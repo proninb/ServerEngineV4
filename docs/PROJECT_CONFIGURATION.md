@@ -177,10 +177,9 @@ POSIX   -> case-sensitive key
 
 The generic composition layer contains no platform API code.
 
-On Windows, the composition key is case-insensitive using invariant Unicode
-case mapping. On POSIX it remains case-sensitive. Therefore two Windows spellings
-such as `Subsystem/project.json` and `subsystem/project.json` cannot create two
-manifest identities for the same normalized path.
+Platform key construction is fail-closed. A failure to construct the required
+filesystem-equivalence key stops composition; Windows never falls back to a
+case-sensitive key.
 
 If a Project references a configuration currently active in the recursion stack,
 composition fails with a cycle diagnostic.

@@ -6,12 +6,25 @@
 
 namespace cw::server {
 
-project_path_key make_project_path_key(
-    const std::filesystem::path& path) {
+project_path_key_result make_project_path_key(
+    const std::filesystem::path& path,
+    project_path_key& output) noexcept {
 
-    return {
-        path.lexically_normal(),
-    };
+    output = {};
+
+    try {
+        output.value =
+            path.lexically_normal();
+
+        return project_path_key_result::
+            success;
+    }
+    catch (...) {
+        output = {};
+
+        return project_path_key_result::
+            failed;
+    }
 }
 
 }

@@ -462,6 +462,10 @@ lexically normalized path
 
 The generic manifest layer contains no Windows/POSIX API code.
 
+`make_project_path_key()` is a status-returning no-exception boundary. Failure to
+construct the required platform key stops Project composition; Windows never
+falls back to case-sensitive semantics.
+
 CMake selects exactly one implementation. Each platform `.cpp` also contains a
 compile-time fail-closed guard so an incorrect build selection cannot silently
 produce an empty or wrong translation unit.

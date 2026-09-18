@@ -173,9 +173,28 @@ private:
     [[nodiscard]] server_status visit(
         const std::filesystem::path& absolute_path) {
 
-        const auto key =
+        project_path_key key;
+
+        const auto key_result =
             make_project_path_key(
-                absolute_path);
+                absolute_path,
+                key);
+
+        if (key_result !=
+            project_path_key_result::
+                success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_configuration_read_failed,
+                    operation)
+                    .file(absolute_path)
+                    .detail(
+                        "Cannot construct platform filesystem-equivalence key for Project configuration path")
+                    .build());
+
+            return server_status::io_error;
+        }
 
         if (active.contains(key)) {
             diagnostics.emit(

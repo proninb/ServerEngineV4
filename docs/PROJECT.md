@@ -245,6 +245,10 @@ Windows -> invariant Unicode case-insensitive key
 POSIX   -> case-sensitive key
 ```
 
+Key construction is fail-closed. If the platform key cannot be constructed,
+configuration composition fails; Windows never falls back to a case-sensitive
+key.
+
 The generic manifest/composition layer contains no platform API code.
 
 This keeps the aggregate configuration identity stable when the whole Project
