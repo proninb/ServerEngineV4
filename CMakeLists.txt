@@ -11,6 +11,34 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_executable(ServerEngineV4
     server_engine/main.cpp
+    server_engine/server.cpp
+    server_engine/diagnostics/diagnostic_collection.cpp
+    server_engine/diagnostics/diagnostic_formatter.cpp
+    server_engine/diagnostics/diagnostic_source_cache.cpp
+    server_engine/json/json_parser.cpp
+
+    server_engine/configuration/server_configuration_loader.cpp
+
+    server_engine/communication/command_queue.cpp
+    server_engine/communication/communication.cpp
+
+    server_engine/communication/console/server_console.cpp
+
+    server_engine/project/project.cpp
+)
+
+if(WIN32)
+    target_sources(ServerEngineV4 PRIVATE
+        server_engine/communication/console/console_input_windows.cpp
+    )
+else()
+    target_sources(ServerEngineV4 PRIVATE
+        server_engine/communication/console/console_input_posix.cpp
+    )
+endif()
+
+target_include_directories(ServerEngineV4 PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
 )
 
 if(MSVC)

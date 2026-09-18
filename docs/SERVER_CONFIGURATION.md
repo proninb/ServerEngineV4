@@ -1,0 +1,138 @@
+# Server Configuration
+
+`server.json` is the process-level Server configuration.
+
+The parser supports both:
+
+```jsonc
+// line comments
+/* block comments */
+```
+
+## Current example
+
+```jsonc
+{
+  "version": 1,
+
+  "communication": {
+    "endpoints": [
+      {
+        "name": "console",
+        "transport": "console"
+      }
+    ]
+  },
+
+  "logging": {
+    "level": "info",
+    "console": true,
+    "file": "logs/server.log"
+  },
+
+  "telemetry": {
+    "console": true,
+    "subsystems": [
+      "server",
+      "communication",
+      "project",
+      "load",
+      "build",
+      "rebuild",
+      "save",
+      "unload",
+      "runtime",
+      "persistence"
+    ]
+  }
+}
+```
+
+## Project startup
+
+Optional:
+
+```jsonc
+"project": {
+  "path": "project.json"
+}
+```
+
+Present: the Server performs startup LOAD.
+
+Absent: the Server starts UNLOADED and waits for a command.
+
+Relative Project paths are resolved relative to `server.json`.
+
+## Communication
+
+Only endpoints listed in `communication.endpoints` exist.
+
+Console:
+
+```jsonc
+{
+  "name": "console",
+  "transport": "console"
+}
+```
+
+If this entry is removed, no console object or console input thread is created.
+
+TCP/JSON remains part of the configuration contract:
+
+```jsonc
+{
+  "name": "main",
+  "transport": "tcp",
+  "protocol": "json",
+  "address": "0.0.0.0",
+  "port": 39001
+}
+```
+
+The TCP backend is not implemented in this step, so configuring it currently fails explicitly instead of being ignored.
+
+## Logging
+
+```jsonc
+"logging": {
+  "level": "info",
+  "console": true,
+  "file": "logs/server.log"
+}
+```
+
+`file` is directly the path. No redundant `enabled` flag exists.
+
+Logging configuration is parsed now; logging sink implementation is a later step.
+
+## Telemetry
+
+```jsonc
+"telemetry": {
+  "console": true,
+  "subsystems": [
+    "server",
+    "communication",
+    "project",
+    "load",
+    "build",
+    "rebuild",
+    "save",
+    "unload",
+    "runtime",
+    "persistence"
+  ]
+}
+```
+
+Telemetry configuration is parsed now; telemetry emission is a later step.
+
+The three console meanings remain separate:
+
+```text
+communication console -> commands
+logging console       -> diagnostic output
+telemetry console     -> telemetry output
+```

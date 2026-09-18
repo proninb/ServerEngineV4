@@ -1,0 +1,41 @@
+{
+  // Server configuration schema version.
+  "version": 1,
+
+  // Only listed endpoints are created.
+  "communication": {
+    "endpoints": [
+      {
+        "name": "console",
+        "transport": "console"
+      }
+    ]
+  },
+
+  // Optional startup Project:
+  // "project": {
+  //   "path": "project.json"
+  // },
+
+  "logging": {
+    "level": "info",
+    "console": true,
+    "file": "logs/server.log"
+  },
+
+  "telemetry": {
+    "console": true,
+    "subsystems": [
+      "server",
+      "communication",
+      "project",
+      "load",
+      "build",
+      "rebuild",
+      "save",
+      "unload",
+      "runtime",
+      "persistence"
+    ]
+  }
+}

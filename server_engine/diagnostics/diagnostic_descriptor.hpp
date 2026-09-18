@@ -1,0 +1,127 @@
+/*
+ * Immutable compile-time diagnostic catalog entries.
+ *
+ * IDs and names are stable contracts intended for logs, clients, tests,
+ * and future TCP/JSON responses. Human-readable message text may evolve.
+ */
+#pragma once
+
+#include "diagnostic.hpp"
+
+#include <string_view>
+
+namespace cw::server {
+
+// Static definition shared by every occurrence of one diagnostic.
+struct diagnostic_descriptor {
+    // Stable numeric identifier.
+    diagnostic_id id;
+
+    // Architectural owner of the diagnostic.
+    diagnostic_domain domain = diagnostic_domain::unknown;
+
+    // Severity applied by default when emitting this diagnostic.
+    diagnostic_severity default_severity = diagnostic_severity::error;
+
+    // Stable machine-readable symbolic name.
+    std::string_view name;
+
+    // Default human-readable message.
+    std::string_view message;
+};
+
+namespace diagnostics {
+
+// Server startup could not complete because of an unexpected internal failure.
+inline constexpr diagnostic_descriptor server_initialization_failed{
+    diagnostic_id{1001},
+    diagnostic_domain::server,
+    diagnostic_severity::fatal,
+    "server.initialization_failed",
+    "Server initialization failed",
+};
+
+// server.json could not be opened/read.
+inline constexpr diagnostic_descriptor configuration_read_failed{
+    diagnostic_id{1101},
+    diagnostic_domain::configuration,
+    diagnostic_severity::error,
+    "configuration.read_failed",
+    "Server configuration could not be read",
+};
+
+// server.json contains malformed JSON/JSON-with-comments syntax.
+inline constexpr diagnostic_descriptor configuration_invalid_json{
+    diagnostic_id{1102},
+    diagnostic_domain::configuration,
+    diagnostic_severity::error,
+    "configuration.invalid_json",
+    "Server configuration contains invalid JSON",
+};
+
+// server.json is syntactically valid but violates the V4 schema.
+inline constexpr diagnostic_descriptor configuration_invalid{
+    diagnostic_id{1103},
+    diagnostic_domain::configuration,
+    diagnostic_severity::error,
+    "configuration.invalid",
+    "Server configuration is invalid",
+};
+
+// server.json uses a schema version not supported by this executable.
+inline constexpr diagnostic_descriptor configuration_unsupported_version{
+    diagnostic_id{1104},
+    diagnostic_domain::configuration,
+    diagnostic_severity::error,
+    "configuration.unsupported_version",
+    "Server configuration version is unsupported",
+};
+
+// A configured communication endpoint could not be started.
+inline constexpr diagnostic_descriptor communication_start_failed{
+    diagnostic_id{1201},
+    diagnostic_domain::communication,
+    diagnostic_severity::error,
+    "communication.start_failed",
+    "Communication endpoint could not be started",
+};
+
+// Configuration requests a known transport that has no backend yet.
+inline constexpr diagnostic_descriptor communication_unsupported_transport{
+    diagnostic_id{1202},
+    diagnostic_domain::communication,
+    diagnostic_severity::error,
+    "communication.unsupported_transport",
+    "Communication transport is not implemented",
+};
+
+// LOAD was requested while another Project is already active.
+inline constexpr diagnostic_descriptor project_already_loaded{
+    diagnostic_id{2001},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.already_loaded",
+    "A Project is already loaded",
+};
+
+// UNLOAD was requested while the Server is already UNLOADED.
+inline constexpr diagnostic_descriptor project_not_loaded{
+    diagnostic_id{2002},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.not_loaded",
+    "No Project is loaded",
+};
+
+// Project configuration could not be opened during bootstrap LOAD.
+inline constexpr diagnostic_descriptor project_load_failed{
+    diagnostic_id{2003},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.load_failed",
+    "Project configuration could not be loaded",
+};
+
+} // namespace diagnostics
+
+}

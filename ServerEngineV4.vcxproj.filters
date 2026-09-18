@@ -1,14 +1,185 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <Filter Include="Source Files">
-      <UniqueIdentifier>{0DCC32DA-1073-4D88-AD61-8235533F26E8}</UniqueIdentifier>
-      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    <Filter Include="server_engine">
+      <UniqueIdentifier>{11111111-1111-1111-1111-111111111111}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="server_engine\configuration">
+      <UniqueIdentifier>{22222222-2222-2222-2222-222222222222}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="server_engine\diagnostics">
+      <UniqueIdentifier>{77777777-7777-7777-7777-777777777777}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="server_engine\json">
+      <UniqueIdentifier>{88888888-8888-8888-8888-888888888888}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="server_engine\communication">
+      <UniqueIdentifier>{33333333-3333-3333-3333-333333333333}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="server_engine\communication\console">
+      <UniqueIdentifier>{44444444-4444-4444-4444-444444444444}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="server_engine\project">
+      <UniqueIdentifier>{55555555-5555-5555-5555-555555555555}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="docs">
+      <UniqueIdentifier>{66666666-6666-6666-6666-666666666666}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
+
   <ItemGroup>
     <ClCompile Include="server_engine\main.cpp">
-      <Filter>Source Files</Filter>
+      <Filter>server_engine</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\server.cpp">
+      <Filter>server_engine</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\diagnostics\diagnostic_collection.cpp">
+      <Filter>server_engine\diagnostics</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\diagnostics\diagnostic_formatter.cpp">
+      <Filter>server_engine\diagnostics</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\diagnostics\diagnostic_source_cache.cpp">
+      <Filter>server_engine\diagnostics</Filter>
+    </ClCompile>
+
+    <ClCompile Include="server_engine\json\json_parser.cpp">
+      <Filter>server_engine\json</Filter>
+    </ClCompile>
+
+    <ClCompile Include="server_engine\configuration\server_configuration_loader.cpp">
+      <Filter>server_engine\configuration</Filter>
+    </ClCompile>
+
+    <ClCompile Include="server_engine\communication\command_queue.cpp">
+      <Filter>server_engine\communication</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\communication\communication.cpp">
+      <Filter>server_engine\communication</Filter>
+    </ClCompile>
+
+    <ClCompile Include="server_engine\communication\console\console_input_windows.cpp">
+      <Filter>server_engine\communication\console</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\communication\console\server_console.cpp">
+      <Filter>server_engine\communication\console</Filter>
+    </ClCompile>
+
+    <ClCompile Include="server_engine\project\project.cpp">
+      <Filter>server_engine\project</Filter>
+    </ClCompile>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ClInclude Include="server_engine\server.hpp">
+      <Filter>server_engine</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\server_context.hpp">
+      <Filter>server_engine</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\server_status.hpp">
+      <Filter>server_engine</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\operation.hpp">
+      <Filter>server_engine</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\diagnostics\diagnostic.hpp">
+      <Filter>server_engine\diagnostics</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\diagnostics\diagnostic_collection.hpp">
+      <Filter>server_engine\diagnostics</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\diagnostics\diagnostic_descriptor.hpp">
+      <Filter>server_engine\diagnostics</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\diagnostics\diagnostic_registry.hpp">
+      <Filter>server_engine\diagnostics</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\diagnostics\diagnostic_formatter.hpp">
+      <Filter>server_engine\diagnostics</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\diagnostics\diagnostic_builder.hpp">
+      <Filter>server_engine\diagnostics</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\diagnostics\diagnostic_source_cache.hpp">
+      <Filter>server_engine\diagnostics</Filter>
+    </ClInclude>
+
+    <ClInclude Include="server_engine\json\json.hpp">
+      <Filter>server_engine\json</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\json\json_ascii.hpp">
+      <Filter>server_engine\json</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\json\json_unicode.hpp">
+      <Filter>server_engine\json</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\json\json_value.hpp">
+      <Filter>server_engine\json</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\json\json_parser.hpp">
+      <Filter>server_engine\json</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\json\json_buffer.hpp">
+      <Filter>server_engine\json</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\json\json_escape.hpp">
+      <Filter>server_engine\json</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\json\json_writer.hpp">
+      <Filter>server_engine\json</Filter>
+    </ClInclude>
+
+    <ClInclude Include="server_engine\configuration\server_configuration.hpp">
+      <Filter>server_engine\configuration</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\configuration\server_configuration_loader.hpp">
+      <Filter>server_engine\configuration</Filter>
+    </ClInclude>
+
+    <ClInclude Include="server_engine\communication\command_queue.hpp">
+      <Filter>server_engine\communication</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\communication\communication.hpp">
+      <Filter>server_engine\communication</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\communication\server_command.hpp">
+      <Filter>server_engine\communication</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\communication\server_command_request.hpp">
+      <Filter>server_engine\communication</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\communication\server_command_result.hpp">
+      <Filter>server_engine\communication</Filter>
+    </ClInclude>
+
+    <ClInclude Include="server_engine\communication\console\console_input.hpp">
+      <Filter>server_engine\communication\console</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\communication\console\server_console.hpp">
+      <Filter>server_engine\communication\console</Filter>
+    </ClInclude>
+
+    <ClInclude Include="server_engine\project\project.hpp">
+      <Filter>server_engine\project</Filter>
+    </ClInclude>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="server.json" />
+
+    <None Include="docs\SERVER_ARCHITECTURE.md">
+      <Filter>docs</Filter>
+    </None>
+    <None Include="docs\DIAGNOSTICS.md">
+      <Filter>docs</Filter>
+    </None>
+    <None Include="docs\JSON.md">
+      <Filter>docs</Filter>
+    </None>
+    <None Include="docs\SERVER_CONFIGURATION.md">
+      <Filter>docs</Filter>
+    </None>
   </ItemGroup>
 </Project>

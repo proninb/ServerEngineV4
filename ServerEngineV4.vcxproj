@@ -10,24 +10,21 @@
       <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
-
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{F8DB92B2-3E1A-4C79-9E88-72E6C8C0D9F4}</ProjectGuid>
     <RootNamespace>ServerEngineV4</RootNamespace>
     <ProjectName>ServerEngineV4</ProjectName>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
-
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
-
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
-
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
@@ -35,26 +32,16 @@
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
-
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
-
   <ImportGroup Label="ExtensionSettings" />
   <ImportGroup Label="Shared" />
-
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props"
-            Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')"
-            Label="LocalAppDataPlatform" />
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
-
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props"
-            Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')"
-            Label="LocalAppDataPlatform" />
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
-
   <PropertyGroup Label="UserMacros" />
-
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WarningLevel>Level4</WarningLevel>
@@ -62,13 +49,13 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <AdditionalIncludeDirectories>$(ProjectDir)server_engine;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>
-
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <WarningLevel>Level4</WarningLevel>
@@ -78,6 +65,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <AdditionalIncludeDirectories>$(ProjectDir)server_engine;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -86,11 +74,58 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>
-
   <ItemGroup>
     <ClCompile Include="server_engine\main.cpp" />
+    <ClCompile Include="server_engine\server.cpp" />
+    <ClCompile Include="server_engine\diagnostics\diagnostic_collection.cpp" />
+    <ClCompile Include="server_engine\diagnostics\diagnostic_formatter.cpp" />
+    <ClCompile Include="server_engine\diagnostics\diagnostic_source_cache.cpp" />
+    <ClCompile Include="server_engine\json\json_parser.cpp" />
+    <ClCompile Include="server_engine\configuration\server_configuration_loader.cpp" />
+    <ClCompile Include="server_engine\communication\command_queue.cpp" />
+    <ClCompile Include="server_engine\communication\communication.cpp" />
+    <ClCompile Include="server_engine\communication\console\console_input_windows.cpp" />
+    <ClCompile Include="server_engine\communication\console\server_console.cpp" />
+    <ClCompile Include="server_engine\project\project.cpp" />
   </ItemGroup>
-
+  <ItemGroup>
+    <ClInclude Include="server_engine\server.hpp" />
+    <ClInclude Include="server_engine\server_context.hpp" />
+    <ClInclude Include="server_engine\server_status.hpp" />
+    <ClInclude Include="server_engine\operation.hpp" />
+    <ClInclude Include="server_engine\diagnostics\diagnostic.hpp" />
+    <ClInclude Include="server_engine\diagnostics\diagnostic_collection.hpp" />
+    <ClInclude Include="server_engine\diagnostics\diagnostic_descriptor.hpp" />
+    <ClInclude Include="server_engine\diagnostics\diagnostic_registry.hpp" />
+    <ClInclude Include="server_engine\diagnostics\diagnostic_formatter.hpp" />
+    <ClInclude Include="server_engine\diagnostics\diagnostic_builder.hpp" />
+    <ClInclude Include="server_engine\diagnostics\diagnostic_source_cache.hpp" />
+    <ClInclude Include="server_engine\json\json.hpp" />
+    <ClInclude Include="server_engine\json\json_ascii.hpp" />
+    <ClInclude Include="server_engine\json\json_unicode.hpp" />
+    <ClInclude Include="server_engine\json\json_value.hpp" />
+    <ClInclude Include="server_engine\json\json_parser.hpp" />
+    <ClInclude Include="server_engine\json\json_buffer.hpp" />
+    <ClInclude Include="server_engine\json\json_escape.hpp" />
+    <ClInclude Include="server_engine\json\json_writer.hpp" />
+    <ClInclude Include="server_engine\configuration\server_configuration.hpp" />
+    <ClInclude Include="server_engine\configuration\server_configuration_loader.hpp" />
+    <ClInclude Include="server_engine\communication\command_queue.hpp" />
+    <ClInclude Include="server_engine\communication\communication.hpp" />
+    <ClInclude Include="server_engine\communication\server_command.hpp" />
+    <ClInclude Include="server_engine\communication\server_command_request.hpp" />
+    <ClInclude Include="server_engine\communication\server_command_result.hpp" />
+    <ClInclude Include="server_engine\communication\console\console_input.hpp" />
+    <ClInclude Include="server_engine\communication\console\server_console.hpp" />
+    <ClInclude Include="server_engine\project\project.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="server.json" />
+    <None Include="docs\SERVER_ARCHITECTURE.md" />
+    <None Include="docs\DIAGNOSTICS.md" />
+    <None Include="docs\JSON.md" />
+    <None Include="docs\SERVER_CONFIGURATION.md" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
 </Project>
