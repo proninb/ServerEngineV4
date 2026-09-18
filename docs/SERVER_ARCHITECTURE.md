@@ -67,6 +67,7 @@ ServerEngineV4/
 │       ├── project_configuration_manifest.cpp
 │       ├── project_configuration_manifest_store.hpp
 │       ├── project_configuration_manifest_store.cpp
+│       ├── project_path.cpp
 │       ├── project_path.hpp
 │       ├── project_path_windows.cpp
 │       ├── project_path_posix.cpp
@@ -431,19 +432,24 @@ dedupe and cycle detection. It is not sorted.
 
 Project composition is platform-neutral.
 
-Filesystem path equivalence is isolated behind:
+Filesystem path processing is isolated behind:
 
 ```text
 project_path.hpp
+project_path.cpp
 project_path_windows.cpp
 project_path_posix.cpp
 ```
 
-The generic composition layer uses only:
+The generic composition layer uses:
 
 ```text
-make_project_path_key(path)
+resolve_project_path(path, output) -> success | failed
+make_project_path_key(path, output) -> success | failed
 ```
+
+`project_path.cpp` owns portable absolute-path resolution and lexical
+normalization.
 
 Windows:
 
@@ -460,12 +466,14 @@ lexically normalized path
     -> case-sensitive dedupe/cycle detection
 ```
 
-The generic manifest layer contains no Windows/POSIX API code.
+`project_path_windows.cpp` and `project_path_posix.cpp` own only
+filesystem-equivalence key construction. The generic manifest layer contains no
+Windows/POSIX API code.
 
-`make_project_path_key()` is a status-returning no-exception boundary. Failure to
-construct the required platform key stops Project composition; Windows never
-falls back to case-sensitive semantics.
+Both path operations are status-returning no-exception boundaries. Failure at
+either boundary stops Project composition. There is no unresolved-path fallback
+and Windows never falls back to case-sensitive semantics.
 
-CMake selects exactly one implementation. Each platform `.cpp` also contains a
-compile-time fail-closed guard so an incorrect build selection cannot silently
-produce an empty or wrong translation unit.
+CMake selects exactly one platform key implementation. Each platform `.cpp`
+contains a compile-time fail-closed guard so an incorrect build selection cannot
+silently produce an empty or wrong translation unit.

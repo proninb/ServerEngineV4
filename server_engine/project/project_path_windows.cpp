@@ -20,7 +20,7 @@
 
 namespace cw::server {
 
-project_path_key_result make_project_path_key(
+project_path_result make_project_path_key(
     const std::filesystem::path& path,
     project_path_key& output) noexcept {
 
@@ -37,7 +37,7 @@ project_path_key_result make_project_path_key(
             output.value =
                 normalized;
 
-            return project_path_key_result::
+            return project_path_result::
                 success;
         }
 
@@ -45,7 +45,7 @@ project_path_key_result make_project_path_key(
             static_cast<std::size_t>(
                 (std::numeric_limits<int>::max)())) {
 
-            return project_path_key_result::
+            return project_path_result::
                 failed;
         }
 
@@ -66,7 +66,7 @@ project_path_key_result make_project_path_key(
                 0);
 
         if (required <= 0) {
-            return project_path_key_result::
+            return project_path_result::
                 failed;
         }
 
@@ -88,7 +88,7 @@ project_path_key_result make_project_path_key(
                 0);
 
         if (written != required) {
-            return project_path_key_result::
+            return project_path_result::
                 failed;
         }
 
@@ -96,13 +96,13 @@ project_path_key_result make_project_path_key(
             std::filesystem::path{
                 std::move(lowered)};
 
-        return project_path_key_result::
+        return project_path_result::
             success;
     }
     catch (...) {
         output = {};
 
-        return project_path_key_result::
+        return project_path_result::
             failed;
     }
 }

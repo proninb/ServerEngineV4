@@ -237,17 +237,27 @@ Manifest paths are normalized relative to the root Project directory.
 All declared configuration/tree paths are required to be relative to their
 declaring `project.json`; absolute/rooted paths fail schema validation.
 
-Filesystem path equivalence used for dedupe/cycle detection is isolated behind
-`project_path.hpp`.
+Filesystem path processing is isolated behind `project_path.hpp`.
+
+```text
+relative declared path
+    -> resolve_project_path(path, output)
+    -> absolute normalized path
+    -> make_project_path_key(path, output)
+    -> platform filesystem-equivalence key
+```
+
+Both path operations are status-returning no-exception boundaries.
 
 ```text
 Windows -> invariant Unicode case-insensitive key
 POSIX   -> case-sensitive key
 ```
 
-Key construction is fail-closed. If the platform key cannot be constructed,
-configuration composition fails; Windows never falls back to a case-sensitive
-key.
+Path processing is fail-closed. Failure to establish the absolute normalized
+path or the platform key stops configuration composition. Windows never falls
+back to a case-sensitive key, and failed absolute resolution never falls back
+to the original unresolved path.
 
 The generic manifest/composition layer contains no platform API code.
 
@@ -353,3 +363,4 @@ failed BUILD
 16. Aggregate configuration identity is relocation-stable through root-relative paths.
 17. Semantic fingerprint remains separate from byte/configuration identity.
 18. Candidate persisted construction state is committed only with its successful generation.
+19. Project absolute-path resolution must fail closed; unresolved paths must never become construction identities.

@@ -144,8 +144,17 @@ A child Project reference is resolved as:
 ```text
 declaring project.json directory
     + relative child path
-    -> normalized child project.json path
+    -> resolve_project_path(...)
+    -> absolute normalized child project.json path
+    -> make_project_path_key(...)
+    -> platform filesystem-equivalence key
 ```
+
+Both path operations return `project_path_result`.
+
+Path processing is fail-closed. If the absolute normalized path or required
+filesystem-equivalence key cannot be produced, composition fails. No stage may
+substitute the original unresolved path or another weaker representation.
 
 ## Recursive Composition
 
@@ -165,7 +174,6 @@ NO SORT
 
 Repeated references to the same normalized child Project do not create duplicate
 manifest entries.
-
 
 Filesystem-equivalence policy is platform-specific and isolated behind
 `project_path.hpp`:
@@ -357,4 +365,6 @@ unsupported version
 unsupported ABI target/pack
 missing referenced project.json
 recursive Project cycle
+absolute path resolution failure
+filesystem-equivalence key construction failure
 ```

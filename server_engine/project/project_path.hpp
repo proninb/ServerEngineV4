@@ -1,9 +1,9 @@
 /*
- * Platform-specific Project filesystem path identity boundary.
+ * Project filesystem path boundary.
  *
- * Composition uses this key only for path-equivalence decisions such as
- * deduplication and recursion-cycle detection. Manifest paths themselves remain
- * normalized root-relative locators.
+ * Portable resolution establishes absolute normalized locators. Platform
+ * implementations derive filesystem-equivalence keys used only for
+ * deduplication and recursion-cycle detection.
  */
 #pragma once
 
@@ -30,12 +30,16 @@ struct project_path_key_hash final {
     }
 };
 
-enum class project_path_key_result : std::uint8_t {
+enum class project_path_result : std::uint8_t {
     success,
     failed,
 };
 
-[[nodiscard]] project_path_key_result make_project_path_key(
+[[nodiscard]] project_path_result resolve_project_path(
+    const std::filesystem::path& path,
+    std::filesystem::path& output) noexcept;
+
+[[nodiscard]] project_path_result make_project_path_key(
     const std::filesystem::path& path,
     project_path_key& output) noexcept;
 

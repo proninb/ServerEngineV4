@@ -7,25 +7,12 @@
 
 #include <cstdint>
 #include <string>
-#include <system_error>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
 namespace cw::server {
 namespace {
-
-[[nodiscard]] std::filesystem::path absolute_normalized(
-    const std::filesystem::path& path) {
-
-    std::error_code error;
-    const auto absolute =
-        std::filesystem::absolute(
-            path,
-            error);
-
-    return (error ? path : absolute).lexically_normal();
-}
 
 [[nodiscard]] std::filesystem::path manifest_path(
     const std::filesystem::path& root_directory,
@@ -132,11 +119,8 @@ public:
         operation_id operation,
         diagnostic_collection& diagnostics,
         project_configuration_manifest& output)
-        : root_path(
-              absolute_normalized(
-                  root_project_path)),
-          root_directory(
-              root_path.parent_path()),
+        : root_project_path(
+              root_project_path),
           operation(operation),
           diagnostics(diagnostics),
           output(output) {
@@ -147,6 +131,30 @@ public:
 
     [[nodiscard]] server_status compose() {
         output = {};
+
+        const auto root_result =
+            resolve_project_path(
+                root_project_path,
+                root_path);
+
+        if (root_result !=
+            project_path_result::
+                success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_configuration_read_failed,
+                    operation)
+                    .file(root_project_path)
+                    .detail(
+                        "Cannot resolve root Project configuration path")
+                    .build());
+
+            return server_status::io_error;
+        }
+
+        root_directory =
+            root_path.parent_path();
 
         const auto status =
             visit(root_path);
@@ -181,7 +189,7 @@ private:
                 key);
 
         if (key_result !=
-            project_path_key_result::
+            project_path_result::
                 success) {
 
             diagnostics.emit(
@@ -289,10 +297,34 @@ private:
             for (const auto& reference :
                  project_references) {
 
-                const auto child =
-                    absolute_normalized(
-                        absolute_path.parent_path() /
-                        reference);
+                const auto child_input =
+                    absolute_path.parent_path() /
+                    reference;
+
+                std::filesystem::path child;
+
+                const auto child_result =
+                    resolve_project_path(
+                        child_input,
+                        child);
+
+                if (child_result !=
+                    project_path_result::
+                        success) {
+
+                    active.erase(key);
+
+                    diagnostics.emit(
+                        diagnostic(
+                            diagnostics::project_configuration_read_failed,
+                            operation)
+                            .file(child_input)
+                            .detail(
+                                "Cannot resolve referenced Project configuration path")
+                            .build());
+
+                    return server_status::io_error;
+                }
 
                 const auto child_status =
                     visit(child);
@@ -312,6 +344,7 @@ private:
         return server_status::success;
     }
 
+    std::filesystem::path root_project_path;
     std::filesystem::path root_path;
     std::filesystem::path root_directory;
     operation_id operation;
@@ -369,9 +402,28 @@ server_status verify_project_configuration_manifest(
             project_artifact_invalid;
     }
 
-    const auto root =
-        absolute_normalized(
-            root_project_path);
+    std::filesystem::path root;
+
+    const auto root_result =
+        resolve_project_path(
+            root_project_path,
+            root);
+
+    if (root_result !=
+        project_path_result::
+            success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_configuration_read_failed,
+                operation)
+                .file(root_project_path)
+                .detail(
+                    "Cannot resolve resident Project configuration path")
+                .build());
+
+        return server_status::io_error;
+    }
 
     const auto root_directory =
         root.parent_path();
@@ -394,10 +446,32 @@ server_status verify_project_configuration_manifest(
     for (const auto& file :
          persisted.files) {
 
-        const auto path =
-            absolute_normalized(
-                root_directory /
-                file.path);
+        const auto path_input =
+            root_directory /
+            file.path;
+
+        std::filesystem::path path;
+
+        const auto path_result =
+            resolve_project_path(
+                path_input,
+                path);
+
+        if (path_result !=
+            project_path_result::
+                success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_configuration_read_failed,
+                    operation)
+                    .file(path_input)
+                    .detail(
+                        "Cannot resolve Project configuration manifest path")
+                    .build());
+
+            return server_status::io_error;
+        }
 
         if (file.change_token_available &&
             file.change_token) {

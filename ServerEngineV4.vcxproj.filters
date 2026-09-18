@@ -78,6 +78,9 @@
     <ClCompile Include="server_engine\project\project_configuration_manifest_store.cpp">
       <Filter>server_engine\project</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\project\project_path.cpp">
+      <Filter>server_engine\project</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\project\project_path_windows.cpp">
       <Filter>server_engine\project</Filter>
     </ClCompile>
