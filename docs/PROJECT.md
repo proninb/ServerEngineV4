@@ -232,39 +232,65 @@ A reference to an active ancestor is a configuration cycle and fails.
 
 ### Path contract
 
-Manifest paths are normalized relative to the root Project directory.
+Project configuration supports both relative and fully absolute filesystem
+locators for `header`, `source`, and `project` items.
 
-All declared configuration/tree paths are required to be relative to their
-declaring `project.json`; absolute/rooted paths fail schema validation.
-
-Filesystem path processing is isolated behind `project_path.hpp`.
+Unsupported context-dependent forms are rejected:
 
 ```text
-relative declared path
-    -> resolve_project_path(path, output)
-    -> absolute normalized path
-    -> make_project_path_key(path, output)
-    -> platform filesystem-equivalence key
+Windows drive-relative: C:foo/project.json
+rooted but not fully absolute: \foo\project.json
 ```
 
-Both path operations are status-returning no-exception boundaries.
+The persisted manifest preserves declaration semantics instead of converting all
+files to root-relative paths.
+
+```text
+project_configuration_file_proof
+    declaring_file
+    path_type = relative | absolute
+    path
+    content_hash
+    optional change_token
+```
+
+`declaring_file` is the index of the `project.json` that declared this child.
+Every non-root edge points backward in the root-first declaration-order DFS.
+The root uses `invalid_configuration_file`.
+
+Relative locator:
+
+```text
+declaring project directory + locator
+    -> resolve_project_path(...)
+    -> absolute normalized physical path
+```
+
+Absolute locator:
+
+```text
+locator
+    -> resolve_project_path(...)
+    -> absolute normalized physical path
+```
+
+Resolved physical paths and `project_path_key` values are temporary construction
+state and are never persisted in the manifest.
+
+Filesystem equivalence used for dedupe/cycle detection remains isolated behind
+`project_path.hpp`:
 
 ```text
 Windows -> invariant Unicode case-insensitive key
 POSIX   -> case-sensitive key
 ```
 
-Path processing is fail-closed. Failure to establish the absolute normalized
-path or the platform key stops configuration composition. Windows never falls
-back to a case-sensitive key, and failed absolute resolution never falls back
-to the original unresolved path.
+Both path resolution and platform-key construction are fail-closed.
 
-The generic manifest/composition layer contains no platform API code.
+Relative locators remain relocation-stable when the composed relative topology is
+preserved. Absolute locators are location-bound by definition.
 
-This keeps the aggregate configuration identity stable when the whole Project
-tree is relocated without changing its internal structure or bytes.
-
-Path is still a locator, not semantic identity.
+Path/locator identity remains separate from future semantic identity.
 
 ## Identity Levels
 
@@ -360,7 +386,7 @@ failed BUILD
 13. Change tokens are proof optimizations, never identity.
 14. Per-file SHA-256 identifies exact configuration bytes.
 15. Aggregate configuration hash identifies the complete ordered configuration input set.
-16. Aggregate configuration identity is relocation-stable through root-relative paths.
+16. Relative-locator configuration identity is relocation-stable while composed relative topology is preserved; absolute locators are location-bound.
 17. Semantic fingerprint remains separate from byte/configuration identity.
 18. Candidate persisted construction state is committed only with its successful generation.
 19. Project absolute-path resolution must fail closed; unresolved paths must never become construction identities.

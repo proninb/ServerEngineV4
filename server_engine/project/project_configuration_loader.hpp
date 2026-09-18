@@ -2,11 +2,12 @@
  * Streaming project.json schema/composition-reference boundary.
  *
  * One file is validated without materializing a project_configuration tree.
- * Direct child Project references are emitted in declaration order so recursive
- * composition can be owned by the Project composition layer.
+ * Direct child Project references preserve locator semantics and declaration
+ * order so recursive composition can be owned by the Project composition layer.
  */
 #pragma once
 
+#include "project_configuration_manifest.hpp"
 #include "../diagnostics/diagnostic_collection.hpp"
 #include "../operation.hpp"
 #include "../server_status.hpp"
@@ -17,11 +18,17 @@
 
 namespace cw::server {
 
+struct project_configuration_reference final {
+    project_configuration_path_type path_type =
+        project_configuration_path_type::relative;
+    std::filesystem::path path;
+};
+
 [[nodiscard]] server_status read_project_configuration(
     std::string& bytes,
     const std::filesystem::path& path,
     operation_id operation,
     diagnostic_collection& diagnostics,
-    std::vector<std::filesystem::path>& project_references);
+    std::vector<project_configuration_reference>& project_references);
 
 }

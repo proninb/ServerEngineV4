@@ -2,8 +2,8 @@
  * Streaming Project configuration validator/reference producer.
  *
  * Validation is state-machine based and does not construct a Project
- * configuration tree. Direct child Project paths are retained only for recursive
- * composition.
+ * configuration tree. Direct child Project locators retain relative/absolute semantics only for
+ * recursive composition.
  */
 #include "project_configuration_loader.hpp"
 
@@ -71,7 +71,7 @@ struct frame {
 class project_configuration_handler final : public json_event_handler {
 public:
     explicit project_configuration_handler(
-        std::vector<std::filesystem::path>& project_references)
+        std::vector<project_configuration_reference>& project_references)
         : project_references(project_references) {
 
         stack.reserve(16);
@@ -528,19 +528,29 @@ private:
                 const std::filesystem::path item_path{
                     path};
 
-                if (item_path.is_absolute() ||
+                project_configuration_path_type path_type =
+                    project_configuration_path_type::relative;
+
+                if (item_path.is_absolute()) {
+                    path_type =
+                        project_configuration_path_type::absolute;
+                } else if (
                     item_path.has_root_name() ||
                     item_path.has_root_directory()) {
 
-                    fail("Project item path must be relative to the declaring project.json");
+                    fail(
+                        "Project item path must be relative or fully absolute; "
+                        "drive-relative/rooted forms are not supported");
                     return;
                 }
 
                 if (current.type ==
                     item_type::project) {
 
-                    project_references.emplace_back(
-                        item_path.lexically_normal());
+                    project_references.push_back({
+                        path_type,
+                        item_path.lexically_normal(),
+                    });
                 }
             }
 
@@ -554,7 +564,7 @@ private:
         }
     }
 
-    std::vector<std::filesystem::path>& project_references;
+    std::vector<project_configuration_reference>& project_references;
     std::vector<frame> stack;
 
     std::size_t current_offset = 0;
@@ -569,7 +579,7 @@ server_status read_project_configuration(
     const std::filesystem::path& path,
     operation_id operation,
     diagnostic_collection& diagnostics,
-    std::vector<std::filesystem::path>& project_references) {
+    std::vector<project_configuration_reference>& project_references) {
 
     project_references.clear();
 

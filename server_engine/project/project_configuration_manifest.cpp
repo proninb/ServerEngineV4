@@ -6,6 +6,7 @@
 #include "../diagnostics/diagnostic_descriptor.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -14,21 +15,19 @@
 namespace cw::server {
 namespace {
 
-[[nodiscard]] std::filesystem::path manifest_path(
-    const std::filesystem::path& root_directory,
-    const std::filesystem::path& absolute_path) {
+void append_u32(
+    std::string& output,
+    std::uint32_t value) {
 
-    const auto relative =
-        absolute_path.lexically_relative(
-            root_directory);
+    for (std::size_t index = 0;
+         index < 4;
+         ++index) {
 
-    if (relative.empty() ||
-        relative.is_absolute()) {
-
-        return {};
+        output.push_back(
+            static_cast<char>(
+                (value >> (index * 8)) &
+                0xffU));
     }
-
-    return relative.lexically_normal();
 }
 
 void append_u64(
@@ -51,7 +50,7 @@ calculate_configuration_hash_impl(
     std::span<const project_configuration_file_proof> files) {
 
     std::string canonical;
-    canonical.append("CWCFG001", 8);
+    canonical.append("CWCFG002", 8);
 
     append_u64(
         canonical,
@@ -61,6 +60,15 @@ calculate_configuration_hash_impl(
     for (const auto& file : files) {
         const auto path =
             file.path.generic_string();
+
+        append_u32(
+            canonical,
+            file.declaring_file);
+
+        append_u32(
+            canonical,
+            static_cast<std::uint32_t>(
+                file.path_type));
 
         append_u64(
             canonical,
@@ -153,11 +161,12 @@ public:
             return server_status::io_error;
         }
 
-        root_directory =
-            root_path.parent_path();
-
         const auto status =
-            visit(root_path);
+            visit(
+                root_path,
+                invalid_configuration_file,
+                project_configuration_path_type::relative,
+                root_path.filename());
 
         if (!succeeded(status)) {
             output = {};
@@ -179,7 +188,10 @@ public:
 
 private:
     [[nodiscard]] server_status visit(
-        const std::filesystem::path& absolute_path) {
+        const std::filesystem::path& absolute_path,
+        std::uint32_t declaring_file,
+        project_configuration_path_type path_type,
+        const std::filesystem::path& locator) {
 
         project_path_key key;
 
@@ -243,7 +255,7 @@ private:
                 acquired);
         }
 
-        std::vector<std::filesystem::path>
+        std::vector<project_configuration_reference>
             project_references;
 
         const auto status =
@@ -260,34 +272,36 @@ private:
         }
 
         try {
-            project_configuration_file_proof proof;
-            proof.path =
-                manifest_path(
-                    root_directory,
-                    absolute_path);
+            if (output.files.size() >
+                static_cast<std::size_t>(
+                    (std::numeric_limits<std::uint32_t>::max)())) {
 
-            if (proof.path.empty()) {
                 active.erase(key);
-
-                diagnostics.emit(
-                    diagnostic(
-                        diagnostics::project_invalid_configuration,
-                        operation)
-                        .file(absolute_path)
-                        .detail(
-                            "Project configuration path cannot be represented relative to the root Project directory")
-                        .build());
-
-                return server_status::
-                    project_configuration_invalid;
+                return server_status::io_error;
             }
 
+            const auto current_file =
+                static_cast<std::uint32_t>(
+                    output.files.size());
+
+            project_configuration_file_proof proof;
+            proof.declaring_file =
+                declaring_file;
+            proof.path_type =
+                path_type;
+            proof.path =
+                locator.lexically_normal();
             proof.content_hash =
                 snapshot.content_hash;
             proof.change_token =
                 snapshot.change_token;
             proof.change_token_available =
                 snapshot.change_token_available;
+
+            if (proof.path.empty()) {
+                active.erase(key);
+                return server_status::io_error;
+            }
 
             output.files.push_back(
                 std::move(proof));
@@ -298,8 +312,11 @@ private:
                  project_references) {
 
                 const auto child_input =
-                    absolute_path.parent_path() /
-                    reference;
+                    reference.path_type ==
+                        project_configuration_path_type::absolute
+                    ? reference.path
+                    : absolute_path.parent_path() /
+                        reference.path;
 
                 std::filesystem::path child;
 
@@ -327,7 +344,11 @@ private:
                 }
 
                 const auto child_status =
-                    visit(child);
+                    visit(
+                        child,
+                        current_file,
+                        reference.path_type,
+                        reference.path);
 
                 if (!succeeded(child_status)) {
                     active.erase(key);
@@ -346,7 +367,6 @@ private:
 
     std::filesystem::path root_project_path;
     std::filesystem::path root_path;
-    std::filesystem::path root_directory;
     operation_id operation;
     diagnostic_collection& diagnostics;
     project_configuration_manifest& output;
@@ -425,11 +445,15 @@ server_status verify_project_configuration_manifest(
         return server_status::io_error;
     }
 
-    const auto root_directory =
-        root.parent_path();
+    const auto& root_file =
+        persisted.files.front();
 
-    if (persisted.files.front().path !=
-        root.filename()) {
+    if (root_file.declaring_file !=
+            invalid_configuration_file ||
+        root_file.path_type !=
+            project_configuration_path_type::relative ||
+        root_file.path !=
+            root.filename()) {
 
         diagnostics.emit(
             diagnostic(
@@ -443,34 +467,82 @@ server_status verify_project_configuration_manifest(
             project_artifact_invalid;
     }
 
-    for (const auto& file :
-         persisted.files) {
+    std::vector<std::filesystem::path>
+        resolved_paths;
 
-        const auto path_input =
-            root_directory /
-            file.path;
+    try {
+        resolved_paths.reserve(
+            persisted.files.size());
+        resolved_paths.push_back(root);
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+
+    for (std::size_t index = 0;
+         index < persisted.files.size();
+         ++index) {
+
+        const auto& file =
+            persisted.files[index];
 
         std::filesystem::path path;
 
-        const auto path_result =
-            resolve_project_path(
-                path_input,
-                path);
+        if (index == 0) {
+            path = root;
+        } else {
+            if (file.declaring_file >= index) {
+                diagnostics.emit(
+                    diagnostic(
+                        diagnostics::project_manifest_invalid,
+                        operation)
+                        .detail(
+                            "Persisted Project configuration manifest contains an invalid declaring-file edge")
+                        .build());
 
-        if (path_result !=
-            project_path_result::
-                success) {
+                return server_status::
+                    project_artifact_invalid;
+            }
 
-            diagnostics.emit(
-                diagnostic(
-                    diagnostics::project_configuration_read_failed,
-                    operation)
-                    .file(path_input)
-                    .detail(
-                        "Cannot resolve Project configuration manifest path")
-                    .build());
+            const auto& declaring_path =
+                resolved_paths[
+                    file.declaring_file];
 
-            return server_status::io_error;
+            const auto path_input =
+                file.path_type ==
+                    project_configuration_path_type::absolute
+                ? file.path
+                : declaring_path.parent_path() /
+                    file.path;
+
+            const auto path_result =
+                resolve_project_path(
+                    path_input,
+                    path);
+
+            if (path_result !=
+                project_path_result::
+                    success) {
+
+                diagnostics.emit(
+                    diagnostic(
+                        diagnostics::project_configuration_read_failed,
+                        operation)
+                        .file(path_input)
+                        .detail(
+                            "Cannot resolve Project configuration manifest path")
+                        .build());
+
+                return server_status::io_error;
+            }
+
+            try {
+                resolved_paths.push_back(
+                    path);
+            }
+            catch (...) {
+                return server_status::io_error;
+            }
         }
 
         if (file.change_token_available &&

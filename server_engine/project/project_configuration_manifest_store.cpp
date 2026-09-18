@@ -32,16 +32,16 @@ constexpr std::array<std::byte, 8> magic{
     std::byte{'A'},
     std::byte{'N'},
     std::byte{'0'},
-    std::byte{'1'},
+    std::byte{'2'},
 };
 
-constexpr std::uint32_t format_version = 1;
+constexpr std::uint32_t format_version = 2;
 constexpr std::uint32_t change_token_flag = 0x01U;
 constexpr std::uint32_t known_flags =
     change_token_flag;
 
 constexpr std::size_t header_size = 48;
-constexpr std::size_t fixed_entry_size = 64;
+constexpr std::size_t fixed_entry_size = 72;
 constexpr std::size_t checksum_size = 32;
 
 void append_u32(
@@ -204,6 +204,49 @@ void append_bytes(
             return false;
         }
 
+        const auto index =
+            static_cast<std::uint32_t>(
+                &file - value.files.data());
+
+        if (index == 0) {
+            if (file.declaring_file !=
+                invalid_configuration_file) {
+
+                return false;
+            }
+        } else if (file.declaring_file >= index) {
+            return false;
+        }
+
+        if (file.path_type ==
+                project_configuration_path_type::relative) {
+
+            if (file.path.is_absolute() ||
+                file.path.has_root_name() ||
+                file.path.has_root_directory()) {
+
+                return false;
+            }
+        } else if (
+            file.path_type ==
+                project_configuration_path_type::absolute) {
+
+            if (!file.path.is_absolute()) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+
+        append_u32(
+            output,
+            file.declaring_file);
+
+        append_u32(
+            output,
+            static_cast<std::uint32_t>(
+                file.path_type));
+
         append_u32(
             output,
             static_cast<std::uint32_t>(
@@ -350,10 +393,23 @@ void append_bytes(
              index < count;
              ++index) {
 
+            std::uint32_t declaring_file = 0;
+            std::uint32_t path_type_raw = 0;
             std::uint32_t path_size = 0;
             std::uint32_t flags = 0;
 
             if (!read_u32(
+                    input,
+                    offset,
+                    declaring_file) ||
+                !read_u32(
+                    input,
+                    offset,
+                    path_type_raw) ||
+                path_type_raw >
+                    static_cast<std::uint32_t>(
+                        project_configuration_path_type::absolute) ||
+                !read_u32(
                     input,
                     offset,
                     path_size) ||
@@ -367,6 +423,16 @@ void append_bytes(
                 return false;
             }
 
+            if (index == 0) {
+                if (declaring_file !=
+                    invalid_configuration_file) {
+
+                    return false;
+                }
+            } else if (declaring_file >= index) {
+                return false;
+            }
+
             if (offset > payload_size ||
                 payload_size - offset < 56 ||
                 payload_size - offset - 56 <
@@ -376,6 +442,11 @@ void append_bytes(
             }
 
             project_configuration_file_proof file;
+            file.declaring_file =
+                declaring_file;
+            file.path_type =
+                static_cast<project_configuration_path_type>(
+                    path_type_raw);
 
             std::copy_n(
                 input.begin() +
@@ -438,9 +509,20 @@ void append_bytes(
 
             offset += path_size;
 
-            if (file.path.empty() ||
-                file.path.is_absolute()) {
+            if (file.path.empty()) {
+                return false;
+            }
 
+            if (file.path_type ==
+                project_configuration_path_type::relative) {
+
+                if (file.path.is_absolute() ||
+                    file.path.has_root_name() ||
+                    file.path.has_root_directory()) {
+
+                    return false;
+                }
+            } else if (!file.path.is_absolute()) {
                 return false;
             }
 

@@ -132,29 +132,56 @@ path
 
 ## Path Resolution
 
-Every declared `header`, `source`, and `project` path must be relative to the
-`project.json` that declares it.
+`header`, `source`, and `project` support two locator forms:
 
-Absolute/rooted paths are rejected by the schema boundary.
+```text
+relative
+absolute
+```
+
+Examples:
+
+```jsonc
+{
+  "name": "Shared",
+  "type": "project",
+  "path": "../Shared/project.json"
+}
+```
+
+```jsonc
+{
+  "name": "InstalledShared",
+  "type": "project",
+  "path": "D:\\Common\\Shared\\project.json"
+}
+```
+
+A relative locator is interpreted relative to the `project.json` that declares
+it. A fully absolute locator is interpreted directly.
+
+Context-dependent rooted forms that are not fully absolute are rejected. On
+Windows this includes drive-relative forms such as `C:foo\\project.json`.
 
 There is no directory scan.
 
-A child Project reference is resolved as:
+For child Project composition:
 
 ```text
-declaring project.json directory
-    + relative child path
-    -> resolve_project_path(...)
-    -> absolute normalized child project.json path
+relative locator
+    declaring project.json directory + locator
+        -> resolve_project_path(...)
+
+absolute locator
+    locator
+        -> resolve_project_path(...)
+
+resolved absolute normalized path
     -> make_project_path_key(...)
-    -> platform filesystem-equivalence key
 ```
 
-Both path operations return `project_path_result`.
-
-Path processing is fail-closed. If the absolute normalized path or required
-filesystem-equivalence key cannot be produced, composition fails. No stage may
-substitute the original unresolved path or another weaker representation.
+`resolve_project_path()` and `make_project_path_key()` are fail-closed
+status-returning boundaries.
 
 ## Recursive Composition
 
@@ -241,13 +268,33 @@ hash comparison.
 
 ## Complete Configuration Identity
 
-Each manifest entry contains:
+The manifest is a minimal ordered configuration dependency graph.
+
+Each entry contains:
 
 ```text
-normalized path relative to root Project directory
+declaring_file
+path_type
+path
 per-file SHA-256
 optional change token
 ```
+
+The entries are root-first declaration-order DFS. For every non-root entry:
+
+```text
+declaring_file < current entry index
+```
+
+The root uses:
+
+```text
+declaring_file = invalid_configuration_file
+path_type = relative
+path = root project.json filename
+```
+
+No persisted resolved absolute path or platform path key is required.
 
 The complete configuration hash is:
 
@@ -255,10 +302,17 @@ The complete configuration hash is:
 project_configuration_hash =
     SHA-256(
         format domain
-        ordered relative paths
-        ordered per-file SHA-256 hashes
+        ordered {
+            declaring_file
+            path_type
+            normalized locator
+            per-file SHA-256
+        }
     )
 ```
+
+`path_type` participates in identity because relative and absolute locators have
+different resolution semantics.
 
 Change tokens do not participate in this hash.
 
@@ -272,11 +326,14 @@ project_content_hash
     exact identity of one file's bytes
 
 project_configuration_hash
-    exact identity of the complete composed configuration input set
+    exact identity of the complete ordered configuration dependency graph
 
 project_semantic_fingerprint
     future canonical semantic identity
 ```
+
+Relative-locator identity is relocation-stable while the composed relative
+topology is preserved. Absolute locators are intentionally location-bound.
 
 ## BUILD Fast Path
 
@@ -328,6 +385,8 @@ entry count
 aggregate configuration hash
 
 for each entry:
+    declaring-file index
+    locator type
     path length
     flags
     content hash
@@ -343,7 +402,8 @@ Validation fails closed on:
 bad magic/version
 bad checksum
 unknown flags
-invalid path
+invalid locator type/path
+invalid declaring-file edge
 invalid token encoding
 truncated/extra bytes
 stored aggregate hash != recomputed aggregate hash

@@ -372,7 +372,8 @@ The manifest stores:
 
 ```text
 root-first declaration-order composition
-root-relative normalized paths
+declaring-file edges
+relative/absolute locator semantics
 per-file SHA-256
 optional file change tokens
 aggregate project_configuration_hash
@@ -383,6 +384,35 @@ The manifest is construction state and never resident Project state.
 
 `project_configuration_manifest_store` is a narrow persistence boundary, not a
 generic Project persistence manager.
+
+## Project configuration locator graph
+
+The configuration manifest preserves how each child Project was declared.
+
+```text
+entry N
+    declaring_file -> earlier entry
+    locator_type    -> relative | absolute
+    locator         -> normalized declared filesystem locator
+```
+
+Root-first declaration-order DFS guarantees:
+
+```text
+declaring_file < N
+```
+
+for every non-root entry. BUILD therefore reconstructs physical configuration
+paths in one linear pass using already resolved parent entries.
+
+```text
+NO SORT
+NO LOOKUP
+```
+
+Relative locators resolve from the declaring Project directory. Absolute locators
+resolve directly and are location-bound. Resolved paths and platform path keys
+remain temporary construction state.
 
 ## Project lifecycle state machine
 
