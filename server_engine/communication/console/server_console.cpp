@@ -3,7 +3,9 @@
  *
  * Current commands:
  *   LOAD <project-path>
+ *   BUILD
  *   UNLOAD
+ *   REBUILD <project-path>
  *   SHUTDOWN
  *   EXIT        (alias of SHUTDOWN)
  *
@@ -90,8 +92,20 @@ void server_console::run() {
             }
 
             publish({server_command_kind::load, std::move(path)});
+        } else if (verb == "BUILD") {
+            publish({server_command_kind::build, {}});
         } else if (verb == "UNLOAD") {
             publish({server_command_kind::unload, {}});
+        } else if (verb == "REBUILD") {
+            std::string path;
+            std::getline(stream >> std::ws, path);
+
+            if (path.empty()) {
+                std::cout << "REBUILD requires a project path\n";
+                continue;
+            }
+
+            publish({server_command_kind::rebuild, std::move(path)});
         } else if (verb == "SHUTDOWN" || verb == "EXIT") {
             publish({server_command_kind::shutdown, {}});
             return;

@@ -37,9 +37,8 @@ public:
         operation_id operation,
         diagnostic_collection& diagnostics);
 
-    // Incremental mode. Starts with persisted Project identity/change proof.
+    // Incremental mode over the currently resident Project Gn.
     [[nodiscard]] server_status build(
-        const std::filesystem::path& project_path,
         operation_id operation,
         diagnostic_collection& diagnostics);
 

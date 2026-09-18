@@ -55,9 +55,6 @@ enum class project_startup_mode {
     // Restore persisted Graph state without Project/source change detection.
     load,
 
-    // Check Project/source changes and reconstruct only when required.
-    build,
-
     // Reconstruct from project.json and sources as a full G0 build.
     rebuild,
 };

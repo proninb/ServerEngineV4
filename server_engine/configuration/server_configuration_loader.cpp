@@ -719,12 +719,6 @@ private:
                 return;
             }
 
-            if (startup == "build") {
-                configuration.project->startup =
-                    project_startup_mode::build;
-                return;
-            }
-
             if (startup == "rebuild") {
                 configuration.project->startup =
                     project_startup_mode::rebuild;
@@ -733,7 +727,7 @@ private:
 
             fail(
                 schema_failure::invalid_value,
-                "project.startup must be load, build, or rebuild");
+                "project.startup must be load or rebuild");
             return;
         }
 

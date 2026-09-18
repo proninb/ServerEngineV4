@@ -103,13 +103,6 @@ server_status server::start(
                 diagnostics);
             break;
 
-        case project_startup_mode::build:
-            status = build(
-                startup.path,
-                operation,
-                diagnostics);
-            break;
-
         case project_startup_mode::rebuild:
             status = rebuild(
                 startup.path,
@@ -162,9 +155,24 @@ server_command_result server::execute(
                 result.diagnostics);
         break;
 
+    case server_command_kind::build:
+        result.status =
+            build(
+                result.operation,
+                result.diagnostics);
+        break;
+
     case server_command_kind::unload:
         result.status =
             unload(
+                result.operation,
+                result.diagnostics);
+        break;
+
+    case server_command_kind::rebuild:
+        result.status =
+            rebuild(
+                command.path,
                 result.operation,
                 result.diagnostics);
         break;
@@ -212,6 +220,7 @@ server_status server::load(
             candidate);
 
     if (!succeeded(status)) {
+        context.project.reset();
         return status;
     }
 
@@ -222,36 +231,31 @@ server_status server::load(
 }
 
 server_status server::build(
-    const std::filesystem::path& project_path,
     operation_id operation,
     diagnostic_collection& diagnostics) {
 
-    if (context.project) {
+    if (!context.project) {
         diagnostics.emit(
             diagnostic(
-                diagnostics::project_already_loaded,
+                diagnostics::project_not_loaded,
                 operation)
-                .detail("UNLOAD the active Project before BUILD")
+                .detail("BUILD requires an active Project")
                 .build());
 
-        return server_status::project_already_loaded;
+        return server_status::project_not_loaded;
     }
-
-    const auto path =
-        resolve(
-            context.configuration_directory,
-            project_path);
 
     std::unique_ptr<project> candidate;
 
     const auto status =
         build_project(
-            path,
+            *context.project,
             operation,
             diagnostics,
             candidate);
 
     if (!succeeded(status)) {
+        context.project.reset();
         return status;
     }
 
@@ -292,6 +296,7 @@ server_status server::rebuild(
             candidate);
 
     if (!succeeded(status)) {
+        context.project.reset();
         return status;
     }
 

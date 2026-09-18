@@ -65,8 +65,6 @@ ServerEngineV4/
 │       ├── project_identity.cpp
 │       ├── project_identity_store.hpp
 │       ├── project_identity_store.cpp
-│       ├── project_identity_store.hpp
-│       ├── project_identity_store.cpp
 │       ├── project_load.hpp
 │       ├── project_load.cpp
 │       ├── project_build.hpp
@@ -329,7 +327,7 @@ and does not bypass normal LOAD state validation.
 
 ## Project documentation
 
-Project construction is mode-oriented. There is no universal mode-local construction state.
+Project construction is mode-oriented. There is no universal Project construction context.
 
 Server architecture owns process lifecycle and the resident Project pointer.
 
@@ -366,3 +364,23 @@ BUILD identity is persisted independently under:
 
 `project_identity_store` is intentionally a narrow persistence boundary. It is
 not a generic Project persistence manager.
+
+
+## Project lifecycle state machine
+
+```text
+UNLOADED
+    +-- LOAD success ------> LOADED
+    +-- LOAD failure ------> UNLOADED
+    +-- REBUILD success ---> LOADED
+    `-- REBUILD failure ---> UNLOADED
+
+LOADED
+    +-- BUILD success -----> LOADED
+    +-- BUILD failure -----> UNLOADED
+    `-- UNLOAD -----------> UNLOADED
+```
+
+BUILD operates on the resident Project and therefore has no Project path
+argument. REBUILD requires UNLOADED. Failure of LOAD, BUILD, or REBUILD always
+leaves `server_context.project == nullptr`.

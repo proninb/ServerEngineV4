@@ -15,8 +15,14 @@ enum class server_command_kind {
     // Restore one persisted Project while the Server is UNLOADED.
     load,
 
+    // Incrementally rebuild the currently resident Project Gn -> Gn+1.
+    build,
+
     // Destroy the currently active Project and return to UNLOADED.
     unload,
+
+    // Construct a new G0 while the Server is UNLOADED.
+    rebuild,
 
     // Stop communication, release Project ownership, and exit server.run().
     shutdown,
@@ -27,7 +33,7 @@ struct server_command {
     // Operation selected by the external command.
     server_command_kind kind = server_command_kind::shutdown;
 
-    // Project entry path used by LOAD; empty for other commands.
+    // Project entry path used by LOAD/REBUILD; empty for BUILD/UNLOAD/SHUTDOWN.
     std::filesystem::path path;
 };
 

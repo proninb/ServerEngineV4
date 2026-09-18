@@ -1,9 +1,9 @@
 /*
  * Project BUILD pipeline.
  *
- * BUILD starts from persisted Project identity and construction metadata.
- * project.json is parsed only when its content identity changed or cannot be
- * proven unchanged. No universal Project construction context is used.
+ * BUILD transforms the currently resident Project Gn into candidate Gn+1.
+ * Persisted construction proof is loaded only for that active Project. On any
+ * failure the Server owner discards Gn and transitions to UNLOADED.
  */
 #pragma once
 
@@ -18,7 +18,7 @@
 namespace cw::server {
 
 [[nodiscard]] server_status build_project(
-    const std::filesystem::path& project_path,
+    const project& resident,
     operation_id operation,
     diagnostic_collection& diagnostics,
     std::unique_ptr<project>& output);

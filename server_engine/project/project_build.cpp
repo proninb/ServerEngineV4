@@ -49,12 +49,15 @@ namespace {
 } // namespace
 
 server_status build_project(
-    const std::filesystem::path& project_path,
+    const project& resident,
     operation_id operation,
     diagnostic_collection& diagnostics,
     std::unique_ptr<project>& output) {
 
     (void)output;
+
+    const auto& project_path =
+        resident.path();
 
     project_identity_store store{
         project_path};
@@ -100,12 +103,12 @@ server_status build_project(
     if (stored ==
         project_identity_store_result::not_found) {
 
-        project_content_snapshot current;
+        project_content_snapshot snapshot;
 
         const auto acquired =
             acquire_project_content(
                 project_path,
-                current);
+                snapshot);
 
         if (acquired !=
             project_snapshot_result::acquired) {
@@ -119,7 +122,7 @@ server_status build_project(
 
         const auto validation =
             validate_project_configuration(
-                current.bytes,
+                snapshot.bytes,
                 project_path,
                 operation,
                 diagnostics);
@@ -138,14 +141,14 @@ server_status build_project(
         project_identity_decision::
             semantic_check_required;
 
-    project_content_snapshot current;
+    project_content_snapshot snapshot;
 
     const auto acquired =
         decide_project_identity(
             project_path,
             persisted,
             decision,
-            current);
+            snapshot);
 
     if (acquired !=
         project_snapshot_result::acquired) {
@@ -176,7 +179,7 @@ server_status build_project(
 
     const auto validation =
         validate_project_configuration(
-            current.bytes,
+            snapshot.bytes,
             project_path,
             operation,
             diagnostics);
