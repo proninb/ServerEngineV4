@@ -2,44 +2,39 @@
 
 ## Purpose
 
-`project.json` is the ordered construction-input contract consumed by REBUILD and
-by BUILD only when byte identity cannot prove the configuration unchanged.
+`project.json` is the ordered Project construction-input contract.
+
+It is consumed by:
+
+```text
+REBUILD
+    always compose from root
+
+BUILD
+    only recompose when committed configuration byte identity changed
+```
 
 It is not resident Project state.
 
-## Acquisition and Streaming
+No materialized `project_configuration` tree is required.
 
-The configuration path is:
+## Streaming Boundary
+
+Each participating configuration file follows:
 
 ```text
-stable project.json snapshot
-    |
+stable file snapshot
     +-- SHA-256 content hash
-    |
     `-- exact same bytes
-            |
-            v
-        generic JSON parser
-            |
-            v
-        Project ordered-schema state machine
-            |
-            v
-        composition consumer
+            -> generic JSON parser
+            -> ordered Project schema state machine
+            -> direct child Project references
 ```
 
-The parser never reopens `project.json`.
+The parser does not reopen the file.
 
-There is no required intermediate `project_configuration` tree.
-
-The current schema layer validates the stream. Composition attaches directly to
-this boundary.
-
-## Version
-
-```jsonc
-"version": 1
-```
+On a diagnostic error, ownership of the same byte buffer moves to the diagnostic
+source cache. No full source-text copy is required.
 
 ## Root Contract
 
@@ -58,7 +53,7 @@ this boundary.
 }
 ```
 
-Canonical root order:
+Canonical root field order:
 
 ```text
 version
@@ -69,7 +64,7 @@ configuration
 
 ## Project Tree
 
-Node types:
+Supported node types:
 
 ```text
 group
@@ -127,7 +122,7 @@ children
 }
 ```
 
-For `header`, `source`, and `project`, order is:
+For `header`, `source`, and `project`:
 
 ```text
 name
@@ -135,14 +130,40 @@ type
 path
 ```
 
-A `project` node references another `project.json`. Recursive resolution belongs
-to composition, not the generic JSON parser.
+## Path Resolution
 
-## Paths
+Every declared path is relative to the `project.json` that declares it.
 
-Paths are relative to the `project.json` that declares them.
+There is no directory scan.
 
-No directory scan is implied. Composition produces explicit roots.
+A child Project reference is resolved as:
+
+```text
+declaring project.json directory
+    + relative child path
+    -> normalized child project.json path
+```
+
+## Recursive Composition
+
+Composition begins at the root `project.json` and recursively follows only
+`type:"project"` references.
+
+Contract:
+
+```text
+root-first
+declaration-order DFS
+normalized-path dedupe
+cycle detection
+NO SORT
+```
+
+Repeated references to the same normalized child Project do not create duplicate
+manifest entries.
+
+If a Project references a configuration currently active in the recursion stack,
+composition fails with a cycle diagnostic.
 
 ## ABI
 
@@ -155,21 +176,14 @@ No directory scan is implied. Composition produces explicit roots.
 }
 ```
 
-Order:
-
-```text
-target
-pack
-```
-
-Targets:
+Supported targets:
 
 ```text
 windows-x64
 posix-x64
 ```
 
-Pack values:
+Supported pack values:
 
 ```text
 1
@@ -181,37 +195,147 @@ Pack values:
 
 The root Project ABI is authoritative for the composed Project.
 
-## BUILD Identity Semantics
+## Per-file Identity
 
-BUILD first tries persisted physical proof:
-
-```text
-change_token
-```
-
-If unchanged cannot be proven, it reads one stable snapshot and compares:
+Each participating `project.json` produces:
 
 ```text
-project_content_hash = SHA-256(exact bytes)
+project_content_hash
+    SHA-256(exact bytes)
+
+file_change_token
+    optional filesystem unchanged proof
 ```
 
-Only when byte content differs does BUILD stream the configuration and compute
-the later semantic fingerprint.
+The token is an optimization only.
 
-This separates:
+If token proof is unavailable, BUILD falls back to a stable read and content
+hash comparison.
+
+## Complete Configuration Identity
+
+Each manifest entry contains:
 
 ```text
-filesystem proof
-byte identity
-semantic identity
+normalized path relative to root Project directory
+per-file SHA-256
+optional change token
 ```
 
-Whitespace/comment-only changes may alter byte identity while preserving semantic
-identity.
+The complete configuration hash is:
+
+```text
+project_configuration_hash =
+    SHA-256(
+        format domain
+        ordered relative paths
+        ordered per-file SHA-256 hashes
+    )
+```
+
+Change tokens do not participate in this hash.
+
+This means:
+
+```text
+change token
+    physical proof optimization
+
+project_content_hash
+    exact identity of one file's bytes
+
+project_configuration_hash
+    exact identity of the complete composed configuration input set
+
+project_semantic_fingerprint
+    future canonical semantic identity
+```
+
+## BUILD Fast Path
+
+BUILD loads the manifest committed with resident Gn.
+
+For every entry:
+
+```text
+token proves unchanged
+    -> no read
+
+token cannot prove unchanged
+    -> acquire stable snapshot
+    -> SHA-256
+```
+
+If every SHA-256 matches:
+
+```text
+no configuration parse
+no recomposition
+-> Source Manager change detection
+```
+
+If any entry differs or disappears:
+
+```text
+recompose from root
+```
+
+Full recomposition is required because one changed `project.json` may change the
+set or order of child Projects.
+
+## Manifest Artifact
+
+```text
+<root-project-dir>/
+    .serverengine/
+        <root-project.json filename>/
+            project.manifest
+```
+
+The artifact contains:
+
+```text
+magic
+format version
+entry count
+aggregate configuration hash
+
+for each entry:
+    path length
+    flags
+    content hash
+    optional change token
+    path bytes
+
+artifact checksum
+```
+
+Validation fails closed on:
+
+```text
+bad magic/version
+bad checksum
+unknown flags
+invalid path
+invalid token encoding
+truncated/extra bytes
+stored aggregate hash != recomputed aggregate hash
+```
 
 ## Validation
 
-The schema fails closed on invalid JSON, wrong field order, unknown/extra
-properties, wrong types, missing required fields, invalid node types, empty
-required names/paths, unsupported version, unsupported ABI target, and
-unsupported ABI pack.
+The schema/composition layer fails closed on:
+
+```text
+malformed JSON
+wrong field order
+unknown/extra properties
+wrong types
+missing required fields
+invalid node types
+empty required names/paths
+unsupported version
+unsupported ABI target/pack
+missing referenced project.json
+recursive Project cycle
+```

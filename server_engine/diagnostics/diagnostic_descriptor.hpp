@@ -183,6 +183,47 @@ inline constexpr diagnostic_descriptor project_identity_io_failed{
     "Persisted Project identity I/O failed",
 };
 
+
+inline constexpr diagnostic_descriptor project_configuration_read_failed{
+    diagnostic_id{2011},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.configuration_read_failed",
+    "Project configuration input could not be read",
+};
+
+inline constexpr diagnostic_descriptor project_configuration_cycle{
+    diagnostic_id{2012},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.configuration_cycle",
+    "Project configuration contains a recursive Project cycle",
+};
+
+inline constexpr diagnostic_descriptor project_manifest_invalid{
+    diagnostic_id{2013},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.manifest_invalid",
+    "Persisted Project configuration manifest is invalid",
+};
+
+inline constexpr diagnostic_descriptor project_manifest_io_failed{
+    diagnostic_id{2014},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.manifest_io_failed",
+    "Project configuration manifest I/O failed",
+};
+
+inline constexpr diagnostic_descriptor project_manifest_missing{
+    diagnostic_id{2015},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.manifest_missing",
+    "Committed Project configuration manifest is missing",
+};
+
 } // namespace diagnostics
 
 }

@@ -26,7 +26,8 @@ add_executable(ServerEngineV4
 
     server_engine/project/project.cpp
     server_engine/project/project_identity.cpp
-    server_engine/project/project_identity_store.cpp
+    server_engine/project/project_configuration_manifest.cpp
+    server_engine/project/project_configuration_manifest_store.cpp
     server_engine/project/project_load.cpp
     server_engine/project/project_build.cpp
     server_engine/project/project_rebuild.cpp

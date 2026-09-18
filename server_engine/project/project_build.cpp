@@ -1,35 +1,12 @@
 #include "project_build.hpp"
 
-#include "project_configuration_loader.hpp"
-#include "project_identity.hpp"
-#include "project_identity_store.hpp"
+#include "project_configuration_manifest.hpp"
+#include "project_configuration_manifest_store.hpp"
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 
 namespace cw::server {
 namespace {
-
-[[nodiscard]] server_status report_snapshot_failure(
-    const std::filesystem::path& project_path,
-    operation_id operation,
-    diagnostic_collection& diagnostics,
-    project_snapshot_result result) {
-
-    diagnostics.emit(
-        diagnostic(
-            diagnostics::project_load_failed,
-            operation)
-            .file(project_path)
-            .detail(
-                result == project_snapshot_result::missing
-                    ? "Project configuration file does not exist"
-                    : result == project_snapshot_result::changed_during_read
-                        ? "Project configuration changed during acquisition"
-                        : "Cannot acquire Project configuration snapshot")
-            .build());
-
-    return server_status::project_load_failed;
-}
 
 [[nodiscard]] server_status report_build_incomplete(
     operation_id operation,
@@ -46,7 +23,7 @@ namespace {
     return server_status::unsupported;
 }
 
-} // namespace
+}
 
 server_status build_project(
     const project& resident,
@@ -59,139 +36,117 @@ server_status build_project(
     const auto& project_path =
         resident.path();
 
-    project_identity_store store{
+    project_configuration_manifest_store store{
         project_path};
 
-    persisted_project_identity persisted;
+    project_configuration_manifest persisted;
 
     const auto stored =
         store.load(
             persisted);
 
     if (stored ==
-        project_identity_store_result::invalid) {
+        project_configuration_manifest_store_result::
+            not_found) {
 
         diagnostics.emit(
             diagnostic(
-                diagnostics::project_identity_invalid,
+                diagnostics::project_manifest_missing,
                 operation)
                 .file(store.path())
                 .detail(
-                    "Persisted Project identity failed format or checksum validation")
+                    "BUILD requires the configuration manifest committed by the resident generation")
                 .build());
 
-        return
-            server_status::
-                project_artifact_invalid;
+        return server_status::
+            project_artifact_invalid;
     }
 
     if (stored ==
-        project_identity_store_result::io_failed) {
+        project_configuration_manifest_store_result::
+            invalid) {
 
         diagnostics.emit(
             diagnostic(
-                diagnostics::project_identity_io_failed,
+                diagnostics::project_manifest_invalid,
                 operation)
                 .file(store.path())
                 .detail(
-                    "Cannot read persisted Project identity")
+                    "Persisted Project configuration manifest failed structural or checksum validation")
+                .build());
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    if (stored ==
+        project_configuration_manifest_store_result::
+            io_failed) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_manifest_io_failed,
+                operation)
+                .file(store.path())
+                .detail(
+                    "Cannot read persisted Project configuration manifest")
                 .build());
 
         return server_status::io_error;
     }
 
-    if (stored ==
-        project_identity_store_result::not_found) {
+    project_configuration_manifest_verification verification =
+        project_configuration_manifest_verification::
+            changed;
 
-        project_content_snapshot snapshot;
-
-        const auto acquired =
-            acquire_project_content(
-                project_path,
-                snapshot);
-
-        if (acquired !=
-            project_snapshot_result::acquired) {
-
-            return report_snapshot_failure(
-                project_path,
-                operation,
-                diagnostics,
-                acquired);
-        }
-
-        const auto validation =
-            validate_project_configuration(
-                snapshot.bytes,
-                project_path,
-                operation,
-                diagnostics);
-
-        if (!succeeded(validation)) {
-            return validation;
-        }
-
-        return report_build_incomplete(
-            operation,
-            diagnostics,
-            "No persisted Project identity exists; composition and initial construction are not implemented yet");
-    }
-
-    project_identity_decision decision =
-        project_identity_decision::
-            semantic_check_required;
-
-    project_content_snapshot snapshot;
-
-    const auto acquired =
-        decide_project_identity(
+    const auto verified =
+        verify_project_configuration_manifest(
             project_path,
             persisted,
-            decision,
-            snapshot);
-
-    if (acquired !=
-        project_snapshot_result::acquired) {
-
-        return report_snapshot_failure(
-            project_path,
             operation,
             diagnostics,
-            acquired);
+            verification);
+
+    if (!succeeded(verified)) {
+        return verified;
     }
 
-    switch (decision) {
-    case project_identity_decision::proven_unchanged:
+    if (verification ==
+        project_configuration_manifest_verification::
+            unchanged) {
+
         return report_build_incomplete(
             operation,
             diagnostics,
-            "Project configuration is proven unchanged; Source Manager change detection is not implemented yet");
+            "Complete Project configuration manifest is unchanged; Source Manager change detection is not implemented yet");
+    }
 
-    case project_identity_decision::content_unchanged:
+    project_configuration_manifest candidate;
+
+    const auto composed =
+        compose_project_configuration_manifest(
+            project_path,
+            operation,
+            diagnostics,
+            candidate);
+
+    if (!succeeded(composed)) {
+        return composed;
+    }
+
+    if (candidate.configuration_hash ==
+        persisted.configuration_hash) {
+
         return report_build_incomplete(
             operation,
             diagnostics,
-            "Project content hash is unchanged; Source Manager change detection is not implemented yet");
-
-    case project_identity_decision::semantic_check_required:
-        break;
-    }
-
-    const auto validation =
-        validate_project_configuration(
-            snapshot.bytes,
-            project_path,
-            operation,
-            diagnostics);
-
-    if (!succeeded(validation)) {
-        return validation;
+            "Project configuration inputs recomposed to the same aggregate hash; Source Manager change detection is not implemented yet");
     }
 
     return report_build_incomplete(
         operation,
         diagnostics,
-        "Project content changed; composition and semantic fingerprint construction are not implemented yet");
+        "Project configuration aggregate hash changed; Gn -> Gn+1 construction is not implemented yet");
 }
 
 }

@@ -153,3 +153,52 @@ LOAD, BUILD, and REBUILD may use different Project subsystems, but one
 external operation still owns one `operation_id` and one
 `diagnostic_collection`. Nested construction layers append to that same
 caller-owned collection.
+
+## Current Project Construction Diagnostics
+
+Project construction diagnostics use stable IDs:
+
+```text
+2001 project.already_loaded
+2002 project.not_loaded
+2003 project.load_failed
+2004 project.startup_unsupported
+2005 project.invalid_json
+2006 project.invalid_configuration
+2007 project.build_incomplete
+2008 project.rebuild_incomplete
+2009 project.identity_invalid
+2010 project.identity_io_failed
+2011 project.configuration_read_failed
+2012 project.configuration_cycle
+2013 project.manifest_invalid
+2014 project.manifest_io_failed
+2015 project.manifest_missing
+```
+
+The manifest-specific diagnostics separate artifact state from configuration
+input state:
+
+```text
+project.configuration_read_failed
+    a participating project.json cannot be acquired/proven safely
+
+project.configuration_cycle
+    recursive type:"project" composition contains a cycle
+
+project.manifest_missing
+    BUILD has resident Gn but no committed configuration manifest
+
+project.manifest_invalid
+    manifest format/checksum/aggregate validation failed
+
+project.manifest_io_failed
+    manifest storage I/O failed
+```
+
+Human-readable detail text may evolve. Numeric IDs and symbolic names are the
+stable machine-facing contracts.
+
+A changed or missing configuration input during BUILD is not itself a corrupt
+manifest. It triggers recomposition. Manifest diagnostics are reserved for the
+persisted manifest artifact itself.

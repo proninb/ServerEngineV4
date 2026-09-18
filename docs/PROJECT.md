@@ -11,39 +11,33 @@ REBUILD
 UNLOAD
 ```
 
-There is no universal `project_context`. Each operation owns only the temporary
-state required by that operation.
+There is no universal `project_context`.
 
-Server owns zero or one resident Project:
+Each operation owns only the temporary state required by that operation.
+
+The state contract is:
 
 ```text
-server
-    |
-    `-- server_context
-            |
-            `-- project
+server_context.project == nullptr
+    == UNLOADED
 ```
 
-`server_context.project == nullptr` exactly means UNLOADED.
-
-## State Machine
+## Lifecycle
 
 ```text
 UNLOADED
     +-- LOAD success ------> LOADED Gn
     +-- LOAD failure ------> UNLOADED
-    |
     +-- REBUILD success ---> LOADED G0
     `-- REBUILD failure ---> UNLOADED
 
 LOADED Gn
     +-- BUILD success -----> LOADED Gn+1
     +-- BUILD failure -----> UNLOADED
-    |
     `-- UNLOAD -----------> UNLOADED
 ```
 
-Operation preconditions are strict:
+Preconditions:
 
 ```text
 LOAD     requires UNLOADED
@@ -52,34 +46,37 @@ BUILD    requires LOADED
 UNLOAD   requires LOADED
 ```
 
-No operation silently substitutes another operation.
+LOAD, BUILD, and REBUILD never substitute for each other.
 
-A failure of LOAD, BUILD, or REBUILD always leaves the Server UNLOADED.
+Failure of LOAD, BUILD, or REBUILD always leaves the Server UNLOADED.
 
 ## Resident Project
 
-Resident `project` contains only data required while the Project is active.
-
-Target state:
+Target resident state:
 
 ```text
 project
-    |
     +-- Graph
     +-- Runtime
     `-- SHM
 ```
 
-It must not retain `project.json`, composition state, Source Manager,
-parser/frontend state, Builder state, or mode-local temporary state.
+Resident Project must not retain construction-only state:
 
-The resident Project retains its Project entry path because a subsequent BUILD
-uses the active Project as its Gn input and resolves construction artifacts from
-that Project location.
+```text
+project.json composition
+configuration manifest
+Source Manager
+Parser/frontend
+Builder
+```
+
+The current resident Project retains its entry path so BUILD can locate the
+persisted construction artifacts belonging to Gn.
 
 ## LOAD
 
-LOAD is valid only while UNLOADED.
+LOAD restores persisted resident state:
 
 ```text
 persisted Graph
@@ -88,160 +85,234 @@ persisted Graph
     -> resident Project Gn
 ```
 
-LOAD does not parse `project.json` for construction, run Source Manager, or
-perform Project/source change detection.
-
-On failure no resident Project is published.
-
-## BUILD
-
-BUILD is valid only while a Project is already LOADED.
-
-BUILD has no Project path argument. The current resident Project is the Gn input:
+LOAD does not:
 
 ```text
-resident Project Gn
-    |
-    +-- project path
-    +-- current Graph/Runtime/SHM
-    |
-    v
-persisted construction baseline
-    |
-    v
-Project/configuration/source change detection
-    |
-    v
-candidate Gn+1
+parse project.json for construction
+compose Project configuration
+run Source Manager
+perform source change detection
 ```
 
-If BUILD succeeds:
-
-```text
-candidate Gn+1
-    -> commit required persisted construction state
-    -> publish Gn+1
-```
-
-If BUILD fails:
-
-```text
-destroy temporary/candidate BUILD state
-destroy resident Gn
-server_context.project = nullptr
--> UNLOADED
-```
-
-The old Gn is not retained after a failed BUILD.
-
-BUILD begins with persisted Project input proof. Current single-file identity is
-an implementation stage; composed Project identity will become a configuration
-manifest covering every participating `project.json`.
-
-Identity levels remain distinct:
-
-```text
-file_change_token
-    filesystem unchanged proof for one file
-
-project_content_hash
-    SHA-256 byte identity for one configuration file
-
-project_semantic_fingerprint
-    semantic identity of the composed Project configuration
-```
+LOAD failure leaves UNLOADED.
 
 ## REBUILD
 
-REBUILD is valid only while UNLOADED and constructs a fresh G0.
+REBUILD starts only from UNLOADED and constructs a fresh generation:
 
 ```text
-project.json
-    -> complete composition
+root project.json
+    -> recursive Project configuration composition
+    -> candidate configuration manifest
     -> explicit roots
     -> new Source Manager
     -> frontend / semantic construction
     -> Graph G0
     -> Runtime
     -> SHM
+    -> coordinated persisted-state commit
     -> resident Project G0
 ```
 
-REBUILD ignores incremental construction state.
+REBUILD ignores previous incremental construction state.
 
-A successful REBUILD creates/persists the construction baseline required by
-future BUILD operations.
+### Current implementation boundary
 
-On failure the Server remains UNLOADED.
-
-## UNLOAD
-
-UNLOAD destroys the current resident Project:
+The current V4 implementation completes:
 
 ```text
-LOADED
-    -> destroy Project
-    -> UNLOADED
+root project.json
+    -> recursive type:"project" composition
+    -> validation of every participating project.json
+    -> candidate project_configuration_manifest
+    -> aggregate project_configuration_hash
 ```
 
-UNLOAD is required before REBUILD.
-
-## Project Identity Persistence
-
-Physical file proof is stored separately from resident Project state.
-
-Current implementation artifact:
+It currently stops before:
 
 ```text
-<project-dir>/
+Source Manager
+G0
+Runtime
+SHM
+coordinated commit
+```
+
+Because no G0 is published yet, the candidate manifest is deliberately not
+persisted by the current incomplete REBUILD path.
+
+## BUILD
+
+BUILD starts only from resident Gn:
+
+```text
+resident Gn
+    -> load committed project.manifest
+    -> verify complete configuration input set
+    -> Source Manager change detection
+    -> candidate Gn+1
+    -> coordinated commit
+    -> resident Gn+1
+```
+
+BUILD has no external Project path argument. It uses the active Project.
+
+### Manifest verification
+
+For every manifest entry:
+
+```text
+change_token available and proves unchanged
+    -> no file read
+
+otherwise
+    -> stable snapshot
+    -> SHA-256
+    -> compare persisted per-file content hash
+```
+
+If every participating `project.json` is byte-identical:
+
+```text
+configuration unchanged
+    -> proceed directly to Source Manager change detection
+```
+
+If any file differs or disappears:
+
+```text
+recompose from root
+    -> discover added/removed/reordered child Projects
+    -> candidate manifest
+    -> candidate aggregate configuration hash
+```
+
+### Current implementation boundary
+
+The current V4 BUILD implements:
+
+```text
+load project.manifest
+verify every configuration input
+recompose when one input changed
+compare aggregate configuration hash
+```
+
+It currently stops before Source Manager and `Gn -> Gn+1` construction.
+
+BUILD failure destroys resident Gn and leaves UNLOADED.
+
+## Configuration Manifest
+
+The complete composed Project configuration proof is represented by:
+
+```text
+project_configuration_manifest
+    configuration_hash
+    files[]
+        normalized root-relative path
+        SHA-256 content hash
+        optional file_change_token
+```
+
+Traversal order is:
+
+```text
+root-first
+declaration-order DFS
+normalized-path dedupe
+cycle detection
+NO SORT
+```
+
+Repeated references to the same normalized configuration file produce one entry.
+
+A reference to an active ancestor is a configuration cycle and fails.
+
+### Path contract
+
+Manifest paths are normalized relative to the root Project directory.
+
+This keeps the aggregate configuration identity stable when the whole Project
+tree is relocated without changing its internal structure or bytes.
+
+Path is still a locator, not semantic identity.
+
+## Identity Levels
+
+The identity/proof levels are intentionally separate:
+
+```text
+file_change_token
+    fast filesystem unchanged proof for one file
+
+project_content_hash
+    SHA-256 of exact bytes of one project.json
+
+project_configuration_hash
+    SHA-256 of the complete ordered configuration-input manifest
+
+project_semantic_fingerprint
+    future canonical semantic identity after semantic composition
+```
+
+`project_configuration_hash` includes:
+
+```text
+format domain
+ordered root-relative paths
+ordered per-file content hashes
+```
+
+It does not include change tokens.
+
+A whitespace/comment-only change modifies byte identity and therefore the
+configuration hash even if a later semantic stage may prove equivalent meaning.
+
+## Manifest Persistence
+
+Committed manifest location:
+
+```text
+<root-project-dir>/
     .serverengine/
-        <project.json filename>/
-            project.identity
+        <root-project.json filename>/
+            project.manifest
 ```
 
-The current artifact is a stepping stone for one configuration file. The final
-composed-Project BUILD proof must cover every `project.json` participating in
-composition and one aggregate configuration identity.
-
-`project_identity_store` remains a narrow persistence boundary, not a generic
-Project persistence manager.
-
-## Configuration Byte Ownership
-
-A configuration file is read once into an owning snapshot:
+The file is:
 
 ```text
-project_content_snapshot.bytes
-    |
-    +-- SHA-256
-    |
-    `-- parser consumes string_view over the same bytes
+versioned
+checksummed
+variable-size
+fail-closed
 ```
 
-On validation failure ownership moves into diagnostics:
+The manifest checksum protects the artifact bytes.
+
+On load, the aggregate `project_configuration_hash` is also recomputed from the
+decoded entries and must match the stored aggregate.
+
+The manifest store is a narrow construction-persistence boundary. It does not
+own Graph, Source Manager, Runtime, SHM, or resident Project state.
+
+## Publication Contract
+
+Candidate construction artifacts belong to the candidate generation.
+
+They become authoritative only as part of the same successful coordinated commit
+that publishes that generation.
+
+Therefore:
 
 ```text
-snapshot.bytes
-    -> diagnostics.add_source(..., std::move(bytes))
-```
+failed REBUILD
+    must not commit candidate manifest
 
-No full source-text copy is required.
-
-## Publication and Failure Rule
-
-LOAD and REBUILD start from UNLOADED and publish only after complete success.
-
-BUILD starts from LOADED Gn, constructs a candidate Gn+1, and publishes only
-after complete success.
-
-The common failure contract is:
-
-```text
-LOAD failure
-BUILD failure
-REBUILD failure
-    -> server_context.project == nullptr
-    -> UNLOADED
+failed BUILD
+    must not commit candidate manifest/baseline
+    and destroys resident Gn
 ```
 
 ## Architectural Invariants
@@ -250,11 +321,17 @@ REBUILD failure
 2. `server_context.project == nullptr` exactly means UNLOADED.
 3. LOAD and REBUILD require UNLOADED.
 4. BUILD and UNLOAD require LOADED.
-5. BUILD operates on the currently resident Project; it has no external Project path argument.
-6. LOAD, BUILD, and REBUILD remain distinct operations.
-7. Failure of LOAD, BUILD, or REBUILD always leaves the Server UNLOADED.
-8. Resident `project` contains runtime-required state only.
+5. BUILD operates on resident Gn.
+6. LOAD, BUILD, and REBUILD are distinct pipelines.
+7. Failure of LOAD, BUILD, or REBUILD leaves UNLOADED.
+8. Resident Project contains runtime-required state only.
 9. There is no universal `project_context`.
 10. Source Manager is construction state, never resident Project state.
-11. Path is location, not semantic identity.
-12. Publication occurs only after complete operation success.
+11. One normalized configuration path appears at most once in the manifest.
+12. Configuration composition is declaration-order DFS and is never sorted.
+13. Change tokens are proof optimizations, never identity.
+14. Per-file SHA-256 identifies exact configuration bytes.
+15. Aggregate configuration hash identifies the complete ordered configuration input set.
+16. Aggregate configuration identity is relocation-stable through root-relative paths.
+17. Semantic fingerprint remains separate from byte/configuration identity.
+18. Candidate persisted construction state is committed only with its successful generation.

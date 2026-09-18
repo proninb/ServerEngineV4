@@ -63,8 +63,10 @@ ServerEngineV4/
 │       ├── project.cpp
 │       ├── project_identity.hpp
 │       ├── project_identity.cpp
-│       ├── project_identity_store.hpp
-│       ├── project_identity_store.cpp
+│       ├── project_configuration_manifest.hpp
+│       ├── project_configuration_manifest.cpp
+│       ├── project_configuration_manifest_store.hpp
+│       ├── project_configuration_manifest_store.cpp
 │       ├── project_load.hpp
 │       ├── project_load.cpp
 │       ├── project_build.hpp
@@ -273,7 +275,7 @@ Invariants:
 5. `server_command_request::origin` is direct and non-owning; no endpoint lookup is performed.
 6. No virtual response hierarchy or shared ownership is used.
 7. SHUTDOWN result is presented before communication endpoints are stopped.
-8. Failed LOAD destroys partial Project state and leaves Server UNLOADED.
+8. Failed LOAD, BUILD, or REBUILD leaves Server UNLOADED.
 
 ## Project LOAD entry points
 
@@ -354,17 +356,29 @@ Project lifecycle/configuration details belong in those documents instead of
 being duplicated in Server process configuration documentation.
 
 
-## Project identity persistence
+## Project configuration manifest persistence
 
-BUILD identity is persisted independently under:
+The complete composed configuration proof is stored under:
 
 ```text
-<project-dir>/.serverengine/<project.json filename>/project.identity
+<root-project-dir>/.serverengine/<root-project.json filename>/project.manifest
 ```
 
-`project_identity_store` is intentionally a narrow persistence boundary. It is
-not a generic Project persistence manager.
+The manifest stores:
 
+```text
+root-first declaration-order composition
+root-relative normalized paths
+per-file SHA-256
+optional file change tokens
+aggregate project_configuration_hash
+artifact checksum
+```
+
+The manifest is construction state and never resident Project state.
+
+`project_configuration_manifest_store` is a narrow persistence boundary, not a
+generic Project persistence manager.
 
 ## Project lifecycle state machine
 
@@ -384,3 +398,28 @@ LOADED
 BUILD operates on the resident Project and therefore has no Project path
 argument. REBUILD requires UNLOADED. Failure of LOAD, BUILD, or REBUILD always
 leaves `server_context.project == nullptr`.
+
+## Current Project construction boundary
+
+The current Project construction layer implements complete configuration-input
+composition and verification:
+
+```text
+REBUILD
+    recursive project.json composition
+    -> candidate manifest
+    -> aggregate configuration hash
+    -> stops before Source Manager/G0
+
+BUILD
+    committed manifest verification
+    -> recomposition on changed configuration bytes
+    -> aggregate hash comparison
+    -> stops before Source Manager/Gn->Gn+1
+```
+
+A candidate manifest is not committed until the generation it describes is
+successfully constructed and published.
+
+Configuration traversal is root-first declaration-order DFS with normalized-path
+dedupe and cycle detection. It is not sorted.

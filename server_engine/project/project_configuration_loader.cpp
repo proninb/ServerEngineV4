@@ -1,8 +1,9 @@
 /*
- * Streaming Project configuration validator.
+ * Streaming Project configuration validator/reference producer.
  *
- * Validation is state-machine based and does not construct a persistent or
- * temporary project_configuration tree.
+ * Validation is state-machine based and does not construct a Project
+ * configuration tree. Direct child Project paths are retained only for recursive
+ * composition.
  */
 #include "project_configuration_loader.hpp"
 
@@ -69,7 +70,10 @@ struct frame {
 
 class project_configuration_handler final : public json_event_handler {
 public:
-    project_configuration_handler() {
+    explicit project_configuration_handler(
+        std::vector<std::filesystem::path>& project_references)
+        : project_references(project_references) {
+
         stack.reserve(16);
     }
 
@@ -520,6 +524,13 @@ private:
                     fail("Project item path must be a non-empty string");
                     return;
                 }
+
+                if (current.type ==
+                    item_type::project) {
+
+                    project_references.emplace_back(
+                        std::move(path));
+                }
             }
 
             current.stage =
@@ -532,6 +543,7 @@ private:
         }
     }
 
+    std::vector<std::filesystem::path>& project_references;
     std::vector<frame> stack;
 
     std::size_t current_offset = 0;
@@ -541,13 +553,17 @@ private:
 
 } // namespace
 
-server_status validate_project_configuration(
+server_status read_project_configuration(
     std::string& bytes,
     const std::filesystem::path& path,
     operation_id operation,
-    diagnostic_collection& diagnostics) {
+    diagnostic_collection& diagnostics,
+    std::vector<std::filesystem::path>& project_references) {
 
-    project_configuration_handler handler;
+    project_references.clear();
+
+    project_configuration_handler handler{
+        project_references};
 
     const auto parsed =
         parse_json(
@@ -555,6 +571,8 @@ server_status validate_project_configuration(
             handler);
 
     if (!parsed.ok()) {
+        project_references.clear();
+
         const auto file_id =
             diagnostics.add_source(
                 path,
@@ -578,6 +596,8 @@ server_status validate_project_configuration(
     }
 
     if (!handler.valid()) {
+        project_references.clear();
+
         const auto& error =
             handler.error();
 
