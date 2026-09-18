@@ -48,6 +48,7 @@ enum class schema_field : std::uint8_t {
     address,
     port,
     path,
+    startup,
     level,
     console,
     file,
@@ -546,6 +547,7 @@ private:
 
         case schema_context::project:
             if (key == "path") return schema_field::path;
+            if (key == "startup") return schema_field::startup;
             break;
 
         case schema_context::logging:
@@ -679,29 +681,65 @@ private:
         schema_field field,
         json_value_view value) {
 
-        if (field !=
+        if (field ==
             schema_field::path) {
 
-            fail(
-                schema_failure::invalid_structure,
-                "invalid project scalar field");
+            std::string path;
+
+            if (!value.get(path) ||
+                path.empty()) {
+
+                fail(
+                    schema_failure::wrong_type,
+                    "project.path must be a non-empty string");
+                return;
+            }
+
+            configuration.project->path =
+                std::filesystem::path(
+                    std::move(path));
             return;
         }
 
-        std::string path;
+        if (field ==
+            schema_field::startup) {
 
-        if (!value.get(path) ||
-            path.empty()) {
+            std::string startup;
+
+            if (!value.get(startup)) {
+                fail(
+                    schema_failure::wrong_type,
+                    "project.startup must be a string");
+                return;
+            }
+
+            if (startup == "load") {
+                configuration.project->startup =
+                    project_startup_mode::load;
+                return;
+            }
+
+            if (startup == "build") {
+                configuration.project->startup =
+                    project_startup_mode::build;
+                return;
+            }
+
+            if (startup == "rebuild") {
+                configuration.project->startup =
+                    project_startup_mode::rebuild;
+                return;
+            }
 
             fail(
-                schema_failure::wrong_type,
-                "project.path must be a non-empty string");
+                schema_failure::invalid_value,
+                "project.startup must be load, build, or rebuild");
             return;
         }
 
-        configuration.project->path =
-            std::filesystem::path(
-                std::move(path));
+        fail(
+            schema_failure::invalid_structure,
+            "invalid project scalar field");
     }
 
     void read_logging(

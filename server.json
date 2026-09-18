@@ -14,7 +14,8 @@
 
   // Optional startup Project:
   // "project": {
-  //   "path": "project.json"
+  //   "path": "project.json",
+  //   "startup": "load"
   // },
 
   "logging": {

@@ -60,11 +60,18 @@ ServerEngineV4/
 │   │
 │   └── project/
 │       ├── project.hpp
-│       └── project.cpp
+│       ├── project.cpp
+│       ├── project_configuration.hpp
+│       ├── project_configuration_loader.hpp
+│       └── project_configuration_loader.cpp
 │
 └── docs/
     ├── SERVER_ARCHITECTURE.md
-    └── SERVER_CONFIGURATION.md
+    ├── SERVER_CONFIGURATION.md
+    ├── PROJECT.md
+    ├── PROJECT_CONFIGURATION.md
+    ├── DIAGNOSTICS.md
+    └── JSON.md
 ```
 
 ## Visual Studio rule
@@ -197,7 +204,7 @@ Console is one communication transport, not a mandatory Server component.
 6. Platform-specific code remains inside the transport implementation subtree.
 7. Server lifecycle behavior remains transport-neutral.
 8. At most one Project is active.
-9. LOAD publishes only a successfully constructed Project.
+9. Project state is published only after the selected lifecycle operation succeeds.
 10. Runtime hot paths must not depend on control-plane command synchronization.
 
 
@@ -288,7 +295,7 @@ Both paths use the same `server::load()` implementation.
 - UNLOADED/LOADED validation;
 - project path resolution relative to `server.json`;
 - Project construction;
-- Project load/build execution;
+- Project LOAD execution;
 - failed-LOAD cleanup.
 
 The state contract is:
@@ -306,5 +313,70 @@ UNLOADED + LOAD failure -> UNLOADED
 LOADED   + LOAD         -> project_already_loaded
 ```
 
-Startup `project.path` is not a separate loading mechanism and does not bypass
-the normal LOAD state validation.
+Startup `project.path` with `startup=load` is not a separate loading mechanism
+and does not bypass normal LOAD state validation.
+
+## Project configuration tree
+
+`project.json` is an ordered V1 contract.
+
+Canonical root field order:
+
+```text
+version -> name -> project -> configuration
+```
+
+Project tree node types:
+
+```text
+group
+header
+source
+project
+```
+
+Canonical item order:
+
+```text
+group:   name -> type -> children
+header:  name -> type -> path
+source:  name -> type -> path
+project: name -> type -> path
+```
+
+`group` is the only container node. `header`, `source`, and `project` are leaves.
+
+`project` is only a reference to another project.json at this stage. Recursive
+composition is a separate stage.
+
+ABI order:
+
+```text
+configuration -> abi -> target -> pack
+```
+
+## Project documentation
+
+Server architecture owns process lifecycle and the resident Project pointer.
+
+Detailed Project contracts are separated into:
+
+```text
+PROJECT.md
+    Project ownership
+    resident vs construction lifetime
+    LOAD / BUILD / REBUILD
+    project_context
+    Graph -> Runtime -> SHM publication
+
+PROJECT_CONFIGURATION.md
+    project.json schema
+    Project tree
+    group / header / source / project
+    path resolution
+    composition input
+    ABI contract
+```
+
+Project lifecycle/configuration details belong in those documents instead of
+being duplicated in Server process configuration documentation.

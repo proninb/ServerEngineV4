@@ -1,8 +1,9 @@
 /*
  * Process-lifetime state container for one Server instance.
  *
- * server_context is an ownership object. It is not a generic service locator
- * and must not accumulate BUILD/REBUILD-only temporary state.
+ * server_context owns only process-lifetime Server state. It is not a service
+ * locator and must never retain project_context, Source Manager, parser,
+ * Builder, or other BUILD/REBUILD-only construction state.
  */
 #pragma once
 
@@ -34,7 +35,8 @@ public:
     // Owner of all endpoints materialized from configuration.communication.
     communication communications;
 
-    // Server-owned Project. nullptr exactly represents the UNLOADED state.
+    // Resident Project runtime state. nullptr exactly represents UNLOADED.
+    // Construction-only Project state is never stored here.
     std::unique_ptr<project> project;
 };
 

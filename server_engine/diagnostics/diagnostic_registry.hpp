@@ -50,6 +50,9 @@ inline constexpr std::array diagnostic_descriptors{
     diagnostics::project_already_loaded,
     diagnostics::project_not_loaded,
     diagnostics::project_load_failed,
+    diagnostics::project_startup_unsupported,
+    diagnostics::project_invalid_json,
+    diagnostics::project_invalid_configuration,
 };
 
 // Process-wide immutable registry view.

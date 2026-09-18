@@ -1,10 +1,13 @@
 /*
- * Current Project ownership boundary.
+ * Resident Project ownership boundary.
  *
- * This bootstrap type establishes LOAD/UNLOAD ownership semantics before
- * Project parsing, build, Graph, Runtime, and persistence are added.
+ * Project owns the successfully parsed configuration of exactly one project.json.
+ * Nested Project composition, BUILD, Graph, Runtime, and persistence are separate
+ * later stages.
  */
 #pragma once
+
+#include "project_configuration.hpp"
 
 #include "../diagnostics/diagnostic_collection.hpp"
 #include "../operation.hpp"
@@ -14,24 +17,24 @@
 
 namespace cw::server {
 
-// Represents the one Project currently owned by a Server.
 class project final {
 public:
-    // Verifies bootstrap accessibility of the requested Project configuration.
-    // Failures are appended to the caller-owned operation diagnostics.
     [[nodiscard]] server_status load(
         const std::filesystem::path& configuration_path,
         operation_id operation,
         diagnostic_collection& diagnostics);
 
-    // Returns the resolved Project configuration path associated with this object.
     [[nodiscard]] const std::filesystem::path& configuration_path() const noexcept {
         return path;
     }
 
+    [[nodiscard]] const project_configuration& configuration() const noexcept {
+        return configuration_value;
+    }
+
 private:
-    // Resolved path established only after successful load().
     std::filesystem::path path;
+    project_configuration configuration_value;
 };
 
 }

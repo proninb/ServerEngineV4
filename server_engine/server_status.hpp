@@ -1,5 +1,5 @@
 /*
- * Small status domain shared by the Server control layer.
+ * Small transport-neutral status domain shared by Server lifecycle code.
  *
  * Status values are transport-neutral and exception-free. Human-readable
  * failure details are returned separately through diagnostic strings.
@@ -8,7 +8,7 @@
 
 namespace cw::server {
 
-// Result codes returned by Server lifecycle and bootstrap operations.
+// Result codes returned by Server lifecycle and Project operations.
 enum class server_status {
     // Operation completed successfully.
     success = 0,
@@ -28,7 +28,7 @@ enum class server_status {
     // An operation requiring an active Project was requested while UNLOADED.
     project_not_loaded,
 
-    // Project bootstrap could not open or validate the requested Project.
+    // Project LOAD could not restore the requested Project.
     project_load_failed,
 
     // One or more configured communication endpoints could not start.

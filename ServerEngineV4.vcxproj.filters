@@ -69,6 +69,9 @@
     <ClCompile Include="server_engine\project\project.cpp">
       <Filter>server_engine\project</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\project\project_configuration_loader.cpp">
+      <Filter>server_engine\project</Filter>
+    </ClCompile>
   </ItemGroup>
 
   <ItemGroup>
@@ -164,6 +167,12 @@
     <ClInclude Include="server_engine\project\project.hpp">
       <Filter>server_engine\project</Filter>
     </ClInclude>
+    <ClInclude Include="server_engine\project\project_configuration.hpp">
+      <Filter>server_engine\project</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\project_configuration_loader.hpp">
+      <Filter>server_engine\project</Filter>
+    </ClInclude>
   </ItemGroup>
 
   <ItemGroup>
@@ -179,6 +188,12 @@
       <Filter>docs</Filter>
     </None>
     <None Include="docs\SERVER_CONFIGURATION.md">
+      <Filter>docs</Filter>
+    </None>
+    <None Include="docs\PROJECT.md">
+      <Filter>docs</Filter>
+    </None>
+    <None Include="docs\PROJECT_CONFIGURATION.md">
       <Filter>docs</Filter>
     </None>
   </ItemGroup>

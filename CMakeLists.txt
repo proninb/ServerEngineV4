@@ -25,6 +25,7 @@ add_executable(ServerEngineV4
     server_engine/communication/console/server_console.cpp
 
     server_engine/project/project.cpp
+    server_engine/project/project_configuration_loader.cpp
 )
 
 if(WIN32)

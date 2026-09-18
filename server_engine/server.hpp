@@ -1,7 +1,8 @@
 /*
  * Server lifecycle controller.
  *
- * server owns behavior. server_context owns mutable process-lifetime state.
+ * server owns lifecycle behavior. server_context owns process-lifetime Server
+ * state. BUILD/REBUILD construction state must remain outside server_context.
  * All lifecycle commands execute on the Server control thread.
  */
 #pragma once
@@ -21,8 +22,8 @@ namespace cw::server {
 // Coordinates Server startup, command execution, Project ownership, and shutdown.
 class server final {
 public:
-    // Loads server.json, starts communication, and routes optional project.path
-    // through the same LOAD implementation used by runtime commands.
+    // Loads server.json, starts communication, and executes the configured
+    // Project startup policy when project.path is present.
     [[nodiscard]] server_status start(
         const std::filesystem::path& configuration_path,
         diagnostic_collection& diagnostics);
@@ -34,7 +35,8 @@ public:
     [[nodiscard]] server_command_result execute(
         const server_command& command);
 
-    // Loads one Project while UNLOADED.
+    // Restores one persisted Project while UNLOADED. Source change detection
+    // and reconstruction belong to BUILD/REBUILD, not LOAD.
     [[nodiscard]] server_status load(
         const std::filesystem::path& project_path,
         operation_id operation,

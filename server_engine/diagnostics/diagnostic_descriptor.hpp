@@ -122,6 +122,31 @@ inline constexpr diagnostic_descriptor project_load_failed{
     "Project configuration could not be loaded",
 };
 
+// Startup BUILD/REBUILD was requested before those execution paths exist.
+inline constexpr diagnostic_descriptor project_startup_unsupported{
+    diagnostic_id{2004},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.startup_unsupported",
+    "Configured Project startup mode is not implemented",
+};
+
+inline constexpr diagnostic_descriptor project_invalid_json{
+    diagnostic_id{2004},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.invalid_json",
+    "Project configuration contains invalid JSON",
+};
+
+inline constexpr diagnostic_descriptor project_invalid_configuration{
+    diagnostic_id{2005},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.invalid_configuration",
+    "Project configuration is invalid",
+};
+
 } // namespace diagnostics
 
 }

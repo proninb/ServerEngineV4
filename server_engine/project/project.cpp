@@ -1,12 +1,8 @@
-/*
- * Minimal Project bootstrap implementation.
- */
 #include "project.hpp"
 
-#include "../diagnostics/diagnostic_builder.hpp"
-#include "../diagnostics/diagnostic_descriptor.hpp"
+#include "project_configuration_loader.hpp"
 
-#include <fstream>
+#include <utility>
 
 namespace cw::server {
 
@@ -15,24 +11,21 @@ server_status project::load(
     operation_id operation,
     diagnostic_collection& diagnostics) {
 
-    std::ifstream stream(
-        configuration_path,
-        std::ios::binary);
+    project_configuration configuration;
 
-    if (!stream) {
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_load_failed,
-                operation)
-                .file(configuration_path)
-                .detail("Cannot open Project configuration file")
-                .build());
+    const auto status =
+        load_project_configuration(
+            configuration_path,
+            operation,
+            diagnostics,
+            configuration);
 
-        return server_status::project_load_failed;
+    if (!succeeded(status)) {
+        return status;
     }
 
-    // Publish Project state only after bootstrap validation succeeds.
     path = configuration_path;
+    configuration_value = std::move(configuration);
 
     return server_status::success;
 }

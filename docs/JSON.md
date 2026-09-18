@@ -39,7 +39,7 @@ streaming parser
     ↓
 json_event_handler
     ↓
-configuration schema handler
+schema-specific event handler
 ```
 
 No DOM is constructed.
@@ -138,6 +138,9 @@ diagnostic_collection
 ```
 
 Unknown and duplicate properties fail closed.
+
+Field ordering, when required by an architecture-level configuration contract,
+is enforced by that schema handler, not by the generic JSON parser.
 
 ## Writer
 

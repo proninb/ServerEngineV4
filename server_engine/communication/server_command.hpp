@@ -12,7 +12,7 @@ namespace cw::server {
 
 // Server lifecycle commands currently accepted by the control layer.
 enum class server_command_kind {
-    // Load one Project configuration while the Server is UNLOADED.
+    // Restore one persisted Project while the Server is UNLOADED.
     load,
 
     // Destroy the currently active Project and return to UNLOADED.
@@ -27,7 +27,7 @@ struct server_command {
     // Operation selected by the external command.
     server_command_kind kind = server_command_kind::shutdown;
 
-    // Command-specific Project path used by LOAD; empty for other commands.
+    // Project entry path used by LOAD; empty for other commands.
     std::filesystem::path path;
 };
 

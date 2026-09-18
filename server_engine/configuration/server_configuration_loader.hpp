@@ -1,8 +1,8 @@
 /*
  * Server configuration loading boundary.
  *
- * Parsing and schema validation are kept outside server. All failures emit
- * catalog diagnostics into the caller-owned operation diagnostic_collection.
+ * Generic JSON parsing remains schema-agnostic. This layer owns server.json
+ * schema and emits failures into the caller-owned operation diagnostics.
  */
 #pragma once
 

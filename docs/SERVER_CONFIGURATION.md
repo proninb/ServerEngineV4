@@ -54,15 +54,34 @@ Optional:
 
 ```jsonc
 "project": {
-  "path": "project.json"
+  "path": "project.json",
+  "startup": "load"
 }
 ```
 
-Present: the Server performs startup LOAD.
+`startup` is optional and defaults to `load`.
 
-Absent: the Server starts UNLOADED and waits for a command.
+```text
+startup = load
+    load the persisted Graph directly
+    do not perform Project/source change detection
+
+startup = build
+    check Project/source changes
+    unchanged -> use persisted Graph
+    changed   -> rebuild
+
+startup = rebuild
+    perform a full G0 rebuild
+```
+
+Absent `project`: the Server starts UNLOADED and waits for a command.
 
 Relative Project paths are resolved relative to `server.json`.
+
+At the current implementation stage only `startup=load` executes. `build` and
+`rebuild` are parsed and represented explicitly, but fail closed as unsupported
+until their Project construction paths are implemented.
 
 ## Communication
 
@@ -136,3 +155,11 @@ communication console -> commands
 logging console       -> diagnostic output
 telemetry console     -> telemetry output
 ```
+
+## Configuration ownership boundary
+
+`server.json` configures the Server process and selects the Project startup
+operation. BUILD/REBUILD construction state belongs to temporary
+`project_context`, never to `server_context`.
+
+See `PROJECT.md` and `PROJECT_CONFIGURATION.md` for Project contracts.

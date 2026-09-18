@@ -89,10 +89,34 @@ server_status server::start(
     running = true;
 
     if (context.configuration.project) {
-        status = load(
-            context.configuration.project->path,
-            operation,
-            diagnostics);
+        const auto& startup =
+            *context.configuration.project;
+
+        switch (startup.startup) {
+        case project_startup_mode::load:
+            status = load(
+                startup.path,
+                operation,
+                diagnostics);
+            break;
+
+        case project_startup_mode::build:
+        case project_startup_mode::rebuild:
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_startup_unsupported,
+                    operation)
+                    .detail(
+                        startup.startup ==
+                                project_startup_mode::build
+                            ? "startup=build is not implemented yet"
+                            : "startup=rebuild is not implemented yet")
+                    .build());
+
+            status =
+                server_status::unsupported;
+            break;
+        }
 
         if (!succeeded(status)) {
             shutdown();

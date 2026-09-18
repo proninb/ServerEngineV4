@@ -50,10 +50,25 @@ struct communication_configuration {
     std::vector<communication_endpoint_configuration> endpoints;
 };
 
-// Optional startup Project reference.
+// Startup policy for the optional Project.
+enum class project_startup_mode {
+    // Restore persisted Graph state without Project/source change detection.
+    load,
+
+    // Check Project/source changes and reconstruct only when required.
+    build,
+
+    // Reconstruct from project.json and sources as a full G0 build.
+    rebuild,
+};
+
+// Optional startup Project entry.
 struct project_startup_configuration {
     // Project configuration path. Relative paths resolve against server.json.
     std::filesystem::path path;
+
+    // Startup policy. load is the default when omitted from server.json.
+    project_startup_mode startup = project_startup_mode::load;
 };
 
 // Human-readable diagnostic logging configuration.
@@ -85,7 +100,7 @@ struct server_configuration {
     // Required communication endpoint configuration.
     communication_configuration communication;
 
-    // Optional Project loaded automatically after communication startup.
+    // Optional Project startup request executed after communication startup.
     std::optional<project_startup_configuration> project;
 
     // Optional-in-JSON logging configuration represented with defaults here.

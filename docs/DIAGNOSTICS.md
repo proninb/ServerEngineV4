@@ -118,7 +118,7 @@ Human-readable message/detail text is not a machine protocol key.
 
 ## JSON-with-comments offset rule
 
-`server.json` supports:
+JSON configuration files such as `server.json` support:
 
 ```text
 // line comments
@@ -127,9 +127,9 @@ Human-readable message/detail text is not a machine protocol key.
 
 Comment removal must preserve source byte positions.
 
-The configuration loader therefore replaces comment bytes with spaces while
-preserving CR/LF bytes and total input length. Parser offsets remain valid
-against the exact original file and can be converted directly to line/column.
+The JSON parser consumes comments as trivia while offsets continue to reference
+the original byte stream. Schema diagnostics can therefore map offsets directly
+to the original file for line/column/caret presentation.
 
 ## Presentation boundary
 
@@ -146,3 +146,10 @@ diagnostic_formatter
 ```
 
 No subsystem should parse human-readable messages to decide machine behavior.
+
+## Lifecycle diagnostic boundary
+
+LOAD, BUILD, and REBUILD may use different Project subsystems, but one
+external operation still owns one `operation_id` and one
+`diagnostic_collection`. Nested construction layers append to that same
+caller-owned collection.

@@ -87,6 +87,7 @@
     <ClCompile Include="server_engine\communication\console\console_input_windows.cpp" />
     <ClCompile Include="server_engine\communication\console\server_console.cpp" />
     <ClCompile Include="server_engine\project\project.cpp" />
+    <ClCompile Include="server_engine\project\project_configuration_loader.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="server_engine\server.hpp" />
@@ -118,6 +119,8 @@
     <ClInclude Include="server_engine\communication\console\console_input.hpp" />
     <ClInclude Include="server_engine\communication\console\server_console.hpp" />
     <ClInclude Include="server_engine\project\project.hpp" />
+    <ClInclude Include="server_engine\project\project_configuration.hpp" />
+    <ClInclude Include="server_engine\project\project_configuration_loader.hpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="server.json" />
@@ -125,6 +128,8 @@
     <None Include="docs\DIAGNOSTICS.md" />
     <None Include="docs\JSON.md" />
     <None Include="docs\SERVER_CONFIGURATION.md" />
+    <None Include="docs\PROJECT.md" />
+    <None Include="docs\PROJECT_CONFIGURATION.md" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
