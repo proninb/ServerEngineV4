@@ -221,6 +221,7 @@ Traversal order is:
 root-first
 declaration-order DFS
 normalized-path dedupe
+platform filesystem case semantics
 cycle detection
 NO SORT
 ```
@@ -232,6 +233,19 @@ A reference to an active ancestor is a configuration cycle and fails.
 ### Path contract
 
 Manifest paths are normalized relative to the root Project directory.
+
+All declared configuration/tree paths are required to be relative to their
+declaring `project.json`; absolute/rooted paths fail schema validation.
+
+Filesystem path equivalence used for dedupe/cycle detection is isolated behind
+`project_path.hpp`.
+
+```text
+Windows -> invariant Unicode case-insensitive key
+POSIX   -> case-sensitive key
+```
+
+The generic manifest/composition layer contains no platform API code.
 
 This keeps the aggregate configuration identity stable when the whole Project
 tree is relocated without changing its internal structure or bytes.

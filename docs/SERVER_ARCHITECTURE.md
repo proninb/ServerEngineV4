@@ -67,6 +67,9 @@ ServerEngineV4/
 │       ├── project_configuration_manifest.cpp
 │       ├── project_configuration_manifest_store.hpp
 │       ├── project_configuration_manifest_store.cpp
+│       ├── project_path.hpp
+│       ├── project_path_windows.cpp
+│       ├── project_path_posix.cpp
 │       ├── project_load.hpp
 │       ├── project_load.cpp
 │       ├── project_build.hpp
@@ -423,3 +426,42 @@ successfully constructed and published.
 
 Configuration traversal is root-first declaration-order DFS with normalized-path
 dedupe and cycle detection. It is not sorted.
+
+## Project path platform boundary
+
+Project composition is platform-neutral.
+
+Filesystem path equivalence is isolated behind:
+
+```text
+project_path.hpp
+project_path_windows.cpp
+project_path_posix.cpp
+```
+
+The generic composition layer uses only:
+
+```text
+make_project_path_key(path)
+```
+
+Windows:
+
+```text
+lexically normalized path
+    -> invariant Unicode lowercase key
+    -> case-insensitive dedupe/cycle detection
+```
+
+POSIX:
+
+```text
+lexically normalized path
+    -> case-sensitive dedupe/cycle detection
+```
+
+The generic manifest layer contains no Windows/POSIX API code.
+
+CMake selects exactly one implementation. Each platform `.cpp` also contains a
+compile-time fail-closed guard so an incorrect build selection cannot silently
+produce an empty or wrong translation unit.

@@ -525,11 +525,22 @@ private:
                     return;
                 }
 
+                const std::filesystem::path item_path{
+                    path};
+
+                if (item_path.is_absolute() ||
+                    item_path.has_root_name() ||
+                    item_path.has_root_directory()) {
+
+                    fail("Project item path must be relative to the declaring project.json");
+                    return;
+                }
+
                 if (current.type ==
                     item_type::project) {
 
                     project_references.emplace_back(
-                        std::move(path));
+                        item_path.lexically_normal());
                 }
             }
 

@@ -1,6 +1,7 @@
 #include "project_configuration_manifest.hpp"
 
 #include "project_configuration_loader.hpp"
+#include "project_path.hpp"
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 
@@ -30,22 +31,17 @@ namespace {
     const std::filesystem::path& root_directory,
     const std::filesystem::path& absolute_path) {
 
-    auto relative =
+    const auto relative =
         absolute_path.lexically_relative(
             root_directory);
 
-    if (relative.empty()) {
-        relative =
-            absolute_path.filename();
+    if (relative.empty() ||
+        relative.is_absolute()) {
+
+        return {};
     }
 
     return relative.lexically_normal();
-}
-
-[[nodiscard]] std::string path_key(
-    const std::filesystem::path& path) {
-
-    return path.generic_string();
 }
 
 void append_u64(
@@ -178,7 +174,8 @@ private:
         const std::filesystem::path& absolute_path) {
 
         const auto key =
-            path_key(absolute_path);
+            make_project_path_key(
+                absolute_path);
 
         if (active.contains(key)) {
             diagnostics.emit(
@@ -241,6 +238,23 @@ private:
                 manifest_path(
                     root_directory,
                     absolute_path);
+
+            if (proof.path.empty()) {
+                active.erase(key);
+
+                diagnostics.emit(
+                    diagnostic(
+                        diagnostics::project_invalid_configuration,
+                        operation)
+                        .file(absolute_path)
+                        .detail(
+                            "Project configuration path cannot be represented relative to the root Project directory")
+                        .build());
+
+                return server_status::
+                    project_configuration_invalid;
+            }
+
             proof.content_hash =
                 snapshot.content_hash;
             proof.change_token =
@@ -284,8 +298,8 @@ private:
     operation_id operation;
     diagnostic_collection& diagnostics;
     project_configuration_manifest& output;
-    std::unordered_set<std::string> visited;
-    std::unordered_set<std::string> active;
+    std::unordered_set<project_path_key, project_path_key_hash> visited;
+    std::unordered_set<project_path_key, project_path_key_hash> active;
 };
 
 }

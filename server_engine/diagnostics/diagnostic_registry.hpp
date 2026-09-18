@@ -52,8 +52,6 @@ inline constexpr std::array diagnostic_descriptors{
     diagnostics::project_load_failed,
     diagnostics::project_build_incomplete,
     diagnostics::project_rebuild_incomplete,
-    diagnostics::project_identity_invalid,
-    diagnostics::project_identity_io_failed,
     diagnostics::project_configuration_read_failed,
     diagnostics::project_configuration_cycle,
     diagnostics::project_manifest_invalid,

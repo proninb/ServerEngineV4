@@ -167,14 +167,16 @@ Project construction diagnostics use stable IDs:
 2006 project.invalid_configuration
 2007 project.build_incomplete
 2008 project.rebuild_incomplete
-2009 project.identity_invalid
-2010 project.identity_io_failed
 2011 project.configuration_read_failed
 2012 project.configuration_cycle
 2013 project.manifest_invalid
 2014 project.manifest_io_failed
 2015 project.manifest_missing
 ```
+
+The retired root-only `project.identity` artifact no longer exists. Diagnostic
+IDs 2009 and 2010 are intentionally unassigned; they are not reused for the
+manifest layer.
 
 The manifest-specific diagnostics separate artifact state from configuration
 input state:

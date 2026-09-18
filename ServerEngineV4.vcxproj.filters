@@ -78,6 +78,9 @@
     <ClCompile Include="server_engine\project\project_configuration_manifest_store.cpp">
       <Filter>server_engine\project</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\project\project_path_windows.cpp">
+      <Filter>server_engine\project</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\project\project_load.cpp">
       <Filter>server_engine\project</Filter>
     </ClCompile>
@@ -192,6 +195,9 @@
       <Filter>server_engine\project</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\project_configuration_manifest_store.hpp">
+      <Filter>server_engine\project</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\project_path.hpp">
       <Filter>server_engine\project</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\project_load.hpp">

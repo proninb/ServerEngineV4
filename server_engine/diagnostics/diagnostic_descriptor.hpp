@@ -165,25 +165,6 @@ inline constexpr diagnostic_descriptor project_invalid_configuration{
     "Project configuration is invalid",
 };
 
-// Persisted Project identity failed structural or checksum validation.
-inline constexpr diagnostic_descriptor project_identity_invalid{
-    diagnostic_id{2009},
-    diagnostic_domain::project,
-    diagnostic_severity::error,
-    "project.identity_invalid",
-    "Persisted Project identity is invalid",
-};
-
-// Persisted Project identity could not be read or written.
-inline constexpr diagnostic_descriptor project_identity_io_failed{
-    diagnostic_id{2010},
-    diagnostic_domain::project,
-    diagnostic_severity::error,
-    "project.identity_io_failed",
-    "Persisted Project identity I/O failed",
-};
-
-
 inline constexpr diagnostic_descriptor project_configuration_read_failed{
     diagnostic_id{2011},
     diagnostic_domain::project,

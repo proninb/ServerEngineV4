@@ -132,7 +132,10 @@ path
 
 ## Path Resolution
 
-Every declared path is relative to the `project.json` that declares it.
+Every declared `header`, `source`, and `project` path must be relative to the
+`project.json` that declares it.
+
+Absolute/rooted paths are rejected by the schema boundary.
 
 There is no directory scan.
 
@@ -155,12 +158,29 @@ Contract:
 root-first
 declaration-order DFS
 normalized-path dedupe
+platform filesystem case semantics
 cycle detection
 NO SORT
 ```
 
 Repeated references to the same normalized child Project do not create duplicate
 manifest entries.
+
+
+Filesystem-equivalence policy is platform-specific and isolated behind
+`project_path.hpp`:
+
+```text
+Windows -> invariant Unicode case-insensitive key
+POSIX   -> case-sensitive key
+```
+
+The generic composition layer contains no platform API code.
+
+On Windows, the composition key is case-insensitive using invariant Unicode
+case mapping. On POSIX it remains case-sensitive. Therefore two Windows spellings
+such as `Subsystem/project.json` and `subsystem/project.json` cannot create two
+manifest identities for the same normalized path.
 
 If a Project references a configuration currently active in the recursion stack,
 composition fails with a cycle diagnostic.
