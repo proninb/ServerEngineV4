@@ -294,6 +294,10 @@ path_type = relative
 path = root project.json filename
 ```
 
+The manifest store enforces this root-entry contract during both encode and
+decode. The root locator must be a single relative filename; malformed root
+metadata is rejected at the artifact boundary before manifest verification.
+
 No persisted resolved absolute path or platform path key is required.
 
 The complete configuration hash is:

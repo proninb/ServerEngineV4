@@ -191,8 +191,12 @@ void append_bytes(
         value.configuration_hash.bytes.data(),
         value.configuration_hash.bytes.size());
 
-    for (const auto& file :
-         value.files) {
+    for (std::uint32_t index = 0;
+         index < value.files.size();
+         ++index) {
+
+        const auto& file =
+            value.files[index];
 
         const auto path =
             file.path.generic_string();
@@ -204,38 +208,43 @@ void append_bytes(
             return false;
         }
 
-        const auto index =
-            static_cast<std::uint32_t>(
-                &file - value.files.data());
-
         if (index == 0) {
             if (file.declaring_file !=
-                invalid_configuration_file) {
-
-                return false;
-            }
-        } else if (file.declaring_file >= index) {
-            return false;
-        }
-
-        if (file.path_type ==
-                project_configuration_path_type::relative) {
-
-            if (file.path.is_absolute() ||
+                    invalid_configuration_file ||
+                file.path_type !=
+                    project_configuration_path_type::relative ||
+                file.path.is_absolute() ||
                 file.path.has_root_name() ||
-                file.path.has_root_directory()) {
+                file.path.has_root_directory() ||
+                file.path !=
+                    file.path.filename()) {
 
-                return false;
-            }
-        } else if (
-            file.path_type ==
-                project_configuration_path_type::absolute) {
-
-            if (!file.path.is_absolute()) {
                 return false;
             }
         } else {
-            return false;
+            if (file.declaring_file >= index) {
+                return false;
+            }
+
+            if (file.path_type ==
+                    project_configuration_path_type::relative) {
+
+                if (file.path.is_absolute() ||
+                    file.path.has_root_name() ||
+                    file.path.has_root_directory()) {
+
+                    return false;
+                }
+            } else if (
+                file.path_type ==
+                    project_configuration_path_type::absolute) {
+
+                if (!file.path.is_absolute()) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
         }
 
         append_u32(
@@ -425,7 +434,10 @@ void append_bytes(
 
             if (index == 0) {
                 if (declaring_file !=
-                    invalid_configuration_file) {
+                        invalid_configuration_file ||
+                    path_type_raw !=
+                        static_cast<std::uint32_t>(
+                            project_configuration_path_type::relative)) {
 
                     return false;
                 }
@@ -513,8 +525,18 @@ void append_bytes(
                 return false;
             }
 
-            if (file.path_type ==
-                project_configuration_path_type::relative) {
+            if (index == 0) {
+                if (file.path.is_absolute() ||
+                    file.path.has_root_name() ||
+                    file.path.has_root_directory() ||
+                    file.path !=
+                        file.path.filename()) {
+
+                    return false;
+                }
+            } else if (
+                file.path_type ==
+                    project_configuration_path_type::relative) {
 
                 if (file.path.is_absolute() ||
                     file.path.has_root_name() ||

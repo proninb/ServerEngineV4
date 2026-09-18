@@ -405,6 +405,17 @@ declaring_file < N
 for every non-root entry. BUILD therefore reconstructs physical configuration
 paths in one linear pass using already resolved parent entries.
 
+The manifest store validates the distinguished root entry on both write and
+read:
+
+```text
+declaring_file = invalid_configuration_file
+locator_type = relative
+locator = root project.json filename
+```
+
+Invalid root metadata is rejected by the artifact boundary itself.
+
 ```text
 NO SORT
 NO LOOKUP
