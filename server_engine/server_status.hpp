@@ -16,6 +16,9 @@ enum class server_status {
     // server.json exists but violates the supported configuration contract.
     invalid_configuration,
 
+    // project.json violates the supported Project construction contract.
+    project_configuration_invalid,
+
     // Required file or stream I/O failed.
     io_error,
 
@@ -30,6 +33,9 @@ enum class server_status {
 
     // Project LOAD could not restore the requested Project.
     project_load_failed,
+
+    // Persisted Project construction/runtime artifact failed structural validation.
+    project_artifact_invalid,
 
     // One or more configured communication endpoints could not start.
     communication_start_failed,

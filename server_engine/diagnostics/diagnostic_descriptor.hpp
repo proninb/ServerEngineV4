@@ -122,6 +122,24 @@ inline constexpr diagnostic_descriptor project_load_failed{
     "Project configuration could not be loaded",
 };
 
+// BUILD reached the first construction stage that is not implemented yet.
+inline constexpr diagnostic_descriptor project_build_incomplete{
+    diagnostic_id{2007},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.build_incomplete",
+    "Project BUILD pipeline is incomplete",
+};
+
+// REBUILD reached the first construction stage that is not implemented yet.
+inline constexpr diagnostic_descriptor project_rebuild_incomplete{
+    diagnostic_id{2008},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.rebuild_incomplete",
+    "Project REBUILD pipeline is incomplete",
+};
+
 // Startup BUILD/REBUILD was requested before those execution paths exist.
 inline constexpr diagnostic_descriptor project_startup_unsupported{
     diagnostic_id{2004},
@@ -132,7 +150,7 @@ inline constexpr diagnostic_descriptor project_startup_unsupported{
 };
 
 inline constexpr diagnostic_descriptor project_invalid_json{
-    diagnostic_id{2004},
+    diagnostic_id{2005},
     diagnostic_domain::project,
     diagnostic_severity::error,
     "project.invalid_json",
@@ -140,11 +158,29 @@ inline constexpr diagnostic_descriptor project_invalid_json{
 };
 
 inline constexpr diagnostic_descriptor project_invalid_configuration{
-    diagnostic_id{2005},
+    diagnostic_id{2006},
     diagnostic_domain::project,
     diagnostic_severity::error,
     "project.invalid_configuration",
     "Project configuration is invalid",
+};
+
+// Persisted Project identity failed structural or checksum validation.
+inline constexpr diagnostic_descriptor project_identity_invalid{
+    diagnostic_id{2009},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.identity_invalid",
+    "Persisted Project identity is invalid",
+};
+
+// Persisted Project identity could not be read or written.
+inline constexpr diagnostic_descriptor project_identity_io_failed{
+    diagnostic_id{2010},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.identity_io_failed",
+    "Persisted Project identity I/O failed",
 };
 
 } // namespace diagnostics

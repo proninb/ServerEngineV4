@@ -2,10 +2,18 @@
 
 ## Purpose
 
-The Project subsystem owns construction and resident execution state for the
-single Project active in one Server instance.
+Project lifecycle is mode-oriented:
 
-Server lifecycle ownership remains outside the Project subsystem:
+```text
+LOAD
+BUILD
+REBUILD
+```
+
+Each mode owns its own temporary pipeline state. There is no universal
+`project_context`.
+
+Server owns zero or one resident Project:
 
 ```text
 server
@@ -15,18 +23,13 @@ server
             `-- project
 ```
 
-At most one resident `project` exists.
-
-```text
-server_context.project == nullptr
-    == UNLOADED
-```
+`server_context.project == nullptr` exactly means UNLOADED.
 
 ## Resident Project
 
-`project` is the state published after a Project operation succeeds.
+Resident `project` contains only data required while the Project is active.
 
-Target resident state:
+Target state:
 
 ```text
 project
@@ -36,198 +39,234 @@ project
     `-- SHM
 ```
 
-Only data required by the active Project belongs in resident `project` state.
-
-The resident Project must not retain construction-only state such as:
-
-```text
-project_configuration tree
-project_context
-Source Manager
-frontend/parser state
-semantic construction state
-Builder state
-temporary dependency/build state
-```
-
-## Construction Context
-
-BUILD and REBUILD use a temporary `project_context`.
-
-```text
-project.json
-    |
-    v
-project_configuration
-    |
-    v
-project_context
-    |
-    +-- composition
-    +-- Source Manager
-    +-- frontend/parser
-    +-- semantic construction
-    `-- Builder
-            |
-            v
-          Graph
-```
-
-`project_context` exists before Source Manager because it is the context for the
-whole Project construction operation, not Builder-local scratch storage.
-
-After successful construction:
-
-```text
-Graph
-    |
-    v
-Runtime
-    |
-    v
-SHM
-    |
-    v
-publish project
-    |
-    v
-destroy project_context
-```
-
-`project_context` must never become process-lifetime state in `server_context`.
+It must not retain `project.json`, composition state, Source Manager,
+parser/frontend state, Builder state, or mode-local temporary state.
 
 ## LOAD
 
-LOAD is the fast restore path.
+LOAD restores persisted resident state:
 
 ```text
 persisted Graph
-    |
-    v
-Runtime
-    |
-    v
-SHM
-    |
-    v
-project
+    -> Runtime
+    -> SHM
+    -> project
 ```
 
-LOAD does not run Source Manager and does not perform Project/source change
-detection.
-
-The Project entry path is used to locate persisted Project state. LOAD must not
-silently become BUILD or REBUILD.
+LOAD does not parse `project.json` for construction, run Source Manager, or
+perform source change detection.
 
 ## BUILD
 
-BUILD is the incremental/change-detection path.
+BUILD begins with persisted Project input proof.
 
 ```text
-project.json
+project.identity
     |
     v
-project_context
-    |
-    v
-Project/source change detection
-    |
-    +-- unchanged -> reuse persisted/current Graph
-    |
-    `-- changed   -> construct Gn -> Gn+1
+Project identity decision
 ```
 
-Source Manager belongs to BUILD because source identity, dependency discovery,
-and change detection are construction concerns.
+Identity has three distinct levels:
+
+```text
+file_snapshot_observation
+    size + write time
+    cheap observation only
+
+file_change_token
+    volume serial + file reference + per-file USN
+    O(1) unchanged proof when supported
+
+project_content_hash
+    SHA-256 of exact project.json bytes
+    authoritative byte identity
+
+project_semantic_fingerprint
+    canonical composed Project meaning
+    produced after composition
+```
+
+Path is location, not identity.
+
+BUILD decision order:
+
+```text
+persisted change_token
+    |
+    +-- proves unchanged
+    |       -> no read
+    |       -> no parse
+    |
+    `-- unavailable / changed
+            |
+            v
+        acquire one stable snapshot
+            |
+            v
+        SHA-256
+            |
+            +-- same
+            |       -> no parse
+            |
+            `-- different
+                    |
+                    v
+                streaming schema
+                    |
+                    v
+                composition
+                    |
+                    v
+                semantic fingerprint
+```
+
+After Project semantics are proven unchanged, BUILD proceeds to Source Manager
+change detection:
+
+```text
+sources unchanged -> reuse persisted Graph
+sources changed   -> Gn -> Gn+1
+```
+
+If Project semantics changed, BUILD recomposes explicit roots and performs the
+required Gn -> Gn+1 construction. REBUILD remains the explicit forced-G0 mode.
 
 ## REBUILD
 
-REBUILD constructs a new G0.
+REBUILD ignores incremental construction state:
 
 ```text
-project.json
+stable project.json snapshot
     |
-    v
-project_context
+    +-- SHA-256 content hash
     |
-    v
-composition
-    |
-    v
-explicit roots
-    |
-    v
-Source Manager
-    |
-    v
-frontend / semantic construction
-    |
-    v
-Graph G0
+    `-- exact same bytes
+            |
+            v
+        streaming schema
+            |
+            v
+        composition
+            |
+            v
+        semantic fingerprint
+            |
+            v
+        explicit roots
+            |
+            v
+        new Source Manager
+            |
+            v
+        G0
+            |
+            v
+        Runtime -> SHM -> project
 ```
 
-REBUILD does not preserve incremental Source Manager identity/state from the
-previous generation.
+A successful REBUILD persists the identity belonging to that committed
+generation.
+
+## Project Identity Persistence
+
+Identity is stored separately from runtime state:
+
+```text
+<project-dir>/
+    .serverengine/
+        <project.json filename>/
+            project.identity
+```
+
+`project.identity` is fixed-size, versioned, and self-checking.
+
+Logical payload:
+
+```text
+header
+    magic
+    format_version
+    flags
+
+content_hash          32 bytes
+semantic_fingerprint  32 bytes
+
+change_token
+    volume_serial      8 bytes
+    file_reference     8 bytes
+    file_usn           8 bytes
+
+checksum              32 bytes SHA-256
+```
+
+The checksum covers the complete decision payload before the checksum field.
+Unknown flags, invalid tokens, noncanonical absent fields, size mismatch, magic
+mismatch, version mismatch, or checksum mismatch fail closed.
+
+The store is intentionally narrow:
+
+```text
+project_identity_store
+    load()
+    save()
+```
+
+It is not a generic persistence manager.
+
+## Configuration Byte Ownership
+
+`project.json` is read once into an owning snapshot.
+
+```text
+project_content_snapshot.bytes
+    |
+    +-- SHA-256
+    |
+    `-- parser consumes string_view over the same bytes
+```
+
+On successful validation there is no source-text copy.
+
+On diagnostic error ownership of the same string moves into
+`diagnostic_collection`:
+
+```text
+snapshot.bytes
+    -> diagnostics.add_source(..., std::move(bytes))
+```
+
+Thus:
+
+```text
+success: one read, zero source copies
+error:   one read, zero source copies
+```
 
 ## Publication Rule
 
-A resident Project is published only after the selected operation succeeds
-completely.
+All modes construct a candidate resident Project and publish only after complete
+success.
 
 ```text
-UNLOADED + operation success -> LOADED
-UNLOADED + operation failure -> UNLOADED
+UNLOADED + success -> LOADED
+UNLOADED + failure -> UNLOADED
 ```
 
-Failed construction must destroy all partial Project state.
-
-## Project Startup
-
-`server.json` selects an optional startup operation:
-
-```jsonc
-"project": {
-  "path": "project.json",
-  "startup": "load"
-}
-```
-
-Supported startup policies:
-
-```text
-load
-build
-rebuild
-```
-
-`load` is the default when `startup` is omitted.
-
-The startup policy belongs to Server process configuration. Project build
-semantics belong to `project.json` and the Project subsystem.
-
-See `PROJECT_CONFIGURATION.md` for the `project.json` contract.
-
-## Diagnostics
-
-One externally visible Project operation owns exactly one:
-
-```text
-operation_id
-diagnostic_collection
-```
-
-Nested Project/configuration/Source Manager/parser/Builder layers append to the
-same caller-owned collection.
+Partial mode state is destroyed on failure.
 
 ## Architectural Invariants
 
 1. One Server owns zero or one resident Project.
-2. `server_context.project == nullptr` exactly represents UNLOADED.
-3. `project` contains only resident execution state.
-4. `project_context` is temporary BUILD/REBUILD state.
-5. LOAD does not perform Source Manager change detection.
-6. BUILD performs change detection and incremental construction when required.
-7. REBUILD constructs a new G0.
-8. Source Manager is construction state, not resident runtime state.
-9. Failed Project operations publish nothing.
-10. Runtime hot paths do not depend on construction/control-plane synchronization.
+2. Resident `project` contains runtime-required state only.
+3. LOAD, BUILD, and REBUILD are separate pipelines.
+4. There is no universal `project_context`.
+5. Path is location, not Project identity.
+6. Filesystem observation is never authoritative content identity.
+7. USN token is a proof optimization, not semantic identity.
+8. SHA-256 identifies exact configuration bytes.
+9. Semantic fingerprint identifies composed Project meaning.
+10. Hashing and parsing use the same acquired bytes.
+11. Project identity persistence is independent from resident Project state.
+12. Source Manager is construction state, never resident Project state.
+13. Publication happens only after complete mode success.

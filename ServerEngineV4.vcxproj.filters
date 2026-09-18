@@ -69,6 +69,21 @@
     <ClCompile Include="server_engine\project\project.cpp">
       <Filter>server_engine\project</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\project\project_identity.cpp">
+      <Filter>server_engine\project</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\project_identity_store.cpp">
+      <Filter>server_engine\project</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\project_load.cpp">
+      <Filter>server_engine\project</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\project_build.cpp">
+      <Filter>server_engine\project</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\project_rebuild.cpp">
+      <Filter>server_engine\project</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\project\project_configuration_loader.cpp">
       <Filter>server_engine\project</Filter>
     </ClCompile>
@@ -167,7 +182,19 @@
     <ClInclude Include="server_engine\project\project.hpp">
       <Filter>server_engine\project</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\project\project_configuration.hpp">
+    <ClInclude Include="server_engine\project\project_identity.hpp">
+      <Filter>server_engine\project</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\project_identity_store.hpp">
+      <Filter>server_engine\project</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\project_load.hpp">
+      <Filter>server_engine\project</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\project_build.hpp">
+      <Filter>server_engine\project</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\project_rebuild.hpp">
       <Filter>server_engine\project</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\project_configuration_loader.hpp">

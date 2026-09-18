@@ -67,9 +67,9 @@ startup = load
     do not perform Project/source change detection
 
 startup = build
-    check Project/source changes
-    unchanged -> use persisted Graph
-    changed   -> rebuild
+    check Project content identity first
+    unchanged -> source change detection
+    changed   -> stream project.json and update construction state
 
 startup = rebuild
     perform a full G0 rebuild
@@ -79,9 +79,9 @@ Absent `project`: the Server starts UNLOADED and waits for a command.
 
 Relative Project paths are resolved relative to `server.json`.
 
-At the current implementation stage only `startup=load` executes. `build` and
-`rebuild` are parsed and represented explicitly, but fail closed as unsupported
-until their Project construction paths are implemented.
+All three startup values route to distinct lifecycle pipelines. BUILD currently
+stops at the unimplemented persisted-identity stage; REBUILD validates the
+streaming Project schema and stops before composition/Source Manager.
 
 ## Communication
 
@@ -159,7 +159,7 @@ telemetry console     -> telemetry output
 ## Configuration ownership boundary
 
 `server.json` configures the Server process and selects the Project startup
-operation. BUILD/REBUILD construction state belongs to temporary
-`project_context`, never to `server_context`.
+operation. LOAD, BUILD, and REBUILD own separate mode-local temporary state;
+construction state never belongs to `server_context`.
 
 See `PROJECT.md` and `PROJECT_CONFIGURATION.md` for Project contracts.

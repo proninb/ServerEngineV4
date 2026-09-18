@@ -1,3 +1,9 @@
+/*
+ * Streaming Project configuration validator.
+ *
+ * Validation is state-machine based and does not construct a persistent or
+ * temporary project_configuration tree.
+ */
 #include "project_configuration_loader.hpp"
 
 #include "../diagnostics/diagnostic_builder.hpp"
@@ -5,8 +11,7 @@
 #include "../json/json_parser.hpp"
 
 #include <array>
-#include <fstream>
-#include <iterator>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -15,6 +20,8 @@
 namespace cw::server {
 namespace {
 
+inline constexpr std::uint32_t current_project_configuration_version = 1;
+
 enum class schema_context : std::uint8_t {
     root,
     project_items,
@@ -22,6 +29,14 @@ enum class schema_context : std::uint8_t {
     configuration,
     abi,
     item_children,
+};
+
+enum class item_type : std::uint8_t {
+    none,
+    group,
+    header,
+    source,
+    project,
 };
 
 enum class item_stage : std::uint8_t {
@@ -41,29 +56,35 @@ struct frame {
     schema_context context = schema_context::root;
     std::uint8_t index = 0;
     item_stage stage = item_stage::expect_name;
-    project_item_configuration item;
+    item_type type = item_type::none;
 };
 
 [[nodiscard]] bool valid_pack(std::uint32_t value) noexcept {
-    return value == 1 || value == 2 || value == 4 ||
-           value == 8 || value == 16;
+    return value == 1 ||
+           value == 2 ||
+           value == 4 ||
+           value == 8 ||
+           value == 16;
 }
 
 class project_configuration_handler final : public json_event_handler {
 public:
-    explicit project_configuration_handler(
-        project_configuration& configuration)
-        : configuration(configuration) {
+    project_configuration_handler() {
         stack.reserve(16);
     }
 
-    void location(std::size_t offset, std::size_t length) override {
+    void location(
+        std::size_t offset,
+        std::size_t length) override {
+
         current_offset = offset;
         current_length = length;
     }
 
     void object_begin() override {
-        if (failed()) return;
+        if (failed()) {
+            return;
+        }
 
         if (stack.empty()) {
             stack.push_back({schema_context::root});
@@ -74,11 +95,14 @@ public:
 
         if (parent.context == schema_context::project_items ||
             parent.context == schema_context::item_children) {
+
             stack.push_back({schema_context::item});
             return;
         }
 
-        if (parent.context == schema_context::root && parent.index == 3) {
+        if (parent.context == schema_context::root &&
+            parent.index == 3) {
+
             parent.index = 4;
             stack.push_back({schema_context::configuration});
             return;
@@ -86,6 +110,7 @@ public:
 
         if (parent.context == schema_context::configuration &&
             parent.index == 0) {
+
             parent.index = 1;
             stack.push_back({schema_context::abi});
             return;
@@ -95,56 +120,40 @@ public:
     }
 
     void object_end() override {
-        if (failed() || stack.empty()) return;
+        if (failed() || stack.empty()) {
+            return;
+        }
 
-        auto ended = std::move(stack.back());
+        const auto ended =
+            stack.back();
+
         stack.pop_back();
 
         switch (ended.context) {
         case schema_context::root:
-            if (ended.index != 4)
-                fail("Project root requires fields in order: version, name, project, configuration");
+            if (ended.index != 4) {
+                fail(
+                    "Project root requires fields in order: "
+                    "version, name, project, configuration");
+            }
             return;
 
         case schema_context::configuration:
-            if (ended.index != 1)
+            if (ended.index != 1) {
                 fail("configuration requires abi");
+            }
             return;
 
         case schema_context::abi:
-            if (ended.index != 2)
+            if (ended.index != 2) {
                 fail("configuration.abi requires target then pack");
+            }
             return;
 
         case schema_context::item:
             if (ended.stage != item_stage::complete) {
                 fail("Project item is incomplete");
-                return;
             }
-
-            if (stack.empty()) {
-                fail("Project item has no owning array");
-                return;
-            }
-
-            if (stack.back().context == schema_context::project_items) {
-                configuration.project.push_back(std::move(ended.item));
-                return;
-            }
-
-            if (stack.back().context == schema_context::item_children) {
-                if (stack.size() < 2 ||
-                    stack[stack.size() - 2].context != schema_context::item) {
-                    fail("group children lost parent item");
-                    return;
-                }
-
-                stack[stack.size() - 2].item.children.push_back(
-                    std::move(ended.item));
-                return;
-            }
-
-            fail("Project item ended in invalid context");
             return;
 
         case schema_context::project_items:
@@ -155,12 +164,15 @@ public:
     }
 
     void array_begin() override {
-        if (failed() || stack.empty()) return;
+        if (failed() || stack.empty()) {
+            return;
+        }
 
         auto& parent = stack.back();
 
         if (parent.context == schema_context::root &&
             parent.index == 2) {
+
             parent.index = 3;
             stack.push_back({schema_context::project_items});
             return;
@@ -168,7 +180,8 @@ public:
 
         if (parent.context == schema_context::item &&
             parent.stage == item_stage::expect_payload &&
-            parent.item.type == project_item_type::group) {
+            parent.type == item_type::group) {
+
             parent.stage = item_stage::complete;
             stack.push_back({schema_context::item_children});
             return;
@@ -178,12 +191,16 @@ public:
     }
 
     void array_end() override {
-        if (failed() || stack.empty()) return;
+        if (failed() || stack.empty()) {
+            return;
+        }
 
-        const auto context = stack.back().context;
+        const auto context =
+            stack.back().context;
 
         if (context != schema_context::project_items &&
             context != schema_context::item_children) {
+
             fail("unexpected array end in Project configuration");
             return;
         }
@@ -192,9 +209,12 @@ public:
     }
 
     void key(std::string_view key) override {
-        if (failed() || stack.empty()) return;
+        if (failed() || stack.empty()) {
+            return;
+        }
 
-        auto& current = stack.back();
+        auto& current =
+            stack.back();
 
         switch (current.context) {
         case schema_context::root:
@@ -202,20 +222,27 @@ public:
             return;
 
         case schema_context::configuration:
-            if (current.index != 0 || key != "abi")
+            if (current.index != 0 || key != "abi") {
                 fail("configuration fields must be ordered: abi");
+            }
             return;
 
         case schema_context::abi:
             if (current.index == 0) {
-                if (key != "target")
-                    fail("configuration.abi fields must be ordered: target, pack");
+                if (key != "target") {
+                    fail(
+                        "configuration.abi fields must be ordered: "
+                        "target, pack");
+                }
                 return;
             }
 
             if (current.index == 1) {
-                if (key != "pack")
-                    fail("configuration.abi fields must be ordered: target, pack");
+                if (key != "pack") {
+                    fail(
+                        "configuration.abi fields must be ordered: "
+                        "target, pack");
+                }
                 return;
             }
 
@@ -234,9 +261,12 @@ public:
     }
 
     void value(json_value_view value) override {
-        if (failed() || stack.empty()) return;
+        if (failed() || stack.empty()) {
+            return;
+        }
 
-        auto& current = stack.back();
+        auto& current =
+            stack.back();
 
         switch (current.context) {
         case schema_context::root:
@@ -260,7 +290,8 @@ public:
     }
 
     [[nodiscard]] bool valid() const noexcept {
-        return !failed() && stack.empty();
+        return !failed() &&
+               stack.empty();
     }
 
     [[nodiscard]] const schema_error& error() const noexcept {
@@ -273,7 +304,9 @@ private:
     }
 
     void fail(std::string detail) {
-        if (failed()) return;
+        if (failed()) {
+            return;
+        }
 
         error_value = {
             current_offset,
@@ -298,8 +331,11 @@ private:
             return;
         }
 
-        if (key != keys[current.index])
-            fail("Project root fields must be ordered: version, name, project, configuration");
+        if (key != keys[current.index]) {
+            fail(
+                "Project root fields must be ordered: "
+                "version, name, project, configuration");
+        }
     }
 
     void validate_item_key(
@@ -308,24 +344,29 @@ private:
 
         switch (current.stage) {
         case item_stage::expect_name:
-            if (key != "name")
+            if (key != "name") {
                 fail("Project item fields must begin with name");
+            }
             return;
 
         case item_stage::expect_type:
-            if (key != "type")
+            if (key != "type") {
                 fail("Project item field type must follow name");
+            }
             return;
 
         case item_stage::expect_payload:
-            if (current.item.type == project_item_type::group) {
-                if (key != "children")
+            if (current.type == item_type::group) {
+                if (key != "children") {
                     fail("group item requires children after type");
+                }
                 return;
             }
 
-            if (key != "path")
-                fail("header/source/project item requires path after type");
+            if (key != "path") {
+                fail(
+                    "header/source/project item requires path after type");
+            }
             return;
 
         case item_stage::complete:
@@ -351,14 +392,16 @@ private:
                 return;
             }
 
-            configuration.version = version;
             ++current.index;
             return;
         }
 
         if (current.index == 1) {
-            if (!value.get(configuration.name) ||
-                configuration.name.empty()) {
+            std::string name;
+
+            if (!value.get(name) ||
+                name.empty()) {
+
                 fail("name must be a non-empty string");
                 return;
             }
@@ -382,12 +425,12 @@ private:
                 return;
             }
 
-            if (target == "windows-x64")
-                configuration.abi.target = abi_target::windows_x64;
-            else if (target == "posix-x64")
-                configuration.abi.target = abi_target::posix_x64;
-            else {
-                fail("configuration.abi.target must be windows-x64 or posix-x64");
+            if (target != "windows-x64" &&
+                target != "posix-x64") {
+
+                fail(
+                    "configuration.abi.target must be "
+                    "windows-x64 or posix-x64");
                 return;
             }
 
@@ -398,12 +441,15 @@ private:
         if (current.index == 1) {
             std::uint32_t pack = 0;
 
-            if (!value.get(pack) || !valid_pack(pack)) {
-                fail("configuration.abi.pack must be 1, 2, 4, 8, or 16");
+            if (!value.get(pack) ||
+                !valid_pack(pack)) {
+
+                fail(
+                    "configuration.abi.pack must be "
+                    "1, 2, 4, 8, or 16");
                 return;
             }
 
-            configuration.abi.pack = pack;
             ++current.index;
             return;
         }
@@ -416,15 +462,20 @@ private:
         json_value_view value) {
 
         switch (current.stage) {
-        case item_stage::expect_name:
-            if (!value.get(current.item.name) ||
-                current.item.name.empty()) {
+        case item_stage::expect_name: {
+            std::string name;
+
+            if (!value.get(name) ||
+                name.empty()) {
+
                 fail("Project item name must be a non-empty string");
                 return;
             }
 
-            current.stage = item_stage::expect_type;
+            current.stage =
+                item_stage::expect_type;
             return;
+        }
 
         case item_stage::expect_type: {
             std::string type;
@@ -434,25 +485,28 @@ private:
                 return;
             }
 
-            if (type == "group")
-                current.item.type = project_item_type::group;
-            else if (type == "header")
-                current.item.type = project_item_type::header;
-            else if (type == "source")
-                current.item.type = project_item_type::source;
-            else if (type == "project")
-                current.item.type = project_item_type::project;
-            else {
-                fail("Project item type must be group, header, source, or project");
+            if (type == "group") {
+                current.type = item_type::group;
+            } else if (type == "header") {
+                current.type = item_type::header;
+            } else if (type == "source") {
+                current.type = item_type::source;
+            } else if (type == "project") {
+                current.type = item_type::project;
+            } else {
+                fail(
+                    "Project item type must be "
+                    "group, header, source, or project");
                 return;
             }
 
-            current.stage = item_stage::expect_payload;
+            current.stage =
+                item_stage::expect_payload;
             return;
         }
 
         case item_stage::expect_payload:
-            if (current.item.type == project_item_type::group) {
+            if (current.type == item_type::group) {
                 fail("group children must be an array");
                 return;
             }
@@ -460,16 +514,16 @@ private:
             {
                 std::string path;
 
-                if (!value.get(path) || path.empty()) {
+                if (!value.get(path) ||
+                    path.empty()) {
+
                     fail("Project item path must be a non-empty string");
                     return;
                 }
-
-                current.item.path =
-                    std::filesystem::path(std::move(path));
-
-                current.stage = item_stage::complete;
             }
+
+            current.stage =
+                item_stage::complete;
             return;
 
         case item_stage::complete:
@@ -478,7 +532,6 @@ private:
         }
     }
 
-    project_configuration& configuration;
     std::vector<frame> stack;
 
     std::size_t current_offset = 0;
@@ -486,53 +539,27 @@ private:
     schema_error error_value;
 };
 
-[[nodiscard]] bool read_text_file(
-    const std::filesystem::path& path,
-    std::string& output) {
-
-    std::ifstream stream(path, std::ios::binary);
-
-    if (!stream) return false;
-
-    output.assign(
-        std::istreambuf_iterator<char>{stream},
-        std::istreambuf_iterator<char>{});
-
-    return stream.good() || stream.eof();
-}
-
 } // namespace
 
-server_status load_project_configuration(
+server_status validate_project_configuration(
+    std::string& bytes,
     const std::filesystem::path& path,
     operation_id operation,
-    diagnostic_collection& diagnostics,
-    project_configuration& configuration) {
+    diagnostic_collection& diagnostics) {
 
-    std::string text;
-
-    if (!read_text_file(path, text)) {
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_load_failed,
-                operation)
-                .file(path)
-                .detail("Cannot read Project configuration file")
-                .build());
-
-        return server_status::project_load_failed;
-    }
-
-    const auto file_id =
-        diagnostics.add_source(path, text);
-
-    project_configuration candidate;
-    project_configuration_handler handler{candidate};
+    project_configuration_handler handler;
 
     const auto parsed =
-        parse_json(text, handler);
+        parse_json(
+            std::string_view{bytes},
+            handler);
 
     if (!parsed.ok()) {
+        const auto file_id =
+            diagnostics.add_source(
+                path,
+                std::move(bytes));
+
         diagnostics.emit(
             diagnostic(
                 diagnostics::project_invalid_json,
@@ -542,14 +569,22 @@ server_status load_project_configuration(
                         file_id,
                         parsed.offset,
                         parsed.length))
-                .detail(json_error_message(parsed.code))
+                .detail(
+                    json_error_message(
+                        parsed.code))
                 .build());
 
-        return server_status::invalid_configuration;
+        return server_status::project_configuration_invalid;
     }
 
     if (!handler.valid()) {
-        const auto& error = handler.error();
+        const auto& error =
+            handler.error();
+
+        const auto file_id =
+            diagnostics.add_source(
+                path,
+                std::move(bytes));
 
         diagnostics.emit(
             diagnostic(
@@ -563,10 +598,9 @@ server_status load_project_configuration(
                 .detail(error.detail)
                 .build());
 
-        return server_status::invalid_configuration;
+        return server_status::project_configuration_invalid;
     }
 
-    configuration = std::move(candidate);
     return server_status::success;
 }
 

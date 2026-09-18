@@ -1,40 +1,27 @@
 /*
- * Resident Project ownership boundary.
+ * Resident Project state.
  *
- * Project owns the successfully parsed configuration of exactly one project.json.
- * Nested Project composition, BUILD, Graph, Runtime, and persistence are separate
- * later stages.
+ * project owns only data required while one Project is active. Graph, Runtime,
+ * and SHM will be added here as their resident representations are implemented.
+ * Construction-mode state must remain outside this class.
  */
 #pragma once
-
-#include "project_configuration.hpp"
-
-#include "../diagnostics/diagnostic_collection.hpp"
-#include "../operation.hpp"
-#include "../server_status.hpp"
 
 #include <filesystem>
 
 namespace cw::server {
 
+// Resident state published only after a Project lifecycle mode succeeds.
 class project final {
 public:
-    [[nodiscard]] server_status load(
-        const std::filesystem::path& configuration_path,
-        operation_id operation,
-        diagnostic_collection& diagnostics);
+    explicit project(std::filesystem::path path);
 
-    [[nodiscard]] const std::filesystem::path& configuration_path() const noexcept {
-        return path;
-    }
-
-    [[nodiscard]] const project_configuration& configuration() const noexcept {
-        return configuration_value;
+    [[nodiscard]] const std::filesystem::path& path() const noexcept {
+        return project_path;
     }
 
 private:
-    std::filesystem::path path;
-    project_configuration configuration_value;
+    std::filesystem::path project_path;
 };
 
 }

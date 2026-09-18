@@ -9,6 +9,9 @@
 #include "configuration/server_configuration_loader.hpp"
 #include "diagnostics/diagnostic_builder.hpp"
 #include "diagnostics/diagnostic_descriptor.hpp"
+#include "project/project_build.hpp"
+#include "project/project_load.hpp"
+#include "project/project_rebuild.hpp"
 
 #include <memory>
 
@@ -101,20 +104,17 @@ server_status server::start(
             break;
 
         case project_startup_mode::build:
-        case project_startup_mode::rebuild:
-            diagnostics.emit(
-                diagnostic(
-                    diagnostics::project_startup_unsupported,
-                    operation)
-                    .detail(
-                        startup.startup ==
-                                project_startup_mode::build
-                            ? "startup=build is not implemented yet"
-                            : "startup=rebuild is not implemented yet")
-                    .build());
+            status = build(
+                startup.path,
+                operation,
+                diagnostics);
+            break;
 
-            status =
-                server_status::unsupported;
+        case project_startup_mode::rebuild:
+            status = rebuild(
+                startup.path,
+                operation,
+                diagnostics);
             break;
         }
 
@@ -197,26 +197,106 @@ server_status server::load(
         return server_status::project_already_loaded;
     }
 
+    const auto path =
+        resolve(
+            context.configuration_directory,
+            project_path);
+
+    std::unique_ptr<project> candidate;
+
+    const auto status =
+        load_project(
+            path,
+            operation,
+            diagnostics,
+            candidate);
+
+    if (!succeeded(status)) {
+        return status;
+    }
+
     context.project =
-        std::make_unique<project>();
+        std::move(candidate);
+
+    return server_status::success;
+}
+
+server_status server::build(
+    const std::filesystem::path& project_path,
+    operation_id operation,
+    diagnostic_collection& diagnostics) {
+
+    if (context.project) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_already_loaded,
+                operation)
+                .detail("UNLOAD the active Project before BUILD")
+                .build());
+
+        return server_status::project_already_loaded;
+    }
 
     const auto path =
         resolve(
             context.configuration_directory,
             project_path);
 
+    std::unique_ptr<project> candidate;
+
     const auto status =
-        context.project->load(
+        build_project(
             path,
             operation,
-            diagnostics);
+            diagnostics,
+            candidate);
 
     if (!succeeded(status)) {
-        context.project.reset();
         return status;
     }
 
+    context.project =
+        std::move(candidate);
 
+    return server_status::success;
+}
+
+server_status server::rebuild(
+    const std::filesystem::path& project_path,
+    operation_id operation,
+    diagnostic_collection& diagnostics) {
+
+    if (context.project) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_already_loaded,
+                operation)
+                .detail("UNLOAD the active Project before REBUILD")
+                .build());
+
+        return server_status::project_already_loaded;
+    }
+
+    const auto path =
+        resolve(
+            context.configuration_directory,
+            project_path);
+
+    std::unique_ptr<project> candidate;
+
+    const auto status =
+        rebuild_project(
+            path,
+            operation,
+            diagnostics,
+            candidate);
+
+    if (!succeeded(status)) {
+        return status;
+    }
+
+    context.project =
+        std::move(candidate);
 
     return server_status::success;
 }

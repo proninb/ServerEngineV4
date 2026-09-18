@@ -61,7 +61,18 @@ ServerEngineV4/
 │   └── project/
 │       ├── project.hpp
 │       ├── project.cpp
-│       ├── project_configuration.hpp
+│       ├── project_identity.hpp
+│       ├── project_identity.cpp
+│       ├── project_identity_store.hpp
+│       ├── project_identity_store.cpp
+│       ├── project_identity_store.hpp
+│       ├── project_identity_store.cpp
+│       ├── project_load.hpp
+│       ├── project_load.cpp
+│       ├── project_build.hpp
+│       ├── project_build.cpp
+│       ├── project_rebuild.hpp
+│       ├── project_rebuild.cpp
 │       ├── project_configuration_loader.hpp
 │       └── project_configuration_loader.cpp
 │
@@ -316,46 +327,9 @@ LOADED   + LOAD         -> project_already_loaded
 Startup `project.path` with `startup=load` is not a separate loading mechanism
 and does not bypass normal LOAD state validation.
 
-## Project configuration tree
-
-`project.json` is an ordered V1 contract.
-
-Canonical root field order:
-
-```text
-version -> name -> project -> configuration
-```
-
-Project tree node types:
-
-```text
-group
-header
-source
-project
-```
-
-Canonical item order:
-
-```text
-group:   name -> type -> children
-header:  name -> type -> path
-source:  name -> type -> path
-project: name -> type -> path
-```
-
-`group` is the only container node. `header`, `source`, and `project` are leaves.
-
-`project` is only a reference to another project.json at this stage. Recursive
-composition is a separate stage.
-
-ABI order:
-
-```text
-configuration -> abi -> target -> pack
-```
-
 ## Project documentation
+
+Project construction is mode-oriented. There is no universal mode-local construction state.
 
 Server architecture owns process lifecycle and the resident Project pointer.
 
@@ -366,7 +340,7 @@ PROJECT.md
     Project ownership
     resident vs construction lifetime
     LOAD / BUILD / REBUILD
-    project_context
+    separate LOAD / BUILD / REBUILD pipelines
     Graph -> Runtime -> SHM publication
 
 PROJECT_CONFIGURATION.md
@@ -380,3 +354,15 @@ PROJECT_CONFIGURATION.md
 
 Project lifecycle/configuration details belong in those documents instead of
 being duplicated in Server process configuration documentation.
+
+
+## Project identity persistence
+
+BUILD identity is persisted independently under:
+
+```text
+<project-dir>/.serverengine/<project.json filename>/project.identity
+```
+
+`project_identity_store` is intentionally a narrow persistence boundary. It is
+not a generic Project persistence manager.

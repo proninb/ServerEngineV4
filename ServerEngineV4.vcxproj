@@ -87,6 +87,11 @@
     <ClCompile Include="server_engine\communication\console\console_input_windows.cpp" />
     <ClCompile Include="server_engine\communication\console\server_console.cpp" />
     <ClCompile Include="server_engine\project\project.cpp" />
+    <ClCompile Include="server_engine\project\project_identity.cpp" />
+    <ClCompile Include="server_engine\project\project_identity_store.cpp" />
+    <ClCompile Include="server_engine\project\project_load.cpp" />
+    <ClCompile Include="server_engine\project\project_build.cpp" />
+    <ClCompile Include="server_engine\project\project_rebuild.cpp" />
     <ClCompile Include="server_engine\project\project_configuration_loader.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -119,7 +124,11 @@
     <ClInclude Include="server_engine\communication\console\console_input.hpp" />
     <ClInclude Include="server_engine\communication\console\server_console.hpp" />
     <ClInclude Include="server_engine\project\project.hpp" />
-    <ClInclude Include="server_engine\project\project_configuration.hpp" />
+    <ClInclude Include="server_engine\project\project_identity.hpp" />
+    <ClInclude Include="server_engine\project\project_identity_store.hpp" />
+    <ClInclude Include="server_engine\project\project_load.hpp" />
+    <ClInclude Include="server_engine\project\project_build.hpp" />
+    <ClInclude Include="server_engine\project\project_rebuild.hpp" />
     <ClInclude Include="server_engine\project\project_configuration_loader.hpp" />
   </ItemGroup>
   <ItemGroup>

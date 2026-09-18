@@ -2,49 +2,46 @@
 
 ## Purpose
 
-`project.json` is the persistent input contract for Project construction.
+`project.json` is the ordered construction-input contract consumed by REBUILD and
+by BUILD only when byte identity cannot prove the configuration unchanged.
 
-It describes:
+It is not resident Project state.
 
-```text
-Project identity
-Project tree
-explicit Project items
-nested Project references
-ABI configuration
-```
+## Acquisition and Streaming
 
-It is consumed by BUILD and REBUILD construction paths.
-
-The resident `project` must not retain the Project configuration tree after
-publication unless a runtime requirement explicitly needs a derived value.
-
-## File
-
-The Project entry file is:
+The configuration path is:
 
 ```text
-project.json
+stable project.json snapshot
+    |
+    +-- SHA-256 content hash
+    |
+    `-- exact same bytes
+            |
+            v
+        generic JSON parser
+            |
+            v
+        Project ordered-schema state machine
+            |
+            v
+        composition consumer
 ```
 
-Paths referenced by a Project configuration are resolved relative to the
-directory containing that `project.json`.
+The parser never reopens `project.json`.
 
-No full Project-directory scan is implied by the configuration.
+There is no required intermediate `project_configuration` tree.
+
+The current schema layer validates the stream. Composition attaches directly to
+this boundary.
 
 ## Version
-
-Current schema version:
 
 ```jsonc
 "version": 1
 ```
 
-Unsupported versions fail closed.
-
 ## Root Contract
-
-Canonical root structure:
 
 ```jsonc
 {
@@ -61,9 +58,7 @@ Canonical root structure:
 }
 ```
 
-The Project configuration is an ordered contract.
-
-Canonical root field order:
+Canonical root order:
 
 ```text
 version
@@ -74,8 +69,6 @@ configuration
 
 ## Project Tree
 
-`project` contains the logical Project tree.
-
 Node types:
 
 ```text
@@ -85,13 +78,7 @@ source
 project
 ```
 
-`group` is the only container type.
-
-`header`, `source`, and `project` are leaf/reference nodes.
-
-## group
-
-Canonical form:
+### group
 
 ```jsonc
 {
@@ -102,7 +89,7 @@ Canonical form:
 }
 ```
 
-Canonical field order:
+Order:
 
 ```text
 name
@@ -110,20 +97,7 @@ type
 children
 ```
 
-Contract:
-
-```text
-name      required, non-empty
-type      "group"
-children  required array
-path      not allowed
-```
-
-Groups may contain groups and leaf/reference nodes recursively.
-
-## header
-
-Canonical form:
+### header
 
 ```jsonc
 {
@@ -133,26 +107,7 @@ Canonical form:
 }
 ```
 
-Canonical field order:
-
-```text
-name
-type
-path
-```
-
-Contract:
-
-```text
-name      required, non-empty
-type      "header"
-path      required, non-empty
-children  not allowed
-```
-
-## source
-
-Canonical form:
+### source
 
 ```jsonc
 {
@@ -162,30 +117,7 @@ Canonical form:
 }
 ```
 
-Canonical field order:
-
-```text
-name
-type
-path
-```
-
-Contract:
-
-```text
-name      required, non-empty
-type      "source"
-path      required, non-empty
-children  not allowed
-```
-
-`source` is a Project semantic role. It is not required to mean a `.cpp` file.
-
-## project
-
-A `project` node references another `project.json`.
-
-Canonical form:
+### project
 
 ```jsonc
 {
@@ -195,7 +127,7 @@ Canonical form:
 }
 ```
 
-Canonical field order:
+For `header`, `source`, and `project`, order is:
 
 ```text
 name
@@ -203,56 +135,16 @@ type
 path
 ```
 
-Contract:
+A `project` node references another `project.json`. Recursive resolution belongs
+to composition, not the generic JSON parser.
 
-```text
-name      required, non-empty
-type      "project"
-path      required, non-empty
-children  not allowed
-```
+## Paths
 
-The single-file Project configuration loader parses exactly one `project.json`.
+Paths are relative to the `project.json` that declares them.
 
-Recursive nested-Project processing belongs to Project composition, not to the
-JSON loader.
-
-## Composition
-
-Project composition resolves `project` references recursively.
-
-```text
-project_configuration_loader
-    |
-    v
-one project_configuration
-    |
-    v
-composition resolver
-    |
-    +-- group
-    +-- header
-    +-- source
-    `-- project -> referenced project.json
-```
-
-Composition requirements:
-
-```text
-normalized-path deduplication
-cycle detection
-deterministic declaration-order traversal
-explicit roots only
-```
-
-The filesystem is not scanned to discover Project roots.
-
-After composition, Source Manager receives explicit roots and discovers source
-dependencies recursively through supported `#include` directives.
+No directory scan is implied. Composition produces explicit roots.
 
 ## ABI
-
-Canonical ABI configuration:
 
 ```jsonc
 "configuration": {
@@ -263,21 +155,21 @@ Canonical ABI configuration:
 }
 ```
 
-Canonical ABI field order:
+Order:
 
 ```text
 target
 pack
 ```
 
-Supported targets:
+Targets:
 
 ```text
 windows-x64
 posix-x64
 ```
 
-Supported pack values:
+Pack values:
 
 ```text
 1
@@ -289,48 +181,37 @@ Supported pack values:
 
 The root Project ABI is authoritative for the composed Project.
 
-A child Project ABI is not merged into the root Project ABI.
+## BUILD Identity Semantics
+
+BUILD first tries persisted physical proof:
+
+```text
+change_token
+```
+
+If unchanged cannot be proven, it reads one stable snapshot and compares:
+
+```text
+project_content_hash = SHA-256(exact bytes)
+```
+
+Only when byte content differs does BUILD stream the configuration and compute
+the later semantic fingerprint.
+
+This separates:
+
+```text
+filesystem proof
+byte identity
+semantic identity
+```
+
+Whitespace/comment-only changes may alter byte identity while preserving semantic
+identity.
 
 ## Validation
 
-The loader fails closed on:
-
-```text
-invalid JSON
-unknown property
-duplicate property
-wrong type
-missing required field
-invalid node type
-invalid node structure
-empty required name/path
-unsupported version
-unsupported ABI target
-unsupported ABI pack
-invalid ordered-field contract
-```
-
-JSON syntax handling remains generic in `server_engine/json`; Project schema
-validation belongs to the Project configuration layer.
-
-## BUILD and REBUILD Boundary
-
-`project.json` is construction input:
-
-```text
-project.json
-    |
-    v
-project_configuration
-    |
-    v
-project_context
-```
-
-BUILD uses the configuration together with persisted construction/change state
-to determine whether the Project changed.
-
-REBUILD uses the configuration to construct a new G0.
-
-LOAD restores persisted Graph/runtime state and does not run the Project
-configuration tree through Source Manager change detection.
+The schema fails closed on invalid JSON, wrong field order, unknown/extra
+properties, wrong types, missing required fields, invalid node types, empty
+required names/paths, unsupported version, unsupported ABI target, and
+unsupported ABI pack.
