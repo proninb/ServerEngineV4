@@ -139,7 +139,7 @@ public:
 
         visited.reserve(32);
         active.reserve(16);
-        sources.reserve(32);
+        unique_inputs.reserve(32);
         kinds.reserve(64);
     }
 
@@ -485,10 +485,12 @@ private:
                 }
 
                 if (dependency.kind ==
-                    file_kind::source) {
+                        file_kind::source ||
+                    dependency.kind ==
+                        file_kind::assign) {
 
                     const auto inserted =
-                        sources.insert(
+                        unique_inputs.insert(
                             child_key);
 
                     if (!inserted.second) {
@@ -498,7 +500,10 @@ private:
                                 operation)
                                 .file(child)
                                 .detail(
-                                    "Source file is declared more than once")
+                                    dependency.kind ==
+                                            file_kind::source
+                                        ? "Source file is declared more than once"
+                                        : "Assign file is declared more than once")
                                 .build());
 
                         active.erase(key);
@@ -639,7 +644,7 @@ private:
     file_context* files = nullptr;
     std::unordered_set<project_path_key, project_path_key_hash> visited;
     std::unordered_set<project_path_key, project_path_key_hash> active;
-    std::unordered_set<project_path_key, project_path_key_hash> sources;
+    std::unordered_set<project_path_key, project_path_key_hash> unique_inputs;
     std::unordered_map<
         project_path_key,
         file_kind,

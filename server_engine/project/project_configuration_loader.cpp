@@ -37,6 +37,7 @@ enum class item_type : std::uint8_t {
     group,
     header,
     source,
+    assign,
     project,
 };
 
@@ -369,7 +370,7 @@ private:
 
             if (key != "path") {
                 fail(
-                    "header/source/project item requires path after type");
+                    "header/source/assign/project item requires path after type");
             }
             return;
 
@@ -495,12 +496,14 @@ private:
                 current.type = item_type::header;
             } else if (type == "source") {
                 current.type = item_type::source;
+            } else if (type == "assign") {
+                current.type = item_type::assign;
             } else if (type == "project") {
                 current.type = item_type::project;
             } else {
                 fail(
                     "Project item type must be "
-                    "group, header, source, or project");
+                    "group, header, source, assign, or project");
                 return;
             }
 
@@ -552,6 +555,9 @@ private:
                     break;
                 case item_type::source:
                     kind = file_kind::source;
+                    break;
+                case item_type::assign:
+                    kind = file_kind::assign;
                     break;
                 case item_type::project:
                     kind = file_kind::project;

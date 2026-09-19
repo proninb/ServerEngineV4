@@ -70,6 +70,7 @@ Supported node types:
 group
 header
 source
+assign
 project
 ```
 
@@ -112,6 +113,20 @@ children
 }
 ```
 
+### assign
+
+```jsonc
+{
+  "name": "Connections",
+  "type": "assign",
+  "path": "tasks/connections.assign"
+}
+```
+
+`assign` is a lightweight construction input used by Studio-facing special
+tasks to describe user connections. It references existing variables and does
+not declare types or create runtime objects.
+
 ### project
 
 ```jsonc
@@ -122,7 +137,7 @@ children
 }
 ```
 
-For `header`, `source`, and `project`:
+For `header`, `source`, `assign`, and `project`:
 
 ```text
 name
@@ -138,25 +153,27 @@ Every non-group Project item emits one ordered typed dependency:
 type:"project" -> file_kind::project
 type:"header"  -> file_kind::header
 type:"source"  -> file_kind::source
+type:"assign"  -> file_kind::assign
 ```
 
 Each File Context node has one immutable `file_kind`. The same physical path
 cannot be classified as two syntax domains inside one construction lineage.
 
 A common dependency graph does not imply common syntax: Project, Header, and
-Source dependencies are discovered by their own language rules.
+Source and Assign dependencies are discovered by their own language rules.
 
 Cross-file cardinality is part of Project composition semantics:
 
 ```text
 header  -> reusable
 source  -> unique in one composed Project
+assign  -> unique in one composed Project
 project -> unique in one composed Project tree
 ```
 
 A repeated Project on the active recursion stack is a cycle. A Project already
 completed elsewhere in the tree is a duplicate Project error. A repeated Source
-is a duplicate Source error. Reusing the same physical file with a different
+or Assign input is an error. Reusing the same physical file with a different
 `file_kind` is also invalid.
 
 These checks belong to composition itself and therefore run identically during
@@ -168,9 +185,50 @@ Context does not own these rules; it only owns physical identity and immutable
 creates a fresh File Context; BUILD restores the committed File Context slots so
 unchanged physical inputs keep the same `file_id` across `Gn -> Gn+1`.
 
+## Dependency Semantics
+
+Project configuration contributes direct file dependencies using the same
+`file_id` identity space as every other construction input.
+
+For a declaring `project.json`:
+
+```text
+project file_id -> child project file_id
+project file_id -> header file_id
+project file_id -> source file_id
+project file_id -> assign file_id
+```
+
+These are file-level construction dependencies. They do not replace semantic
+relations produced later by Type, Source, or Assign frontends.
+
+`assign` is intentionally lightweight:
+
+```text
+assign file
+    -> parse user connection descriptions
+    -> resolve referenced variables
+    -> diagnose missing/invalid references
+    -> emit resolved assignment/connection facts
+```
+
+The eventual assignment relation in Graph is distinct from the file dependency
+relation used for BUILD invalidation.
+
+The topology model does not allocate a second identity for graph nodes or edges:
+
+```text
+node identity = file_id
+edge identity is implicit in (source file_id, target file_id)
+```
+
+Project composition establishes only the explicit Project-declared edges.
+Header, Source, and Assign frontends add their own direct dependencies according
+to their own syntax contracts.
+
 ## Path Resolution
 
-`header`, `source`, and `project` support two locator forms:
+`header`, `source`, `assign`, and `project` support two locator forms:
 
 ```text
 relative
@@ -231,14 +289,14 @@ Contract:
 ```text
 root-first
 declaration-order DFS
-normalized-path dedupe
 platform filesystem case semantics
 cycle detection
+duplicate Project rejection
 NO SORT
 ```
 
-Repeated references to the same normalized child Project do not create duplicate
-manifest entries.
+Repeated references to the same child Project are invalid. Project composition
+is a tree; sharing/reuse is permitted only for reusable Header inputs.
 
 Filesystem-equivalence policy is platform-specific and isolated behind
 `project_path.hpp`:

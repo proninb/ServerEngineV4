@@ -384,6 +384,7 @@ Syntax routing is explicit:
 file_kind::project -> Project configuration syntax
 file_kind::header  -> Type syntax
 file_kind::source  -> Source syntax
+file_kind::assign  -> Assignment/connection syntax
 ```
 
 The same physical path cannot change kind inside one construction lineage.
@@ -401,6 +402,11 @@ Source parser
     objects
     links
     initialization
+
+Assign parser
+    references existing variables
+    emits user connection/assignment facts
+    creates no declarations or objects
 ```
 
 `file_context` contains neither parser state nor parser facts. Dependency discovery is syntax-domain-specific: Project syntax emits project/header/source dependencies, Header syntax discovers Header dependencies, and Source syntax uses only Source-language dependency rules.
@@ -470,8 +476,8 @@ identity layers.
 persisted File Context is restored.
 
 Project composition now populates the flat File Context closure for every
-explicit `project`, `header`, and `source` item. `project.json` uses the same
-stable snapshot for manifest proof and File Context physical state.
+explicit `project`, `header`, `source`, and `assign` item. `project.json` uses
+the same stable snapshot for manifest proof and File Context physical state.
 
 Reuse policy is intentionally syntax-domain-specific:
 
@@ -482,6 +488,11 @@ header
 
 source
     one semantic construction unit
+    repeated declaration anywhere in the composed Project is invalid
+
+assign
+    one user connection-description input
+    references existing variables only
     repeated declaration anywhere in the composed Project is invalid
 
 project
@@ -499,6 +510,7 @@ File Context-specific work:
 ```text
 same physical path + different file_kind -> error
 repeated source                       -> error
+repeated assign                       -> error
 repeated completed project            -> error
 active project ancestor               -> cycle error
 repeated header                       -> allowed
@@ -506,6 +518,113 @@ repeated header                       -> allowed
 
 This keeps configuration acceptance identical whether composition is manifest-only
 or also populates a fresh File Context.
+
+## File Dependency Topology
+
+`file_id` is the only identity of a construction-input node.
+
+There is no separate graph-node identity:
+
+```text
+file_id
+    -> file_record
+    -> file_physical_record
+    -> file_dependency_record
+```
+
+The file itself is the dependency-graph node. V4 therefore does not introduce:
+
+```text
+graph_node_id
+dependency_id
+edge_id
+stable_dependency_id
+```
+
+A direct dependency relation is only:
+
+```text
+file_id -> file_id
+```
+
+For every file, construction needs two direct adjacency views:
+
+```text
+dependencies(file_id)
+dependents(file_id)
+```
+
+Only direct relations are stored. Transitive affected sets are discovered by
+walking `dependents` from changed files.
+
+Dependency discovery remains syntax-domain-specific:
+
+```text
+file_kind::project
+    Project configuration syntax
+    -> explicit project/header/source/assign inputs
+
+file_kind::header
+    Type/Header syntax
+    -> Header-language dependencies
+
+file_kind::source
+    Source syntax
+    -> Source-language dependencies
+
+file_kind::assign
+    Assign syntax
+    -> references required for user connection validation
+```
+
+The topology layer stores only resolved `file_id` relations; it does not contain
+paths, parser state, or syntax-specific facts.
+
+### Generation storage contract
+
+The logical graph model is the same for every generation, but construction
+storage follows the generation mode.
+
+Fresh REBUILD (`G0`) owns a dense native realization:
+
+```text
+file_dependency_record[file_id]
+forward_edges[]
+reverse_edges[]
+```
+
+Incremental BUILD (`Gn -> Gn+1`) is baseline-backed:
+
+```text
+untouched file
+    -> adjacency read directly from committed baseline
+
+touched file
+    -> materialize only that dependency record
+    -> append replacement forward/reverse ranges
+```
+
+Edge arenas are append-only during the construction lineage. BUILD does not
+rewrite or compact the complete graph after a sparse change.
+
+REBUILD is the natural full-compaction boundary.
+
+This preserves the V3 property that sparse BUILD cost is proportional to the
+affected construction set instead of total file/edge count, while V4 keeps the
+cleaner single `file_id` identity model.
+
+Architectural constraints:
+
+```text
+NO SORT
+NO per-node heap allocation
+NO vector<vector<file_id>>
+NO global topology rewrite for sparse BUILD
+NO secondary node identity
+```
+
+Dependency topology is construction state/persisted baseline state. It is not
+resident runtime Project state after Runtime/SHM construction is complete.
 
 Dependency edge storage is still the next construction slice.
 
@@ -548,3 +667,8 @@ failed BUILD
 17. Semantic fingerprint remains separate from byte/configuration identity.
 18. Candidate persisted construction state is committed only with its successful generation.
 19. Project absolute-path resolution must fail closed; unresolved paths must never become construction identities.
+20. `file_id` is the only identity of a file-dependency node; no secondary graph-node ID exists.
+21. File dependency storage contains direct `file_id -> file_id` relations only.
+22. Forward and reverse adjacency are first-class construction data.
+23. REBUILD creates dense dependency storage; BUILD materializes only sparse replacements over the committed baseline.
+24. Sparse BUILD never performs an O(V+E) graph compaction; REBUILD is the compaction boundary.

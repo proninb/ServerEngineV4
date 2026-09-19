@@ -14,6 +14,7 @@ enum class file_kind : std::uint8_t {
     project,
     header,
     source,
+    assign,
 };
 
 }
