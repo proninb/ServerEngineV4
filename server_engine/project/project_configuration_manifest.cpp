@@ -3,11 +3,13 @@
 #include "project_configuration_loader.hpp"
 #include "file/file_context.hpp"
 #include "project_path.hpp"
+#include "../filesystem_path.hpp"
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -60,8 +62,14 @@ calculate_configuration_hash_impl(
             files.size()));
 
     for (const auto& file : files) {
-        const auto path =
-            file.path.generic_string();
+        std::string path;
+
+        if (filesystem_path_to_utf8(file.path, path) !=
+            filesystem_path_result::success) {
+
+            throw std::runtime_error(
+                "Cannot encode Project configuration path as UTF-8");
+        }
 
         append_u32(
             canonical,

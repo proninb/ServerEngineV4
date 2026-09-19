@@ -77,6 +77,7 @@
   <ItemGroup>
     <ClCompile Include="server_engine\main.cpp" />
     <ClCompile Include="server_engine\server.cpp" />
+    <ClCompile Include="server_engine\filesystem_path.cpp" />
     <ClCompile Include="server_engine\diagnostics\diagnostic_collection.cpp" />
     <ClCompile Include="server_engine\diagnostics\diagnostic_formatter.cpp" />
     <ClCompile Include="server_engine\diagnostics\diagnostic_source_cache.cpp" />
@@ -100,6 +101,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="server_engine\server.hpp" />
+    <ClInclude Include="server_engine\filesystem_path.hpp" />
     <ClInclude Include="server_engine\server_context.hpp" />
     <ClInclude Include="server_engine\server_status.hpp" />
     <ClInclude Include="server_engine\operation.hpp" />

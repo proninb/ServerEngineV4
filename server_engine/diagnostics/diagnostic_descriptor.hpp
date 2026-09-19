@@ -122,6 +122,15 @@ inline constexpr diagnostic_descriptor project_load_failed{
     "Project configuration could not be loaded",
 };
 
+// LOAD cannot proceed until committed generation restore is implemented.
+inline constexpr diagnostic_descriptor project_load_incomplete{
+    diagnostic_id{2009},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.load_incomplete",
+    "Project LOAD pipeline is incomplete",
+};
+
 // BUILD reached the first construction stage that is not implemented yet.
 inline constexpr diagnostic_descriptor project_build_incomplete{
     diagnostic_id{2007},

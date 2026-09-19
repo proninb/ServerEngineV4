@@ -1,0 +1,227 @@
+#include "filesystem_path.hpp"
+
+#include <cstddef>
+#include <limits>
+#include <utility>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+#else
+#include <cstdint>
+#endif
+
+namespace cw::server {
+namespace {
+
+#if !defined(_WIN32)
+
+[[nodiscard]] bool valid_utf8(std::string_view value) noexcept {
+    std::size_t offset = 0;
+
+    while (offset < value.size()) {
+        const auto first = static_cast<unsigned char>(value[offset]);
+
+        if (first <= 0x7Fu) {
+            ++offset;
+            continue;
+        }
+
+        std::size_t length = 0;
+        std::uint32_t codepoint = 0;
+        std::uint32_t minimum = 0;
+
+        if (first >= 0xC2u && first <= 0xDFu) {
+            length = 2;
+            codepoint = first & 0x1Fu;
+            minimum = 0x80u;
+        } else if (first >= 0xE0u && first <= 0xEFu) {
+            length = 3;
+            codepoint = first & 0x0Fu;
+            minimum = 0x800u;
+        } else if (first >= 0xF0u && first <= 0xF4u) {
+            length = 4;
+            codepoint = first & 0x07u;
+            minimum = 0x10000u;
+        } else {
+            return false;
+        }
+
+        if (offset + length > value.size()) {
+            return false;
+        }
+
+        for (std::size_t index = 1; index < length; ++index) {
+            const auto next = static_cast<unsigned char>(value[offset + index]);
+
+            if ((next & 0xC0u) != 0x80u) {
+                return false;
+            }
+
+            codepoint =
+                (codepoint << 6u) |
+                static_cast<std::uint32_t>(next & 0x3Fu);
+        }
+
+        if (codepoint < minimum ||
+            codepoint > 0x10FFFFu ||
+            (codepoint >= 0xD800u && codepoint <= 0xDFFFu)) {
+
+            return false;
+        }
+
+        offset += length;
+    }
+
+    return true;
+}
+
+#endif
+
+}
+
+filesystem_path_result filesystem_path_from_utf8(
+    std::string_view value,
+    std::filesystem::path& output) noexcept {
+
+    output.clear();
+
+    try {
+#if defined(_WIN32)
+        if (value.size() >
+            static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
+            return filesystem_path_result::failed;
+        }
+
+        if (value.empty()) {
+            return filesystem_path_result::success;
+        }
+
+        const auto input_size = static_cast<int>(value.size());
+
+        const int wide_size = MultiByteToWideChar(
+            CP_UTF8,
+            MB_ERR_INVALID_CHARS,
+            value.data(),
+            input_size,
+            nullptr,
+            0);
+
+        if (wide_size <= 0) {
+            return GetLastError() == ERROR_NO_UNICODE_TRANSLATION
+                ? filesystem_path_result::invalid_utf8
+                : filesystem_path_result::failed;
+        }
+
+        std::wstring wide(
+            static_cast<std::size_t>(wide_size),
+            L'\0');
+
+        if (MultiByteToWideChar(
+                CP_UTF8,
+                MB_ERR_INVALID_CHARS,
+                value.data(),
+                input_size,
+                wide.data(),
+                wide_size) != wide_size) {
+
+            return GetLastError() == ERROR_NO_UNICODE_TRANSLATION
+                ? filesystem_path_result::invalid_utf8
+                : filesystem_path_result::failed;
+        }
+
+        output = std::filesystem::path(std::move(wide));
+#else
+        if (!valid_utf8(value)) {
+            return filesystem_path_result::invalid_utf8;
+        }
+
+        output = std::filesystem::path(std::string(value));
+#endif
+
+        return filesystem_path_result::success;
+    }
+    catch (...) {
+        output.clear();
+        return filesystem_path_result::failed;
+    }
+}
+
+filesystem_path_result filesystem_path_to_utf8(
+    const std::filesystem::path& value,
+    std::string& output) noexcept {
+
+    output.clear();
+
+    try {
+#if defined(_WIN32)
+        const auto wide = value.generic_wstring();
+
+        if (wide.size() >
+            static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
+            return filesystem_path_result::failed;
+        }
+
+        if (wide.empty()) {
+            return filesystem_path_result::success;
+        }
+
+        const auto input_size = static_cast<int>(wide.size());
+
+        const int utf8_size = WideCharToMultiByte(
+            CP_UTF8,
+            WC_ERR_INVALID_CHARS,
+            wide.data(),
+            input_size,
+            nullptr,
+            0,
+            nullptr,
+            nullptr);
+
+        if (utf8_size <= 0) {
+            return GetLastError() == ERROR_NO_UNICODE_TRANSLATION
+                ? filesystem_path_result::invalid_utf8
+                : filesystem_path_result::failed;
+        }
+
+        output.resize(static_cast<std::size_t>(utf8_size));
+
+        if (WideCharToMultiByte(
+                CP_UTF8,
+                WC_ERR_INVALID_CHARS,
+                wide.data(),
+                input_size,
+                output.data(),
+                utf8_size,
+                nullptr,
+                nullptr) != utf8_size) {
+
+            output.clear();
+
+            return GetLastError() == ERROR_NO_UNICODE_TRANSLATION
+                ? filesystem_path_result::invalid_utf8
+                : filesystem_path_result::failed;
+        }
+#else
+        output = value.generic_string();
+
+        if (!valid_utf8(output)) {
+            output.clear();
+            return filesystem_path_result::invalid_utf8;
+        }
+#endif
+
+        return filesystem_path_result::success;
+    }
+    catch (...) {
+        output.clear();
+        return filesystem_path_result::failed;
+    }
+}
+
+}

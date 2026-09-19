@@ -8,6 +8,7 @@
 #include "project_configuration_loader.hpp"
 
 #include "../diagnostics/diagnostic_builder.hpp"
+#include "../filesystem_path.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 #include "../json/json_parser.hpp"
 
@@ -92,6 +93,13 @@ public:
         }
 
         if (stack.empty()) {
+            if (root_started) {
+                fail(
+                    "Project configuration must contain exactly one root object");
+                return;
+            }
+
+            root_started = true;
             stack.push_back({schema_context::root});
             return;
         }
@@ -140,7 +148,10 @@ public:
                 fail(
                     "Project root requires fields in order: "
                     "version, name, project, configuration");
+                return;
             }
+
+            root_completed = true;
             return;
 
         case schema_context::configuration:
@@ -169,7 +180,13 @@ public:
     }
 
     void array_begin() override {
-        if (failed() || stack.empty()) {
+        if (failed()) {
+            return;
+        }
+
+        if (stack.empty()) {
+            fail(
+                "Project configuration root must be an object");
             return;
         }
 
@@ -266,7 +283,13 @@ public:
     }
 
     void value(json_value_view value) override {
-        if (failed() || stack.empty()) {
+        if (failed()) {
+            return;
+        }
+
+        if (stack.empty()) {
+            fail(
+                "Project configuration root must be an object");
             return;
         }
 
@@ -296,6 +319,8 @@ public:
 
     [[nodiscard]] bool valid() const noexcept {
         return !failed() &&
+               root_started &&
+               root_completed &&
                stack.empty();
     }
 
@@ -528,8 +553,20 @@ private:
                     return;
                 }
 
-                const std::filesystem::path item_path{
-                    path};
+                std::filesystem::path item_path;
+
+                const auto converted =
+                    filesystem_path_from_utf8(
+                        path,
+                        item_path);
+
+                if (converted != filesystem_path_result::success) {
+                    fail(
+                        converted == filesystem_path_result::invalid_utf8
+                            ? "Project item path must be valid UTF-8"
+                            : "Cannot convert Project item path to native filesystem path");
+                    return;
+                }
 
                 project_configuration_path_type path_type =
                     project_configuration_path_type::relative;
@@ -590,6 +627,8 @@ private:
 
     std::size_t current_offset = 0;
     std::size_t current_length = 0;
+    bool root_started = false;
+    bool root_completed = false;
     schema_error error_value;
 };
 

@@ -3,7 +3,6 @@
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 
-#include <fstream>
 #include <memory>
 
 namespace cw::server {
@@ -14,28 +13,18 @@ server_status load_project(
     diagnostic_collection& diagnostics,
     std::unique_ptr<project>& output) {
 
-    // Temporary gate until persisted Graph restore replaces direct entry access.
-    std::ifstream stream(
-        project_path,
-        std::ios::binary);
+    output.reset();
 
-    if (!stream) {
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_load_failed,
-                operation)
-                .file(project_path)
-                .detail("Cannot open Project entry file")
-                .build());
+    diagnostics.emit(
+        diagnostic(
+            diagnostics::project_load_incomplete,
+            operation)
+            .file(project_path)
+            .detail(
+                "Committed Project generation restore is not implemented")
+            .build());
 
-        return server_status::project_load_failed;
-    }
-
-    output =
-        std::make_unique<project>(
-            project_path);
-
-    return server_status::success;
+    return server_status::unsupported;
 }
 
 }

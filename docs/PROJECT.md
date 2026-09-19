@@ -217,6 +217,23 @@ It currently stops before File Context and `Gn -> Gn+1` construction.
 
 BUILD failure destroys resident Gn and leaves UNLOADED.
 
+## LOAD Implementation Boundary
+
+LOAD restores a committed Project generation. It does not validate `project.json`
+as a substitute for persisted runtime state and must never publish a placeholder
+resident Project.
+
+Until committed Graph/Runtime/SHM generation restore exists:
+
+```text
+LOAD
+    -> project.load_incomplete diagnostic
+    -> server_status::unsupported
+    -> no resident Project publication
+```
+
+Opening or parsing `project.json` is not part of the LOAD proof.
+
 ## Configuration Manifest
 
 The complete composed Project configuration proof is represented by:
@@ -365,6 +382,35 @@ decoded entries and must match the stored aggregate.
 
 The manifest store is a narrow construction-persistence boundary. It does not
 own Graph, File Context, Runtime, SHM, or resident Project state.
+
+## Filesystem Text Boundary
+
+All textual and persisted filesystem paths use strict UTF-8. Internal paths use
+the platform-native `std::filesystem::path` representation.
+
+```text
+JSON / persisted manifest
+    UTF-8
+        -> filesystem_path_from_utf8()
+        -> native std::filesystem::path
+
+native std::filesystem::path
+        -> filesystem_path_to_utf8()
+        -> UTF-8 persisted bytes
+```
+
+Project-specific path handling begins only after conversion to native form:
+
+```text
+UTF-8 locator
+    -> native path
+    -> resolve_project_path()
+    -> make_project_path_key()
+```
+
+`project_configuration_hash` hashes the same UTF-8 generic path representation
+that the manifest store persists. Locale-dependent narrow path conversion does
+not participate in persisted Project identity.
 
 ## File Context
 

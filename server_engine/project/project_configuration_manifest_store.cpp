@@ -1,5 +1,7 @@
 #include "project_configuration_manifest_store.hpp"
 
+#include "../filesystem_path.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -198,8 +200,13 @@ void append_bytes(
         const auto& file =
             value.files[index];
 
-        const auto path =
-            file.path.generic_string();
+        std::string path;
+
+        if (filesystem_path_to_utf8(file.path, path) !=
+            filesystem_path_result::success) {
+
+            return false;
+        }
 
         if (path.empty() ||
             path.size() >
@@ -512,12 +519,16 @@ void append_bytes(
                 return false;
             }
 
-            file.path =
-                std::filesystem::path{
-                    std::string{
-                        reinterpret_cast<const char*>(
-                            input.data() + offset),
-                        path_size}};
+            const std::string path{
+                reinterpret_cast<const char*>(
+                    input.data() + offset),
+                path_size};
+
+            if (filesystem_path_from_utf8(path, file.path) !=
+                filesystem_path_result::success) {
+
+                return false;
+            }
 
             offset += path_size;
 
@@ -802,4 +813,3 @@ project_configuration_manifest_store::save(
 }
 
 }
-
