@@ -130,6 +130,26 @@ type
 path
 ```
 
+## Parser Routing
+
+Project file items route physical files to one of two independent semantic
+parsers:
+
+```text
+type:"header"
+    -> file_role::type
+    -> Type parser
+       declarations / types / members
+
+type:"source"
+    -> file_role::source
+    -> Source parser
+       declarations / objects / links / initialization
+```
+
+`file_context` owns only physical file identity and this root routing role. It
+does not own either parser.
+
 ## Path Resolution
 
 `header`, `source`, and `project` support two locator forms:
@@ -359,7 +379,7 @@ If every SHA-256 matches:
 ```text
 no configuration parse
 no recomposition
--> Source Manager change detection
+-> File Context change detection
 ```
 
 If any entry differs or disappears:

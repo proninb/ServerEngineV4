@@ -118,7 +118,7 @@ server_status build_project(
         return report_build_incomplete(
             operation,
             diagnostics,
-            "Complete Project configuration manifest is unchanged; Source Manager change detection is not implemented yet");
+            "Complete Project configuration manifest is unchanged; File Context change detection is not implemented yet");
     }
 
     project_configuration_manifest candidate;
@@ -140,7 +140,7 @@ server_status build_project(
         return report_build_incomplete(
             operation,
             diagnostics,
-            "Project configuration inputs recomposed to the same aggregate hash; Source Manager change detection is not implemented yet");
+            "Project configuration inputs recomposed to the same aggregate hash; File Context change detection is not implemented yet");
     }
 
     return report_build_incomplete(

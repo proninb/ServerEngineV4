@@ -35,7 +35,7 @@ server_status rebuild_project(
             diagnostics::project_rebuild_incomplete,
             operation)
             .detail(
-                "Project configuration composition manifest is complete; Source Manager and G0 construction are not implemented yet")
+                "Project configuration composition manifest is complete; File Context and G0 construction are not implemented yet")
             .build());
 
     return server_status::unsupported;

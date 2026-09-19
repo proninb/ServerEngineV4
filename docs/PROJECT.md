@@ -351,6 +351,54 @@ decoded entries and must match the stored aggregate.
 The manifest store is a narrow construction-persistence boundary. It does not
 own Graph, Source Manager, Runtime, SHM, or resident Project state.
 
+## File Context
+
+`file_context` is the construction-time identity boundary for physical Project
+input files.
+
+```text
+file_context
+    file_id
+    canonical filesystem path
+    root parser role
+```
+
+Root routing is explicit:
+
+```text
+header item -> file_role::type   -> Type parser
+source item -> file_role::source -> Source parser
+```
+
+The parsers are separate semantic domains:
+
+```text
+Type parser
+    declarations
+    types
+    members
+
+Source parser
+    declarations
+    objects
+    links
+    initialization
+```
+
+`file_context` contains neither parser state nor parser facts.
+
+`file_id` is dense, 1-based, and assigned in first-resolution order. No sorting is
+performed. Known files are addressed directly by `file_id`; path lookup exists
+only at the filesystem identity boundary.
+
+There is no `file_manager` and no nested `file_update` transaction. BUILD and
+REBUILD construct disposable candidate construction state, so the whole candidate
+is the transaction boundary. Failed construction destroys that candidate.
+
+The first implementation owns file identity and root roles only. File content
+state and include/dependency topology are added in the next construction slice
+without changing the identity contract.
+
 ## Publication Contract
 
 Candidate construction artifacts belong to the candidate generation.
@@ -380,7 +428,7 @@ failed BUILD
 7. Failure of LOAD, BUILD, or REBUILD leaves UNLOADED.
 8. Resident Project contains runtime-required state only.
 9. There is no universal `project_context`.
-10. Source Manager is construction state, never resident Project state.
+10. File Context is construction state, never resident Project state.
 11. One normalized configuration path appears at most once in the manifest.
 12. Configuration composition is declaration-order DFS and is never sorted.
 13. Change tokens are proof optimizations, never identity.
