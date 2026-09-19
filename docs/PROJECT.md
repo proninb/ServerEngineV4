@@ -235,13 +235,13 @@ Traversal order is:
 ```text
 root-first
 declaration-order DFS
-normalized-path dedupe
 platform filesystem case semantics
 cycle detection
+duplicate Project rejection
 NO SORT
 ```
 
-Repeated references to the same normalized configuration file produce one entry.
+Repeated references to the same child Project are invalid.
 
 A reference to an active ancestor is a configuration cycle and fails.
 
@@ -292,7 +292,7 @@ locator
 Resolved physical paths and `project_path_key` values are temporary construction
 state and are never persisted in the manifest.
 
-Filesystem equivalence used for dedupe/cycle detection remains isolated behind
+Filesystem equivalence used for identity/cycle/duplicate detection remains isolated behind
 `project_path.hpp`:
 
 ```text
@@ -409,7 +409,7 @@ Assign parser
     creates no declarations or objects
 ```
 
-`file_context` contains neither parser state nor parser facts. Dependency discovery is syntax-domain-specific: Project syntax emits project/header/source dependencies, Header syntax discovers Header dependencies, and Source syntax uses only Source-language dependency rules.
+`file_context` contains neither parser state nor parser facts. Dependency discovery is syntax-domain-specific: Project syntax emits project/header/source/assign dependencies, Header syntax discovers Header dependencies, Source syntax uses only Source-language dependency rules, and Assign syntax resolves user connection references.
 
 `file_id` is dense and 1-based. REBUILD creates a fresh identity space. BUILD
 restores the previous File Context slots before change detection, preserving every
