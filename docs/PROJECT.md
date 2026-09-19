@@ -66,7 +66,7 @@ Resident Project must not retain construction-only state:
 ```text
 project.json composition
 configuration manifest
-Source Manager
+File Context
 Parser/frontend
 Builder
 ```
@@ -90,7 +90,7 @@ LOAD does not:
 ```text
 parse project.json for construction
 compose Project configuration
-run Source Manager
+run File Context
 perform source change detection
 ```
 
@@ -105,7 +105,7 @@ root project.json
     -> recursive Project configuration composition
     -> candidate configuration manifest
     -> explicit roots
-    -> new Source Manager
+    -> new File Context
     -> frontend / semantic construction
     -> Graph G0
     -> Runtime
@@ -131,7 +131,7 @@ root project.json
 It currently stops before:
 
 ```text
-Source Manager
+File Context
 G0
 Runtime
 SHM
@@ -149,7 +149,7 @@ BUILD starts only from resident Gn:
 resident Gn
     -> load committed project.manifest
     -> verify complete configuration input set
-    -> Source Manager change detection
+    -> File Context change detection
     -> candidate Gn+1
     -> coordinated commit
     -> resident Gn+1
@@ -300,7 +300,7 @@ The identity/proof levels are intentionally separate:
 file_change_token
     fast filesystem unchanged proof for one file
 
-project_content_hash
+file_content_hash
     SHA-256 of exact bytes of one project.json
 
 project_configuration_hash
@@ -415,9 +415,43 @@ mutex. BUILD and REBUILD construct disposable candidate construction state, so
 the whole candidate is the transaction boundary. Failed construction destroys
 that candidate.
 
-The current implementation owns file identity and root roles only. File content
-state and include/dependency topology are added in the next construction slice
-without changing the identity or storage contract.
+File Context keeps hot identity and cold physical state separate:
+
+```text
+file_record[]            16 bytes / file
+file_physical_record[]   64 bytes / file
+native_path_chars[]      one contiguous native-character arena
+path_index[]              8 bytes / slot
+```
+
+`file_physical_record` contains exact content SHA-256 and the optional native
+change token. Filesystem timestamp/size observation is acquisition-local only; it
+is not persisted or trusted as an unchanged proof.
+
+Acquisition is split for parallel execution:
+
+```text
+prepare_acquire()
+    -> borrowed file_acquire_job
+
+execute_acquire()
+    -> token proof when available
+    -> otherwise stable read + SHA-256
+
+apply_acquire()
+    -> update cold physical state
+    -> report exact content change
+```
+
+`construction_content_hash` is SHA-256 over domain `CWFCNT01`, the ordered file
+count, and raw 32-byte per-file SHA-256 values. It intentionally contains no HEX
+encoding, path, role, or dependency topology. Those belong to higher construction
+identity layers.
+
+`path_hash` is never durable identity. It is rebuilt from physical paths when a
+persisted File Context is restored.
+
+Include/dependency topology is the next construction slice.
 
 ## Publication Contract
 

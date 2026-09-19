@@ -86,7 +86,7 @@ calculate_configuration_hash_impl(
     }
 
     const auto digest =
-        hash_project_content(
+        hash_file_content(
             canonical);
 
     project_configuration_hash output;
@@ -98,7 +98,7 @@ calculate_configuration_hash_impl(
     const std::filesystem::path& path,
     operation_id operation,
     diagnostic_collection& diagnostics,
-    project_snapshot_result result) {
+    file_content_result result) {
 
     diagnostics.emit(
         diagnostic(
@@ -106,16 +106,16 @@ calculate_configuration_hash_impl(
             operation)
             .file(path)
             .detail(
-                result == project_snapshot_result::missing
+                result == file_content_result::missing
                     ? "Project configuration file does not exist"
-                    : result == project_snapshot_result::changed_during_read
+                    : result == file_content_result::changed_during_read
                         ? "Project configuration changed during stable acquisition"
-                        : result == project_snapshot_result::allocation_failed
+                        : result == file_content_result::allocation_failed
                             ? "Cannot allocate Project configuration snapshot"
                             : "Cannot acquire Project configuration snapshot")
             .build());
 
-    return result == project_snapshot_result::allocation_failed
+    return result == file_content_result::allocation_failed
         ? server_status::io_error
         : server_status::project_configuration_invalid;
 }
@@ -236,15 +236,15 @@ private:
 
         active.insert(key);
 
-        project_content_snapshot snapshot;
+        file_content_snapshot snapshot;
 
         const auto acquired =
-            acquire_project_content(
+            acquire_file_content(
                 absolute_path,
                 snapshot);
 
         if (acquired !=
-            project_snapshot_result::acquired) {
+            file_content_result::acquired) {
 
             active.erase(key);
 
@@ -557,7 +557,7 @@ server_status verify_project_configuration_manifest(
                     unchanged);
 
             if (proof ==
-                project_token_result::missing) {
+                file_token_result::missing) {
 
                 verification =
                     project_configuration_manifest_verification::
@@ -567,7 +567,7 @@ server_status verify_project_configuration_manifest(
             }
 
             if (proof ==
-                project_token_result::failed) {
+                file_token_result::failed) {
 
                 diagnostics.emit(
                     diagnostic(
@@ -582,22 +582,22 @@ server_status verify_project_configuration_manifest(
             }
 
             if (proof ==
-                    project_token_result::available &&
+                    file_token_result::available &&
                 unchanged) {
 
                 continue;
             }
         }
 
-        project_content_snapshot snapshot;
+        file_content_snapshot snapshot;
 
         const auto acquired =
-            acquire_project_content(
+            acquire_file_content(
                 path,
                 snapshot);
 
         if (acquired ==
-            project_snapshot_result::missing) {
+            file_content_result::missing) {
 
             verification =
                 project_configuration_manifest_verification::
@@ -607,7 +607,7 @@ server_status verify_project_configuration_manifest(
         }
 
         if (acquired !=
-            project_snapshot_result::acquired) {
+            file_content_result::acquired) {
 
             return report_acquisition_failure(
                 path,

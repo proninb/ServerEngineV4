@@ -278,7 +278,7 @@ The root Project ABI is authoritative for the composed Project.
 Each participating `project.json` produces:
 
 ```text
-project_content_hash
+file_content_hash
     SHA-256(exact bytes)
 
 file_change_token
@@ -350,7 +350,7 @@ This means:
 change token
     physical proof optimization
 
-project_content_hash
+file_content_hash
     exact identity of one file's bytes
 
 project_configuration_hash

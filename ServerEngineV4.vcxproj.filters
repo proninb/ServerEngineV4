@@ -72,8 +72,8 @@
     <ClCompile Include="server_engine\project\project.cpp">
       <Filter>server_engine\project</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\project\project_identity.cpp">
-      <Filter>server_engine\project</Filter>
+    <ClCompile Include="server_engine\project\file\file_identity.cpp">
+      <Filter>server_engine\project\file</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\project\project_configuration_manifest.cpp">
       <Filter>server_engine\project</Filter>
@@ -208,6 +208,9 @@
     </ClInclude>
     <ClInclude Include="server_engine\project\project_path.hpp">
       <Filter>server_engine\project</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\file\file_identity.hpp">
+      <Filter>server_engine\project\file</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\file\file_context.hpp">
       <Filter>server_engine\project\file</Filter>

@@ -2,7 +2,7 @@
  * Persisted composed Project configuration manifest boundary.
  *
  * This store owns only configuration-input proof. It does not own Graph,
- * Source Manager, frontend state, Runtime, or resident Project state.
+ * File Context, frontend state, Runtime, or resident Project state.
  */
 #pragma once
 

@@ -1,4 +1,4 @@
-#include "project_identity.hpp"
+#include "file_identity.hpp"
 
 #include <algorithm>
 #include <array>
@@ -115,7 +115,7 @@ public:
         }
     }
 
-    [[nodiscard]] project_content_hash finish() noexcept {
+    [[nodiscard]] file_content_hash finish() noexcept {
         const auto bit_length =
             total_bytes * 8ULL;
 
@@ -149,7 +149,7 @@ public:
 
         transform(buffer.data());
 
-        project_content_hash output;
+        file_content_hash output;
 
         for (std::size_t word = 0;
              word < state.size();
@@ -385,7 +385,7 @@ struct observed_file_change_state final {
     }
 };
 
-[[nodiscard]] project_token_result query_file_change_state(
+[[nodiscard]] file_token_result query_file_change_state(
     const std::filesystem::path& path,
     observed_file_change_state& output) noexcept {
 
@@ -414,10 +414,10 @@ struct observed_file_change_state final {
             if (error == ERROR_FILE_NOT_FOUND ||
                 error == ERROR_PATH_NOT_FOUND) {
 
-                return project_token_result::missing;
+                return file_token_result::missing;
             }
 
-            return project_token_result::failed;
+            return file_token_result::failed;
         }
 
         BY_HANDLE_FILE_INFORMATION information{};
@@ -426,7 +426,7 @@ struct observed_file_change_state final {
                 file.get(),
                 &information) == 0) {
 
-            return project_token_result::failed;
+            return file_token_result::failed;
         }
 
         READ_FILE_USN_DATA request{};
@@ -454,14 +454,14 @@ struct observed_file_change_state final {
                 error == ERROR_NOT_SUPPORTED ||
                 error == ERROR_INVALID_PARAMETER) {
 
-                return project_token_result::unavailable;
+                return file_token_result::unavailable;
             }
 
-            return project_token_result::failed;
+            return file_token_result::failed;
         }
 
         if (returned < sizeof(USN_RECORD_V2)) {
-            return project_token_result::failed;
+            return file_token_result::failed;
         }
 
         USN_RECORD_V2 record{};
@@ -485,7 +485,7 @@ struct observed_file_change_state final {
             record.FileReferenceNumber !=
                 file_reference) {
 
-            return project_token_result::failed;
+            return file_token_result::failed;
         }
 
         output.volume_serial =
@@ -499,18 +499,18 @@ struct observed_file_change_state final {
                 record.Usn);
 
         return output
-            ? project_token_result::available
-            : project_token_result::unavailable;
+            ? file_token_result::available
+            : file_token_result::unavailable;
     }
     catch (...) {
-        return project_token_result::failed;
+        return file_token_result::failed;
     }
 }
 
-[[nodiscard]] project_snapshot_result
+[[nodiscard]] file_content_result
 acquire_windows_snapshot(
     const std::filesystem::path& path,
-    project_content_snapshot& output) noexcept {
+    file_content_snapshot& output) noexcept {
 
     output = {};
 
@@ -533,17 +533,17 @@ acquire_windows_snapshot(
             if (error == ERROR_FILE_NOT_FOUND ||
                 error == ERROR_PATH_NOT_FOUND) {
 
-                return project_snapshot_result::missing;
+                return file_content_result::missing;
             }
 
             if (error == ERROR_SHARING_VIOLATION ||
                 error == ERROR_LOCK_VIOLATION) {
 
-                return project_snapshot_result::
+                return file_content_result::
                     changed_during_read;
             }
 
-            return project_snapshot_result::failed;
+            return file_content_result::failed;
         }
 
         BY_HANDLE_FILE_INFORMATION before{};
@@ -552,7 +552,7 @@ acquire_windows_snapshot(
                 file.get(),
                 &before) == 0) {
 
-            return project_snapshot_result::failed;
+            return file_content_result::failed;
         }
 
         const auto native_size =
@@ -563,7 +563,7 @@ acquire_windows_snapshot(
         if (native_size >
             (std::numeric_limits<std::uint32_t>::max)()) {
 
-            return project_snapshot_result::failed;
+            return file_content_result::failed;
         }
 
         std::string bytes(
@@ -596,7 +596,7 @@ acquire_windows_snapshot(
                     nullptr) == 0 ||
                 read != chunk) {
 
-                return project_snapshot_result::
+                return file_content_result::
                     changed_during_read;
             }
 
@@ -610,7 +610,7 @@ acquire_windows_snapshot(
                 file.get(),
                 &after) == 0) {
 
-            return project_snapshot_result::failed;
+            return file_content_result::failed;
         }
 
         const bool same =
@@ -630,7 +630,7 @@ acquire_windows_snapshot(
                 after.ftLastWriteTime.dwLowDateTime;
 
         if (!same) {
-            return project_snapshot_result::
+            return file_content_result::
                 changed_during_read;
         }
 
@@ -642,7 +642,7 @@ acquire_windows_snapshot(
                 error);
 
         if (error) {
-            return project_snapshot_result::failed;
+            return file_content_result::failed;
         }
 
         output.observation.size =
@@ -653,7 +653,7 @@ acquire_windows_snapshot(
                 write_time.time_since_epoch().count());
 
         output.content_hash =
-            hash_project_content(bytes);
+            hash_file_content(bytes);
 
         output.bytes =
             std::move(bytes);
@@ -663,7 +663,7 @@ acquire_windows_snapshot(
         if (query_file_change_state(
                 path,
                 state) ==
-            project_token_result::available) {
+            file_token_result::available) {
 
             output.change_token = {
                 state.volume_serial,
@@ -674,18 +674,18 @@ acquire_windows_snapshot(
             output.change_token_available = true;
         }
 
-        return project_snapshot_result::acquired;
+        return file_content_result::acquired;
     }
     catch (const std::bad_alloc&) {
-        return project_snapshot_result::
+        return file_content_result::
             allocation_failed;
     }
     catch (const std::length_error&) {
-        return project_snapshot_result::
+        return file_content_result::
             allocation_failed;
     }
     catch (...) {
-        return project_snapshot_result::failed;
+        return file_content_result::failed;
     }
 }
 
@@ -693,7 +693,7 @@ acquire_windows_snapshot(
 
 } // namespace
 
-project_content_hash hash_project_content(
+file_content_hash hash_file_content(
     std::string_view bytes) noexcept {
 
     sha256_state hash;
@@ -701,7 +701,7 @@ project_content_hash hash_project_content(
     return hash.finish();
 }
 
-project_token_result capture_file_change_token(
+file_token_result capture_file_change_token(
     const std::filesystem::path& path,
     file_change_token& output) noexcept {
 
@@ -709,7 +709,7 @@ project_token_result capture_file_change_token(
 
 #if !defined(_WIN32)
     (void)path;
-    return project_token_result::unavailable;
+    return file_token_result::unavailable;
 #else
     observed_file_change_state state;
 
@@ -718,7 +718,7 @@ project_token_result capture_file_change_token(
             path,
             state);
 
-    if (result != project_token_result::available) {
+    if (result != file_token_result::available) {
         return result;
     }
 
@@ -728,11 +728,11 @@ project_token_result capture_file_change_token(
         state.file_usn,
     };
 
-    return project_token_result::available;
+    return file_token_result::available;
 #endif
 }
 
-project_token_result prove_file_unchanged(
+file_token_result prove_file_unchanged(
     const std::filesystem::path& path,
     const file_change_token& token,
     bool& unchanged) noexcept {
@@ -740,12 +740,12 @@ project_token_result prove_file_unchanged(
     unchanged = false;
 
     if (!token) {
-        return project_token_result::unavailable;
+        return file_token_result::unavailable;
     }
 
 #if !defined(_WIN32)
     (void)path;
-    return project_token_result::unavailable;
+    return file_token_result::unavailable;
 #else
     observed_file_change_state current;
 
@@ -754,7 +754,7 @@ project_token_result prove_file_unchanged(
             path,
             current);
 
-    if (result != project_token_result::available) {
+    if (result != file_token_result::available) {
         return result;
     }
 
@@ -766,13 +766,13 @@ project_token_result prove_file_unchanged(
         current.file_usn ==
             token.file_usn;
 
-    return project_token_result::available;
+    return file_token_result::available;
 #endif
 }
 
-project_snapshot_result acquire_project_content(
+file_content_result acquire_file_content(
     const std::filesystem::path& path,
-    project_content_snapshot& output) noexcept {
+    file_content_snapshot& output) noexcept {
 
 #if defined(_WIN32)
     return acquire_windows_snapshot(
@@ -789,17 +789,17 @@ project_snapshot_result acquire_project_content(
             before,
             missing)) {
 
-        return project_snapshot_result::failed;
+        return file_content_result::failed;
     }
 
     if (missing) {
-        return project_snapshot_result::missing;
+        return file_content_result::missing;
     }
 
     if (before.size >
         (std::numeric_limits<std::uint32_t>::max)()) {
 
-        return project_snapshot_result::failed;
+        return file_content_result::failed;
     }
 
     try {
@@ -808,7 +808,7 @@ project_snapshot_result acquire_project_content(
             std::ios::binary);
 
         if (!stream) {
-            return project_snapshot_result::failed;
+            return file_content_result::failed;
         }
 
         std::string bytes(
@@ -826,7 +826,7 @@ project_snapshot_result acquire_project_content(
                 static_cast<std::streamsize>(
                     bytes.size())) {
 
-                return project_snapshot_result::
+                return file_content_result::
                     changed_during_read;
             }
         }
@@ -838,30 +838,30 @@ project_snapshot_result acquire_project_content(
                 after,
                 missing)) {
 
-            return project_snapshot_result::failed;
+            return file_content_result::failed;
         }
 
         if (missing ||
             before != after) {
 
-            return project_snapshot_result::
+            return file_content_result::
                 changed_during_read;
         }
 
         output.observation = after;
         output.content_hash =
-            hash_project_content(bytes);
+            hash_file_content(bytes);
         output.bytes =
             std::move(bytes);
 
-        return project_snapshot_result::acquired;
+        return file_content_result::acquired;
     }
     catch (const std::bad_alloc&) {
-        return project_snapshot_result::
+        return file_content_result::
             allocation_failed;
     }
     catch (const std::length_error&) {
-        return project_snapshot_result::
+        return file_content_result::
             allocation_failed;
     }
 #endif

@@ -62,7 +62,6 @@ ServerEngineV4/
 │       ├── project.hpp
 │       ├── project.cpp
 │       ├── project_identity.hpp
-│       ├── project_identity.cpp
 │       ├── project_configuration_manifest.hpp
 │       ├── project_configuration_manifest.cpp
 │       ├── project_configuration_manifest_store.hpp
@@ -72,6 +71,8 @@ ServerEngineV4/
 │       ├── project_path_windows.cpp
 │       ├── project_path_posix.cpp
 │       ├── file/
+│       │   ├── file_identity.hpp
+│       │   ├── file_identity.cpp
 │       │   ├── file_context.hpp
 │       │   └── file_context.cpp
 │       ├── project_load.hpp
@@ -549,3 +550,12 @@ path_index[]        open-addressed path identity index
 
 There is no per-file `std::filesystem::path` allocation and no persisted
 `project_path_key` object in File Context. No sort or mutex is required.
+
+Physical acquisition is owned by `file/file_identity.*`, not Project semantic
+identity. The cold physical record stores exact SHA-256 plus an optional native
+change token; timestamp/size observation remains transient.
+
+`construction_content_hash` aggregates ordered raw per-file SHA-256 values under
+domain `CWFCNT01`. It proves aggregate byte-content identity only; file path,
+role, configuration, and future dependency topology remain separate inputs to a
+higher construction identity.

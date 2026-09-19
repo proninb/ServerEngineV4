@@ -2,6 +2,9 @@
 
 #include <cassert>
 #include <limits>
+#include <new>
+#include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace cw::server {
@@ -23,6 +26,29 @@ namespace {
     }
 
     return capacity;
+}
+
+void append_u64(
+    std::string& output,
+    std::uint64_t value) {
+
+    for (std::size_t index = 0;
+         index < 8;
+         ++index) {
+
+        output.push_back(
+            static_cast<char>(
+                (value >> (index * 8)) &
+                0xffU));
+    }
+}
+
+[[nodiscard]] std::filesystem::path make_path(
+    file_path_view value) {
+
+    return std::filesystem::path{
+        value.begin(),
+        value.end()};
 }
 
 }
@@ -57,17 +83,10 @@ server_status file_context::same_key(
     }
 
     try {
-        const auto stored =
-            path(file);
-
-        const std::filesystem::path stored_path{
-            stored.begin(),
-            stored.end()};
-
         project_path_key stored_key;
 
         if (make_project_path_key(
-                stored_path,
+                make_path(path(file)),
                 stored_key) !=
             project_path_result::success) {
 
@@ -310,6 +329,16 @@ server_status file_context::resolve(
             {},
         });
 
+        try {
+            physical_files.emplace_back();
+        }
+        catch (...) {
+            files.pop_back();
+            path_chars.resize(
+                old_path_size);
+            throw;
+        }
+
         output = file_id{
             static_cast<std::uint32_t>(
                 files.size())};
@@ -400,12 +429,260 @@ server_status file_context::add_root(
     }
 }
 
+server_status file_context::prepare_acquire(
+    file_id file,
+    file_acquire_job& output) const noexcept {
+
+    output = {};
+
+    if (!contains(file)) {
+        return server_status::project_configuration_invalid;
+    }
+
+    const auto& state =
+        physical_files[file.value() - 1];
+
+    output.file = file;
+    output.path = path(file);
+    output.baseline_present =
+        state.present();
+    output.baseline_token_available =
+        state.has_change_token();
+
+    if (output.baseline_token_available) {
+        output.baseline_token =
+            state.change_token;
+    }
+
+    return server_status::success;
+}
+
+void file_context::execute_acquire(
+    const file_acquire_job& job,
+    file_acquire_result& output) noexcept {
+
+    output = {};
+    output.file = job.file;
+
+    try {
+        const auto file_path =
+            make_path(job.path);
+
+        if (job.baseline_present &&
+            job.baseline_token_available) {
+
+            bool unchanged = false;
+
+            const auto proof =
+                prove_file_unchanged(
+                    file_path,
+                    job.baseline_token,
+                    unchanged);
+
+            if (proof ==
+                    file_token_result::available &&
+                unchanged) {
+
+                output.kind =
+                    file_acquire_result_kind::unchanged;
+                return;
+            }
+
+            if (proof ==
+                file_token_result::missing) {
+
+                output.kind =
+                    file_acquire_result_kind::missing;
+                return;
+            }
+
+            if (proof ==
+                file_token_result::failed) {
+
+                output.kind =
+                    file_acquire_result_kind::failed;
+                return;
+            }
+        }
+
+        const auto acquired =
+            acquire_file_content(
+                file_path,
+                output.snapshot);
+
+        switch (acquired) {
+        case file_content_result::acquired:
+            output.kind =
+                file_acquire_result_kind::present;
+            return;
+
+        case file_content_result::missing:
+            output.kind =
+                file_acquire_result_kind::missing;
+            return;
+
+        case file_content_result::changed_during_read:
+            output.kind =
+                file_acquire_result_kind::changed_during_read;
+            return;
+
+        case file_content_result::allocation_failed:
+            output.kind =
+                file_acquire_result_kind::allocation_failed;
+            return;
+
+        case file_content_result::failed:
+            output.kind =
+                file_acquire_result_kind::failed;
+            return;
+        }
+    }
+    catch (const std::bad_alloc&) {
+        output.kind =
+            file_acquire_result_kind::allocation_failed;
+    }
+    catch (const std::length_error&) {
+        output.kind =
+            file_acquire_result_kind::allocation_failed;
+    }
+    catch (...) {
+        output.kind =
+            file_acquire_result_kind::failed;
+    }
+}
+
+server_status file_context::apply_acquire(
+    const file_acquire_result& result,
+    bool& content_changed) noexcept {
+
+    content_changed = false;
+
+    if (!contains(result.file)) {
+        return server_status::project_configuration_invalid;
+    }
+
+    auto& state =
+        physical_files[
+            result.file.value() - 1];
+
+    const auto baseline_present =
+        state.present();
+
+    switch (result.kind) {
+    case file_acquire_result_kind::unchanged:
+        return baseline_present
+            ? server_status::success
+            : server_status::project_artifact_invalid;
+
+    case file_acquire_result_kind::missing:
+        content_changed =
+            baseline_present;
+        state = {};
+        return server_status::success;
+
+    case file_acquire_result_kind::present:
+        content_changed =
+            !baseline_present ||
+            !(state.content_hash ==
+              result.snapshot.content_hash);
+
+        state = {};
+        state.content_hash =
+            result.snapshot.content_hash;
+        state.flags =
+            file_physical_present;
+
+        if (result.snapshot.change_token_available &&
+            result.snapshot.change_token) {
+
+            state.change_token =
+                result.snapshot.change_token;
+            state.flags |=
+                file_physical_change_token;
+        }
+
+        return server_status::success;
+
+    case file_acquire_result_kind::changed_during_read:
+    case file_acquire_result_kind::failed:
+    case file_acquire_result_kind::allocation_failed:
+        return server_status::io_error;
+    }
+
+    return server_status::io_error;
+}
+
+server_status file_context::calculate_content_hash(
+    std::span<const file_id> ordered_files,
+    construction_content_hash& output) const noexcept {
+
+    output = {};
+
+    try {
+        if (ordered_files.size() >
+            ((std::numeric_limits<std::size_t>::max)() - 16) /
+                32) {
+
+            return server_status::io_error;
+        }
+
+        std::string canonical;
+        canonical.reserve(
+            16 +
+            ordered_files.size() * 32);
+
+        canonical.append(
+            "CWFCNT01",
+            8);
+
+        append_u64(
+            canonical,
+            static_cast<std::uint64_t>(
+                ordered_files.size()));
+
+        for (const auto file :
+             ordered_files) {
+
+            const auto* state =
+                physical(file);
+
+            if (state == nullptr ||
+                !state->present()) {
+
+                output = {};
+                return server_status::
+                    project_configuration_invalid;
+            }
+
+            canonical.append(
+                reinterpret_cast<const char*>(
+                    state->content_hash.bytes.data()),
+                state->content_hash.bytes.size());
+        }
+
+        const auto digest =
+            hash_file_content(
+                canonical);
+
+        output.bytes =
+            digest.bytes;
+
+        return server_status::success;
+    }
+    catch (...) {
+        output = {};
+        return server_status::io_error;
+    }
+}
+
 bool file_context::contains(
     file_id file) const noexcept {
 
     return file &&
         static_cast<std::size_t>(
             file.value()) <=
+            files.size() &&
+        physical_files.size() ==
             files.size();
 }
 
@@ -422,6 +699,15 @@ file_path_view file_context::path(
             record.path_offset,
         record.path_length,
     };
+}
+
+const file_physical_record* file_context::physical(
+    file_id file) const noexcept {
+
+    return contains(file)
+        ? &physical_files[
+            file.value() - 1]
+        : nullptr;
 }
 
 }

@@ -1,4 +1,4 @@
-#include "project_configuration_manifest_store.hpp"
+﻿#include "project_configuration_manifest_store.hpp"
 
 #include <algorithm>
 #include <array>
@@ -141,11 +141,11 @@ void append_bytes(
     return true;
 }
 
-[[nodiscard]] project_content_hash checksum(
+[[nodiscard]] file_content_hash checksum(
     const std::vector<std::byte>& image,
     std::size_t size) noexcept {
 
-    return hash_project_content(
+    return hash_file_content(
         std::string_view{
             reinterpret_cast<const char*>(
                 image.data()),
@@ -802,3 +802,4 @@ project_configuration_manifest_store::save(
 }
 
 }
+

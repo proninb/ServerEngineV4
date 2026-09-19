@@ -8,7 +8,7 @@
  */
 #pragma once
 
-#include "project_identity.hpp"
+#include "file/file_identity.hpp"
 #include "../diagnostics/diagnostic_collection.hpp"
 #include "../operation.hpp"
 #include "../server_status.hpp"
@@ -47,7 +47,7 @@ struct project_configuration_file_proof final {
     project_configuration_path_type path_type =
         project_configuration_path_type::relative;
     std::filesystem::path path;
-    project_content_hash content_hash{};
+    file_content_hash content_hash{};
     file_change_token change_token{};
     bool change_token_available = false;
 };
