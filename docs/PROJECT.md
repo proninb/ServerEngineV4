@@ -493,6 +493,20 @@ project
 `file_context` itself owns identity only. These cardinality rules remain in the
 Project composition layer.
 
+BUILD recomposition and REBUILD use the same composition semantics before any
+File Context-specific work:
+
+```text
+same physical path + different file_kind -> error
+repeated source                       -> error
+repeated completed project            -> error
+active project ancestor               -> cycle error
+repeated header                       -> allowed
+```
+
+This keeps configuration acceptance identical whether composition is manifest-only
+or also populates a fresh File Context.
+
 Dependency edge storage is still the next construction slice.
 
 ## Publication Contract

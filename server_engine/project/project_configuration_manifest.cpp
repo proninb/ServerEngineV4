@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -139,6 +140,7 @@ public:
         visited.reserve(32);
         active.reserve(16);
         sources.reserve(32);
+        kinds.reserve(64);
     }
 
     [[nodiscard]] server_status compose() {
@@ -218,6 +220,16 @@ private:
                     .build());
 
             return server_status::io_error;
+        }
+
+        const auto kind_status =
+            register_kind(
+                key,
+                file_kind::project,
+                absolute_path);
+
+        if (!succeeded(kind_status)) {
+            return kind_status;
         }
 
         if (active.contains(key)) {
@@ -429,6 +441,31 @@ private:
                     return server_status::io_error;
                 }
 
+                project_path_key child_key;
+
+                const auto key_result =
+                    make_project_path_key(
+                        child,
+                        child_key);
+
+                if (key_result !=
+                    project_path_result::success) {
+
+                    active.erase(key);
+                    return server_status::io_error;
+                }
+
+                const auto kind_status =
+                    register_kind(
+                        child_key,
+                        dependency.kind,
+                        child);
+
+                if (!succeeded(kind_status)) {
+                    active.erase(key);
+                    return kind_status;
+                }
+
                 if (dependency.kind ==
                     file_kind::project) {
 
@@ -445,24 +482,6 @@ private:
                     }
 
                     continue;
-                }
-
-                if (files == nullptr) {
-                    continue;
-                }
-
-                project_path_key child_key;
-
-                const auto key_result =
-                    make_project_path_key(
-                        child,
-                        child_key);
-
-                if (key_result !=
-                    project_path_result::success) {
-
-                    active.erase(key);
-                    return server_status::io_error;
                 }
 
                 if (dependency.kind ==
@@ -486,6 +505,10 @@ private:
                         return server_status::
                             project_configuration_invalid;
                     }
+                }
+
+                if (files == nullptr) {
+                    continue;
                 }
 
                 file_id child_file;
@@ -579,6 +602,35 @@ private:
         return server_status::success;
     }
 
+    [[nodiscard]] server_status register_kind(
+        const project_path_key& key,
+        file_kind kind,
+        const std::filesystem::path& path) {
+
+        const auto [position, inserted] =
+            kinds.emplace(
+                key,
+                kind);
+
+        if (inserted ||
+            position->second == kind) {
+
+            return server_status::success;
+        }
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_duplicate_construction_input,
+                operation)
+                .file(path)
+                .detail(
+                    "Physical Project input is used with conflicting file kinds")
+                .build());
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
     std::filesystem::path root_project_path;
     std::filesystem::path root_path;
     operation_id operation;
@@ -588,6 +640,10 @@ private:
     std::unordered_set<project_path_key, project_path_key_hash> visited;
     std::unordered_set<project_path_key, project_path_key_hash> active;
     std::unordered_set<project_path_key, project_path_key_hash> sources;
+    std::unordered_map<
+        project_path_key,
+        file_kind,
+        project_path_key_hash> kinds;
 };
 
 }

@@ -156,8 +156,13 @@ project -> unique in one composed Project tree
 
 A repeated Project on the active recursion stack is a cycle. A Project already
 completed elsewhere in the tree is a duplicate Project error. A repeated Source
-is a duplicate Source error. File Context does not own these rules; it only owns
-physical identity and immutable `file_kind`.
+is a duplicate Source error. Reusing the same physical file with a different
+`file_kind` is also invalid.
+
+These checks belong to composition itself and therefore run identically during
+BUILD manifest-only recomposition and REBUILD File Context population. File
+Context does not own these rules; it only owns physical identity and immutable
+`file_kind`.
 
 `file_id` belongs to the construction lineage, not one Graph generation. REBUILD
 creates a fresh File Context; BUILD restores the committed File Context slots so
