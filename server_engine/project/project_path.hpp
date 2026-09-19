@@ -2,8 +2,8 @@
  * Project filesystem path boundary.
  *
  * Portable resolution establishes absolute normalized locators. Platform
- * implementations derive filesystem-equivalence keys used only for
- * deduplication and recursion-cycle detection.
+ * implementations derive filesystem-equivalence keys used at Project
+ * construction identity boundaries without changing the physical I/O path.
  */
 #pragma once
 

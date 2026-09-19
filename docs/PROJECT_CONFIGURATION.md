@@ -150,6 +150,10 @@ type:"source"
 `file_context` owns only physical file identity and this root routing role. It
 does not own either parser.
 
+`file_id` belongs to the construction lineage, not one Graph generation. REBUILD
+creates a fresh File Context; BUILD restores the committed File Context slots so
+unchanged physical inputs keep the same `file_id` across `Gn -> Gn+1`.
+
 ## Path Resolution
 
 `header`, `source`, and `project` support two locator forms:

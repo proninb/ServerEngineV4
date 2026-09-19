@@ -45,6 +45,45 @@ std::uint32_t file_context::fingerprint(
     return output;
 }
 
+server_status file_context::same_key(
+    file_id file,
+    const project_path_key& key,
+    bool& output) const noexcept {
+
+    output = false;
+
+    if (!contains(file)) {
+        return server_status::project_configuration_invalid;
+    }
+
+    try {
+        const auto stored =
+            path(file);
+
+        const std::filesystem::path stored_path{
+            stored.begin(),
+            stored.end()};
+
+        project_path_key stored_key;
+
+        if (make_project_path_key(
+                stored_path,
+                stored_key) !=
+            project_path_result::success) {
+
+            return server_status::io_error;
+        }
+
+        output =
+            stored_key == key;
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
 server_status file_context::find_key(
     const project_path_key& key,
     std::uint32_t hash,
@@ -74,11 +113,23 @@ server_status file_context::find_key(
             return server_status::success;
         }
 
-        if (slot.fingerprint == hash &&
-            files[slot.file.value() - 1].key == key) {
+        if (slot.fingerprint == hash) {
+            bool equal = false;
 
-            output = slot.file;
-            return server_status::success;
+            const auto compared =
+                same_key(
+                    slot.file,
+                    key,
+                    equal);
+
+            if (!succeeded(compared)) {
+                return compared;
+            }
+
+            if (equal) {
+                output = slot.file;
+                return server_status::success;
+            }
         }
 
         position =
@@ -127,7 +178,8 @@ server_status file_context::ensure_index_capacity(
         files.size() + additional;
 
     if (!path_index.empty() &&
-        required <= path_index.size() / 2) {
+        required <=
+            path_index.size() / 2) {
 
         return server_status::success;
     }
@@ -154,7 +206,7 @@ server_status file_context::ensure_index_capacity(
             insert_index(
                 candidate,
                 file,
-                fingerprint(files[index].key));
+                files[index].path_hash);
         }
 
         path_index =
@@ -206,9 +258,22 @@ server_status file_context::resolve(
         return found;
     }
 
-    if (files.size() >=
+    const auto max_u32 =
         static_cast<std::size_t>(
-            (std::numeric_limits<std::uint32_t>::max)())) {
+            (std::numeric_limits<std::uint32_t>::max)());
+
+    if (files.size() >= max_u32) {
+        return server_status::io_error;
+    }
+
+    const auto& native =
+        resolved.native();
+
+    if (path_chars.size() >= max_u32 ||
+        native.size() >
+            max_u32 -
+                path_chars.size() -
+                1) {
 
         return server_status::io_error;
     }
@@ -220,11 +285,29 @@ server_status file_context::resolve(
         return prepared;
     }
 
+    const auto old_path_size =
+        path_chars.size();
+
     try {
+        const auto offset =
+            static_cast<std::uint32_t>(
+                path_chars.size());
+
+        path_chars.insert(
+            path_chars.end(),
+            native.begin(),
+            native.end());
+
+        path_chars.push_back(
+            file_path_char{});
+
         files.push_back({
-            std::move(resolved),
-            std::move(key),
+            offset,
+            static_cast<std::uint32_t>(
+                native.size()),
+            hash,
             root_role::none,
+            {},
         });
 
         output = file_id{
@@ -239,6 +322,9 @@ server_status file_context::resolve(
         return server_status::success;
     }
     catch (...) {
+        path_chars.resize(
+            old_path_size);
+
         output = {};
         return server_status::io_error;
     }
@@ -323,11 +409,19 @@ bool file_context::contains(
             files.size();
 }
 
-const std::filesystem::path& file_context::path(
+file_path_view file_context::path(
     file_id file) const noexcept {
 
     assert(contains(file));
-    return files[file.value() - 1].path;
+
+    const auto& record =
+        files[file.value() - 1];
+
+    return {
+        path_chars.data() +
+            record.path_offset,
+        record.path_length,
+    };
 }
 
 }

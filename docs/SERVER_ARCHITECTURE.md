@@ -71,6 +71,9 @@ ServerEngineV4/
 │       ├── project_path.hpp
 │       ├── project_path_windows.cpp
 │       ├── project_path_posix.cpp
+│       ├── file/
+│       │   ├── file_context.hpp
+│       │   └── file_context.cpp
 │       ├── project_load.hpp
 │       ├── project_load.cpp
 │       ├── project_build.hpp
@@ -99,6 +102,7 @@ server_engine
 ├── communication
 │   └── console
 └── project
+    └── file
 
 docs
 ```
@@ -454,13 +458,13 @@ REBUILD
     recursive project.json composition
     -> candidate manifest
     -> aggregate configuration hash
-    -> stops before Source Manager/G0
+    -> stops before File Context/G0
 
 BUILD
     committed manifest verification
     -> recomposition on changed configuration bytes
     -> aggregate hash comparison
-    -> stops before Source Manager/Gn->Gn+1
+    -> stops before File Context/Gn->Gn+1
 ```
 
 A candidate manifest is not committed until the generation it describes is
@@ -518,3 +522,30 @@ and Windows never falls back to case-sensitive semantics.
 CMake selects exactly one platform key implementation. Each platform `.cpp`
 contains a compile-time fail-closed guard so an incorrect build selection cannot
 silently produce an empty or wrong translation unit.
+
+## File Context storage boundary
+
+`file_context` is temporary Project construction state.
+
+```text
+REBUILD
+    fresh File Context identity space
+
+BUILD
+    restore committed File Context slots
+    preserve existing file_id values
+    append IDs only for newly discovered files
+```
+
+The physical path is stored once in one contiguous native-character arena.
+Platform-equivalence keys are transient lookup values and never replace the
+physical I/O path.
+
+```text
+file_record[]       dense file_id slots
+native_path_chars[] physical paths
+path_index[]        open-addressed path identity index
+```
+
+There is no per-file `std::filesystem::path` allocation and no persisted
+`project_path_key` object in File Context. No sort or mutex is required.

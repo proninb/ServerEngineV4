@@ -175,7 +175,7 @@ If every participating `project.json` is byte-identical:
 
 ```text
 configuration unchanged
-    -> proceed directly to Source Manager change detection
+    -> proceed directly to File Context change detection
 ```
 
 If any file differs or disappears:
@@ -198,7 +198,7 @@ recompose when one input changed
 compare aggregate configuration hash
 ```
 
-It currently stops before Source Manager and `Gn -> Gn+1` construction.
+It currently stops before File Context and `Gn -> Gn+1` construction.
 
 BUILD failure destroys resident Gn and leaves UNLOADED.
 
@@ -349,7 +349,7 @@ On load, the aggregate `project_configuration_hash` is also recomputed from the
 decoded entries and must match the stored aggregate.
 
 The manifest store is a narrow construction-persistence boundary. It does not
-own Graph, Source Manager, Runtime, SHM, or resident Project state.
+own Graph, File Context, Runtime, SHM, or resident Project state.
 
 ## File Context
 
@@ -387,17 +387,37 @@ Source parser
 
 `file_context` contains neither parser state nor parser facts.
 
-`file_id` is dense, 1-based, and assigned in first-resolution order. No sorting is
-performed. Known files are addressed directly by `file_id`; path lookup exists
-only at the filesystem identity boundary.
+`file_id` is dense and 1-based. REBUILD creates a fresh identity space. BUILD
+restores the previous File Context slots before change detection, preserving every
+existing `file_id`; new files append new IDs. IDs are never renumbered or recycled
+inside one construction lineage.
 
-There is no `file_manager` and no nested `file_update` transaction. BUILD and
-REBUILD construct disposable candidate construction state, so the whole candidate
-is the transaction boundary. Failed construction destroys that candidate.
+File Context storage is compact and allocation-independent per file:
 
-The first implementation owns file identity and root roles only. File content
+```text
+file_record[]          16 bytes / file
+native_path_chars[]    one contiguous native-character arena
+path_index[]            8 bytes / slot, <= 0.5 load factor
+```
+
+At one million files the current path index capacity is 2,097,152 slots, about
+16 MiB, while file records consume about 16 MiB. Path storage depends only on the
+actual native path characters.
+
+The physical path is retained exactly for I/O. Each dense record keeps only a
+32-bit identity fingerprint so hash-table rebuilds never recanonicalize old
+paths. A full platform-equivalence `project_path_key` is transient lookup state
+and is not stored per file. Matching fingerprints are verified against the exact
+platform key, so filesystem identity remains fail-closed.
+
+There is no `file_manager`, no nested `file_update` transaction, no sort, and no
+mutex. BUILD and REBUILD construct disposable candidate construction state, so
+the whole candidate is the transaction boundary. Failed construction destroys
+that candidate.
+
+The current implementation owns file identity and root roles only. File content
 state and include/dependency topology are added in the next construction slice
-without changing the identity contract.
+without changing the identity or storage contract.
 
 ## Publication Contract
 
