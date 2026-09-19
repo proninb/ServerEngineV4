@@ -14,6 +14,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
+#include <array>
 #include <string_view>
 
 namespace cw::server {
@@ -84,6 +85,12 @@ struct console_input::implementation {
 
     // Current Unicode input line before UTF-8 conversion.
     std::wstring pending;
+
+    // ReadConsoleInputW removes a whole batch from the console queue. Keep the
+    // unread tail here so returning one completed line never drops later input.
+    std::array<INPUT_RECORD, 32> records{};
+    DWORD record_count = 0;
+    DWORD record_position = 0;
 };
 
 console_input::console_input()
@@ -124,39 +131,51 @@ bool console_input::read_line(std::string& line) {
     };
 
     while (true) {
-        const DWORD result = WaitForMultipleObjects(
-            2,
-            handles,
-            FALSE,
-            INFINITE);
+        if (state->record_position >=
+            state->record_count) {
 
-        if (result == WAIT_OBJECT_0 + 1) {
-            return false;
+            state->record_position = 0;
+            state->record_count = 0;
+
+            const DWORD result = WaitForMultipleObjects(
+                2,
+                handles,
+                FALSE,
+                INFINITE);
+
+            if (result == WAIT_OBJECT_0 + 1) {
+                return false;
+            }
+
+            if (result != WAIT_OBJECT_0) {
+                return false;
+            }
+
+            if (!ReadConsoleInputW(
+                    state->input,
+                    state->records.data(),
+                    static_cast<DWORD>(
+                        state->records.size()),
+                    &state->record_count)) {
+
+                return false;
+            }
         }
 
-        if (result != WAIT_OBJECT_0) {
-            return false;
-        }
+        while (state->record_position <
+               state->record_count) {
 
-        INPUT_RECORD records[32]{};
-        DWORD count = 0;
+            const auto& record =
+                state->records[
+                    state->record_position++];
 
-        if (!ReadConsoleInputW(
-                state->input,
-                records,
-                static_cast<DWORD>(sizeof(records) / sizeof(records[0])),
-                &count)) {
-            return false;
-        }
-
-        for (DWORD i = 0; i < count; ++i) {
-            if (records[i].EventType != KEY_EVENT ||
-                !records[i].Event.KeyEvent.bKeyDown) {
+            if (record.EventType != KEY_EVENT ||
+                !record.Event.KeyEvent.bKeyDown) {
                 continue;
             }
 
             const wchar_t ch =
-                records[i].Event.KeyEvent.uChar.UnicodeChar;
+                record.Event.KeyEvent.uChar.UnicodeChar;
 
             if (ch == L'\r') {
                 echo(state->output, L"\r\n");
@@ -204,6 +223,8 @@ void console_input::close() noexcept {
     state->input = INVALID_HANDLE_VALUE;
     state->output = INVALID_HANDLE_VALUE;
     state->pending.clear();
+    state->record_count = 0;
+    state->record_position = 0;
 }
 
 }
