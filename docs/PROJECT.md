@@ -126,12 +126,27 @@ root project.json
     -> validation of every participating project.json
     -> candidate project_configuration_manifest
     -> aggregate project_configuration_hash
+    -> flat File Context population
+         project/header/source nodes
+         immutable file_id + file_kind
+         exact per-file SHA-256 physical state
 ```
+
+Cardinality is semantic, not generic identity policy:
+
+```text
+header  -> repeated use allowed
+source  -> duplicate declaration is an error
+project -> duplicate reference is an error
+           active ancestor reference is a cycle error
+```
+
+File IDs are assigned root-first in declaration-order DFS. There is no sort.
 
 It currently stops before:
 
 ```text
-File Context
+syntax-specific dependency graph discovery
 G0
 Runtime
 SHM
@@ -454,7 +469,31 @@ identity layers.
 `path_hash` is never durable identity. It is rebuilt from physical paths when a
 persisted File Context is restored.
 
-Dependency storage is the next construction slice; node identity and immutable syntax-domain classification are fixed first.
+Project composition now populates the flat File Context closure for every
+explicit `project`, `header`, and `source` item. `project.json` uses the same
+stable snapshot for manifest proof and File Context physical state.
+
+Reuse policy is intentionally syntax-domain-specific:
+
+```text
+header
+    reusable declaration input
+    multiple incoming uses are valid
+
+source
+    one semantic construction unit
+    repeated declaration anywhere in the composed Project is invalid
+
+project
+    one composed subtree
+    repeated reference is invalid
+    recursion through an active ancestor is a cycle
+```
+
+`file_context` itself owns identity only. These cardinality rules remain in the
+Project composition layer.
+
+Dependency edge storage is still the next construction slice.
 
 ## Publication Contract
 

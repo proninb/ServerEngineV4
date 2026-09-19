@@ -2,8 +2,9 @@
  * Streaming project.json schema/composition-reference boundary.
  *
  * One file is validated without materializing a project_configuration tree.
- * Direct child Project references preserve locator semantics and declaration
- * order so recursive composition can be owned by the Project composition layer.
+ * Every non-group item is emitted in declaration order with its immutable
+ * file_kind and locator semantics. Composition owns cross-file cardinality and
+ * recursive Project traversal.
  */
 #pragma once
 

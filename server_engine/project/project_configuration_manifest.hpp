@@ -23,6 +23,8 @@
 
 namespace cw::server {
 
+class file_context;
+
 inline constexpr std::uint32_t invalid_configuration_file =
     (std::numeric_limits<std::uint32_t>::max)();
 
@@ -72,6 +74,13 @@ enum class project_configuration_manifest_verification : std::uint8_t {
     operation_id operation,
     diagnostic_collection& diagnostics,
     project_configuration_manifest& output);
+
+[[nodiscard]] server_status compose_project_configuration(
+    const std::filesystem::path& root_project_path,
+    operation_id operation,
+    diagnostic_collection& diagnostics,
+    project_configuration_manifest& manifest,
+    file_context& files);
 
 [[nodiscard]] server_status verify_project_configuration_manifest(
     const std::filesystem::path& root_project_path,

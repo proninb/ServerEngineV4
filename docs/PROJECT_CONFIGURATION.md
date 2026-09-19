@@ -146,6 +146,19 @@ cannot be classified as two syntax domains inside one construction lineage.
 A common dependency graph does not imply common syntax: Project, Header, and
 Source dependencies are discovered by their own language rules.
 
+Cross-file cardinality is part of Project composition semantics:
+
+```text
+header  -> reusable
+source  -> unique in one composed Project
+project -> unique in one composed Project tree
+```
+
+A repeated Project on the active recursion stack is a cycle. A Project already
+completed elsewhere in the tree is a duplicate Project error. A repeated Source
+is a duplicate Source error. File Context does not own these rules; it only owns
+physical identity and immutable `file_kind`.
+
 `file_id` belongs to the construction lineage, not one Graph generation. REBUILD
 creates a fresh File Context; BUILD restores the committed File Context slots so
 unchanged physical inputs keep the same `file_id` across `Gn -> Gn+1`.

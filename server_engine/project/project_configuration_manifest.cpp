@@ -1,6 +1,7 @@
 #include "project_configuration_manifest.hpp"
 
 #include "project_configuration_loader.hpp"
+#include "file/file_context.hpp"
 #include "project_path.hpp"
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
@@ -126,15 +127,18 @@ public:
         const std::filesystem::path& root_project_path,
         operation_id operation,
         diagnostic_collection& diagnostics,
-        project_configuration_manifest& output)
+        project_configuration_manifest& output,
+        file_context* files)
         : root_project_path(
               root_project_path),
           operation(operation),
           diagnostics(diagnostics),
-          output(output) {
+          output(output),
+          files(files) {
 
         visited.reserve(32);
         active.reserve(16);
+        sources.reserve(32);
     }
 
     [[nodiscard]] server_status compose() {
@@ -231,28 +235,110 @@ private:
         }
 
         if (visited.contains(key)) {
-            return server_status::success;
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_duplicate_construction_input,
+                    operation)
+                    .file(absolute_path)
+                    .detail(
+                        "Project configuration is referenced more than once")
+                    .build());
+
+            return server_status::
+                project_configuration_invalid;
         }
 
         active.insert(key);
 
         file_content_snapshot snapshot;
 
-        const auto acquired =
-            acquire_file_content(
-                absolute_path,
-                snapshot);
+        if (files == nullptr) {
+            const auto acquired =
+                acquire_file_content(
+                    absolute_path,
+                    snapshot);
 
-        if (acquired !=
-            file_content_result::acquired) {
+            if (acquired !=
+                file_content_result::acquired) {
 
-            active.erase(key);
+                active.erase(key);
 
-            return report_acquisition_failure(
-                absolute_path,
-                operation,
-                diagnostics,
-                acquired);
+                return report_acquisition_failure(
+                    absolute_path,
+                    operation,
+                    diagnostics,
+                    acquired);
+            }
+        } else {
+            file_id file;
+
+            const auto resolved =
+                files->resolve(
+                    absolute_path,
+                    file_kind::project,
+                    file);
+
+            if (!succeeded(resolved)) {
+                active.erase(key);
+                return resolved;
+            }
+
+            file_acquire_job job;
+
+            const auto prepared =
+                files->prepare_acquire(
+                    file,
+                    job);
+
+            if (!succeeded(prepared)) {
+                active.erase(key);
+                return prepared;
+            }
+
+            file_acquire_result result;
+
+            file_context::execute_acquire(
+                job,
+                result);
+
+            if (result.kind !=
+                file_acquire_result_kind::present) {
+
+                active.erase(key);
+
+                const auto acquisition =
+                    result.kind ==
+                        file_acquire_result_kind::missing
+                    ? file_content_result::missing
+                    : result.kind ==
+                        file_acquire_result_kind::changed_during_read
+                        ? file_content_result::changed_during_read
+                        : result.kind ==
+                            file_acquire_result_kind::allocation_failed
+                            ? file_content_result::allocation_failed
+                            : file_content_result::failed;
+
+                return report_acquisition_failure(
+                    absolute_path,
+                    operation,
+                    diagnostics,
+                    acquisition);
+            }
+
+            bool content_changed = false;
+
+            const auto applied =
+                files->apply_acquire(
+                    result,
+                    content_changed);
+
+            if (!succeeded(applied)) {
+                active.erase(key);
+                return applied;
+            }
+
+            snapshot =
+                std::move(result.snapshot);
         }
 
         std::vector<project_configuration_dependency>
@@ -311,10 +397,6 @@ private:
             for (const auto& dependency :
                  dependencies) {
 
-                if (dependency.kind != file_kind::project) {
-                    continue;
-                }
-
                 const auto child_input =
                     dependency.path_type ==
                         project_configuration_path_type::absolute
@@ -341,22 +423,150 @@ private:
                             operation)
                             .file(child_input)
                             .detail(
-                                "Cannot resolve referenced Project configuration path")
+                                "Cannot resolve referenced Project construction input")
                             .build());
 
                     return server_status::io_error;
                 }
 
-                const auto child_status =
-                    visit(
-                        child,
-                        current_file,
-                        dependency.path_type,
-                        dependency.path);
+                if (dependency.kind ==
+                    file_kind::project) {
 
-                if (!succeeded(child_status)) {
+                    const auto child_status =
+                        visit(
+                            child,
+                            current_file,
+                            dependency.path_type,
+                            dependency.path);
+
+                    if (!succeeded(child_status)) {
+                        active.erase(key);
+                        return child_status;
+                    }
+
+                    continue;
+                }
+
+                if (files == nullptr) {
+                    continue;
+                }
+
+                project_path_key child_key;
+
+                const auto key_result =
+                    make_project_path_key(
+                        child,
+                        child_key);
+
+                if (key_result !=
+                    project_path_result::success) {
+
                     active.erase(key);
-                    return child_status;
+                    return server_status::io_error;
+                }
+
+                if (dependency.kind ==
+                    file_kind::source) {
+
+                    const auto inserted =
+                        sources.insert(
+                            child_key);
+
+                    if (!inserted.second) {
+                        diagnostics.emit(
+                            diagnostic(
+                                diagnostics::project_duplicate_construction_input,
+                                operation)
+                                .file(child)
+                                .detail(
+                                    "Source file is declared more than once")
+                                .build());
+
+                        active.erase(key);
+                        return server_status::
+                            project_configuration_invalid;
+                    }
+                }
+
+                file_id child_file;
+
+                const auto resolved =
+                    files->resolve(
+                        child,
+                        dependency.kind,
+                        child_file);
+
+                if (!succeeded(resolved)) {
+                    active.erase(key);
+                    return resolved;
+                }
+
+                const auto* physical =
+                    files->physical(
+                        child_file);
+
+                if (physical == nullptr) {
+                    active.erase(key);
+                    return server_status::
+                        project_configuration_invalid;
+                }
+
+                if (physical->present()) {
+                    continue;
+                }
+
+                file_acquire_job job;
+
+                const auto prepared =
+                    files->prepare_acquire(
+                        child_file,
+                        job);
+
+                if (!succeeded(prepared)) {
+                    active.erase(key);
+                    return prepared;
+                }
+
+                file_acquire_result result;
+
+                file_context::execute_acquire(
+                    job,
+                    result);
+
+                if (result.kind !=
+                    file_acquire_result_kind::present) {
+
+                    active.erase(key);
+
+                    const auto acquisition =
+                        result.kind ==
+                            file_acquire_result_kind::missing
+                        ? file_content_result::missing
+                        : result.kind ==
+                            file_acquire_result_kind::changed_during_read
+                            ? file_content_result::changed_during_read
+                            : result.kind ==
+                                file_acquire_result_kind::allocation_failed
+                                ? file_content_result::allocation_failed
+                                : file_content_result::failed;
+
+                    return report_acquisition_failure(
+                        child,
+                        operation,
+                        diagnostics,
+                        acquisition);
+                }
+
+                bool content_changed = false;
+
+                const auto applied =
+                    files->apply_acquire(
+                        result,
+                        content_changed);
+
+                if (!succeeded(applied)) {
+                    active.erase(key);
+                    return applied;
                 }
             }
         }
@@ -374,8 +584,10 @@ private:
     operation_id operation;
     diagnostic_collection& diagnostics;
     project_configuration_manifest& output;
+    file_context* files = nullptr;
     std::unordered_set<project_path_key, project_path_key_hash> visited;
     std::unordered_set<project_path_key, project_path_key_hash> active;
+    std::unordered_set<project_path_key, project_path_key_hash> sources;
 };
 
 }
@@ -397,7 +609,25 @@ server_status compose_project_configuration_manifest(
         root_project_path,
         operation,
         diagnostics,
-        output};
+        output,
+        nullptr};
+
+    return composer.compose();
+}
+
+server_status compose_project_configuration(
+    const std::filesystem::path& root_project_path,
+    operation_id operation,
+    diagnostic_collection& diagnostics,
+    project_configuration_manifest& manifest,
+    file_context& files) {
+
+    manifest_composer composer{
+        root_project_path,
+        operation,
+        diagnostics,
+        manifest,
+        &files};
 
     return composer.compose();
 }

@@ -1,6 +1,7 @@
 #include "project_rebuild.hpp"
 
 #include "project_configuration_manifest.hpp"
+#include "file/file_context.hpp"
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 
@@ -15,13 +16,15 @@ server_status rebuild_project(
     (void)output;
 
     project_configuration_manifest candidate;
+    file_context files;
 
     const auto composed =
-        compose_project_configuration_manifest(
+        compose_project_configuration(
             project_path,
             operation,
             diagnostics,
-            candidate);
+            candidate,
+            files);
 
     if (!succeeded(composed)) {
         return composed;
@@ -35,7 +38,7 @@ server_status rebuild_project(
             diagnostics::project_rebuild_incomplete,
             operation)
             .detail(
-                "Project configuration composition manifest is complete; File Context and G0 construction are not implemented yet")
+                "Project configuration manifest and flat File Context are complete; syntax-specific dependency discovery and G0 construction are not implemented yet")
             .build());
 
     return server_status::unsupported;

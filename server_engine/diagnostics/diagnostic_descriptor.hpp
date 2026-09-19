@@ -205,6 +205,14 @@ inline constexpr diagnostic_descriptor project_manifest_missing{
     "Committed Project configuration manifest is missing",
 };
 
+inline constexpr diagnostic_descriptor project_duplicate_construction_input{
+    diagnostic_id{2016},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.duplicate_construction_input",
+    "Project construction input is duplicated",
+};
+
 } // namespace diagnostics
 
 }
