@@ -133,6 +133,7 @@
     <ClInclude Include="server_engine\project\project_configuration_manifest_store.hpp" />
     <ClInclude Include="server_engine\project\project_path.hpp" />
     <ClInclude Include="server_engine\project\file\file_identity.hpp" />
+    <ClInclude Include="server_engine\project\file\file_kind.hpp" />
     <ClInclude Include="server_engine\project\file\file_context.hpp" />
     <ClInclude Include="server_engine\project\project_load.hpp" />
     <ClInclude Include="server_engine\project\project_build.hpp" />

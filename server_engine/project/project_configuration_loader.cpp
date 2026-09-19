@@ -71,8 +71,8 @@ struct frame {
 class project_configuration_handler final : public json_event_handler {
 public:
     explicit project_configuration_handler(
-        std::vector<project_configuration_reference>& project_references)
-        : project_references(project_references) {
+        std::vector<project_configuration_dependency>& dependencies)
+        : dependencies(dependencies) {
 
         stack.reserve(16);
     }
@@ -544,14 +544,29 @@ private:
                     return;
                 }
 
-                if (current.type ==
-                    item_type::project) {
+                file_kind kind = file_kind::project;
 
-                    project_references.push_back({
-                        path_type,
-                        item_path.lexically_normal(),
-                    });
+                switch (current.type) {
+                case item_type::header:
+                    kind = file_kind::header;
+                    break;
+                case item_type::source:
+                    kind = file_kind::source;
+                    break;
+                case item_type::project:
+                    kind = file_kind::project;
+                    break;
+                case item_type::none:
+                case item_type::group:
+                    fail("internal Project item kind mismatch");
+                    return;
                 }
+
+                dependencies.push_back({
+                    kind,
+                    path_type,
+                    item_path.lexically_normal(),
+                });
             }
 
             current.stage =
@@ -564,7 +579,7 @@ private:
         }
     }
 
-    std::vector<project_configuration_reference>& project_references;
+    std::vector<project_configuration_dependency>& dependencies;
     std::vector<frame> stack;
 
     std::size_t current_offset = 0;
@@ -579,12 +594,12 @@ server_status read_project_configuration(
     const std::filesystem::path& path,
     operation_id operation,
     diagnostic_collection& diagnostics,
-    std::vector<project_configuration_reference>& project_references) {
+    std::vector<project_configuration_dependency>& dependencies) {
 
-    project_references.clear();
+    dependencies.clear();
 
     project_configuration_handler handler{
-        project_references};
+        dependencies};
 
     const auto parsed =
         parse_json(
@@ -592,7 +607,7 @@ server_status read_project_configuration(
             handler);
 
     if (!parsed.ok()) {
-        project_references.clear();
+        dependencies.clear();
 
         const auto file_id =
             diagnostics.add_source(
@@ -617,7 +632,7 @@ server_status read_project_configuration(
     }
 
     if (!handler.valid()) {
-        project_references.clear();
+        dependencies.clear();
 
         const auto& error =
             handler.error();

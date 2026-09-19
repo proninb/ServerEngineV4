@@ -240,6 +240,7 @@ server_status file_context::ensure_index_capacity(
 
 server_status file_context::resolve(
     const std::filesystem::path& value,
+    file_kind requested_kind,
     file_id& output) noexcept {
 
     output = {};
@@ -273,8 +274,14 @@ server_status file_context::resolve(
             hash,
             output);
 
-    if (!succeeded(found) || output) {
+    if (!succeeded(found)) {
         return found;
+    }
+
+    if (output) {
+        return kind(output) == requested_kind
+            ? server_status::success
+            : server_status::project_configuration_invalid;
     }
 
     const auto max_u32 =
@@ -325,7 +332,7 @@ server_status file_context::resolve(
             static_cast<std::uint32_t>(
                 native.size()),
             hash,
-            root_role::none,
+            requested_kind,
             {},
         });
 
@@ -389,44 +396,6 @@ server_status file_context::find(
         key,
         fingerprint(key),
         output);
-}
-
-server_status file_context::add_root(
-    file_id file,
-    file_role role) noexcept {
-
-    if (!contains(file)) {
-        return server_status::project_configuration_invalid;
-    }
-
-    auto& record =
-        files[file.value() - 1];
-
-    const auto required =
-        role == file_role::type
-        ? root_role::type
-        : root_role::source;
-
-    if (record.role == required) {
-        return server_status::success;
-    }
-
-    if (record.role != root_role::none) {
-        return server_status::project_configuration_invalid;
-    }
-
-    try {
-        root_files.push_back({
-            file,
-            role,
-        });
-
-        record.role = required;
-        return server_status::success;
-    }
-    catch (...) {
-        return server_status::io_error;
-    }
 }
 
 server_status file_context::prepare_acquire(
@@ -699,6 +668,13 @@ file_path_view file_context::path(
             record.path_offset,
         record.path_length,
     };
+}
+
+file_kind file_context::kind(
+    file_id file) const noexcept {
+
+    assert(contains(file));
+    return files[file.value() - 1].kind;
 }
 
 const file_physical_record* file_context::physical(

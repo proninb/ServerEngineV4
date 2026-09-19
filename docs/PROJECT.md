@@ -360,15 +360,18 @@ input files.
 file_context
     file_id
     canonical filesystem path
-    root parser role
+    immutable file_kind
 ```
 
-Root routing is explicit:
+Syntax routing is explicit:
 
 ```text
-header item -> file_role::type   -> Type parser
-source item -> file_role::source -> Source parser
+file_kind::project -> Project configuration syntax
+file_kind::header  -> Type syntax
+file_kind::source  -> Source syntax
 ```
+
+The same physical path cannot change kind inside one construction lineage.
 
 The parsers are separate semantic domains:
 
@@ -385,7 +388,7 @@ Source parser
     initialization
 ```
 
-`file_context` contains neither parser state nor parser facts.
+`file_context` contains neither parser state nor parser facts. Dependency discovery is syntax-domain-specific: Project syntax emits project/header/source dependencies, Header syntax discovers Header dependencies, and Source syntax uses only Source-language dependency rules.
 
 `file_id` is dense and 1-based. REBUILD creates a fresh identity space. BUILD
 restores the previous File Context slots before change detection, preserving every
@@ -451,7 +454,7 @@ identity layers.
 `path_hash` is never durable identity. It is rebuilt from physical paths when a
 persisted File Context is restored.
 
-Include/dependency topology is the next construction slice.
+Dependency storage is the next construction slice; node identity and immutable syntax-domain classification are fixed first.
 
 ## Publication Contract
 

@@ -8,6 +8,7 @@
 #pragma once
 
 #include "file_identity.hpp"
+#include "file_kind.hpp"
 #include "../project_path.hpp"
 #include "../../server_status.hpp"
 
@@ -60,16 +61,6 @@ private:
 };
 
 static_assert(sizeof(file_id) == 4);
-
-enum class file_role : std::uint8_t {
-    type,
-    source,
-};
-
-struct file_root final {
-    file_id file{};
-    file_role role = file_role::type;
-};
 
 inline constexpr std::uint32_t file_physical_present =
     0x00000001u;
@@ -146,15 +137,12 @@ public:
 
     [[nodiscard]] server_status resolve(
         const std::filesystem::path& path,
+        file_kind kind,
         file_id& output) noexcept;
 
     [[nodiscard]] server_status find(
         const std::filesystem::path& path,
         file_id& output) const noexcept;
-
-    [[nodiscard]] server_status add_root(
-        file_id file,
-        file_role role) noexcept;
 
     [[nodiscard]] server_status prepare_acquire(
         file_id file,
@@ -180,12 +168,11 @@ public:
     [[nodiscard]] file_path_view path(
         file_id file) const noexcept;
 
-    [[nodiscard]] const file_physical_record* physical(
+    [[nodiscard]] file_kind kind(
         file_id file) const noexcept;
 
-    [[nodiscard]] std::span<const file_root> roots() const noexcept {
-        return root_files;
-    }
+    [[nodiscard]] const file_physical_record* physical(
+        file_id file) const noexcept;
 
     [[nodiscard]] std::span<const file_physical_record>
     physical_records() const noexcept {
@@ -197,12 +184,6 @@ public:
     }
 
 private:
-    enum class root_role : std::uint8_t {
-        none,
-        type,
-        source,
-    };
-
     struct file_record final {
         std::uint32_t path_offset = 0;
         std::uint32_t path_length = 0;
@@ -211,7 +192,7 @@ private:
         // persisted File Context is restored; never use as durable identity.
         std::uint32_t path_hash = 0;
 
-        root_role role = root_role::none;
+        file_kind kind = file_kind::project;
         std::uint8_t reserved[3]{};
     };
 
@@ -247,7 +228,6 @@ private:
     std::vector<file_record> files;
     std::vector<file_path_char> path_chars;
     std::vector<path_slot> path_index;
-    std::vector<file_root> root_files;
 
     // Kept separate from hot path/identity records so SHA-256/change-token data
     // is not pulled into cache during path lookup.

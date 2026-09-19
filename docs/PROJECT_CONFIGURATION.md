@@ -130,25 +130,21 @@ type
 path
 ```
 
-## Parser Routing
+## File Kind and Syntax Routing
 
-Project file items route physical files to one of two independent semantic
-parsers:
+Every non-group Project item emits one ordered typed dependency:
 
 ```text
-type:"header"
-    -> file_role::type
-    -> Type parser
-       declarations / types / members
-
-type:"source"
-    -> file_role::source
-    -> Source parser
-       declarations / objects / links / initialization
+type:"project" -> file_kind::project
+type:"header"  -> file_kind::header
+type:"source"  -> file_kind::source
 ```
 
-`file_context` owns only physical file identity and this root routing role. It
-does not own either parser.
+Each File Context node has one immutable `file_kind`. The same physical path
+cannot be classified as two syntax domains inside one construction lineage.
+
+A common dependency graph does not imply common syntax: Project, Header, and
+Source dependencies are discovered by their own language rules.
 
 `file_id` belongs to the construction lineage, not one Graph generation. REBUILD
 creates a fresh File Context; BUILD restores the committed File Context slots so

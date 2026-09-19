@@ -212,6 +212,9 @@
     <ClInclude Include="server_engine\project\file\file_identity.hpp">
       <Filter>server_engine\project\file</Filter>
     </ClInclude>
+    <ClInclude Include="server_engine\project\file\file_kind.hpp">
+      <Filter>server_engine\project\file</Filter>
+    </ClInclude>
     <ClInclude Include="server_engine\project\file\file_context.hpp">
       <Filter>server_engine\project\file</Filter>
     </ClInclude>

@@ -8,6 +8,7 @@
 #pragma once
 
 #include "project_configuration_manifest.hpp"
+#include "file/file_kind.hpp"
 #include "../diagnostics/diagnostic_collection.hpp"
 #include "../operation.hpp"
 #include "../server_status.hpp"
@@ -18,7 +19,8 @@
 
 namespace cw::server {
 
-struct project_configuration_reference final {
+struct project_configuration_dependency final {
+    file_kind kind = file_kind::project;
     project_configuration_path_type path_type =
         project_configuration_path_type::relative;
     std::filesystem::path path;
@@ -29,6 +31,6 @@ struct project_configuration_reference final {
     const std::filesystem::path& path,
     operation_id operation,
     diagnostic_collection& diagnostics,
-    std::vector<project_configuration_reference>& project_references);
+    std::vector<project_configuration_dependency>& dependencies);
 
 }

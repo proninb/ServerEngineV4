@@ -255,8 +255,8 @@ private:
                 acquired);
         }
 
-        std::vector<project_configuration_reference>
-            project_references;
+        std::vector<project_configuration_dependency>
+            dependencies;
 
         const auto status =
             read_project_configuration(
@@ -264,7 +264,7 @@ private:
                 absolute_path,
                 operation,
                 diagnostics,
-                project_references);
+                dependencies);
 
         if (!succeeded(status)) {
             active.erase(key);
@@ -308,15 +308,19 @@ private:
 
             visited.insert(key);
 
-            for (const auto& reference :
-                 project_references) {
+            for (const auto& dependency :
+                 dependencies) {
+
+                if (dependency.kind != file_kind::project) {
+                    continue;
+                }
 
                 const auto child_input =
-                    reference.path_type ==
+                    dependency.path_type ==
                         project_configuration_path_type::absolute
-                    ? reference.path
+                    ? dependency.path
                     : absolute_path.parent_path() /
-                        reference.path;
+                        dependency.path;
 
                 std::filesystem::path child;
 
@@ -347,8 +351,8 @@ private:
                     visit(
                         child,
                         current_file,
-                        reference.path_type,
-                        reference.path);
+                        dependency.path_type,
+                        dependency.path);
 
                 if (!succeeded(child_status)) {
                     active.erase(key);
