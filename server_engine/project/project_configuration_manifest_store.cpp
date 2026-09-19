@@ -1,4 +1,4 @@
-﻿#include "project_configuration_manifest_store.hpp"
+#include "project_configuration_manifest_store.hpp"
 
 #include <algorithm>
 #include <array>
