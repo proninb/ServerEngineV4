@@ -2,6 +2,12 @@
   // Server configuration schema version.
   "version": 1,
 
+  // One process-wide ABI governs all Projects and the single SHM layout.
+  "abi": {
+    "target": "windows-x64",
+    "pack": 8
+  },
+
   // Only listed endpoints are created.
   "communication": {
     "endpoints": [

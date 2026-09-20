@@ -9,6 +9,7 @@
 #pragma once
 
 #include "project_configuration_manifest.hpp"
+#include "project_preprocessor_configuration.hpp"
 #include "file/file_kind.hpp"
 #include "../diagnostics/diagnostic_collection.hpp"
 #include "../operation.hpp"
@@ -32,6 +33,7 @@ struct project_configuration_dependency final {
     const std::filesystem::path& path,
     operation_id operation,
     diagnostic_collection& diagnostics,
-    std::vector<project_configuration_dependency>& dependencies);
+    std::vector<project_configuration_dependency>& dependencies,
+    project_preprocessor_configuration& preprocessor);
 
 }

@@ -26,6 +26,7 @@ namespace {
 
 enum class schema_context : std::uint8_t {
     root,
+    abi,
     communication,
     endpoints,
     endpoint,
@@ -38,6 +39,9 @@ enum class schema_context : std::uint8_t {
 enum class schema_field : std::uint8_t {
     none = 0,
     version,
+    abi,
+    target,
+    pack,
     communication,
     project,
     logging,
@@ -150,6 +154,22 @@ public:
         if (parent.context ==
                 schema_context::root &&
             parent.field ==
+                schema_field::abi) {
+
+            stack.back().field =
+                schema_field::none;
+
+            stack.push_back({
+                schema_context::abi,
+                schema_field::none,
+                0,
+            });
+            return;
+        }
+
+        if (parent.context ==
+                schema_context::root &&
+            parent.field ==
                 schema_field::communication) {
 
             stack.back().field =
@@ -245,15 +265,27 @@ public:
         switch (frame.context) {
         case schema_context::root:
             if (!seen(frame, schema_field::version) ||
+                !seen(frame, schema_field::abi) ||
                 !seen(frame, schema_field::communication)) {
 
                 fail(
                     schema_failure::missing_required_field,
-                    "server configuration requires version and communication");
+                    "server configuration requires version, abi, and communication");
                 return;
             }
 
             root_completed = true;
+            break;
+
+        case schema_context::abi:
+            if (!seen(frame, schema_field::target) ||
+                !seen(frame, schema_field::pack)) {
+
+                fail(
+                    schema_failure::missing_required_field,
+                    "abi requires target and pack");
+                return;
+            }
             break;
 
         case schema_context::communication:
@@ -476,6 +508,10 @@ public:
             read_root(field, value);
             break;
 
+        case schema_context::abi:
+            read_abi(field, value);
+            break;
+
         case schema_context::endpoint:
             read_endpoint(field, value);
             break;
@@ -553,10 +589,16 @@ private:
         switch (context) {
         case schema_context::root:
             if (key == "version") return schema_field::version;
+            if (key == "abi") return schema_field::abi;
             if (key == "communication") return schema_field::communication;
             if (key == "project") return schema_field::project;
             if (key == "logging") return schema_field::logging;
             if (key == "telemetry") return schema_field::telemetry;
+            break;
+
+        case schema_context::abi:
+            if (key == "target") return schema_field::target;
+            if (key == "pack") return schema_field::pack;
             break;
 
         case schema_context::communication:
@@ -623,6 +665,63 @@ private:
         }
 
         configuration.version = version;
+    }
+
+    void read_abi(
+        schema_field field,
+        json_value_view value) {
+
+        if (field == schema_field::target) {
+            std::string target;
+
+            if (!value.get(target)) {
+                fail(
+                    schema_failure::wrong_type,
+                    "abi.target must be a string");
+                return;
+            }
+
+            if (target == "windows-x64") {
+                configuration.abi.target =
+                    abi_target::windows_x64;
+                return;
+            }
+
+            if (target == "posix-x64") {
+                configuration.abi.target =
+                    abi_target::posix_x64;
+                return;
+            }
+
+            fail(
+                schema_failure::invalid_value,
+                "abi.target must be windows-x64 or posix-x64");
+            return;
+        }
+
+        if (field == schema_field::pack) {
+            std::uint32_t pack = 0;
+
+            if (!value.get(pack) ||
+                (pack != 1 &&
+                 pack != 2 &&
+                 pack != 4 &&
+                 pack != 8 &&
+                 pack != 16)) {
+
+                fail(
+                    schema_failure::invalid_value,
+                    "abi.pack must be 1, 2, 4, 8, or 16");
+                return;
+            }
+
+            configuration.abi.pack = pack;
+            return;
+        }
+
+        fail(
+            schema_failure::invalid_structure,
+            "invalid abi scalar field");
     }
 
     void read_endpoint(

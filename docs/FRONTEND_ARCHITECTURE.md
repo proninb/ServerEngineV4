@@ -494,6 +494,34 @@ Preprocessor never assigns semantic meaning.
 
 ---
 
+## Project-local Preprocessor Configuration
+
+Each participating `project.json` contributes one immutable
+`project_preprocessor_configuration` containing its local predefines.
+
+```text
+project.json
+    -> preprocessor.predefines[]
+    -> project_preprocessor_configuration
+```
+
+Composition keeps these configurations aligned with the root-first
+`project_configuration_manifest::files` order:
+
+```text
+preprocessors[i]
+    <-> manifest.files[i]
+```
+
+This introduces no new `project_id` and no second preprocessing identity domain.
+
+Configuration is distinct from mutable preprocessing state. During frontend
+execution, spellings are interned through the construction `string_table` and
+used to initialize the appropriate `preprocessor` state.
+
+Parent/child effective-predefine application is deliberately not decided by
+composition. That rule belongs to directive/frontend execution.
+
 ## Streaming Frontend
 
 The frontend is a single streaming execution over the effective preprocessing
@@ -859,6 +887,12 @@ frontend_input
     no retained lexical span across include publication
     O(1) parent resume after child include
 
+directive_decoder
+    consumes exactly one pp_* ... pp_end directive
+    retains exact file-local lexical/source ranges
+    direct quoted/angled include payload only
+    no include resolution / macro execution / File Context mutation
+
 lexical_token
     one 32-bit word
     8-bit token_kind
@@ -872,11 +906,11 @@ lexical_token
 Not implemented yet:
 
 ```text
-directive parser
+directive execution
 #ifdef / #ifndef / #else / #endif execution
-include request type in the directive layer
+include request execution/resolution
 include path resolver / configured include roots
-#include execution through the frontend_input boundary
+#include traversal through the frontend_input boundary
 Semantic identity_space
 identity_ref integration
 Graph semantic construction
@@ -886,10 +920,11 @@ Graph semantic construction
 
 ## Next Construction Step
 
-The next slice is decoding the compact lexical streams and executing preprocessing
-directives over `pp_*` / `pp_end` markers. Executed `#include` directives may
-discover additional Header files and stage additional File Context edges before
-terminal topology finalization.
+The next slice is directive execution over the already decoded `pp_*` /
+`pp_end` sequences. It must initialize mutable preprocessing state from the
+appropriate project-local predefines, execute the restricted preprocessing
+contract, and emit include requests without absorbing include resolution or File
+Context ownership.
 
 It must not introduce a second file identity domain, a semantic token graph,
 per-file semantic cache, AST persistence, or a generic frontend manager/context.

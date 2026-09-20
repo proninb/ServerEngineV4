@@ -44,11 +44,16 @@ source cache. No full source-text copy is required.
   "name": "Example",
   "project": [
   ],
-  "configuration": {
-    "abi": {
-      "target": "windows-x64",
-      "pack": 8
-    }
+  "preprocessor": {
+    "predefines": [
+      {
+        "name": "PROJECT_LOCAL"
+      },
+      {
+        "name": "ALIAS",
+        "replacement": "TARGET"
+      }
+    ]
   }
 }
 ```
@@ -59,7 +64,7 @@ Canonical root field order:
 version
 name
 project
-configuration
+preprocessor
 ```
 
 ## Project Tree
@@ -317,35 +322,45 @@ case-sensitive key.
 If a Project references a configuration currently active in the recursion stack,
 composition fails with a cycle diagnostic.
 
-## ABI
+## Preprocessor
+
+Every `project.json` owns one local immutable preprocessing configuration.
 
 ```jsonc
-"configuration": {
-  "abi": {
-    "target": "windows-x64",
-    "pack": 8
-  }
+"preprocessor": {
+  "predefines": [
+    { "name": "LOCAL_FEATURE" },
+    { "name": "ALIAS", "replacement": "TARGET" }
+  ]
 }
 ```
 
-Supported targets:
+The current representation supports the restricted object-like forms:
 
 ```text
-windows-x64
-posix-x64
+NAME
+NAME -> IDENTIFIER
 ```
 
-Supported pack values:
+`project_preprocessor_configuration` is construction input only. Mutable
+`#define/#undef` state belongs to frontend execution.
+
+Recursive composition retains one local preprocessor configuration for every
+participating `project.json` in the same root-first order as manifest entries:
 
 ```text
-1
-2
-4
-8
-16
+preprocessors[i]
+    <-> manifest.files[i]
 ```
 
-The root Project ABI is authoritative for the composed Project.
+No separate `project_id` is introduced.
+
+A child `project.json` may declare different local predefines. Composition does
+not silently merge parent/child configurations; the effective application rule
+belongs to the directive/frontend execution stage.
+
+ABI is absent from `project.json`. Target and pack are Server-wide because one
+Server owns one SHM layout contract.
 
 ## Per-file Identity
 
@@ -523,8 +538,8 @@ wrong types
 missing required fields
 invalid node types
 empty required names/paths
+invalid predefine objects
 unsupported version
-unsupported ABI target/pack
 missing referenced project.json
 recursive Project cycle
 absolute path resolution failure

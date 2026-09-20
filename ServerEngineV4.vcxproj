@@ -138,6 +138,8 @@
     <ClInclude Include="server_engine\communication\console\console_input.hpp" />
     <ClInclude Include="server_engine\communication\console\server_console.hpp" />
     <ClInclude Include="server_engine\project\project.hpp" />
+    <ClInclude Include="server_engine\project\project_lifecycle_context.hpp" />
+    <ClInclude Include="server_engine\project\project_preprocessor_configuration.hpp" />
     <ClInclude Include="server_engine\project\project_identity.hpp" />
     <ClInclude Include="server_engine\project\project_configuration_manifest.hpp" />
     <ClInclude Include="server_engine\project\project_configuration_manifest_store.hpp" />

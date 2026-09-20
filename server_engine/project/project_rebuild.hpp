@@ -7,6 +7,7 @@
 #pragma once
 
 #include "project.hpp"
+#include "../configuration/server_configuration.hpp"
 #include "../diagnostics/diagnostic_collection.hpp"
 #include "../operation.hpp"
 #include "../server_status.hpp"
@@ -18,6 +19,7 @@ namespace cw::server {
 
 [[nodiscard]] server_status rebuild_project(
     const std::filesystem::path& project_path,
+    const server_abi_configuration& abi,
     operation_id operation,
     diagnostic_collection& diagnostics,
     std::unique_ptr<project>& output);

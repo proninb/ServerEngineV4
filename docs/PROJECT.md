@@ -50,6 +50,35 @@ LOAD, BUILD, and REBUILD never substitute for each other.
 
 Failure of LOAD, BUILD, or REBUILD always leaves the Server UNLOADED.
 
+## Mode-specific construction contexts
+
+There is no universal Project construction context and no shared
+`builder_context`.
+
+```text
+load_context
+    ABI
+
+build_context
+    ABI
+    persisted manifest
+    candidate manifest
+    per-project preprocessing configurations
+    incremental construction state
+
+rebuild_context
+    ABI
+    candidate manifest
+    File Context
+    lexical generation
+    per-project preprocessing configurations
+    fresh G0 construction state
+```
+
+All three are temporary operation state and are discarded on publication or
+failure. ABI originates from `server.json`. Local preprocessing configuration
+originates from each participating `project.json` and is construction-only.
+
 ## Resident Project
 
 Target resident state:
@@ -103,6 +132,7 @@ REBUILD starts only from UNLOADED and constructs a fresh generation:
 ```text
 root project.json
     -> recursive Project configuration composition
+    -> local preprocessor configuration per project.json
     -> candidate configuration manifest
     -> explicit roots
     -> new File Context
@@ -124,6 +154,7 @@ The current V4 implementation completes:
 root project.json
     -> recursive type:"project" composition
     -> validation of every participating project.json
+    -> local project_preprocessor_configuration per project.json
     -> candidate project_configuration_manifest
     -> aggregate project_configuration_hash
     -> flat File Context population
@@ -146,7 +177,9 @@ File IDs are assigned root-first in declaration-order DFS. There is no sort.
 It currently stops before:
 
 ```text
-syntax-specific dependency graph discovery
+directive execution
+executed-include dependency discovery
+Semantic construction
 G0
 Runtime
 SHM

@@ -1,5 +1,7 @@
 #include "project_load.hpp"
 
+#include "project_lifecycle_context.hpp"
+
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 
@@ -9,11 +11,15 @@ namespace cw::server {
 
 server_status load_project(
     const std::filesystem::path& project_path,
+    const server_abi_configuration& abi,
     operation_id operation,
     diagnostic_collection& diagnostics,
     std::unique_ptr<project>& output) {
 
     output.reset();
+
+    load_context context{abi};
+    (void)context;
 
     diagnostics.emit(
         diagnostic(

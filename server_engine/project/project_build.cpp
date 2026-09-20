@@ -1,6 +1,6 @@
 #include "project_build.hpp"
 
-#include "project_configuration_manifest.hpp"
+#include "project_lifecycle_context.hpp"
 #include "project_configuration_manifest_store.hpp"
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
@@ -27,11 +27,14 @@ namespace {
 
 server_status build_project(
     const project& resident,
+    const server_abi_configuration& abi,
     operation_id operation,
     diagnostic_collection& diagnostics,
     std::unique_ptr<project>& output) {
 
     (void)output;
+
+    build_context context{abi};
 
     const auto& project_path =
         resident.path();
@@ -39,11 +42,9 @@ server_status build_project(
     project_configuration_manifest_store store{
         project_path};
 
-    project_configuration_manifest persisted;
-
     const auto stored =
         store.load(
-            persisted);
+            context.persisted);
 
     if (stored ==
         project_configuration_manifest_store_result::
@@ -102,7 +103,7 @@ server_status build_project(
     const auto verified =
         verify_project_configuration_manifest(
             project_path,
-            persisted,
+            context.persisted,
             operation,
             diagnostics,
             verification);
@@ -121,21 +122,20 @@ server_status build_project(
             "Complete Project configuration manifest is unchanged; File Context change detection is not implemented yet");
     }
 
-    project_configuration_manifest candidate;
-
     const auto composed =
         compose_project_configuration_manifest(
             project_path,
             operation,
             diagnostics,
-            candidate);
+            context.candidate,
+            context.preprocessors);
 
     if (!succeeded(composed)) {
         return composed;
     }
 
-    if (candidate.configuration_hash ==
-        persisted.configuration_hash) {
+    if (context.candidate.configuration_hash ==
+        context.persisted.configuration_hash) {
 
         return report_build_incomplete(
             operation,

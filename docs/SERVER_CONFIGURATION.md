@@ -15,6 +15,11 @@ The JSON parser supports:
 {
   "version": 1,
 
+  "abi": {
+    "target": "windows-x64",
+    "pack": 8
+  },
+
   "communication": {
     "endpoints": [
       {
@@ -36,6 +41,38 @@ The JSON parser supports:
   }
 }
 ```
+
+## ABI
+
+Required process-wide ABI:
+
+```jsonc
+"abi": {
+  "target": "windows-x64",
+  "pack": 8
+}
+```
+
+Supported targets:
+
+```text
+windows-x64
+posix-x64
+```
+
+Supported pack values:
+
+```text
+1
+2
+4
+8
+16
+```
+
+One Server owns one ABI and one SHM layout contract. Every Project and
+subproject constructed or restored by that Server uses this ABI.
+`project.json` cannot override it.
 
 ## Project Startup
 
@@ -147,7 +184,8 @@ the current architecture stage. Configuring it fails explicitly.
 
 ## Configuration Ownership Boundary
 
-`server.json` configures process-level Server behavior.
+`server.json` configures process-level Server behavior, including the single
+ABI used by the Server's one SHM layout.
 
 Project construction inputs and their persisted manifest do not belong to
 `server_context`.

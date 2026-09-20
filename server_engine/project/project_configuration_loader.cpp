@@ -28,8 +28,9 @@ enum class schema_context : std::uint8_t {
     root,
     project_items,
     item,
-    configuration,
-    abi,
+    preprocessor,
+    predefines,
+    predefine,
     item_children,
 };
 
@@ -62,19 +63,13 @@ struct frame {
     item_type type = item_type::none;
 };
 
-[[nodiscard]] bool valid_pack(std::uint32_t value) noexcept {
-    return value == 1 ||
-           value == 2 ||
-           value == 4 ||
-           value == 8 ||
-           value == 16;
-}
-
 class project_configuration_handler final : public json_event_handler {
 public:
-    explicit project_configuration_handler(
-        std::vector<project_configuration_dependency>& dependencies)
-        : dependencies(dependencies) {
+    project_configuration_handler(
+        std::vector<project_configuration_dependency>& dependencies,
+        project_preprocessor_configuration& preprocessor)
+        : dependencies(dependencies),
+          preprocessor(preprocessor) {
 
         stack.reserve(16);
     }
@@ -117,15 +112,20 @@ public:
             parent.index == 3) {
 
             parent.index = 4;
-            stack.push_back({schema_context::configuration});
+            stack.push_back({schema_context::preprocessor});
             return;
         }
 
-        if (parent.context == schema_context::configuration &&
-            parent.index == 0) {
+        if (parent.context == schema_context::predefines) {
+            try {
+                preprocessor.predefines.emplace_back();
+            }
+            catch (...) {
+                fail("cannot allocate Project predefine");
+                return;
+            }
 
-            parent.index = 1;
-            stack.push_back({schema_context::abi});
+            stack.push_back({schema_context::predefine});
             return;
         }
 
@@ -147,22 +147,22 @@ public:
             if (ended.index != 4) {
                 fail(
                     "Project root requires fields in order: "
-                    "version, name, project, configuration");
+                    "version, name, project, preprocessor");
                 return;
             }
 
             root_completed = true;
             return;
 
-        case schema_context::configuration:
+        case schema_context::preprocessor:
             if (ended.index != 1) {
-                fail("configuration requires abi");
+                fail("preprocessor requires predefines");
             }
             return;
 
-        case schema_context::abi:
-            if (ended.index != 2) {
-                fail("configuration.abi requires target then pack");
+        case schema_context::predefine:
+            if (ended.index == 0) {
+                fail("predefine requires name");
             }
             return;
 
@@ -173,6 +173,7 @@ public:
             return;
 
         case schema_context::project_items:
+        case schema_context::predefines:
         case schema_context::item_children:
             fail("internal Project schema object mismatch");
             return;
@@ -200,6 +201,14 @@ public:
             return;
         }
 
+        if (parent.context == schema_context::preprocessor &&
+            parent.index == 0) {
+
+            parent.index = 1;
+            stack.push_back({schema_context::predefines});
+            return;
+        }
+
         if (parent.context == schema_context::item &&
             parent.stage == item_stage::expect_payload &&
             parent.type == item_type::group) {
@@ -221,6 +230,7 @@ public:
             stack.back().context;
 
         if (context != schema_context::project_items &&
+            context != schema_context::predefines &&
             context != schema_context::item_children) {
 
             fail("unexpected array end in Project configuration");
@@ -243,32 +253,28 @@ public:
             validate_root_key(current, key);
             return;
 
-        case schema_context::configuration:
-            if (current.index != 0 || key != "abi") {
-                fail("configuration fields must be ordered: abi");
+        case schema_context::preprocessor:
+            if (current.index != 0 || key != "predefines") {
+                fail("preprocessor fields must be ordered: predefines");
             }
             return;
 
-        case schema_context::abi:
+        case schema_context::predefine:
             if (current.index == 0) {
-                if (key != "target") {
-                    fail(
-                        "configuration.abi fields must be ordered: "
-                        "target, pack");
+                if (key != "name") {
+                    fail("predefine fields must begin with name");
                 }
                 return;
             }
 
             if (current.index == 1) {
-                if (key != "pack") {
-                    fail(
-                        "configuration.abi fields must be ordered: "
-                        "target, pack");
+                if (key != "replacement") {
+                    fail("predefine optional replacement must follow name");
                 }
                 return;
             }
 
-            fail("configuration.abi contains extra field");
+            fail("predefine contains extra field");
             return;
 
         case schema_context::item:
@@ -278,6 +284,10 @@ public:
         case schema_context::project_items:
         case schema_context::item_children:
             fail("array elements must be Project item objects");
+            return;
+
+        case schema_context::predefines:
+            fail("predefines array elements must be objects");
             return;
         }
     }
@@ -301,15 +311,16 @@ public:
             read_root_value(current, value);
             return;
 
-        case schema_context::abi:
-            read_abi_value(current, value);
+        case schema_context::predefine:
+            read_predefine_value(current, value);
             return;
 
         case schema_context::item:
             read_item_value(current, value);
             return;
 
-        case schema_context::configuration:
+        case schema_context::preprocessor:
+        case schema_context::predefines:
         case schema_context::project_items:
         case schema_context::item_children:
             fail("unexpected scalar in Project configuration");
@@ -353,7 +364,7 @@ private:
             "version",
             "name",
             "project",
-            "configuration",
+            "preprocessor",
         };
 
         if (current.index >= keys.size()) {
@@ -364,7 +375,7 @@ private:
         if (key != keys[current.index]) {
             fail(
                 "Project root fields must be ordered: "
-                "version, name, project, configuration");
+                "version, name, project, preprocessor");
         }
     }
 
@@ -443,24 +454,60 @@ private:
         fail("Project root object/array field expected");
     }
 
-    void read_abi_value(
+    [[nodiscard]] static bool valid_identifier(
+        std::string_view value) noexcept {
+
+        if (value.empty()) {
+            return false;
+        }
+
+        const auto first =
+            static_cast<unsigned char>(value.front());
+
+        if (!((first >= 'A' && first <= 'Z') ||
+              (first >= 'a' && first <= 'z') ||
+              first == '_')) {
+
+            return false;
+        }
+
+        for (std::size_t index = 1;
+             index < value.size();
+             ++index) {
+
+            const auto ch =
+                static_cast<unsigned char>(value[index]);
+
+            if (!((ch >= 'A' && ch <= 'Z') ||
+                  (ch >= 'a' && ch <= 'z') ||
+                  (ch >= '0' && ch <= '9') ||
+                  ch == '_')) {
+
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    void read_predefine_value(
         frame& current,
         json_value_view value) {
 
+        if (preprocessor.predefines.empty()) {
+            fail("internal predefine state mismatch");
+            return;
+        }
+
+        auto& predefine =
+            preprocessor.predefines.back();
+
         if (current.index == 0) {
-            std::string target;
-
-            if (!value.get(target)) {
-                fail("configuration.abi.target must be a string");
-                return;
-            }
-
-            if (target != "windows-x64" &&
-                target != "posix-x64") {
+            if (!value.get(predefine.name) ||
+                !valid_identifier(predefine.name)) {
 
                 fail(
-                    "configuration.abi.target must be "
-                    "windows-x64 or posix-x64");
+                    "predefine.name must be a valid identifier");
                 return;
             }
 
@@ -469,14 +516,11 @@ private:
         }
 
         if (current.index == 1) {
-            std::uint32_t pack = 0;
-
-            if (!value.get(pack) ||
-                !valid_pack(pack)) {
+            if (!value.get(predefine.replacement) ||
+                !valid_identifier(predefine.replacement)) {
 
                 fail(
-                    "configuration.abi.pack must be "
-                    "1, 2, 4, 8, or 16");
+                    "predefine.replacement must be a valid identifier");
                 return;
             }
 
@@ -484,7 +528,7 @@ private:
             return;
         }
 
-        fail("configuration.abi contains extra scalar");
+        fail("predefine contains extra scalar");
     }
 
     void read_item_value(
@@ -623,6 +667,7 @@ private:
     }
 
     std::vector<project_configuration_dependency>& dependencies;
+    project_preprocessor_configuration& preprocessor;
     std::vector<frame> stack;
 
     std::size_t current_offset = 0;
@@ -639,12 +684,15 @@ server_status read_project_configuration(
     const std::filesystem::path& path,
     operation_id operation,
     diagnostic_collection& diagnostics,
-    std::vector<project_configuration_dependency>& dependencies) {
+    std::vector<project_configuration_dependency>& dependencies,
+    project_preprocessor_configuration& preprocessor) {
 
     dependencies.clear();
+    preprocessor.predefines.clear();
 
     project_configuration_handler handler{
-        dependencies};
+        dependencies,
+        preprocessor};
 
     const auto parsed =
         parse_json(
@@ -653,6 +701,7 @@ server_status read_project_configuration(
 
     if (!parsed.ok()) {
         dependencies.clear();
+        preprocessor.predefines.clear();
 
         const auto file_id =
             diagnostics.add_source(
@@ -678,6 +727,7 @@ server_status read_project_configuration(
 
     if (!handler.valid()) {
         dependencies.clear();
+        preprocessor.predefines.clear();
 
         const auto& error =
             handler.error();

@@ -89,10 +89,24 @@ struct telemetry_configuration {
     std::vector<std::string> subsystems;
 };
 
+enum class abi_target : std::uint8_t {
+    windows_x64,
+    posix_x64,
+};
+
+// Process-wide physical layout contract shared by all Projects and the one SHM.
+struct server_abi_configuration final {
+    abi_target target = abi_target::windows_x64;
+    std::uint32_t pack = 8;
+};
+
 // Process-level configuration loaded before communication and Project lifecycle begin.
 struct server_configuration {
     // server.json schema version. Current V4 schema value is 1.
     std::uint32_t version = 0;
+
+    // Required process-wide ABI used by all Project lifecycle modes.
+    server_abi_configuration abi;
 
     // Required communication endpoint configuration.
     communication_configuration communication;

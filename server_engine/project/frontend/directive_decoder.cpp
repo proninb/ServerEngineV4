@@ -1,7 +1,5 @@
 #include "directive_decoder.hpp"
 
-#include <limits>
-
 namespace cw::server {
 namespace {
 
@@ -92,14 +90,12 @@ server_status directive_decoder::decode(
     }
 
     include_directive include;
-    bool include_payload_seen = false;
+    bool include_argument_seen = false;
+    bool direct_include = false;
 
     frontend_token current = first;
 
     for (;;) {
-        const auto before =
-            input.word_offset();
-
         const auto next_status =
             input.next(current);
 
@@ -148,29 +144,26 @@ server_status directive_decoder::decode(
             continue;
         }
 
-        const auto form =
-            decode_include_form(
-                current.kind);
+        if (!include_argument_seen) {
+            include_argument_seen = true;
 
-        if (form == include_form::none) {
+            const auto form =
+                decode_include_form(
+                    current.kind);
+
+            if (form != include_form::none) {
+                direct_include = true;
+                include.form = form;
+                include.locator = {
+                    current.source_offset,
+                    current.source_length,
+                };
+            }
+
             continue;
         }
 
-        if (include_payload_seen) {
-            return server_status::project_configuration_invalid;
-        }
-
-        include_payload_seen = true;
-        include.form = form;
-        include.locator = {
-            current.source_offset,
-            current.source_length,
-        };
-
-        const auto after =
-            input.word_offset();
-
-        if (after <= before) {
+        if (direct_include) {
             return server_status::project_configuration_invalid;
         }
     }

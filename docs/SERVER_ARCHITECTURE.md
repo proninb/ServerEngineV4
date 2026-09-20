@@ -62,6 +62,8 @@ ServerEngineV4/
 │       ├── project.hpp
 │       ├── project.cpp
 │       ├── project_identity.hpp
+│       ├── project_lifecycle_context.hpp
+│       ├── project_preprocessor_configuration.hpp
 │       ├── project_configuration_manifest.hpp
 │       ├── project_configuration_manifest.cpp
 │       ├── project_configuration_manifest_store.hpp
@@ -123,6 +125,7 @@ main
       +-- server_context
            |
            +-- server_configuration
+           |    `-- one process-wide ABI
            +-- command_queue
            +-- communication
            |    |
@@ -130,6 +133,44 @@ main
            |
            +-- project
 ```
+
+## Server ABI and SHM contract
+
+One Server instance owns one ABI and one SHM layout contract.
+
+```text
+server.json
+    -> abi.target
+    -> abi.pack
+
+one Server
+    -> one ABI
+    -> one SHM
+    -> all Projects/subprojects use the same physical layout contract
+```
+
+ABI is process configuration. `project.json` does not contain or override ABI.
+
+The same parsed `server_abi_configuration` is passed into the mode-specific
+temporary lifecycle context:
+
+```text
+LOAD
+    load_context
+        ABI
+
+BUILD
+    build_context
+        ABI
+        persisted/candidate construction state
+
+REBUILD
+    rebuild_context
+        ABI
+        fresh construction state
+```
+
+There is no universal `builder_context`.
 
 ## Configuration directory
 
@@ -340,6 +381,8 @@ and does not bypass normal LOAD state validation.
 
 Project construction is mode-oriented. There is no universal Project construction context.
 
+Temporary construction state is owned by explicit `load_context`, `build_context`, and `rebuild_context` boundaries.
+
 Server architecture owns process lifecycle and the resident Project pointer.
 
 Detailed Project contracts are separated into:
@@ -358,7 +401,7 @@ PROJECT_CONFIGURATION.md
     group / header / source / project
     path resolution
     composition input
-    ABI contract
+    per-project preprocessing configuration
 ```
 
 Project lifecycle/configuration details belong in those documents instead of
@@ -451,21 +494,24 @@ leaves `server_context.project == nullptr`.
 
 ## Current Project construction boundary
 
-The current Project construction layer implements complete configuration-input
-composition and verification:
+The current Project construction layer implements configuration composition and
+the initial lexical construction boundary:
 
 ```text
 REBUILD
     recursive project.json composition
+    -> local preprocessor configuration per project.json
     -> candidate manifest
-    -> aggregate configuration hash
-    -> stops before File Context/G0
+    -> flat File Context
+    -> Header/Source lexical generation
+    -> stops before directive execution / Semantic / G0
 
 BUILD
     committed manifest verification
     -> recomposition on changed configuration bytes
+    -> local preprocessor configuration per project.json
     -> aggregate hash comparison
-    -> stops before File Context/Gn->Gn+1
+    -> stops before Gn->Gn+1 source construction
 ```
 
 A candidate manifest is not committed until the generation it describes is

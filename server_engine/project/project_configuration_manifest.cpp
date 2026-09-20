@@ -249,13 +249,15 @@ public:
         operation_id operation,
         diagnostic_collection& diagnostics,
         project_configuration_manifest& output,
-        file_context* files)
+        file_context* files,
+        std::vector<project_preprocessor_configuration>& preprocessors)
         : root_project_path(
               root_project_path),
           operation(operation),
           diagnostics(diagnostics),
           output(output),
-          files(files) {
+          files(files),
+          preprocessors(preprocessors) {
 
         visited.reserve(32);
         active.reserve(16);
@@ -265,6 +267,7 @@ public:
 
     [[nodiscard]] server_status compose() {
         output = {};
+        preprocessors.clear();
 
         const auto root_result =
             resolve_project_path(
@@ -299,6 +302,7 @@ public:
 
         if (!succeeded(status)) {
             output = {};
+            preprocessors.clear();
             return status;
         }
 
@@ -509,13 +513,17 @@ private:
         std::vector<project_configuration_dependency>
             dependencies;
 
+        project_preprocessor_configuration
+            preprocessor;
+
         const auto status =
             read_project_configuration(
                 snapshot.bytes,
                 absolute_path,
                 operation,
                 diagnostics,
-                dependencies);
+                dependencies,
+                preprocessor);
 
         if (!succeeded(status)) {
             active.erase(key);
@@ -556,6 +564,9 @@ private:
 
             output.files.push_back(
                 std::move(proof));
+
+            preprocessors.push_back(
+                std::move(preprocessor));
 
             visited.insert(key);
 
@@ -851,6 +862,7 @@ private:
     diagnostic_collection& diagnostics;
     project_configuration_manifest& output;
     file_context* files = nullptr;
+    std::vector<project_preprocessor_configuration>& preprocessors;
     std::unordered_set<project_path_key, project_path_key_hash> visited;
     std::unordered_set<project_path_key, project_path_key_hash> active;
     std::unordered_set<project_path_key, project_path_key_hash> unique_inputs;
@@ -874,14 +886,16 @@ server_status compose_project_configuration_manifest(
     const std::filesystem::path& root_project_path,
     operation_id operation,
     diagnostic_collection& diagnostics,
-    project_configuration_manifest& output) {
+    project_configuration_manifest& output,
+    std::vector<project_preprocessor_configuration>& preprocessors) {
 
     manifest_composer composer{
         root_project_path,
         operation,
         diagnostics,
         output,
-        nullptr};
+        nullptr,
+        preprocessors};
 
     return composer.compose();
 }
@@ -891,14 +905,16 @@ server_status compose_project_configuration(
     operation_id operation,
     diagnostic_collection& diagnostics,
     project_configuration_manifest& manifest,
-    file_context& files) {
+    file_context& files,
+    std::vector<project_preprocessor_configuration>& preprocessors) {
 
     manifest_composer composer{
         root_project_path,
         operation,
         diagnostics,
         manifest,
-        &files};
+        &files,
+        preprocessors};
 
     return composer.compose();
 }
