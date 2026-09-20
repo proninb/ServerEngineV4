@@ -1,6 +1,6 @@
 #include "string_table.hpp"
 
-#include <functional>
+#include <cstdint>
 #include <limits>
 #include <string>
 
@@ -257,33 +257,35 @@ server_status string_table::intern(
     if (!bytes.empty() &&
         value.data() != nullptr) {
 
-        const auto* arena_begin =
-            bytes.data();
+        const auto arena_begin =
+            reinterpret_cast<std::uintptr_t>(
+                bytes.data());
 
-        const auto* arena_end =
-            arena_begin + bytes.size();
+        const auto value_begin =
+            reinterpret_cast<std::uintptr_t>(
+                value.data());
 
-        const auto* value_begin =
-            value.data();
+        if (value_begin >= arena_begin) {
+            const auto offset =
+                value_begin - arena_begin;
 
-        const std::less<const char*> less;
+            if (offset < bytes.size() &&
+                value.size() <=
+                    bytes.size() -
+                        static_cast<std::size_t>(
+                            offset)) {
 
-        if (!less(value_begin, arena_begin) &&
-            less(value_begin, arena_end) &&
-            value.size() <=
-                static_cast<std::size_t>(
-                    arena_end - value_begin)) {
+                try {
+                    stable_value.assign(
+                        value.data(),
+                        value.size());
+                }
+                catch (...) {
+                    return server_status::io_error;
+                }
 
-            try {
-                stable_value.assign(
-                    value.data(),
-                    value.size());
+                value = stable_value;
             }
-            catch (...) {
-                return server_status::io_error;
-            }
-
-            value = stable_value;
         }
     }
 

@@ -564,7 +564,8 @@ private:
                     absolute_path,
                     current_file,
                     source_file,
-                    dependencies);
+                    dependencies,
+                    depth);
 
             if (!succeeded(
                     dependency_status)) {
@@ -587,7 +588,8 @@ private:
         const std::filesystem::path& absolute_path,
         std::uint32_t current_file,
         file_id source_file,
-        std::span<const project_configuration_dependency> dependencies) {
+        std::span<const project_configuration_dependency> dependencies,
+        std::size_t depth) {
 
         std::vector<pending_project_dependency>
             pending;

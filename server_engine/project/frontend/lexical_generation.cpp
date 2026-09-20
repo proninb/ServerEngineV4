@@ -4,8 +4,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <limits>
+#include <mutex>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -45,89 +47,194 @@ struct lexical_file_work final {
     return server_status::io_error;
 }
 
-[[nodiscard]] server_status execute_parallel(
-    std::span<lexical_file_work> work) noexcept {
+void execute_lexical_work(
+    lexical_file_work& item) noexcept {
 
-    if (work.empty()) {
+    auto source =
+        item.source;
+
+    if (item.job.file) {
+        file_context::execute_acquire(
+            item.job,
+            item.result);
+
+        if (item.result.kind !=
+            file_acquire_result_kind::present) {
+
+            return;
+        }
+
+        source =
+            item.result.snapshot.bytes;
+    }
+
+    item.lexical_status =
+        lexer::tokenize(
+            item.file,
+            source,
+            item.lexical,
+            &item.error);
+}
+
+// Persistent construction executor for one lexical-generation build. Threads are
+// created once, while each bounded wave still completes before owner publication.
+class lexical_wave_executor final {
+public:
+    explicit lexical_wave_executor(
+        std::size_t worker_count) {
+
+        if (worker_count <= 1) {
+            return;
+        }
+
+        workers.reserve(
+            worker_count - 1);
+
+        for (std::size_t index = 1;
+             index < worker_count;
+             ++index) {
+
+            workers.emplace_back(
+                [this](std::stop_token stop) noexcept {
+                    worker_loop(stop);
+                });
+        }
+    }
+
+    lexical_wave_executor(
+        const lexical_wave_executor&) = delete;
+
+    lexical_wave_executor& operator=(
+        const lexical_wave_executor&) = delete;
+
+    ~lexical_wave_executor() {
+        {
+            std::lock_guard lock{gate};
+            stopping = true;
+        }
+
+        ready.notify_all();
+    }
+
+    [[nodiscard]] server_status execute(
+        std::span<lexical_file_work> wave) noexcept {
+
+        if (wave.empty()) {
+            return server_status::success;
+        }
+
+        if (workers.empty()) {
+            for (auto& item : wave) {
+                execute_lexical_work(
+                    item);
+            }
+
+            return server_status::success;
+        }
+
+        {
+            std::lock_guard lock{gate};
+
+            current = wave;
+            next.store(
+                0,
+                std::memory_order_relaxed);
+
+            pending =
+                workers.size();
+
+            ++generation;
+        }
+
+        ready.notify_all();
+
+        execute_current();
+
+        std::unique_lock lock{gate};
+
+        completed.wait(
+            lock,
+            [&]() noexcept {
+                return pending == 0;
+            });
+
+        current = {};
         return server_status::success;
     }
 
-    const auto hardware =
-        std::thread::hardware_concurrency();
-
-    const auto worker_count =
-        (std::min)(
-            work.size(),
-            static_cast<std::size_t>(
-                hardware == 0 ? 1 : hardware));
-
-    std::atomic_size_t next{0};
-
-    const auto execute = [&]() noexcept {
+private:
+    void execute_current() noexcept {
         for (;;) {
             const auto index =
                 next.fetch_add(
                     1,
                     std::memory_order_relaxed);
 
-            if (index >= work.size()) {
+            if (index >= current.size()) {
                 return;
             }
 
-            auto& item =
-                work[index];
+            execute_lexical_work(
+                current[index]);
+        }
+    }
 
-            auto source =
-                item.source;
+    void worker_loop(
+        std::stop_token stop) noexcept {
 
-            if (item.job.file) {
-                file_context::execute_acquire(
-                    item.job,
-                    item.result);
+        std::uint64_t observed = 0;
 
-                if (item.result.kind !=
-                    file_acquire_result_kind::present) {
+        for (;;) {
+            {
+                std::unique_lock lock{gate};
 
-                    continue;
+                ready.wait(
+                    lock,
+                    stop,
+                    [&]() noexcept {
+                        return stopping ||
+                            generation != observed;
+                    });
+
+                if (stop.stop_requested() ||
+                    stopping) {
+
+                    return;
                 }
 
-                source =
-                    item.result.snapshot.bytes;
+                observed =
+                    generation;
             }
 
-            item.lexical_status =
-                lexer::tokenize(
-                    item.file,
-                    source,
-                    item.lexical,
-                    &item.error);
+            execute_current();
+
+            {
+                std::lock_guard lock{gate};
+
+                if (pending != 0) {
+                    --pending;
+                }
+
+                if (pending == 0) {
+                    completed.notify_one();
+                }
+            }
         }
-    };
-
-    if (worker_count == 1) {
-        execute();
-        return server_status::success;
     }
 
-    try {
-        std::vector<std::jthread> workers;
-        workers.reserve(worker_count - 1);
+    std::mutex gate;
+    std::condition_variable_any ready;
+    std::condition_variable completed;
+    std::span<lexical_file_work> current;
+    std::atomic_size_t next{0};
+    std::size_t pending = 0;
+    std::uint64_t generation = 0;
+    bool stopping = false;
 
-        for (std::size_t index = 1;
-             index < worker_count;
-             ++index) {
-
-            workers.emplace_back(execute);
-        }
-
-        execute();
-    }
-    catch (...) {
-        return server_status::io_error;
-    }
-
-    return server_status::success;
-}
+    // Declared last so jthread destruction joins workers before synchronization
+    // state is destroyed, including constructor-unwind paths.
+    std::vector<std::jthread> workers;
+};
 
 }
 
@@ -254,6 +361,10 @@ lexical_generation::words(
         records[
             file.value() - 1];
 
+    if (record.word_count == 0) {
+        return {};
+    }
+
     return std::span<const std::uint32_t>{
         word_arena.data() + record.offset,
         record.word_count,
@@ -274,11 +385,12 @@ std::uint32_t lexical_generation::token_count(
 [[nodiscard]] server_status publish_batch(
     file_context& files,
     lexical_generation& output,
+    lexical_wave_executor& executor,
     std::vector<lexical_file_work>& work,
     lexical_failure* failure) noexcept {
 
     const auto executed =
-        execute_parallel(
+        executor.execute(
             work);
 
     if (!succeeded(executed)) {
@@ -366,11 +478,17 @@ server_status build_lexical_generation(
         return server_status::io_error;
     }
 
-    for (std::uint32_t value = 1;
-         value <= files.size();
-         ++value) {
+    try {
+        lexical_wave_executor executor{
+            batch_capacity};
 
-        const file_id file{value};
+        for (std::size_t index = 0;
+             index < files.size();
+             ++index) {
+
+            const file_id file{
+                static_cast<std::uint32_t>(
+                    index + 1)};
 
         const auto kind =
             files.kind(file);
@@ -426,6 +544,7 @@ server_status build_lexical_generation(
                 publish_batch(
                     files,
                     output,
+                    executor,
                     work,
                     failure);
 
@@ -435,15 +554,20 @@ server_status build_lexical_generation(
         }
     }
 
-    if (!work.empty()) {
-        return publish_batch(
-            files,
-            output,
-            work,
-            failure);
-    }
+        if (!work.empty()) {
+            return publish_batch(
+                files,
+                output,
+                executor,
+                work,
+                failure);
+        }
 
-    return server_status::success;
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
 }
 
 }
