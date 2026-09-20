@@ -1,9 +1,9 @@
 /*
  * Compact per-file lexical stream.
  *
- * lexical_stream owns only construction-time lexical tokens and sparse source
- * position recovery data. It has one physical file_id and no string_id,
- * identity_ref, preprocessing state, or semantic state.
+ * lexical_stream owns one construction-time uint32 word stream for one
+ * physical file. Common tokens occupy one word; rare extended source delta or
+ * lexeme length values are encoded immediately after the token header.
  */
 #pragma once
 
@@ -17,24 +17,6 @@
 #include <vector>
 
 namespace cw::server {
-
-inline constexpr std::uint32_t lexical_checkpoint_stride = 256;
-
-struct lexical_checkpoint final {
-    std::uint32_t token_index = 0;
-    std::uint32_t source_offset = 0;
-};
-
-// Present only when a token cannot encode its source delta or source length
-// inline. One record may carry either or both extended values.
-struct lexical_extended_token final {
-    std::uint32_t token_index = 0;
-    std::uint32_t delta = 0;
-    std::uint32_t length = 0;
-};
-
-static_assert(sizeof(lexical_checkpoint) == 8);
-static_assert(sizeof(lexical_extended_token) == 12);
 
 class lexical_stream final {
 public:
@@ -56,42 +38,28 @@ public:
         return source_file;
     }
 
-    [[nodiscard]] std::span<const lexical_token> tokens() const noexcept {
+    [[nodiscard]] std::span<const std::uint32_t> words() const noexcept {
         return values;
     }
 
-    [[nodiscard]] std::size_t size() const noexcept {
+    [[nodiscard]] std::size_t word_count() const noexcept {
         return values.size();
     }
 
-    [[nodiscard]] bool empty() const noexcept {
-        return values.empty();
+    [[nodiscard]] std::uint32_t token_count() const noexcept {
+        return tokens;
     }
 
-    [[nodiscard]] server_status source_offset(
-        std::size_t token_index,
-        std::uint32_t& output) const noexcept;
-
-    [[nodiscard]] server_status source_length(
-        std::size_t token_index,
-        std::uint32_t& output) const noexcept;
+    [[nodiscard]] bool empty() const noexcept {
+        return tokens == 0;
+    }
 
 private:
-    [[nodiscard]] const lexical_extended_token* extended_at(
-        std::size_t token_index) const noexcept;
-
-    [[nodiscard]] std::uint32_t delta_at(
-        std::size_t token_index) const noexcept;
-
-    [[nodiscard]] std::uint32_t length_at(
-        std::size_t token_index) const noexcept;
-
     file_id source_file{};
-    std::vector<lexical_token> values;
-    std::vector<lexical_checkpoint> checkpoints;
-    std::vector<lexical_extended_token> extended_tokens;
+    std::vector<std::uint32_t> values;
     std::uint32_t source_size = 0;
     std::uint32_t last_source_offset = 0;
+    std::uint32_t tokens = 0;
 };
 
 }

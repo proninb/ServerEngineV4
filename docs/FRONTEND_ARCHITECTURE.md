@@ -567,7 +567,7 @@ Base token representation:
 [ token_kind : 8 ][ source-start delta : 16 ][ source length : 8 ]
 ```
 
-The payload stores a 16-bit byte delta from the previous token start plus an 8-bit source length. `0xffff` and `0xff` are sparse escapes for a larger delta or token length. An absolute checkpoint is stored every 256 tokens for bounded random source-position recovery.
+The payload stores a 16-bit byte delta from the previous token start plus an 8-bit lexeme length. `0xffff` and `0xff` are in-band escapes: the full 32-bit delta and/or full 32-bit lexeme length immediately follow the token header in the same word stream. There is no checkpoint array or extended-token side table.
 
 The lexer performs no `string_table` lookup and creates no `string_id` or `identity_ref`. It directly classifies fixed C++ keywords, punctuation/operators, and preprocessing directive names. Directive lines use `pp_*` markers plus `pp_end`; direct quoted/angled include names use dedicated token kinds.
 
@@ -772,7 +772,7 @@ The following contracts are fail-closed architecture rules.
 
 13. File Context is the sole owner of dependency staging.
 
-14. A retained per-file lexical stream is construction data, not a semantic token graph. Its base token is exactly four bytes and carries no string_id or identity_ref.
+14. A retained per-file lexical stream is construction data, not a semantic token graph. Its common token is exactly four bytes and carries no string_id or identity_ref. Rare large source deltas or lexeme lengths use in-band extension words in the same uint32 stream.
 
 15. Do not store state that is authoritatively derivable elsewhere.
 
@@ -823,7 +823,9 @@ frontend_input
 lexical_token
     one 32-bit word
     8-bit token_kind
-    16-bit source-start delta + 8-bit source length
+    16-bit source-start delta + 8-bit lexeme length
+    in-band 32-bit extension words for large delta/length
+    one uint32 word stream; no side arrays
     punctuation / keyword / preprocessing classification
     no string_id / identity_ref
 ```

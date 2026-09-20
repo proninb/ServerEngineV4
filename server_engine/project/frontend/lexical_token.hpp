@@ -183,7 +183,7 @@ enum class token_kind : std::uint8_t {
 //
 //   [ token_kind : 8 ][ source-start delta : 16 ][ source length : 8 ]
 //
-// Escape values are resolved through lexical_stream's sparse extended records.
+// Escape values are followed immediately by full-width values in the same uint32 word stream.
 class lexical_token final {
 public:
     constexpr lexical_token() noexcept = default;
