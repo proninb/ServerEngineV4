@@ -28,7 +28,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -91,6 +91,7 @@
     <ClCompile Include="server_engine\project\string\string_table.cpp" />
     <ClCompile Include="server_engine\project\preprocessor\preprocessor.cpp" />
     <ClCompile Include="server_engine\project\frontend\frontend_input.cpp" />
+    <ClCompile Include="server_engine\project\frontend\directive_decoder.cpp" />
     <ClCompile Include="server_engine\project\frontend\lexical_stream.cpp" />
     <ClCompile Include="server_engine\project\frontend\lexer.cpp" />
     <ClCompile Include="server_engine\project\frontend\lexical_generation.cpp" />
@@ -144,6 +145,7 @@
     <ClInclude Include="server_engine\project\string\string_table.hpp" />
     <ClInclude Include="server_engine\project\preprocessor\preprocessor.hpp" />
     <ClInclude Include="server_engine\project\frontend\frontend_input.hpp" />
+    <ClInclude Include="server_engine\project\frontend\directive_decoder.hpp" />
     <ClInclude Include="server_engine\project\frontend\lexical_stream.hpp" />
     <ClInclude Include="server_engine\project\frontend\lexer.hpp" />
     <ClInclude Include="server_engine\project\frontend\lexical_generation.hpp" />
