@@ -485,13 +485,17 @@ mutex. BUILD and REBUILD construct disposable candidate construction state, so
 the whole candidate is the transaction boundary. Failed construction destroys
 that candidate.
 
-File Context keeps hot identity and cold physical state separate:
+File Context keeps identity, cold physical state, and dependency topology in
+parallel SoA arrays indexed by the same `file_id`:
 
 ```text
-file_record[]            16 bytes / file
-file_physical_record[]   64 bytes / file
-native_path_chars[]      one contiguous native-character arena
-path_index[]              8 bytes / slot
+file_record[]              16 bytes / file
+file_physical_record[]     64 bytes / file
+file_dependency_record[]   16 bytes / file
+native_path_chars[]        one contiguous native-character arena
+path_index[]                8 bytes / slot
+forward_edges[]             4 bytes / direct edge
+reverse_edges[]             4 bytes / direct edge
 ```
 
 `file_physical_record` contains exact content SHA-256 and the optional native
@@ -626,53 +630,66 @@ file_kind::assign
 The topology layer stores only resolved `file_id` relations; it does not contain
 paths, parser state, or syntax-specific facts.
 
-### Generation storage contract
+### Storage contract
 
-The logical graph model is the same for every generation, but construction
-storage follows the generation mode.
+There is one current File Context topology. V4 does not maintain separate `G0`
+and `Gn` dependency-storage models.
 
-Fresh REBUILD (`G0`) owns a dense native realization:
+Committed construction topology is compact:
 
 ```text
-file_dependency_record[file_id]
+file_dependency_record[file_id - 1]
 forward_edges[]
 reverse_edges[]
 ```
 
-Incremental BUILD (`Gn -> Gn+1`) is baseline-backed:
+Each range is:
 
-```text
-untouched file
-    -> adjacency read directly from committed baseline
-
-touched file
-    -> materialize only that dependency record
-    -> append replacement forward/reverse ranges
+```cpp
+struct file_edge_range {
+    std::uint32_t offset;
+    std::uint32_t count;
+};
 ```
 
-Edge arenas are append-only during the construction lineage. BUILD does not
-rewrite or compact the complete graph after a sparse change.
+and each dependency record is 16 bytes:
 
-REBUILD is the natural full-compaction boundary.
+```cpp
+struct file_dependency_record {
+    file_edge_range dependencies;
+    file_edge_range dependents;
+};
+```
 
-This preserves the V3 property that sparse BUILD cost is proportional to the
-affected construction set instead of total file/edge count, while V4 keeps the
-cleaner single `file_id` identity model.
+Construction discovers temporary `(source file_id, target file_id)` relations.
+Finalization groups relations by source with a linear counting pass, collapses
+duplicate `(source,target)` pairs with dense `file_id` markers, and fills exact
+forward/reverse arenas. The algorithm is `O(F + E)` with no sort or hash lookup.
+Temporary edge staging is destroyed with the candidate construction.
 
 Architectural constraints:
 
 ```text
+NO secondary node identity
+NO dependency_id / edge_id
 NO SORT
 NO per-node heap allocation
 NO vector<vector<file_id>>
-NO global topology rewrite for sparse BUILD
-NO secondary node identity
 ```
 
-Dependency topology is construction state/persisted baseline state. It is not
-resident runtime Project state after Runtime/SHM construction is complete.
+Project composition is the first producer and emits only explicit direct edges:
 
-Dependency edge storage is still the next construction slice.
+```text
+project -> child project
+project -> header
+project -> source
+project -> assign
+```
+
+Other syntax domains add only their own resolved direct dependencies later.
+
+Dependency topology is construction state. It is not resident runtime Project
+state after Runtime/SHM construction is complete.
 
 ## Publication Contract
 
@@ -698,7 +715,7 @@ failed BUILD
 2. `server_context.project == nullptr` exactly means UNLOADED.
 3. LOAD and REBUILD require UNLOADED.
 4. BUILD and UNLOAD require LOADED.
-5. BUILD operates on resident Gn.
+5. BUILD operates on the one current resident Project and creates disposable candidate construction state.
 6. LOAD, BUILD, and REBUILD are distinct pipelines.
 7. Failure of LOAD, BUILD, or REBUILD leaves UNLOADED.
 8. Resident Project contains runtime-required state only.
@@ -716,5 +733,5 @@ failed BUILD
 20. `file_id` is the only identity of a file-dependency node; no secondary graph-node ID exists.
 21. File dependency storage contains direct `file_id -> file_id` relations only.
 22. Forward and reverse adjacency are first-class construction data.
-23. REBUILD creates dense dependency storage; BUILD materializes only sparse replacements over the committed baseline.
-24. Sparse BUILD never performs an O(V+E) graph compaction; REBUILD is the compaction boundary.
+23. File dependency records are indexed directly by `file_id - 1`.
+24. Dependency topology uses one compact forward/reverse representation; there is no separate G0/Gn storage model.

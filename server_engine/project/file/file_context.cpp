@@ -327,6 +327,9 @@ server_status file_context::resolve(
         path_chars.push_back(
             file_path_char{});
 
+        const auto old_file_count =
+            files.size();
+
         files.push_back({
             offset,
             static_cast<std::uint32_t>(
@@ -338,9 +341,15 @@ server_status file_context::resolve(
 
         try {
             physical_files.emplace_back();
+            dependency_files.emplace_back();
         }
         catch (...) {
-            files.pop_back();
+            files.resize(
+                old_file_count);
+            physical_files.resize(
+                old_file_count);
+            dependency_files.resize(
+                old_file_count);
             path_chars.resize(
                 old_path_size);
             throw;
@@ -644,6 +653,372 @@ server_status file_context::calculate_content_hash(
     }
 }
 
+server_status file_context::finalize_dependency_topology(
+    std::span<const file_dependency_edge> edges) noexcept {
+
+    const auto max_u32 =
+        static_cast<std::size_t>(
+            (std::numeric_limits<std::uint32_t>::max)());
+
+    if (dependency_files.size() !=
+            files.size() ||
+        edges.size() > max_u32) {
+
+        return server_status::io_error;
+    }
+
+    try {
+        std::vector<std::uint32_t> source_counts(
+            files.size());
+
+        for (const auto& edge : edges) {
+            if (!contains(edge.source) ||
+                !contains(edge.target)) {
+
+                return server_status::
+                    project_configuration_invalid;
+            }
+
+            auto& count =
+                source_counts[
+                    edge.source.value() - 1];
+
+            if (count ==
+                (std::numeric_limits<std::uint32_t>::max)()) {
+
+                return server_status::io_error;
+            }
+
+            ++count;
+        }
+
+        std::vector<std::uint32_t> source_offsets(
+            files.size());
+
+        std::uint32_t staged_count = 0;
+
+        for (std::size_t index = 0;
+             index < source_counts.size();
+             ++index) {
+
+            source_offsets[index] =
+                staged_count;
+
+            if (source_counts[index] >
+                (std::numeric_limits<std::uint32_t>::max)() -
+                    staged_count) {
+
+                return server_status::io_error;
+            }
+
+            staged_count +=
+                source_counts[index];
+        }
+
+        if (static_cast<std::size_t>(
+                staged_count) !=
+            edges.size()) {
+
+            return server_status::io_error;
+        }
+
+        std::vector<file_id> staged_targets(
+            edges.size());
+
+        std::vector<std::uint32_t> cursor =
+            source_offsets;
+
+        for (const auto& edge : edges) {
+            staged_targets[
+                cursor[
+                    edge.source.value() - 1]++] =
+                edge.target;
+        }
+
+        std::vector<file_dependency_record> records(
+            files.size());
+
+        std::vector<std::uint32_t> seen_target(
+            files.size());
+
+        for (std::size_t source_index = 0;
+             source_index < files.size();
+             ++source_index) {
+
+            const auto source_value =
+                static_cast<std::uint32_t>(
+                    source_index + 1);
+
+            const auto begin =
+                source_offsets[source_index];
+
+            const auto count =
+                source_counts[source_index];
+
+            for (std::uint32_t index = 0;
+                 index < count;
+                 ++index) {
+
+                const auto target =
+                    staged_targets[
+                        begin + index];
+
+                auto& marker =
+                    seen_target[
+                        target.value() - 1];
+
+                if (marker ==
+                    source_value) {
+
+                    continue;
+                }
+
+                marker =
+                    source_value;
+
+                auto& forward_count =
+                    records[source_index]
+                        .dependencies.count;
+
+                auto& reverse_count =
+                    records[
+                        target.value() - 1]
+                        .dependents.count;
+
+                if (forward_count ==
+                        (std::numeric_limits<std::uint32_t>::max)() ||
+                    reverse_count ==
+                        (std::numeric_limits<std::uint32_t>::max)()) {
+
+                    return server_status::io_error;
+                }
+
+                ++forward_count;
+                ++reverse_count;
+            }
+        }
+
+        std::uint32_t forward_offset = 0;
+        std::uint32_t reverse_offset = 0;
+
+        for (auto& record : records) {
+            const auto forward_count =
+                record.dependencies.count;
+
+            const auto reverse_count =
+                record.dependents.count;
+
+            record.dependencies.offset =
+                forward_offset;
+
+            record.dependents.offset =
+                reverse_offset;
+
+            if (forward_count >
+                    (std::numeric_limits<std::uint32_t>::max)() -
+                        forward_offset ||
+                reverse_count >
+                    (std::numeric_limits<std::uint32_t>::max)() -
+                        reverse_offset) {
+
+                return server_status::io_error;
+            }
+
+            forward_offset +=
+                forward_count;
+
+            reverse_offset +=
+                reverse_count;
+        }
+
+        if (forward_offset !=
+            reverse_offset) {
+
+            return server_status::io_error;
+        }
+
+        std::vector<file_id> forward(
+            forward_offset);
+
+        std::vector<file_id> reverse(
+            reverse_offset);
+
+        cursor.resize(
+            records.size());
+
+        for (std::size_t index = 0;
+             index < records.size();
+             ++index) {
+
+            cursor[index] =
+                records[index]
+                    .dependencies.offset;
+        }
+
+        std::fill(
+            seen_target.begin(),
+            seen_target.end(),
+            0);
+
+        for (std::size_t source_index = 0;
+             source_index < files.size();
+             ++source_index) {
+
+            const auto source =
+                file_id{
+                    static_cast<std::uint32_t>(
+                        source_index + 1)};
+
+            const auto begin =
+                source_offsets[source_index];
+
+            const auto count =
+                source_counts[source_index];
+
+            for (std::uint32_t index = 0;
+                 index < count;
+                 ++index) {
+
+                const auto target =
+                    staged_targets[
+                        begin + index];
+
+                auto& marker =
+                    seen_target[
+                        target.value() - 1];
+
+                if (marker ==
+                    source.value()) {
+
+                    continue;
+                }
+
+                marker =
+                    source.value();
+
+                forward[
+                    cursor[source_index]++] =
+                    target;
+            }
+        }
+
+        for (std::size_t index = 0;
+             index < records.size();
+             ++index) {
+
+            cursor[index] =
+                records[index]
+                    .dependents.offset;
+        }
+
+        for (std::size_t source_index = 0;
+             source_index < files.size();
+             ++source_index) {
+
+            const auto source =
+                file_id{
+                    static_cast<std::uint32_t>(
+                        source_index + 1)};
+
+            const auto range =
+                records[source_index]
+                    .dependencies;
+
+            for (std::uint32_t index = 0;
+                 index < range.count;
+                 ++index) {
+
+                const auto target =
+                    forward[
+                        range.offset + index];
+
+                reverse[
+                    cursor[
+                        target.value() - 1]++] =
+                    source;
+            }
+        }
+
+        dependency_files =
+            std::move(records);
+
+        forward_edges =
+            std::move(forward);
+
+        reverse_edges =
+            std::move(reverse);
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
+std::span<const file_id> file_context::dependencies(
+    file_id file) const noexcept {
+
+    if (!contains(file)) {
+        return {};
+    }
+
+    const auto range =
+        dependency_files[
+            file.value() - 1]
+            .dependencies;
+
+    if (range.count == 0) {
+        return {};
+    }
+
+    if (range.offset >
+            forward_edges.size() ||
+        range.count >
+            forward_edges.size() -
+                range.offset) {
+
+        return {};
+    }
+
+    return {
+        forward_edges.data() +
+            range.offset,
+        range.count,
+    };
+}
+
+std::span<const file_id> file_context::dependents(
+    file_id file) const noexcept {
+
+    if (!contains(file)) {
+        return {};
+    }
+
+    const auto range =
+        dependency_files[
+            file.value() - 1]
+            .dependents;
+
+    if (range.count == 0) {
+        return {};
+    }
+
+    if (range.offset >
+            reverse_edges.size() ||
+        range.count >
+            reverse_edges.size() -
+                range.offset) {
+
+        return {};
+    }
+
+    return {
+        reverse_edges.data() +
+            range.offset,
+        range.count,
+    };
+}
+
 bool file_context::contains(
     file_id file) const noexcept {
 
@@ -652,6 +1027,8 @@ bool file_context::contains(
             file.value()) <=
             files.size() &&
         physical_files.size() ==
+            files.size() &&
+        dependency_files.size() ==
             files.size();
 }
 

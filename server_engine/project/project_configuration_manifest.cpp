@@ -149,6 +149,10 @@ public:
         active.reserve(16);
         unique_inputs.reserve(32);
         kinds.reserve(64);
+
+        if (files != nullptr) {
+            dependency_edges.reserve(64);
+        }
     }
 
     [[nodiscard]] server_status compose() {
@@ -187,6 +191,17 @@ public:
             return status;
         }
 
+        if (files != nullptr) {
+            const auto finalized =
+                files->finalize_dependency_topology(
+                    dependency_edges);
+
+            if (!succeeded(finalized)) {
+                output = {};
+                return finalized;
+            }
+        }
+
         try {
             output.configuration_hash =
                 calculate_project_configuration_hash(
@@ -205,7 +220,8 @@ private:
         const std::filesystem::path& absolute_path,
         std::uint32_t declaring_file,
         project_configuration_path_type path_type,
-        const std::filesystem::path& locator) {
+        const std::filesystem::path& locator,
+        file_id known_file = {}) {
 
         project_path_key key;
 
@@ -271,6 +287,8 @@ private:
         active.insert(key);
 
         file_content_snapshot snapshot;
+        file_id source_file =
+            known_file;
 
         if (files == nullptr) {
             const auto acquired =
@@ -290,24 +308,32 @@ private:
                     acquired);
             }
         } else {
-            file_id file;
+            if (!source_file) {
+                const auto resolved =
+                    files->resolve(
+                        absolute_path,
+                        file_kind::project,
+                        source_file);
 
-            const auto resolved =
-                files->resolve(
-                    absolute_path,
-                    file_kind::project,
-                    file);
+                if (!succeeded(resolved)) {
+                    active.erase(key);
+                    return resolved;
+                }
+            } else if (
+                !files->contains(source_file) ||
+                files->kind(source_file) !=
+                    file_kind::project) {
 
-            if (!succeeded(resolved)) {
                 active.erase(key);
-                return resolved;
+                return server_status::
+                    project_configuration_invalid;
             }
 
             file_acquire_job job;
 
             const auto prepared =
                 files->prepare_acquire(
-                    file,
+                    source_file,
                     job);
 
             if (!succeeded(prepared)) {
@@ -475,24 +501,6 @@ private:
                 }
 
                 if (dependency.kind ==
-                    file_kind::project) {
-
-                    const auto child_status =
-                        visit(
-                            child,
-                            current_file,
-                            dependency.path_type,
-                            dependency.path);
-
-                    if (!succeeded(child_status)) {
-                        active.erase(key);
-                        return child_status;
-                    }
-
-                    continue;
-                }
-
-                if (dependency.kind ==
                         file_kind::source ||
                     dependency.kind ==
                         file_kind::assign) {
@@ -520,21 +528,52 @@ private:
                     }
                 }
 
-                if (files == nullptr) {
+                file_id child_file;
+
+                if (files != nullptr) {
+                    const auto resolved =
+                        files->resolve(
+                            child,
+                            dependency.kind,
+                            child_file);
+
+                    if (!succeeded(resolved)) {
+                        active.erase(key);
+                        return resolved;
+                    }
+
+                    const auto staged =
+                        add_dependency(
+                            source_file,
+                            child_file);
+
+                    if (!succeeded(staged)) {
+                        active.erase(key);
+                        return staged;
+                    }
+                }
+
+                if (dependency.kind ==
+                    file_kind::project) {
+
+                    const auto child_status =
+                        visit(
+                            child,
+                            current_file,
+                            dependency.path_type,
+                            dependency.path,
+                            child_file);
+
+                    if (!succeeded(child_status)) {
+                        active.erase(key);
+                        return child_status;
+                    }
+
                     continue;
                 }
 
-                file_id child_file;
-
-                const auto resolved =
-                    files->resolve(
-                        child,
-                        dependency.kind,
-                        child_file);
-
-                if (!succeeded(resolved)) {
-                    active.erase(key);
-                    return resolved;
+                if (files == nullptr) {
+                    continue;
                 }
 
                 const auto* physical =
@@ -615,6 +654,34 @@ private:
         return server_status::success;
     }
 
+    [[nodiscard]] server_status add_dependency(
+        file_id source,
+        file_id target) {
+
+        if (files == nullptr) {
+            return server_status::success;
+        }
+
+        if (!source ||
+            !target) {
+
+            return server_status::
+                project_configuration_invalid;
+        }
+
+        try {
+            dependency_edges.push_back({
+                source,
+                target,
+            });
+
+            return server_status::success;
+        }
+        catch (...) {
+            return server_status::io_error;
+        }
+    }
+
     [[nodiscard]] server_status register_kind(
         const project_path_key& key,
         file_kind kind,
@@ -657,6 +724,10 @@ private:
         project_path_key,
         file_kind,
         project_path_key_hash> kinds;
+
+    // Construction-only direct relations. File Context finalization
+    // canonicalizes duplicate (source,target) relations without sorting.
+    std::vector<file_dependency_edge> dependency_edges;
 };
 
 }

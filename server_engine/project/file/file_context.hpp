@@ -1,9 +1,10 @@
 /*
  * Project construction file context.
  *
- * file_context owns compact physical-file identity and cold physical-content
- * state for one candidate construction. Parser state, Graph, Runtime, and
- * resident Project state remain outside this class.
+ * file_context owns construction-file identity, cold physical-content state,
+ * and compact direct dependency topology for one candidate construction.
+ * Parser state, semantic Graph, Runtime, and resident Project state remain
+ * outside this class.
  */
 #pragma once
 
@@ -61,6 +62,32 @@ private:
 };
 
 static_assert(sizeof(file_id) == 4);
+
+// Direct adjacency range inside one global file_id edge arena.
+struct file_edge_range final {
+    std::uint32_t offset = 0;
+    std::uint32_t count = 0;
+};
+
+static_assert(sizeof(file_edge_range) == 8);
+
+// Additional SoA state indexed directly by file_id. No dependency/node identity
+// exists beyond file_id itself.
+struct file_dependency_record final {
+    file_edge_range dependencies;
+    file_edge_range dependents;
+};
+
+static_assert(sizeof(file_dependency_record) == 16);
+
+// Construction-only staging relation. Source is not stored in committed edge
+// arenas because it is implied by the owning file_dependency_record.
+struct file_dependency_edge final {
+    file_id source{};
+    file_id target{};
+};
+
+static_assert(sizeof(file_dependency_edge) == 8);
 
 inline constexpr std::uint32_t file_physical_present =
     0x00000001u;
@@ -160,6 +187,17 @@ public:
         std::span<const file_id> ordered_files,
         construction_content_hash& output) const noexcept;
 
+    // Finalizes direct relations into compact forward/reverse arenas.
+    // Duplicate (source,target) staging relations collapse to one edge.
+    [[nodiscard]] server_status finalize_dependency_topology(
+        std::span<const file_dependency_edge> edges) noexcept;
+
+    [[nodiscard]] std::span<const file_id> dependencies(
+        file_id file) const noexcept;
+
+    [[nodiscard]] std::span<const file_id> dependents(
+        file_id file) const noexcept;
+
     [[nodiscard]] bool contains(
         file_id file) const noexcept;
 
@@ -232,6 +270,11 @@ private:
     // Kept separate from hot path/identity records so SHA-256/change-token data
     // is not pulled into cache during path lookup.
     std::vector<file_physical_record> physical_files;
+
+    // Direct-indexed SoA topology state. file_id N maps to dependency_files[N-1].
+    std::vector<file_dependency_record> dependency_files;
+    std::vector<file_id> forward_edges;
+    std::vector<file_id> reverse_edges;
 };
 
 }

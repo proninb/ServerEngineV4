@@ -222,9 +222,10 @@ node identity = file_id
 edge identity is implicit in (source file_id, target file_id)
 ```
 
-Project composition establishes only the explicit Project-declared edges.
-Header, Source, and Assign frontends add their own direct dependencies according
-to their own syntax contracts.
+Project composition establishes only the explicit Project-declared edges and
+finalizes them into the File Context forward/reverse topology. Header, Source,
+and Assign frontends add their own resolved direct dependencies according to
+their own syntax contracts in later construction stages.
 
 ## Path Resolution
 
