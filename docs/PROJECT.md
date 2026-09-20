@@ -26,13 +26,13 @@ server_context.project == nullptr
 
 ```text
 UNLOADED
-    +-- LOAD success ------> LOADED Gn
+    +-- LOAD success ------> LOADED
     +-- LOAD failure ------> UNLOADED
-    +-- REBUILD success ---> LOADED G0
+    +-- REBUILD success ---> LOADED
     `-- REBUILD failure ---> UNLOADED
 
-LOADED Gn
-    +-- BUILD success -----> LOADED Gn+1
+LOADED
+    +-- BUILD success -----> LOADED
     +-- BUILD failure -----> UNLOADED
     `-- UNLOAD -----------> UNLOADED
 ```
@@ -72,7 +72,7 @@ Builder
 ```
 
 The current resident Project retains its entry path so BUILD can locate the
-persisted construction artifacts belonging to Gn.
+persisted construction artifacts belonging to the current Project state.
 
 ## LOAD
 
@@ -82,7 +82,7 @@ LOAD restores persisted resident state:
 persisted Graph
     -> Runtime
     -> SHM
-    -> resident Project Gn
+    -> resident Project
 ```
 
 LOAD does not:
@@ -158,16 +158,16 @@ persisted by the current incomplete REBUILD path.
 
 ## BUILD
 
-BUILD starts only from resident Gn:
+BUILD starts only from the current resident Project:
 
 ```text
-resident Gn
+current resident Project
     -> load committed project.manifest
     -> verify complete configuration input set
     -> File Context change detection
-    -> candidate Gn+1
+    -> disposable candidate construction state
     -> coordinated commit
-    -> resident Gn+1
+    -> replace current resident Project
 ```
 
 BUILD has no external Project path argument. It uses the active Project.
@@ -213,9 +213,9 @@ recompose when one input changed
 compare aggregate configuration hash
 ```
 
-It currently stops before File Context and `Gn -> Gn+1` construction.
+It currently stops before File Context-driven construction.
 
-BUILD failure destroys resident Gn and leaves UNLOADED.
+BUILD failure destroys the current resident Project and leaves UNLOADED.
 
 ## LOAD Implementation Boundary
 
@@ -697,10 +697,11 @@ state after Runtime/SHM construction is complete.
 
 ## Publication Contract
 
-Candidate construction artifacts belong to the candidate generation.
+Candidate construction artifacts belong to the disposable candidate
+construction state.
 
 They become authoritative only as part of the same successful coordinated commit
-that publishes that generation.
+that publishes the resulting Project state.
 
 Therefore:
 
@@ -710,7 +711,7 @@ failed REBUILD
 
 failed BUILD
     must not commit candidate manifest/baseline
-    and destroys resident Gn
+    and destroys the current resident Project
 ```
 
 ## Architectural Invariants
@@ -738,4 +739,4 @@ failed BUILD
 21. File dependency storage contains direct `file_id -> file_id` relations only.
 22. Forward and reverse adjacency are first-class construction data.
 23. File dependency records are indexed directly by `file_id - 1`.
-24. Dependency topology uses one compact forward/reverse representation; there is no separate G0/Gn storage model.
+24. Dependency topology uses one compact forward/reverse representation; there is no generation-specific storage model.
