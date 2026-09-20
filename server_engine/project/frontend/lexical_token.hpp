@@ -193,11 +193,23 @@ public:
         std::uint32_t delta,
         std::uint32_t length) noexcept {
 
-        return delta <= delta_max && length <= length_max
+        return kind > token_kind::invalid &&
+            kind <= token_kind::spaceship &&
+            delta <= delta_max &&
+            length <= length_max
             ? lexical_token(
                 (static_cast<std::uint32_t>(kind) << kind_shift) |
                 (delta << delta_shift) |
                 length)
+            : lexical_token{};
+    }
+
+    [[nodiscard]] static constexpr lexical_token from_value(
+        std::uint32_t value) noexcept {
+
+        const lexical_token token{value};
+        return token.valid()
+            ? token
             : lexical_token{};
     }
 
@@ -218,7 +230,8 @@ public:
     }
 
     [[nodiscard]] constexpr bool valid() const noexcept {
-        return kind() != token_kind::invalid;
+        return kind() > token_kind::invalid &&
+            kind() <= token_kind::spaceship;
     }
 
     [[nodiscard]] explicit constexpr operator bool() const noexcept {

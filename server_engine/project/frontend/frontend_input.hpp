@@ -1,19 +1,19 @@
 /*
- * Streaming Frontend physical-input stack.
+ * Streaming Frontend lexical-input stack.
  *
- * frontend_input owns only active file traversal positions. File identity and
- * bytes remain owned by File Context; include resolution remains a construction
- * responsibility outside this class.
+ * frontend_input owns only active per-file lexical positions. Lexical storage
+ * remains owned by lexical_generation; frames retain no pointer/span, so lexical
+ * arena growth during include discovery cannot invalidate suspended parents.
  */
 #pragma once
 
-#include "../file/file_context.hpp"
+#include "lexical_generation.hpp"
+#include "lexical_token.hpp"
 #include "../../server_status.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <string_view>
 
 namespace cw::server {
 
@@ -21,14 +21,23 @@ namespace cw::server {
 // independent of Project file count and keeps frontend traversal allocation-free.
 inline constexpr std::size_t frontend_include_depth_limit = 256;
 
-// Active physical-input stack for one streaming frontend execution. Frames keep
-// only file_id + byte offset so File Context arena growth cannot invalidate the
-// saved parent position while an included file is resolved and materialized.
+struct frontend_token final {
+    file_id file{};
+    token_kind kind = token_kind::invalid;
+    std::uint32_t source_offset = 0;
+    std::uint32_t source_length = 0;
+};
+
+static_assert(sizeof(frontend_token) == 16);
+
+// Active lexical-input stack for one streaming frontend execution. A frame keeps
+// the word position plus the previous token start required by delta decoding.
+// No lexical arena address survives an include/mutation boundary.
 class frontend_input final {
 public:
     explicit frontend_input(
-        const file_context& files) noexcept
-        : files(files) {
+        const lexical_generation& lexical) noexcept
+        : lexical(lexical) {
     }
 
     frontend_input(const frontend_input&) = delete;
@@ -40,18 +49,16 @@ public:
     [[nodiscard]] server_status enter(
         file_id file) noexcept;
 
-    [[nodiscard]] server_status advance(
-        std::size_t count) noexcept;
+    [[nodiscard]] server_status next(
+        frontend_token& output) noexcept;
 
     [[nodiscard]] server_status leave() noexcept;
 
     [[nodiscard]] file_id current_file() const noexcept;
 
-    [[nodiscard]] std::size_t offset() const noexcept;
+    [[nodiscard]] std::uint32_t word_offset() const noexcept;
 
-    // The view is intentionally short-lived. Do not retain it across any
-    // File Context mutation; call remaining() again after include resolution.
-    [[nodiscard]] std::string_view remaining() const noexcept;
+    [[nodiscard]] std::uint32_t source_offset() const noexcept;
 
     [[nodiscard]] bool finished() const noexcept;
 
@@ -66,12 +73,13 @@ public:
 private:
     struct frame final {
         file_id file{};
-        std::uint32_t offset = 0;
+        std::uint32_t word_offset = 0;
+        std::uint32_t source_offset = 0;
     };
 
-    static_assert(sizeof(frame) == 8);
+    static_assert(sizeof(frame) == 12);
 
-    const file_context& files;
+    const lexical_generation& lexical;
     std::array<frame, frontend_include_depth_limit> stack{};
     std::size_t stack_size = 0;
 };

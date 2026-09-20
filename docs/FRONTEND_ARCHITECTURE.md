@@ -525,27 +525,25 @@ The lexical stream classifies punctuation, C++ keywords, literal classes, and pr
 
 The stream is reusable construction input for preprocessing and parallel type-level semantic work. There is still no retained semantic token graph and no second source-byte lexing pass used only to construct dependency topology.
 
-The active physical-input stack stores only:
+The active lexical-input stack stores only:
 
 ```text
-{ file_id, byte_offset }
+{ file_id, word_offset, source_offset }
 ```
 
-It is a fixed-capacity array with a 256-level include-nesting limit. Include
-nesting is active execution depth, not Project-size state, so this stack performs
-no heap allocation and does not grow with the number of files in the Project.
+`word_offset` is the next word in that file's compact lexical stream.
+`source_offset` is the previous decoded token start and is required to decode the
+next token's source-start delta in O(1). No checkpoint table is required.
 
-It deliberately stores no pointer or permanent `string_view` into File Context's
-content arena. If resolving/materializing an include grows that arena, the parent
-frame remains valid. After the child finishes, the frontend obtains a fresh view
-for the parent `file_id` and resumes at the saved byte offset.
+The stack is a fixed-capacity array with a 256-level include-nesting limit.
+Frames store no pointer, span, or arena address. `frontend_input::next()` obtains
+a fresh `lexical_generation::words(file_id)` view for each decode, so publishing
+an include-discovered Header may reallocate the lexical word arena without
+invalidating a suspended parent frame.
 
-`frontend_input::remaining()` therefore returns a short-lived view for immediate
-lexing only. That view must not survive a File Context mutation.
-
-The active include traversal remains bounded execution state. Retained lexical
-memory is construction-only and scales with the compact lexical streams of the
-physical files that have been tokenized.
+At child EOF the child frame is removed. Parent execution resumes from its saved
+word/source offsets and reacquires the parent lexical span. The active include
+traversal therefore remains bounded, allocation-free execution state.
 
 ---
 
@@ -822,6 +820,9 @@ The following contracts are fail-closed architecture rules.
 
 18. Active frontend include traversal is bounded execution state and must not
     allocate from the heap on include enter/leave.
+
+19. Active frontend frames store no pointer/span into lexical_generation. Resume
+    state is file_id + word_offset + source_offset and reacquires the span.
 ```
 
 ---
@@ -852,11 +853,11 @@ preprocessor
     cycle protection
 
 frontend_input
-    fixed 256-level { file_id, byte_offset } stack
+    fixed 256-level { file_id, word_offset, source_offset } stack
+    compact lexical token decoder
     no heap allocation on include enter/leave
-    no retained content pointers across include resolution
-    short-lived remaining() view
-    enter/leave child input
+    no retained lexical span across include publication
+    O(1) parent resume after child include
 
 lexical_token
     one 32-bit word
