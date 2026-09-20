@@ -93,6 +93,12 @@
     <ClCompile Include="server_engine\project\frontend\frontend_input.cpp">
       <Filter>server_engine\project\frontend</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\project\frontend\lexical_stream.cpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\frontend\lexer.cpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\project\file\file_identity.cpp">
       <Filter>server_engine\project\file</Filter>
     </ClCompile>
@@ -243,6 +249,15 @@
       <Filter>server_engine\project\preprocessor</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\frontend\frontend_input.hpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\frontend\lexical_stream.hpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\frontend\lexer.hpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\frontend\lexical_token.hpp">
       <Filter>server_engine\project\frontend</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\file\file_identity.hpp">

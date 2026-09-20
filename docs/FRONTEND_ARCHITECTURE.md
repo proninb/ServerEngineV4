@@ -17,7 +17,9 @@ identity_ref
     scoped semantic entity
 ```
 
-The architecture must remain deterministic, compact, and free of retained token graphs or duplicated identity systems.
+The architecture must remain deterministic, compact, and free of duplicated identity systems.
+
+Physical lexing may retain one compact construction-only lexical stream per physical file. That stream is not a semantic graph and carries no textual or semantic identity.
 
 ---
 
@@ -513,8 +515,15 @@ lexer / directive execution
            -> Semantic
 ```
 
-Tokens remain transient. There is no retained token graph and no second source
-pass used only to construct file dependency topology.
+The per-file lexer produces a compact construction-only lexical stream. Each base lexical token is exactly one 32-bit word:
+
+```text
+[ token_kind : 8 ][ source-start delta : 16 ][ source length : 8 ]
+```
+
+The lexical stream classifies punctuation, C++ keywords, literal classes, and preprocessing directives. It does not intern identifiers and does not create `string_id` or `identity_ref`.
+
+The stream is reusable construction input for preprocessing and parallel type-level semantic work. There is still no retained semantic token graph and no second source-byte lexing pass used only to construct dependency topology.
 
 The active physical-input stack stores only:
 
@@ -547,6 +556,22 @@ Frontend token memory must not scale with the total number of tokens in the
 Project.
 
 ---
+
+## Parallel Per-File Lexical Stream
+
+Physical lexing is independent per `file_id` and may run concurrently across Project files. Each worker reads immutable file bytes and writes only its private `lexical_stream`.
+
+Base token representation:
+
+```text
+[ token_kind : 8 ][ source-start delta : 16 ][ source length : 8 ]
+```
+
+The payload stores a 16-bit byte delta from the previous token start plus an 8-bit source length. `0xffff` and `0xff` are sparse escapes for a larger delta or token length. An absolute checkpoint is stored every 256 tokens for bounded random source-position recovery.
+
+The lexer performs no `string_table` lookup and creates no `string_id` or `identity_ref`. It directly classifies fixed C++ keywords, punctuation/operators, and preprocessing directive names. Directive lines use `pp_*` markers plus `pp_end`; direct quoted/angled include names use dedicated token kinds.
+
+Current fail-closed lexical boundaries are non-ASCII identifiers and backslash-newline source splicing. Malformed comments, literals, and direct header names fail construction.
 
 ## `#include`
 
@@ -747,7 +772,7 @@ The following contracts are fail-closed architecture rules.
 
 13. File Context is the sole owner of dependency staging.
 
-14. No retained token graph unless measurement proves it necessary.
+14. A retained per-file lexical stream is construction data, not a semantic token graph. Its base token is exactly four bytes and carries no string_id or identity_ref.
 
 15. Do not store state that is authoritatively derivable elsewhere.
 
@@ -794,15 +819,20 @@ frontend_input
     no retained content pointers across include resolution
     short-lived remaining() view
     enter/leave child input
+
+lexical_token
+    one 32-bit word
+    8-bit token_kind
+    16-bit source-start delta + 8-bit source length
+    punctuation / keyword / preprocessing classification
+    no string_id / identity_ref
 ```
 
 Not implemented yet:
 
 ```text
-lexer
 directive parser
 #ifdef / #ifndef / #else / #endif execution
-include request type in the directive layer
 include request type in the directive layer
 include path resolver / configured include roots
 #include execution through the frontend_input boundary
