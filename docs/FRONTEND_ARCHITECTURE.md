@@ -549,30 +549,38 @@ physical files that have been tokenized.
 
 ---
 
-## Parallel Project File Acquisition
+## Project Composition and Frontend Boundary
 
-Each parsed `project.json` is a dynamic producer of acquisition work. Direct
-construction inputs are resolved to `file_id` first. Only after all direct paths
-for that Project node are resolved are their borrowed `file_acquire_job.path`
-views considered stable.
-
-The direct inputs are then acquired in parallel:
+Each parsed `project.json` is a dynamic producer of physical `file_id`
+registrations and Project-declared dependency edges. Composition reads only
+Project configuration files because child `project.json` bytes are required to
+continue recursive discovery.
 
 ```text
 project.json
-    -> resolve direct inputs to file_id
-    -> prepare acquisition jobs
-    -> parallel execute_acquire
-    -> declaration-order apply_acquire
-    -> recurse into already acquired child project.json
+    -> resolve/register all direct inputs
+    -> stage Project-declared file edges
+    -> parallel prefetch child project.json
+    -> parse child project.json
+    -> continue discovery
 ```
 
-`execute_acquire` workers never mutate File Context. `apply_acquire` remains
-single-owner and deterministic. A physical `file_id` is scheduled at most once
-inside one parallel batch even if the Project configuration references it more
-than once. A child Project configuration is a continuation: after its already
-acquired bytes are parsed, newly discovered direct inputs form the next parallel
-batch. No directory scan and no full-Project discovery barrier is introduced.
+Header, Source, and Assign bytes are not acquired by `manifest_composer`.
+After composition reaches closure, REBUILD owns the next construction stage.
+
+Header/Source lexical generation scans the dense `file_id` table once:
+
+```text
+file_id table
+    -> Header/Source only
+    -> prepare acquisition
+    -> worker: read -> lex private snapshot
+    -> single-owner File Context publication
+    -> lexical_stream[file_id - 1]
+```
+
+There is no manifest-to-frontend dependency and no second file identity domain.
+Each physical Header/Source `file_id` is processed once by the generation scan.
 
 ## Parallel Per-File Lexical Stream
 
@@ -864,9 +872,10 @@ Graph semantic construction
 
 ## Next Construction Step
 
-The next slice is to connect completed physical-file acquisition to the existing
-per-file lexer so independent source/header files can be tokenized in parallel.
+The next slice is decoding the compact lexical streams and executing preprocessing
+directives over `pp_*` / `pp_end` markers. Executed `#include` directives may
+discover additional Header files and stage additional File Context edges before
+terminal topology finalization.
 
 It must not introduce a second file identity domain, a semantic token graph,
 per-file semantic cache, AST persistence, or a generic frontend manager/context.
-Directive execution remains a later step over the compact lexical streams.

@@ -25,6 +25,9 @@ public:
     lexical_stream(const lexical_stream&) = delete;
     lexical_stream& operator=(const lexical_stream&) = delete;
 
+    lexical_stream(lexical_stream&&) noexcept = default;
+    lexical_stream& operator=(lexical_stream&&) noexcept = default;
+
     [[nodiscard]] server_status reset(
         file_id file,
         std::size_t source_size) noexcept;

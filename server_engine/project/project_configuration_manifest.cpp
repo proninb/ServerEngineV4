@@ -142,7 +142,7 @@ struct pending_project_dependency final {
     file_acquire_result result;
 };
 
-[[nodiscard]] server_status execute_parallel_acquires(
+[[nodiscard]] server_status execute_parallel_project_acquires(
     std::span<pending_project_dependency> pending) noexcept {
 
     std::size_t acquire_count = 0;
@@ -723,6 +723,12 @@ private:
             }
 
             for (auto& input : pending) {
+                if (input.dependency->kind !=
+                    file_kind::project) {
+
+                    continue;
+                }
+
                 const auto* physical =
                     files->physical(
                         input.file);
@@ -762,7 +768,7 @@ private:
             }
 
             const auto executed =
-                execute_parallel_acquires(
+                execute_parallel_project_acquires(
                     pending);
 
             if (!succeeded(executed)) {
@@ -795,13 +801,6 @@ private:
 
                 if (!succeeded(applied)) {
                     return applied;
-                }
-
-                if (input.dependency->kind !=
-                    file_kind::project) {
-
-                    std::string{}.swap(
-                        input.result.snapshot.bytes);
                 }
             }
         }
