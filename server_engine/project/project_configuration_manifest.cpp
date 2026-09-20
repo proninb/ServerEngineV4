@@ -134,6 +134,9 @@ calculate_configuration_hash_impl(
 }
 
 
+inline constexpr std::size_t project_configuration_depth_limit =
+    256;
+
 struct pending_project_dependency final {
     const project_configuration_dependency* dependency = nullptr;
     std::filesystem::path path;
@@ -289,7 +292,10 @@ public:
                 root_path,
                 invalid_configuration_file,
                 project_configuration_path_type::relative,
-                root_path.filename());
+                root_path.filename(),
+                {},
+                nullptr,
+                1);
 
         if (!succeeded(status)) {
             output = {};
@@ -316,7 +322,24 @@ private:
         project_configuration_path_type path_type,
         const std::filesystem::path& locator,
         file_id known_file = {},
-        file_content_snapshot* prefetched_snapshot = nullptr) {
+        file_content_snapshot* prefetched_snapshot = nullptr,
+        std::size_t depth = 1) {
+
+        if (depth >
+            project_configuration_depth_limit) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_configuration_depth_exceeded,
+                    operation)
+                    .file(absolute_path)
+                    .detail(
+                        "Project configuration nesting exceeds 256 levels")
+                    .build());
+
+            return server_status::
+                project_configuration_invalid;
+        }
 
         project_path_key key;
 
@@ -780,7 +803,8 @@ private:
                     input.dependency->path_type,
                     input.dependency->path,
                     input.file,
-                    prefetched);
+                    prefetched,
+                    depth + 1);
 
             if (!succeeded(child_status)) {
                 return child_status;

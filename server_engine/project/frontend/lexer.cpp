@@ -529,7 +529,29 @@ struct literal_start final {
 server_status lexer::tokenize(
     file_id file,
     std::string_view source,
-    lexical_stream& output) noexcept {
+    lexical_stream& output,
+    lexical_error* error) noexcept {
+
+    if (error != nullptr) {
+        *error = {};
+    }
+
+    const auto fail =
+        [&](server_status status,
+            std::size_t offset,
+            std::size_t length,
+            lexical_error_reason reason) noexcept {
+
+            if (error != nullptr) {
+                error->offset =
+                    static_cast<std::uint32_t>(offset);
+                error->length =
+                    static_cast<std::uint32_t>(length);
+                error->reason = reason;
+            }
+
+            return status;
+        };
 
     const auto reset =
         output.reset(file, source.size());
@@ -547,7 +569,11 @@ server_status lexer::tokenize(
         const auto value = source[position];
 
         if (static_cast<unsigned char>(value) >= 0x80U) {
-            return server_status::unsupported;
+            return fail(
+                server_status::unsupported,
+                position,
+                1,
+                lexical_error_reason::unsupported_non_ascii);
         }
 
         std::size_t newline_length = 0;
@@ -576,13 +602,35 @@ server_status lexer::tokenize(
             position + 1 < source.size()) {
             std::size_t spliced_newline = 0;
             if (newline_at(source, position + 1, spliced_newline)) {
-                return server_status::unsupported;
+                return fail(
+                    server_status::unsupported,
+                    position,
+                    1 + spliced_newline,
+                    lexical_error_reason::unsupported_line_splice);
             }
         }
 
         if (match(source, position, "//")) {
             position += 2;
             while (position < source.size()) {
+                if (source[position] == '\\' &&
+                    position + 1 < source.size()) {
+
+                    std::size_t spliced_newline = 0;
+
+                    if (newline_at(
+                            source,
+                            position + 1,
+                            spliced_newline)) {
+
+                        return fail(
+                            server_status::unsupported,
+                            position,
+                            1 + spliced_newline,
+                            lexical_error_reason::unsupported_line_splice);
+                    }
+                }
+
                 std::size_t comment_newline = 0;
                 if (newline_at(source, position, comment_newline)) {
                     break;
@@ -624,7 +672,11 @@ server_status lexer::tokenize(
             }
 
             if (!closed) {
-                return server_status::project_configuration_invalid;
+                return fail(
+                    server_status::project_configuration_invalid,
+                    position == 0 ? 0 : position - 1,
+                    1,
+                    lexical_error_reason::unterminated_block_comment);
             }
 
             continue;
@@ -685,7 +737,11 @@ server_status lexer::tokenize(
                     ++position;
                 }
                 if (position >= source.size()) {
-                    return server_status::project_configuration_invalid;
+                    return fail(
+                        server_status::project_configuration_invalid,
+                        start,
+                        source.size() - start,
+                        lexical_error_reason::unterminated_header_name);
                 }
                 ++position;
 
@@ -711,7 +767,11 @@ server_status lexer::tokenize(
                     ++position;
                 }
                 if (position >= source.size()) {
-                    return server_status::project_configuration_invalid;
+                    return fail(
+                        server_status::project_configuration_invalid,
+                        start,
+                        source.size() - start,
+                        lexical_error_reason::unterminated_header_name);
                 }
                 ++position;
 
@@ -748,7 +808,13 @@ server_status lexer::tokenize(
                         end);
 
             if (!succeeded(status)) {
-                return status;
+                return fail(
+                    status,
+                    start,
+                    source.size() - start,
+                    status == server_status::unsupported
+                        ? lexical_error_reason::unsupported_line_splice
+                        : lexical_error_reason::unterminated_literal);
             }
 
             const auto emitted =
@@ -827,7 +893,11 @@ server_status lexer::tokenize(
             continue;
         }
 
-        return server_status::project_configuration_invalid;
+        return fail(
+            server_status::project_configuration_invalid,
+            position,
+            1,
+            lexical_error_reason::invalid_character);
     }
 
     if (in_directive) {

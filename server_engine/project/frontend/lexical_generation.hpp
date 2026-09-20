@@ -7,7 +7,7 @@
  */
 #pragma once
 
-#include "lexical_stream.hpp"
+#include "lexer.hpp"
 #include "../file/file_context.hpp"
 #include "../../server_status.hpp"
 
@@ -32,6 +32,11 @@ struct lexical_record final {
 };
 
 static_assert(sizeof(lexical_record) == 12);
+
+struct lexical_failure final {
+    file_id file{};
+    lexical_error error;
+};
 
 class lexical_generation final {
 public:
@@ -67,6 +72,7 @@ private:
 
 [[nodiscard]] server_status build_lexical_generation(
     file_context& files,
-    lexical_generation& output) noexcept;
+    lexical_generation& output,
+    lexical_failure* failure = nullptr) noexcept;
 
 }

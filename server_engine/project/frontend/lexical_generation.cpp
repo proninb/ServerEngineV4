@@ -19,6 +19,7 @@ struct lexical_file_work final {
     file_acquire_result result;
     std::string_view source;
     lexical_stream lexical;
+    lexical_error error;
     server_status lexical_status = server_status::success;
 };
 
@@ -98,7 +99,8 @@ struct lexical_file_work final {
                 lexer::tokenize(
                     item.file,
                     source,
-                    item.lexical);
+                    item.lexical,
+                    &item.error);
         }
     };
 
@@ -272,7 +274,8 @@ std::uint32_t lexical_generation::token_count(
 [[nodiscard]] server_status publish_batch(
     file_context& files,
     lexical_generation& output,
-    std::vector<lexical_file_work>& work) noexcept {
+    std::vector<lexical_file_work>& work,
+    lexical_failure* failure) noexcept {
 
     const auto executed =
         execute_parallel(
@@ -307,6 +310,11 @@ std::uint32_t lexical_generation::token_count(
         if (!succeeded(
                 item.lexical_status)) {
 
+            if (failure != nullptr) {
+                failure->file = item.file;
+                failure->error = item.error;
+            }
+
             return item.lexical_status;
         }
 
@@ -326,7 +334,12 @@ std::uint32_t lexical_generation::token_count(
 
 server_status build_lexical_generation(
     file_context& files,
-    lexical_generation& output) noexcept {
+    lexical_generation& output,
+    lexical_failure* failure) noexcept {
+
+    if (failure != nullptr) {
+        *failure = {};
+    }
 
     const auto reset =
         output.reset(
@@ -413,7 +426,8 @@ server_status build_lexical_generation(
                 publish_batch(
                     files,
                     output,
-                    work);
+                    work,
+                    failure);
 
             if (!succeeded(published)) {
                 return published;
@@ -425,7 +439,8 @@ server_status build_lexical_generation(
         return publish_batch(
             files,
             output,
-            work);
+            work,
+            failure);
     }
 
     return server_status::success;

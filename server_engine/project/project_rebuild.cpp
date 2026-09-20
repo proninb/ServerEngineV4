@@ -7,6 +7,8 @@
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 
+#include <string>
+
 namespace cw::server {
 
 server_status rebuild_project(
@@ -33,13 +35,62 @@ server_status rebuild_project(
     }
 
     lexical_generation lexical;
+    lexical_failure failure;
 
     const auto tokenized =
         build_lexical_generation(
             files,
-            lexical);
+            lexical,
+            &failure);
 
     if (!succeeded(tokenized)) {
+        if (failure.file &&
+            failure.error.reason !=
+                lexical_error_reason::none &&
+            files.content_available(
+                failure.file)) {
+
+            const auto path_view =
+                files.path(
+                    failure.file);
+
+            std::filesystem::path source_path{
+                path_view.begin(),
+                path_view.end()};
+
+            const auto source =
+                files.content(
+                    failure.file);
+
+            try {
+                const auto diagnostic_file =
+                    diagnostics.add_source(
+                        source_path,
+                        std::string{
+                            source.data(),
+                            source.size()});
+
+                const auto location =
+                    diagnostics.locate(
+                        diagnostic_file,
+                        failure.error.offset,
+                        failure.error.length);
+
+                diagnostics.emit(
+                    diagnostic(
+                        diagnostics::project_lexical_error,
+                        operation)
+                        .location(location)
+                        .detail(
+                            lexical_error_message(
+                                failure.error.reason))
+                        .build());
+            }
+            catch (...) {
+                return server_status::io_error;
+            }
+        }
+
         return tokenized;
     }
 

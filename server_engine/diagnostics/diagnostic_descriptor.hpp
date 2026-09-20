@@ -222,6 +222,22 @@ inline constexpr diagnostic_descriptor project_duplicate_construction_input{
     "Project construction input is duplicated",
 };
 
+inline constexpr diagnostic_descriptor project_lexical_error{
+    diagnostic_id{2017},
+    diagnostic_domain::parser,
+    diagnostic_severity::error,
+    "project.lexical_error",
+    "Project source contains a lexical error",
+};
+
+inline constexpr diagnostic_descriptor project_configuration_depth_exceeded{
+    diagnostic_id{2018},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.configuration_depth_exceeded",
+    "Project configuration nesting depth exceeds the supported limit",
+};
+
 } // namespace diagnostics
 
 }
