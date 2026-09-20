@@ -4,7 +4,6 @@
 #include "file/file_context.hpp"
 #include "frontend/lexical_generation.hpp"
 
-#include <vector>
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 
@@ -33,12 +32,12 @@ server_status rebuild_project(
         return composed;
     }
 
-    std::vector<lexical_stream> lexical_streams;
+    lexical_generation lexical;
 
     const auto tokenized =
         build_lexical_generation(
             files,
-            lexical_streams);
+            lexical);
 
     if (!succeeded(tokenized)) {
         return tokenized;

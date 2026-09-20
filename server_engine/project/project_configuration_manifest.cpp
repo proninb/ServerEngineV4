@@ -682,6 +682,12 @@ private:
                 }
             }
 
+            if (dependency.kind !=
+                file_kind::project) {
+
+                continue;
+            }
+
             try {
                 pending.push_back({
                     &dependency,
@@ -695,9 +701,9 @@ private:
         }
 
         if (files != nullptr) {
-            // All file_id resolution is complete before prepare_acquire().
-            // file_acquire_job.path is a borrowed view into File Context's path
-            // arena and must remain stable while parallel reads are running.
+            // All child Project file_id resolution is complete before
+            // prepare_acquire(). Borrowed path views remain stable while reads
+            // run because File Context path storage is not mutated until join.
             if (acquire_marks.size() < files->size()) {
                 try {
                     acquire_marks.resize(
@@ -723,12 +729,6 @@ private:
             }
 
             for (auto& input : pending) {
-                if (input.dependency->kind !=
-                    file_kind::project) {
-
-                    continue;
-                }
-
                 const auto* physical =
                     files->physical(
                         input.file);
@@ -763,8 +763,6 @@ private:
                 if (!succeeded(prepared)) {
                     return prepared;
                 }
-
-                // A valid prepared job is the acquisition marker.
             }
 
             const auto executed =
@@ -775,7 +773,6 @@ private:
                 return executed;
             }
 
-            // Publication remains single-owner and declaration ordered.
             for (auto& input : pending) {
                 if (!input.job.file) {
                     continue;
@@ -805,15 +802,7 @@ private:
             }
         }
 
-        // Project files are continuations: once their bytes are available,
-        // parsing them may discover another parallel acquisition batch.
         for (auto& input : pending) {
-            if (input.dependency->kind !=
-                file_kind::project) {
-
-                continue;
-            }
-
             auto* prefetched =
                 files != nullptr &&
                 input.job.file

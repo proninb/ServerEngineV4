@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <limits>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -128,23 +129,225 @@ struct lexical_file_work final {
 
 }
 
+server_status lexical_generation::reset(
+    std::size_t file_count) noexcept {
+
+    records.clear();
+    word_arena.clear();
+
+    if (file_count >
+        static_cast<std::size_t>(
+            (std::numeric_limits<std::uint32_t>::max)())) {
+
+        return server_status::io_error;
+    }
+
+    try {
+        records.resize(
+            file_count);
+    }
+    catch (...) {
+        records.clear();
+        return server_status::io_error;
+    }
+
+    return server_status::success;
+}
+
+server_status lexical_generation::publish(
+    file_id file,
+    const lexical_stream& stream) noexcept {
+
+    if (!file ||
+        stream.file() != file ||
+        stream.word_count() >
+            static_cast<std::size_t>(
+                (std::numeric_limits<std::uint32_t>::max)())) {
+
+        return server_status::project_configuration_invalid;
+    }
+
+    const auto index =
+        static_cast<std::size_t>(
+            file.value() - 1);
+
+    try {
+        if (records.size() <= index) {
+            records.resize(
+                index + 1);
+        }
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+
+    if (records[index].available()) {
+        return server_status::project_configuration_invalid;
+    }
+
+    const auto values =
+        stream.words();
+
+    if (word_arena.size() >
+            static_cast<std::size_t>(
+                (std::numeric_limits<std::uint32_t>::max)()) ||
+        values.size() >
+            static_cast<std::size_t>(
+                (std::numeric_limits<std::uint32_t>::max)()) -
+                word_arena.size()) {
+
+        return server_status::io_error;
+    }
+
+    const auto offset =
+        static_cast<std::uint32_t>(
+            word_arena.size());
+
+    try {
+        word_arena.insert(
+            word_arena.end(),
+            values.begin(),
+            values.end());
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+
+    records[index] = {
+        offset,
+        static_cast<std::uint32_t>(
+            values.size()),
+        stream.token_count(),
+    };
+
+    return server_status::success;
+}
+
+bool lexical_generation::contains(
+    file_id file) const noexcept {
+
+    if (!file) {
+        return false;
+    }
+
+    const auto index =
+        static_cast<std::size_t>(
+            file.value() - 1);
+
+    return index < records.size() &&
+        records[index].available();
+}
+
+std::span<const std::uint32_t>
+lexical_generation::words(
+    file_id file) const noexcept {
+
+    if (!contains(file)) {
+        return {};
+    }
+
+    const auto& record =
+        records[
+            file.value() - 1];
+
+    return std::span<const std::uint32_t>{
+        word_arena.data() + record.offset,
+        record.word_count,
+    };
+}
+
+std::uint32_t lexical_generation::token_count(
+    file_id file) const noexcept {
+
+    if (!contains(file)) {
+        return 0;
+    }
+
+    return records[
+        file.value() - 1].token_count;
+}
+
+[[nodiscard]] server_status publish_batch(
+    file_context& files,
+    lexical_generation& output,
+    std::vector<lexical_file_work>& work) noexcept {
+
+    const auto executed =
+        execute_parallel(
+            work);
+
+    if (!succeeded(executed)) {
+        return executed;
+    }
+
+    for (auto& item : work) {
+        if (item.job.file) {
+            const auto status =
+                acquisition_status(
+                    item.result.kind);
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            bool content_changed = false;
+
+            const auto applied =
+                files.apply_acquire(
+                    item.result,
+                    content_changed);
+
+            if (!succeeded(applied)) {
+                return applied;
+            }
+        }
+
+        if (!succeeded(
+                item.lexical_status)) {
+
+            return item.lexical_status;
+        }
+
+        const auto published =
+            output.publish(
+                item.file,
+                item.lexical);
+
+        if (!succeeded(published)) {
+            return published;
+        }
+    }
+
+    work.clear();
+    return server_status::success;
+}
+
 server_status build_lexical_generation(
     file_context& files,
-    std::vector<lexical_stream>& output) noexcept {
+    lexical_generation& output) noexcept {
 
-    output.clear();
+    const auto reset =
+        output.reset(
+            files.size());
+
+    if (!succeeded(reset)) {
+        return reset;
+    }
+
+    const auto hardware =
+        std::thread::hardware_concurrency();
+
+    const auto batch_capacity =
+        static_cast<std::size_t>(
+            hardware == 0 ? 1 : hardware);
 
     std::vector<lexical_file_work> work;
 
     try {
-        output.resize(
-            files.size());
-
         work.reserve(
-            files.size());
+            batch_capacity);
     }
     catch (...) {
-        output.clear();
         return server_status::io_error;
     }
 
@@ -170,14 +373,12 @@ server_status build_lexical_generation(
             files.physical(file);
 
         if (physical == nullptr) {
-            output.clear();
             return server_status::
                 project_configuration_invalid;
         }
 
         if (physical->present()) {
             if (!files.content_available(file)) {
-                output.clear();
                 return server_status::
                     project_artifact_invalid;
             }
@@ -191,7 +392,6 @@ server_status build_lexical_generation(
                     item.job);
 
             if (!succeeded(prepared)) {
-                output.clear();
                 return prepared;
             }
         }
@@ -201,55 +401,29 @@ server_status build_lexical_generation(
                 std::move(item));
         }
         catch (...) {
-            output.clear();
             return server_status::io_error;
         }
+
+        if (work.size() ==
+            batch_capacity) {
+
+            const auto published =
+                publish_batch(
+                    files,
+                    output,
+                    work);
+
+            if (!succeeded(published)) {
+                return published;
+            }
+        }
     }
 
-    const auto executed =
-        execute_parallel(
+    if (!work.empty()) {
+        return publish_batch(
+            files,
+            output,
             work);
-
-    if (!succeeded(executed)) {
-        output.clear();
-        return executed;
-    }
-
-    for (auto& item : work) {
-        if (item.job.file) {
-            const auto status =
-                acquisition_status(
-                    item.result.kind);
-
-            if (!succeeded(status)) {
-                output.clear();
-                return status;
-            }
-
-            bool content_changed = false;
-
-            const auto applied =
-                files.apply_acquire(
-                    item.result,
-                    content_changed);
-
-            if (!succeeded(applied)) {
-                output.clear();
-                return applied;
-            }
-        }
-
-        if (!succeeded(
-                item.lexical_status)) {
-
-            output.clear();
-            return item.lexical_status;
-        }
-
-        output[
-            item.file.value() - 1] =
-                std::move(
-                    item.lexical);
     }
 
     return server_status::success;

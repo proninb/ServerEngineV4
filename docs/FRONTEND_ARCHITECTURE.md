@@ -568,7 +568,7 @@ project.json
 Header, Source, and Assign bytes are not acquired by `manifest_composer`.
 After composition reaches closure, REBUILD owns the next construction stage.
 
-Header/Source lexical generation scans the dense `file_id` table once:
+Initial Header/Source lexical construction scans the dense `file_id` table:
 
 ```text
 file_id table
@@ -576,15 +576,26 @@ file_id table
     -> prepare acquisition
     -> worker: read -> lex private snapshot
     -> single-owner File Context publication
-    -> lexical_stream[file_id - 1]
+    -> lexical_generation.publish(file_id, stream)
 ```
 
-There is no manifest-to-frontend dependency and no second file identity domain.
-Each physical Header/Source `file_id` is processed once by the generation scan.
+`lexical_generation` is direct-indexed construction storage:
+
+```text
+lexical_record[file_id - 1]
+    -> { offset, word_count, token_count }
+
+one uint32 word arena
+    -> all published lexical words
+```
+
+There is no manifest-to-frontend dependency, no per-file heap-owned lexical
+vector in the retained generation, and no second file identity domain. The
+storage may grow when later preprocessing discovers a new Header `file_id`.
 
 ## Parallel Per-File Lexical Stream
 
-Physical lexing is independent per `file_id` and may run concurrently across Project files. Each worker reads immutable file bytes and writes only its private `lexical_stream`.
+Physical lexing is independent per `file_id` and may run concurrently across Project files. Each worker reads immutable file bytes and writes only its private `lexical_stream`; retained construction storage is published afterward into one shared lexical word arena.
 
 Base token representation:
 
