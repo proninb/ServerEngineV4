@@ -7,10 +7,13 @@
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 
+#include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -130,6 +133,113 @@ calculate_configuration_hash_impl(
         : server_status::project_configuration_invalid;
 }
 
+
+struct pending_project_dependency final {
+    project_configuration_dependency dependency;
+    std::filesystem::path path;
+    file_id file{};
+    bool acquire = false;
+    file_acquire_job job;
+    file_acquire_result result;
+};
+
+[[nodiscard]] server_status execute_parallel_acquires(
+    std::span<pending_project_dependency> pending) noexcept {
+
+    std::size_t acquire_count = 0;
+
+    for (const auto& input : pending) {
+        if (input.acquire) {
+            ++acquire_count;
+        }
+    }
+
+    if (acquire_count == 0) {
+        return server_status::success;
+    }
+
+    const auto hardware =
+        std::thread::hardware_concurrency();
+
+    const auto worker_count =
+        (std::min)(
+            acquire_count,
+            static_cast<std::size_t>(
+                hardware == 0 ? 1 : hardware));
+
+    std::atomic_size_t next{0};
+
+    const auto execute = [&]() noexcept {
+        for (;;) {
+            const auto index =
+                next.fetch_add(
+                    1,
+                    std::memory_order_relaxed);
+
+            if (index >= pending.size()) {
+                return;
+            }
+
+            auto& input =
+                pending[index];
+
+            if (!input.acquire) {
+                continue;
+            }
+
+            file_context::execute_acquire(
+                input.job,
+                input.result);
+        }
+    };
+
+    if (worker_count == 1) {
+        execute();
+        return server_status::success;
+    }
+
+    try {
+        std::vector<std::jthread> workers;
+        workers.reserve(worker_count - 1);
+
+        for (std::size_t index = 1;
+             index < worker_count;
+             ++index) {
+
+            workers.emplace_back(execute);
+        }
+
+        execute();
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+
+    return server_status::success;
+}
+
+[[nodiscard]] file_content_result acquisition_result(
+    file_acquire_result_kind kind) noexcept {
+
+    switch (kind) {
+    case file_acquire_result_kind::missing:
+        return file_content_result::missing;
+
+    case file_acquire_result_kind::changed_during_read:
+        return file_content_result::changed_during_read;
+
+    case file_acquire_result_kind::allocation_failed:
+        return file_content_result::allocation_failed;
+
+    case file_acquire_result_kind::unchanged:
+    case file_acquire_result_kind::present:
+    case file_acquire_result_kind::failed:
+        return file_content_result::failed;
+    }
+
+    return file_content_result::failed;
+}
+
 class manifest_composer final {
 public:
     manifest_composer(
@@ -206,7 +316,8 @@ private:
         std::uint32_t declaring_file,
         project_configuration_path_type path_type,
         const std::filesystem::path& locator,
-        file_id known_file = {}) {
+        file_id known_file = {},
+        file_acquire_result* prefetched_result = nullptr) {
 
         project_path_key key;
 
@@ -275,24 +386,7 @@ private:
         file_id source_file =
             known_file;
 
-        if (files == nullptr) {
-            const auto acquired =
-                acquire_file_content(
-                    absolute_path,
-                    snapshot);
-
-            if (acquired !=
-                file_content_result::acquired) {
-
-                active.erase(key);
-
-                return report_acquisition_failure(
-                    absolute_path,
-                    operation,
-                    diagnostics,
-                    acquired);
-            }
-        } else {
+        if (files != nullptr) {
             if (!source_file) {
                 const auto resolved =
                     files->resolve(
@@ -313,7 +407,40 @@ private:
                 return server_status::
                     project_configuration_invalid;
             }
+        }
 
+        if (prefetched_result != nullptr) {
+            if (files == nullptr ||
+                prefetched_result->file != source_file ||
+                prefetched_result->kind !=
+                    file_acquire_result_kind::present) {
+
+                active.erase(key);
+                return server_status::
+                    project_configuration_invalid;
+            }
+
+            snapshot =
+                std::move(
+                    prefetched_result->snapshot);
+        } else if (files == nullptr) {
+            const auto acquired =
+                acquire_file_content(
+                    absolute_path,
+                    snapshot);
+
+            if (acquired !=
+                file_content_result::acquired) {
+
+                active.erase(key);
+
+                return report_acquisition_failure(
+                    absolute_path,
+                    operation,
+                    diagnostics,
+                    acquired);
+            }
+        } else {
             file_acquire_job job;
 
             const auto prepared =
@@ -337,23 +464,12 @@ private:
 
                 active.erase(key);
 
-                const auto acquisition =
-                    result.kind ==
-                        file_acquire_result_kind::missing
-                    ? file_content_result::missing
-                    : result.kind ==
-                        file_acquire_result_kind::changed_during_read
-                        ? file_content_result::changed_during_read
-                        : result.kind ==
-                            file_acquire_result_kind::allocation_failed
-                            ? file_content_result::allocation_failed
-                            : file_content_result::failed;
-
                 return report_acquisition_failure(
                     absolute_path,
                     operation,
                     diagnostics,
-                    acquisition);
+                    acquisition_result(
+                        result.kind));
             }
 
             bool content_changed = false;
@@ -425,209 +541,18 @@ private:
 
             visited.insert(key);
 
-            for (const auto& dependency :
-                 dependencies) {
+            const auto dependency_status =
+                process_dependencies(
+                    absolute_path,
+                    current_file,
+                    source_file,
+                    dependencies);
 
-                const auto child_input =
-                    dependency.path_type ==
-                        project_configuration_path_type::absolute
-                    ? dependency.path
-                    : absolute_path.parent_path() /
-                        dependency.path;
+            if (!succeeded(
+                    dependency_status)) {
 
-                std::filesystem::path child;
-
-                const auto child_result =
-                    resolve_project_path(
-                        child_input,
-                        child);
-
-                if (child_result !=
-                    project_path_result::
-                        success) {
-
-                    active.erase(key);
-
-                    diagnostics.emit(
-                        diagnostic(
-                            diagnostics::project_configuration_read_failed,
-                            operation)
-                            .file(child_input)
-                            .detail(
-                                "Cannot resolve referenced Project construction input")
-                            .build());
-
-                    return server_status::io_error;
-                }
-
-                project_path_key child_key;
-
-                const auto key_result =
-                    make_project_path_key(
-                        child,
-                        child_key);
-
-                if (key_result !=
-                    project_path_result::success) {
-
-                    active.erase(key);
-                    return server_status::io_error;
-                }
-
-                const auto kind_status =
-                    register_kind(
-                        child_key,
-                        dependency.kind,
-                        child);
-
-                if (!succeeded(kind_status)) {
-                    active.erase(key);
-                    return kind_status;
-                }
-
-                if (dependency.kind ==
-                        file_kind::source ||
-                    dependency.kind ==
-                        file_kind::assign) {
-
-                    const auto inserted =
-                        unique_inputs.insert(
-                            child_key);
-
-                    if (!inserted.second) {
-                        diagnostics.emit(
-                            diagnostic(
-                                diagnostics::project_duplicate_construction_input,
-                                operation)
-                                .file(child)
-                                .detail(
-                                    dependency.kind ==
-                                            file_kind::source
-                                        ? "Source file is declared more than once"
-                                        : "Assign file is declared more than once")
-                                .build());
-
-                        active.erase(key);
-                        return server_status::
-                            project_configuration_invalid;
-                    }
-                }
-
-                file_id child_file;
-
-                if (files != nullptr) {
-                    const auto resolved =
-                        files->resolve(
-                            child,
-                            dependency.kind,
-                            child_file);
-
-                    if (!succeeded(resolved)) {
-                        active.erase(key);
-                        return resolved;
-                    }
-
-                    const auto staged =
-                        files->add_dependency(
-                            source_file,
-                            child_file);
-
-                    if (!succeeded(staged)) {
-                        active.erase(key);
-                        return staged;
-                    }
-                }
-
-                if (dependency.kind ==
-                    file_kind::project) {
-
-                    const auto child_status =
-                        visit(
-                            child,
-                            current_file,
-                            dependency.path_type,
-                            dependency.path,
-                            child_file);
-
-                    if (!succeeded(child_status)) {
-                        active.erase(key);
-                        return child_status;
-                    }
-
-                    continue;
-                }
-
-                if (files == nullptr) {
-                    continue;
-                }
-
-                const auto* physical =
-                    files->physical(
-                        child_file);
-
-                if (physical == nullptr) {
-                    active.erase(key);
-                    return server_status::
-                        project_configuration_invalid;
-                }
-
-                if (physical->present()) {
-                    continue;
-                }
-
-                file_acquire_job job;
-
-                const auto prepared =
-                    files->prepare_acquire(
-                        child_file,
-                        job);
-
-                if (!succeeded(prepared)) {
-                    active.erase(key);
-                    return prepared;
-                }
-
-                file_acquire_result result;
-
-                file_context::execute_acquire(
-                    job,
-                    result);
-
-                if (result.kind !=
-                    file_acquire_result_kind::present) {
-
-                    active.erase(key);
-
-                    const auto acquisition =
-                        result.kind ==
-                            file_acquire_result_kind::missing
-                        ? file_content_result::missing
-                        : result.kind ==
-                            file_acquire_result_kind::changed_during_read
-                            ? file_content_result::changed_during_read
-                            : result.kind ==
-                                file_acquire_result_kind::allocation_failed
-                                ? file_content_result::allocation_failed
-                                : file_content_result::failed;
-
-                    return report_acquisition_failure(
-                        child,
-                        operation,
-                        diagnostics,
-                        acquisition);
-                }
-
-                bool content_changed = false;
-
-                const auto applied =
-                    files->apply_acquire(
-                        result,
-                        content_changed);
-
-                if (!succeeded(applied)) {
-                    active.erase(key);
-                    return applied;
-                }
+                active.erase(key);
+                return dependency_status;
             }
         }
         catch (...) {
@@ -636,6 +561,241 @@ private:
         }
 
         active.erase(key);
+        return server_status::success;
+    }
+
+
+    [[nodiscard]] server_status process_dependencies(
+        const std::filesystem::path& absolute_path,
+        std::uint32_t current_file,
+        file_id source_file,
+        std::span<const project_configuration_dependency> dependencies) {
+
+        std::vector<pending_project_dependency>
+            pending;
+
+        try {
+            pending.reserve(
+                dependencies.size());
+        }
+        catch (...) {
+            return server_status::io_error;
+        }
+
+        for (const auto& dependency :
+             dependencies) {
+
+            const auto child_input =
+                dependency.path_type ==
+                    project_configuration_path_type::absolute
+                ? dependency.path
+                : absolute_path.parent_path() /
+                    dependency.path;
+
+            std::filesystem::path child;
+
+            const auto child_result =
+                resolve_project_path(
+                    child_input,
+                    child);
+
+            if (child_result !=
+                project_path_result::success) {
+
+                diagnostics.emit(
+                    diagnostic(
+                        diagnostics::project_configuration_read_failed,
+                        operation)
+                        .file(child_input)
+                        .detail(
+                            "Cannot resolve referenced Project construction input")
+                        .build());
+
+                return server_status::io_error;
+            }
+
+            project_path_key child_key;
+
+            const auto key_result =
+                make_project_path_key(
+                    child,
+                    child_key);
+
+            if (key_result !=
+                project_path_result::success) {
+
+                return server_status::io_error;
+            }
+
+            const auto kind_status =
+                register_kind(
+                    child_key,
+                    dependency.kind,
+                    child);
+
+            if (!succeeded(kind_status)) {
+                return kind_status;
+            }
+
+            if (dependency.kind ==
+                    file_kind::source ||
+                dependency.kind ==
+                    file_kind::assign) {
+
+                const auto inserted =
+                    unique_inputs.insert(
+                        child_key);
+
+                if (!inserted.second) {
+                    diagnostics.emit(
+                        diagnostic(
+                            diagnostics::project_duplicate_construction_input,
+                            operation)
+                            .file(child)
+                            .detail(
+                                dependency.kind ==
+                                        file_kind::source
+                                    ? "Source file is declared more than once"
+                                    : "Assign file is declared more than once")
+                            .build());
+
+                    return server_status::
+                        project_configuration_invalid;
+                }
+            }
+
+            file_id child_file;
+
+            if (files != nullptr) {
+                const auto resolved =
+                    files->resolve(
+                        child,
+                        dependency.kind,
+                        child_file);
+
+                if (!succeeded(resolved)) {
+                    return resolved;
+                }
+
+                const auto staged =
+                    files->add_dependency(
+                        source_file,
+                        child_file);
+
+                if (!succeeded(staged)) {
+                    return staged;
+                }
+            }
+
+            try {
+                pending.push_back({
+                    dependency,
+                    std::move(child),
+                    child_file,
+                });
+            }
+            catch (...) {
+                return server_status::io_error;
+            }
+        }
+
+        if (files != nullptr) {
+            // All file_id resolution is complete before prepare_acquire().
+            // file_acquire_job.path is a borrowed view into File Context's path
+            // arena and must remain stable while parallel reads are running.
+            for (auto& input : pending) {
+                const auto* physical =
+                    files->physical(
+                        input.file);
+
+                if (physical == nullptr) {
+                    return server_status::
+                        project_configuration_invalid;
+                }
+
+                if (physical->present()) {
+                    continue;
+                }
+
+                const auto prepared =
+                    files->prepare_acquire(
+                        input.file,
+                        input.job);
+
+                if (!succeeded(prepared)) {
+                    return prepared;
+                }
+
+                input.acquire = true;
+            }
+
+            const auto executed =
+                execute_parallel_acquires(
+                    pending);
+
+            if (!succeeded(executed)) {
+                return executed;
+            }
+
+            // Publication remains single-owner and declaration ordered.
+            for (auto& input : pending) {
+                if (!input.acquire) {
+                    continue;
+                }
+
+                if (input.result.kind !=
+                    file_acquire_result_kind::present) {
+
+                    return report_acquisition_failure(
+                        input.path,
+                        operation,
+                        diagnostics,
+                        acquisition_result(
+                            input.result.kind));
+                }
+
+                bool content_changed = false;
+
+                const auto applied =
+                    files->apply_acquire(
+                        input.result,
+                        content_changed);
+
+                if (!succeeded(applied)) {
+                    return applied;
+                }
+            }
+        }
+
+        // Project files are continuations: once their bytes are available,
+        // parsing them may discover another parallel acquisition batch.
+        for (auto& input : pending) {
+            if (input.dependency.kind !=
+                file_kind::project) {
+
+                continue;
+            }
+
+            auto* prefetched =
+                files != nullptr &&
+                input.acquire
+                    ? &input.result
+                    : nullptr;
+
+            const auto child_status =
+                visit(
+                    input.path,
+                    current_file,
+                    input.dependency.path_type,
+                    input.dependency.path,
+                    input.file,
+                    prefetched);
+
+            if (!succeeded(child_status)) {
+                return child_status;
+            }
+        }
+
         return server_status::success;
     }
 

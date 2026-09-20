@@ -557,6 +557,30 @@ Project.
 
 ---
 
+## Parallel Project File Acquisition
+
+Each parsed `project.json` is a dynamic producer of acquisition work. Direct
+construction inputs are resolved to `file_id` first. Only after all direct paths
+for that Project node are resolved are their borrowed `file_acquire_job.path`
+views considered stable.
+
+The direct inputs are then acquired in parallel:
+
+```text
+project.json
+    -> resolve direct inputs to file_id
+    -> prepare acquisition jobs
+    -> parallel execute_acquire
+    -> declaration-order apply_acquire
+    -> recurse into already acquired child project.json
+```
+
+`execute_acquire` workers never mutate File Context. `apply_acquire` remains
+single-owner and deterministic. A child Project configuration is a continuation:
+after its already acquired bytes are parsed, newly discovered direct inputs form
+the next parallel batch. No directory scan and no full-Project discovery barrier
+is introduced.
+
 ## Parallel Per-File Lexical Stream
 
 Physical lexing is independent per `file_id` and may run concurrently across Project files. Each worker reads immutable file bytes and writes only its private `lexical_stream`.
