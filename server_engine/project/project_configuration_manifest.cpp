@@ -135,10 +135,9 @@ calculate_configuration_hash_impl(
 
 
 struct pending_project_dependency final {
-    project_configuration_dependency dependency;
+    const project_configuration_dependency* dependency = nullptr;
     std::filesystem::path path;
     file_id file{};
-    bool acquire = false;
     file_acquire_job job;
     file_acquire_result result;
 };
@@ -149,7 +148,7 @@ struct pending_project_dependency final {
     std::size_t acquire_count = 0;
 
     for (const auto& input : pending) {
-        if (input.acquire) {
+        if (input.job.file) {
             ++acquire_count;
         }
     }
@@ -183,7 +182,7 @@ struct pending_project_dependency final {
             auto& input =
                 pending[index];
 
-            if (!input.acquire) {
+            if (!input.job.file) {
                 continue;
             }
 
@@ -317,7 +316,7 @@ private:
         project_configuration_path_type path_type,
         const std::filesystem::path& locator,
         file_id known_file = {},
-        file_acquire_result* prefetched_result = nullptr) {
+        file_content_snapshot* prefetched_snapshot = nullptr) {
 
         project_path_key key;
 
@@ -409,12 +408,8 @@ private:
             }
         }
 
-        if (prefetched_result != nullptr) {
-            if (files == nullptr ||
-                prefetched_result->file != source_file ||
-                prefetched_result->kind !=
-                    file_acquire_result_kind::present) {
-
+        if (prefetched_snapshot != nullptr) {
+            if (files == nullptr) {
                 active.erase(key);
                 return server_status::
                     project_configuration_invalid;
@@ -422,7 +417,7 @@ private:
 
             snapshot =
                 std::move(
-                    prefetched_result->snapshot);
+                    *prefetched_snapshot);
         } else if (files == nullptr) {
             const auto acquired =
                 acquire_file_content(
@@ -689,7 +684,7 @@ private:
 
             try {
                 pending.push_back({
-                    dependency,
+                    &dependency,
                     std::move(child),
                     child_file,
                 });
@@ -726,7 +721,7 @@ private:
                     return prepared;
                 }
 
-                input.acquire = true;
+                // A valid prepared job is the acquisition marker.
             }
 
             const auto executed =
@@ -739,7 +734,7 @@ private:
 
             // Publication remains single-owner and declaration ordered.
             for (auto& input : pending) {
-                if (!input.acquire) {
+                if (!input.job.file) {
                     continue;
                 }
 
@@ -764,13 +759,20 @@ private:
                 if (!succeeded(applied)) {
                     return applied;
                 }
+
+                if (input.dependency->kind !=
+                    file_kind::project) {
+
+                    std::string{}.swap(
+                        input.result.snapshot.bytes);
+                }
             }
         }
 
         // Project files are continuations: once their bytes are available,
         // parsing them may discover another parallel acquisition batch.
         for (auto& input : pending) {
-            if (input.dependency.kind !=
+            if (input.dependency->kind !=
                 file_kind::project) {
 
                 continue;
@@ -778,16 +780,16 @@ private:
 
             auto* prefetched =
                 files != nullptr &&
-                input.acquire
-                    ? &input.result
+                input.job.file
+                    ? &input.result.snapshot
                     : nullptr;
 
             const auto child_status =
                 visit(
                     input.path,
                     current_file,
-                    input.dependency.path_type,
-                    input.dependency.path,
+                    input.dependency->path_type,
+                    input.dependency->path,
                     input.file,
                     prefetched);
 

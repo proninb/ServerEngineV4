@@ -4,7 +4,7 @@
 
 This document defines the construction-time frontend architecture for Server Engine V4.
 
-The frontend is intentionally streaming and separates three different identity domains:
+The construction frontend separates three different identity domains:
 
 ```text
 file_id
@@ -543,17 +543,9 @@ for the parent `file_id` and resumes at the saved byte offset.
 `frontend_input::remaining()` therefore returns a short-lived view for immediate
 lexing only. That view must not survive a File Context mutation.
 
-The memory target remains:
-
-```text
-active input stack
-small lexer/parser lookahead
-preprocessor state
-semantic construction state
-```
-
-Frontend token memory must not scale with the total number of tokens in the
-Project.
+The active include traversal remains bounded execution state. Retained lexical
+memory is construction-only and scales with the compact lexical streams of the
+physical files that have been tokenized.
 
 ---
 
@@ -871,30 +863,9 @@ Graph semantic construction
 
 ## Next Construction Step
 
-The next slice is the lexer/directive executor on top of `frontend_input`.
+The next slice is to connect completed physical-file acquisition to the existing
+per-file lexer so independent source/header files can be tokenized in parallel.
 
-It should:
-
-```text
-lex the current short-lived input view
-recognize preprocessing-directive position
-execute conditional preprocessing state
-construct quoted/angled include request at #include
-synchronously resolve/materialize the target
-enter the target input
-resume the parent at child EOF
-```
-
-It must not introduce:
-
-```text
-separate include scan
-retained token arrays
-source_interface
-per-file semantic cache
-AST persistence
-generic frontend manager/context
-```
-
-Semantic should be added only after this streaming lexical/directive boundary is
-operational.
+It must not introduce a second file identity domain, a semantic token graph,
+per-file semantic cache, AST persistence, or a generic frontend manager/context.
+Directive execution remains a later step over the compact lexical streams.
