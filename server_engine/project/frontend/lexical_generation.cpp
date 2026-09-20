@@ -150,16 +150,21 @@ public:
 
         execute_current();
 
-        std::unique_lock lock{gate};
+        try {
+            std::unique_lock lock{gate};
 
-        completed.wait(
-            lock,
-            [&]() noexcept {
-                return pending == 0;
-            });
+            completed.wait(
+                lock,
+                [&]() noexcept {
+                    return pending == 0;
+                });
 
-        current = {};
-        return server_status::success;
+            current = {};
+            return server_status::success;
+        }
+        catch (...) {
+            return server_status::io_error;
+        }
     }
 
 private:
