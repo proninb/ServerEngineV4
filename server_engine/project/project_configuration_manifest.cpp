@@ -187,16 +187,6 @@ public:
             return status;
         }
 
-        if (files != nullptr) {
-            const auto finalized =
-                files->finalize_dependency_topology();
-
-            if (!succeeded(finalized)) {
-                output = {};
-                return finalized;
-            }
-        }
-
         try {
             output.configuration_hash =
                 calculate_project_configuration_hash(
