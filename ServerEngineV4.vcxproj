@@ -88,6 +88,8 @@
     <ClCompile Include="server_engine\communication\console\console_input_windows.cpp" />
     <ClCompile Include="server_engine\communication\console\server_console.cpp" />
     <ClCompile Include="server_engine\project\project.cpp" />
+    <ClCompile Include="server_engine\project\string\string_table.cpp" />
+    <ClCompile Include="server_engine\project\preprocessor\preprocessor.cpp" />
     <ClCompile Include="server_engine\project\file\file_identity.cpp" />
     <ClCompile Include="server_engine\project\project_configuration_manifest.cpp" />
     <ClCompile Include="server_engine\project\project_configuration_manifest_store.cpp" />
@@ -104,6 +106,7 @@
     <ClInclude Include="server_engine\filesystem_path.hpp" />
     <ClInclude Include="server_engine\server_context.hpp" />
     <ClInclude Include="server_engine\server_status.hpp" />
+    <ClInclude Include="server_engine\string_id.hpp" />
     <ClInclude Include="server_engine\operation.hpp" />
     <ClInclude Include="server_engine\diagnostics\diagnostic.hpp" />
     <ClInclude Include="server_engine\diagnostics\diagnostic_collection.hpp" />
@@ -134,6 +137,8 @@
     <ClInclude Include="server_engine\project\project_configuration_manifest.hpp" />
     <ClInclude Include="server_engine\project\project_configuration_manifest_store.hpp" />
     <ClInclude Include="server_engine\project\project_path.hpp" />
+    <ClInclude Include="server_engine\project\string\string_table.hpp" />
+    <ClInclude Include="server_engine\project\preprocessor\preprocessor.hpp" />
     <ClInclude Include="server_engine\project\file\file_identity.hpp" />
     <ClInclude Include="server_engine\project\file\file_kind.hpp" />
     <ClInclude Include="server_engine\project\file\file_context.hpp" />
@@ -150,6 +155,7 @@
     <None Include="docs\SERVER_CONFIGURATION.md" />
     <None Include="docs\PROJECT.md" />
     <None Include="docs\PROJECT_CONFIGURATION.md" />
+    <None Include="docs\FRONTEND_ARCHITECTURE.md" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

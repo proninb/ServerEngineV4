@@ -115,6 +115,22 @@ struct file_physical_record final {
 
 static_assert(sizeof(file_physical_record) == 64);
 
+inline constexpr std::uint32_t invalid_file_content_offset =
+    0xffffffffu;
+
+// Construction-only location of one current immutable byte image. Bytes live in
+// File Context's content arena and are never part of resident Project state.
+struct file_content_record final {
+    std::uint32_t offset = invalid_file_content_offset;
+    std::uint32_t size = 0;
+
+    [[nodiscard]] constexpr bool materialized() const noexcept {
+        return offset != invalid_file_content_offset;
+    }
+};
+
+static_assert(sizeof(file_content_record) == 8);
+
 enum class file_acquire_result_kind : std::uint8_t {
     unchanged,
     present,
@@ -216,6 +232,16 @@ public:
     [[nodiscard]] const file_physical_record* physical(
         file_id file) const noexcept;
 
+    // A present file may have no construction bytes only when restored metadata
+    // has not yet been materialized. Empty files are available with size()==0.
+    [[nodiscard]] bool content_available(
+        file_id file) const noexcept;
+
+    // Precondition: content_available(file) == true. The view remains valid
+    // until File Context mutates its construction content arena.
+    [[nodiscard]] std::string_view content(
+        file_id file) const noexcept;
+
     [[nodiscard]] std::span<const file_physical_record>
     physical_records() const noexcept {
         return physical_files;
@@ -274,6 +300,11 @@ private:
     // Kept separate from hot path/identity records so SHA-256/change-token data
     // is not pulled into cache during path lookup.
     std::vector<file_physical_record> physical_files;
+
+    // Construction-only current source bytes. Records are direct-indexed by
+    // file_id; the byte arena is append-only during initial materialization.
+    std::vector<file_content_record> content_files;
+    std::vector<char> content_bytes;
 
     // Direct-indexed SoA topology state. file_id N maps to dependency_files[N-1].
     std::vector<file_dependency_record> dependency_files;

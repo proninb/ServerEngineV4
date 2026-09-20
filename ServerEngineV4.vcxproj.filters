@@ -25,6 +25,12 @@
     <Filter Include="server_engine\project\file">
       <UniqueIdentifier>{99999999-9999-9999-9999-999999999999}</UniqueIdentifier>
     </Filter>
+    <Filter Include="server_engine\project\string">
+      <UniqueIdentifier>{A1111111-1111-1111-1111-111111111111}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="server_engine\project\preprocessor">
+      <UniqueIdentifier>{B2222222-2222-2222-2222-222222222222}</UniqueIdentifier>
+    </Filter>
     <Filter Include="docs">
       <UniqueIdentifier>{66666666-6666-6666-6666-666666666666}</UniqueIdentifier>
     </Filter>
@@ -75,6 +81,12 @@
     <ClCompile Include="server_engine\project\project.cpp">
       <Filter>server_engine\project</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\project\string\string_table.cpp">
+      <Filter>server_engine\project\string</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\preprocessor\preprocessor.cpp">
+      <Filter>server_engine\project\preprocessor</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\project\file\file_identity.cpp">
       <Filter>server_engine\project\file</Filter>
     </ClCompile>
@@ -118,6 +130,9 @@
       <Filter>server_engine</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\server_status.hpp">
+      <Filter>server_engine</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\string_id.hpp">
       <Filter>server_engine</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\operation.hpp">
@@ -215,6 +230,12 @@
     <ClInclude Include="server_engine\project\project_path.hpp">
       <Filter>server_engine\project</Filter>
     </ClInclude>
+    <ClInclude Include="server_engine\project\string\string_table.hpp">
+      <Filter>server_engine\project\string</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\preprocessor\preprocessor.hpp">
+      <Filter>server_engine\project\preprocessor</Filter>
+    </ClInclude>
     <ClInclude Include="server_engine\project\file\file_identity.hpp">
       <Filter>server_engine\project\file</Filter>
     </ClInclude>
@@ -257,6 +278,9 @@
       <Filter>docs</Filter>
     </None>
     <None Include="docs\PROJECT_CONFIGURATION.md">
+      <Filter>docs</Filter>
+    </None>
+    <None Include="docs\FRONTEND_ARCHITECTURE.md">
       <Filter>docs</Filter>
     </None>
   </ItemGroup>

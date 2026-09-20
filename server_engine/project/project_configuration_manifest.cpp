@@ -149,10 +149,6 @@ public:
         active.reserve(16);
         unique_inputs.reserve(32);
         kinds.reserve(64);
-
-        if (files != nullptr) {
-            dependency_edges.reserve(64);
-        }
     }
 
     [[nodiscard]] server_status compose() {
@@ -193,8 +189,7 @@ public:
 
         if (files != nullptr) {
             const auto finalized =
-                files->finalize_dependency_topology(
-                    dependency_edges);
+                files->finalize_dependency_topology();
 
             if (!succeeded(finalized)) {
                 output = {};
@@ -654,34 +649,6 @@ private:
         return server_status::success;
     }
 
-    [[nodiscard]] server_status add_dependency(
-        file_id source,
-        file_id target) {
-
-        if (files == nullptr) {
-            return server_status::success;
-        }
-
-        if (!source ||
-            !target) {
-
-            return server_status::
-                project_configuration_invalid;
-        }
-
-        try {
-            dependency_edges.push_back({
-                source,
-                target,
-            });
-
-            return server_status::success;
-        }
-        catch (...) {
-            return server_status::io_error;
-        }
-    }
-
     [[nodiscard]] server_status register_kind(
         const project_path_key& key,
         file_kind kind,
@@ -725,9 +692,6 @@ private:
         file_kind,
         project_path_key_hash> kinds;
 
-    // Construction-only direct relations. File Context finalization
-    // canonicalizes duplicate (source,target) relations without sorting.
-    std::vector<file_dependency_edge> dependency_edges;
 };
 
 }

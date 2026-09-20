@@ -346,12 +346,15 @@ server_status file_context::resolve(
 
         try {
             physical_files.emplace_back();
+            content_files.emplace_back();
             dependency_files.emplace_back();
         }
         catch (...) {
             files.resize(
                 old_file_count);
             physical_files.resize(
+                old_file_count);
+            content_files.resize(
                 old_file_count);
             dependency_files.resize(
                 old_file_count);
@@ -544,9 +547,15 @@ server_status file_context::apply_acquire(
         return server_status::project_configuration_invalid;
     }
 
+    const auto index =
+        static_cast<std::size_t>(
+            result.file.value() - 1);
+
     auto& state =
-        physical_files[
-            result.file.value() - 1];
+        physical_files[index];
+
+    auto& content_state =
+        content_files[index];
 
     const auto baseline_present =
         state.present();
@@ -558,16 +567,67 @@ server_status file_context::apply_acquire(
             : server_status::project_artifact_invalid;
 
     case file_acquire_result_kind::missing:
+        if (content_state.materialized()) {
+            // Replacing an already materialized image would leave unreachable
+            // bytes in the construction arena. BUILD replacement policy is a
+            // separate slice and must not be smuggled into this representation.
+            return server_status::unsupported;
+        }
+
         content_changed =
             baseline_present;
         state = {};
+        content_state = {};
         return server_status::success;
 
-    case file_acquire_result_kind::present:
-        content_changed =
+    case file_acquire_result_kind::present: {
+        const auto changed =
             !baseline_present ||
             !(state.content_hash ==
               result.snapshot.content_hash);
+
+        if (content_state.materialized()) {
+            if (changed) {
+                // Current arena is optimized for one initial materialization per
+                // file. Sparse BUILD replacement needs its own no-garbage policy.
+                return server_status::unsupported;
+            }
+
+            content_changed = false;
+            return server_status::success;
+        }
+
+        const auto max_u32 =
+            static_cast<std::size_t>(
+                (std::numeric_limits<std::uint32_t>::max)());
+
+        if (content_bytes.size() > max_u32 ||
+            result.snapshot.bytes.size() >
+                max_u32 - content_bytes.size()) {
+
+            return server_status::io_error;
+        }
+
+        const auto old_size =
+            content_bytes.size();
+
+        try {
+            content_bytes.insert(
+                content_bytes.end(),
+                result.snapshot.bytes.begin(),
+                result.snapshot.bytes.end());
+        }
+        catch (...) {
+            return server_status::io_error;
+        }
+
+        content_state.offset =
+            static_cast<std::uint32_t>(
+                old_size);
+
+        content_state.size =
+            static_cast<std::uint32_t>(
+                result.snapshot.bytes.size());
 
         state = {};
         state.content_hash =
@@ -584,7 +644,11 @@ server_status file_context::apply_acquire(
                 file_physical_change_token;
         }
 
+        content_changed =
+            changed;
+
         return server_status::success;
+    }
 
     case file_acquire_result_kind::changed_during_read:
     case file_acquire_result_kind::failed:
@@ -1070,6 +1134,8 @@ bool file_context::contains(
             files.size() &&
         physical_files.size() ==
             files.size() &&
+        content_files.size() ==
+            files.size() &&
         dependency_files.size() ==
             files.size();
 }
@@ -1103,6 +1169,46 @@ const file_physical_record* file_context::physical(
         ? &physical_files[
             file.value() - 1]
         : nullptr;
+}
+
+bool file_context::content_available(
+    file_id file) const noexcept {
+
+    if (!contains(file)) {
+        return false;
+    }
+
+    const auto index =
+        static_cast<std::size_t>(
+            file.value() - 1);
+
+    return physical_files[index].present() &&
+        content_files[index].materialized();
+}
+
+std::string_view file_context::content(
+    file_id file) const noexcept {
+
+    assert(content_available(file));
+
+    const auto& record =
+        content_files[
+            file.value() - 1];
+
+    if (record.offset >
+            content_bytes.size() ||
+        record.size >
+            content_bytes.size() -
+                record.offset) {
+
+        return {};
+    }
+
+    return {
+        content_bytes.data() +
+            record.offset,
+        record.size,
+    };
 }
 
 }

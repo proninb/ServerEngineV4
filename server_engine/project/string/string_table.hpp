@@ -1,0 +1,75 @@
+/*
+ * Project-construction canonical string table.
+ *
+ * string_table owns one dense string_id space and immutable spelling bytes for
+ * the current construction. It is single-owner and intentionally has no mutex,
+ * baseline overlay, persistence policy, or semantic responsibility.
+ */
+#pragma once
+
+#include "../../server_status.hpp"
+#include "../../string_id.hpp"
+
+#include <cstddef>
+#include <cstdint>
+#include <string_view>
+#include <vector>
+
+namespace cw::server {
+
+class string_table final {
+public:
+    string_table() = default;
+
+    string_table(const string_table&) = delete;
+    string_table& operator=(const string_table&) = delete;
+
+    [[nodiscard]] server_status intern(
+        std::string_view value,
+        string_id& output) noexcept;
+
+    [[nodiscard]] string_id find(
+        std::string_view value) const noexcept;
+
+    [[nodiscard]] std::string_view get(
+        string_id id) const noexcept;
+
+    [[nodiscard]] bool contains(
+        string_id id) const noexcept;
+
+    [[nodiscard]] std::size_t size() const noexcept {
+        return records.size();
+    }
+
+private:
+    struct string_record final {
+        std::uint32_t offset = 0;
+        std::uint32_t length = 0;
+        std::uint32_t hash = 0;
+    };
+
+    struct string_slot final {
+        std::uint32_t hash = 0;
+        string_id id{};
+    };
+
+    static_assert(sizeof(string_record) == 12);
+    static_assert(sizeof(string_slot) == 8);
+
+    [[nodiscard]] static std::uint32_t hash_text(
+        std::string_view value) noexcept;
+
+    [[nodiscard]] server_status ensure_index_capacity(
+        std::size_t additional) noexcept;
+
+    void insert_index(
+        std::vector<string_slot>& index,
+        string_id id,
+        std::uint32_t hash) const noexcept;
+
+    std::vector<string_record> records;
+    std::vector<char> bytes;
+    std::vector<string_slot> index;
+};
+
+}
