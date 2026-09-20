@@ -568,10 +568,11 @@ project.json
 ```
 
 `execute_acquire` workers never mutate File Context. `apply_acquire` remains
-single-owner and deterministic. A child Project configuration is a continuation:
-after its already acquired bytes are parsed, newly discovered direct inputs form
-the next parallel batch. No directory scan and no full-Project discovery barrier
-is introduced.
+single-owner and deterministic. A physical `file_id` is scheduled at most once
+inside one parallel batch even if the Project configuration references it more
+than once. A child Project configuration is a continuation: after its already
+acquired bytes are parsed, newly discovered direct inputs form the next parallel
+batch. No directory scan and no full-Project discovery barrier is introduced.
 
 ## Parallel Per-File Lexical Stream
 
