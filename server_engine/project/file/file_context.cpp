@@ -1,5 +1,6 @@
 #include "file_context.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <limits>
 #include <new>
@@ -282,6 +283,10 @@ server_status file_context::resolve(
         return kind(output) == requested_kind
             ? server_status::success
             : server_status::project_configuration_invalid;
+    }
+
+    if (topology_finalized) {
+        return server_status::project_configuration_invalid;
     }
 
     const auto max_u32 =
@@ -653,8 +658,40 @@ server_status file_context::calculate_content_hash(
     }
 }
 
-server_status file_context::finalize_dependency_topology(
-    std::span<const file_dependency_edge> edges) noexcept {
+
+server_status file_context::add_dependency(
+    file_id source,
+    file_id target) noexcept {
+
+    if (topology_finalized ||
+        !contains(source) ||
+        !contains(target)) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    try {
+        dependency_edges.push_back({
+            source,
+            target,
+        });
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
+server_status file_context::finalize_dependency_topology() noexcept {
+
+    if (topology_finalized) {
+        return server_status::success;
+    }
+
+    const std::span<const file_dependency_edge> edges{
+        dependency_edges};
 
     const auto max_u32 =
         static_cast<std::size_t>(
@@ -947,6 +984,11 @@ server_status file_context::finalize_dependency_topology(
 
         reverse_edges =
             std::move(reverse);
+
+        topology_finalized = true;
+
+        std::vector<file_dependency_edge>{}.swap(
+            dependency_edges);
 
         return server_status::success;
     }

@@ -38,7 +38,7 @@ server_status rebuild_project(
             diagnostics::project_rebuild_incomplete,
             operation)
             .detail(
-                "Project configuration manifest, flat File Context, and Project-declared file dependency topology are complete; Header/Source/Assign dependency discovery and Graph construction are not implemented yet")
+                "Project configuration manifest and flat File Context are complete; Project-declared dependencies are staged, while Header/Source/Assign dependency discovery, topology finalization, and Graph construction are not implemented yet")
             .build());
 
     return server_status::unsupported;

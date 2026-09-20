@@ -187,10 +187,14 @@ public:
         std::span<const file_id> ordered_files,
         construction_content_hash& output) const noexcept;
 
-    // Finalizes direct relations into compact forward/reverse arenas.
-    // Duplicate (source,target) staging relations collapse to one edge.
-    [[nodiscard]] server_status finalize_dependency_topology(
-        std::span<const file_dependency_edge> edges) noexcept;
+    // Stages one direct relation in the shared construction topology.
+    [[nodiscard]] server_status add_dependency(
+        file_id source,
+        file_id target) noexcept;
+
+    // Finalizes all staged relations exactly once after dependency discovery
+    // reaches closure. Duplicate (source,target) relations collapse to one edge.
+    [[nodiscard]] server_status finalize_dependency_topology() noexcept;
 
     [[nodiscard]] std::span<const file_id> dependencies(
         file_id file) const noexcept;
@@ -275,6 +279,11 @@ private:
     std::vector<file_dependency_record> dependency_files;
     std::vector<file_id> forward_edges;
     std::vector<file_id> reverse_edges;
+
+    // Shared construction-only staging arena used by all syntax domains before
+    // one terminal topology finalization.
+    std::vector<file_dependency_edge> dependency_edges;
+    bool topology_finalized = false;
 };
 
 }

@@ -543,7 +543,7 @@ private:
                     }
 
                     const auto staged =
-                        add_dependency(
+                        files->add_dependency(
                             source_file,
                             child_file);
 

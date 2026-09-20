@@ -661,11 +661,15 @@ struct file_dependency_record {
 };
 ```
 
-Construction discovers temporary `(source file_id, target file_id)` relations.
+All syntax domains stage temporary `(source file_id, target file_id)` relations
+into one File Context arena. Project composition is only the first producer;
+Header, Source, and Assign discovery append to the same arena.
+
+After dependency discovery reaches closure, topology is finalized exactly once.
 Finalization groups relations by source with a linear counting pass, collapses
 duplicate `(source,target)` pairs with dense `file_id` markers, and fills exact
 forward/reverse arenas. The algorithm is `O(F + E)` with no sort or hash lookup.
-Temporary edge staging is destroyed with the candidate construction.
+After finalization no new file identity or dependency relation may be added.
 
 Architectural constraints:
 
@@ -677,7 +681,7 @@ NO per-node heap allocation
 NO vector<vector<file_id>>
 ```
 
-Project composition is the first producer and emits only explicit direct edges:
+Project composition is the first producer and stages only explicit direct edges:
 
 ```text
 project -> child project
