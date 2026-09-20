@@ -630,6 +630,12 @@ file_kind::assign
 The topology layer stores only resolved `file_id` relations; it does not contain
 paths, parser state, or syntax-specific facts.
 
+Header/Source include dependencies are staged during the same streaming frontend
+execution that performs preprocessing/parsing. V4 does not run a separate source
+scan only to discover includes. At an executed `#include`, the frontend pauses,
+construction resolves/registers the target `file_id`, stages the direct edge,
+enters the child input, and resumes the parent after child EOF.
+
 ### Storage contract
 
 There is one current File Context topology. V4 does not maintain separate `G0`

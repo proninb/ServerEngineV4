@@ -494,35 +494,47 @@ Preprocessor never assigns semantic meaning.
 
 ## Streaming Frontend
 
-The intended frontend remains streaming:
+The frontend is a single streaming execution over the effective preprocessing
+input. V4 does not perform a separate include/dependency scan before parsing.
 
 ```text
-file bytes
+active file bytes
     |
     v
-lexer
+lexer / directive execution
     |
-    +-- directive
-    |      -> Preprocessor / File Context
+    +-- #include
+    |      -> synchronous construction resolution
+    |      -> push child input
+    |      -> continue the same stream
     |
     `-- normal token
            -> Parser
            -> Semantic
 ```
 
-Tokens are transient.
+Tokens remain transient. There is no retained token graph and no second source
+pass used only to construct file dependency topology.
 
-The architecture does not require retained:
+The active physical-input stack stores only:
 
 ```text
-tokens[]
-preprocessed_tokens[]
-parsed_source[]
-source_interface[]
-token graph
+{ file_id, byte_offset }
 ```
 
-The memory target is:
+It is a fixed-capacity array with a 256-level include-nesting limit. Include
+nesting is active execution depth, not Project-size state, so this stack performs
+no heap allocation and does not grow with the number of files in the Project.
+
+It deliberately stores no pointer or permanent `string_view` into File Context's
+content arena. If resolving/materializing an include grows that arena, the parent
+frame remains valid. After the child finishes, the frontend obtains a fresh view
+for the parent `file_id` and resumes at the saved byte offset.
+
+`frontend_input::remaining()` therefore returns a short-lived view for immediate
+lexing only. That view must not survive a File Context mutation.
+
+The memory target remains:
 
 ```text
 active input stack
@@ -531,15 +543,70 @@ preprocessor state
 semantic construction state
 ```
 
-Frontend token memory must not scale with the total number of tokens in the Project.
+Frontend token memory must not scale with the total number of tokens in the
+Project.
 
 ---
 
 ## `#include`
 
-`#include` changes physical input.
+`#include` changes physical input but does not create or change semantic scope.
 
-It does not create or change semantic scope.
+The directive boundary preserves the two C/C++ include forms:
+
+```cpp
+#include "x/a.hpp"  // include_form::quoted
+#include <x/a.hpp>  // include_form::angled
+```
+
+At the exact directive position the directive executor emits a transient request
+carrying the source `file_id`, include form, and locator.
+
+That request belongs to directive execution, not to `frontend_input`, whose
+responsibility remains only physical input traversal.
+
+The locator is consumed synchronously and is not stored in dependency topology.
+
+Construction resolves the request according to the include-search policy:
+
+```text
+quoted
+    current physical file directory
+    -> configured include roots
+
+angled
+    configured include roots
+```
+
+The include-root configuration/resolver is a separate construction policy and is
+not defined by `frontend_input`.
+
+Execution is:
+
+```text
+parent frontend reaches #include
+    -> consume directive in parent
+    -> include_request { source, form, locator }
+    -> construction resolves/registers target file_id
+    -> File Context stages source -> target
+    -> target bytes are materialized
+    -> frontend_input.enter(target)
+    -> lexer/preprocessor/parser continue on child
+    -> child EOF
+    -> frontend_input.leave()
+    -> parent resumes at saved byte offset
+```
+
+There is no:
+
+```text
+scan includes pass
+    -> finalize dependency information
+    -> parse source again
+```
+
+File dependency topology is produced as a side effect of the same streaming
+frontend execution that performs preprocessing/parsing.
 
 Example:
 
@@ -555,20 +622,7 @@ At the directive:
 current semantic scope = AA
 ```
 
-The Streaming Frontend will:
-
-```text
-resolve include path through File Context
-    -> file_id(A.hpp)
-
-File Context:
-    add_dependency(current_file, file_id(A.hpp))
-
-push included input
-continue Parser with current semantic scope AA
-```
-
-If `A.hpp` contains:
+The child input executes under that same semantic scope. If `A.hpp` contains:
 
 ```cpp
 struct B {};
@@ -580,7 +634,7 @@ Semantic creates:
 identity_ref(AA::B)
 ```
 
-At EOF, the included input is popped and parent input resumes.
+At child EOF the input frame is popped and the parent continues.
 
 ---
 
@@ -699,6 +753,12 @@ The following contracts are fail-closed architecture rules.
 
 16. Do not introduce manager/context abstractions without a demonstrated
     ownership or lifetime requirement.
+
+17. Do not run a separate include/dependency prepass. Executed includes stage
+    topology during the same streaming frontend execution.
+
+18. Active frontend include traversal is bounded execution state and must not
+    allocate from the heap on include enter/leave.
 ```
 
 ---
@@ -727,16 +787,25 @@ preprocessor
     defined(name)
     recursive identifier-only expansion
     cycle protection
+
+frontend_input
+    fixed 256-level { file_id, byte_offset } stack
+    no heap allocation on include enter/leave
+    no retained content pointers across include resolution
+    short-lived remaining() view
+    enter/leave child input
 ```
 
 Not implemented yet:
 
 ```text
-streaming input stack
 lexer
 directive parser
 #ifdef / #ifndef / #else / #endif execution
-#include execution
+include request type in the directive layer
+include request type in the directive layer
+include path resolver / configured include roots
+#include execution through the frontend_input boundary
 Semantic identity_space
 identity_ref integration
 Graph semantic construction
@@ -746,21 +815,24 @@ Graph semantic construction
 
 ## Next Construction Step
 
-The next architectural slice is the Streaming Frontend input/lexer boundary.
+The next slice is the lexer/directive executor on top of `frontend_input`.
 
-It should introduce only the state required to:
+It should:
 
 ```text
-read one active file
-produce transient lexical tokens
-recognize directive position
-push/pop included files later
-preserve parser semantic scope across includes
+lex the current short-lived input view
+recognize preprocessing-directive position
+execute conditional preprocessing state
+construct quoted/angled include request at #include
+synchronously resolve/materialize the target
+enter the target input
+resume the parent at child EOF
 ```
 
 It must not introduce:
 
 ```text
+separate include scan
 retained token arrays
 source_interface
 per-file semantic cache
@@ -768,14 +840,5 @@ AST persistence
 generic frontend manager/context
 ```
 
-The first consumer relationship should become:
-
-```text
-Streaming Frontend
-    |
-    +-- File Context&
-    +-- string_table&
-    `-- preprocessor&
-```
-
-Semantic should be added only when the lexical/directive boundary is established.
+Semantic should be added only after this streaming lexical/directive boundary is
+operational.

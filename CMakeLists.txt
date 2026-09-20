@@ -28,6 +28,7 @@ add_executable(ServerEngineV4
     server_engine/project/project.cpp
     server_engine/project/string/string_table.cpp
     server_engine/project/preprocessor/preprocessor.cpp
+    server_engine/project/frontend/frontend_input.cpp
     server_engine/project/file/file_identity.cpp
     server_engine/project/project_configuration_manifest.cpp
     server_engine/project/project_configuration_manifest_store.cpp
