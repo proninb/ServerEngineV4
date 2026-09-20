@@ -93,6 +93,9 @@
     <ClCompile Include="server_engine\project\frontend\frontend_input.cpp">
       <Filter>server_engine\project\frontend</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\project\frontend\directive_decoder.cpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\project\frontend\lexical_stream.cpp">
       <Filter>server_engine\project\frontend</Filter>
     </ClCompile>
@@ -252,6 +255,9 @@
       <Filter>server_engine\project\preprocessor</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\frontend\frontend_input.hpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\frontend\directive_decoder.hpp">
       <Filter>server_engine\project\frontend</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\frontend\lexical_stream.hpp">
