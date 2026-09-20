@@ -590,8 +590,10 @@ one uint32 word arena
 ```
 
 There is no manifest-to-frontend dependency, no per-file heap-owned lexical
-vector in the retained generation, and no second file identity domain. The
-storage may grow when later preprocessing discovers a new Header `file_id`.
+vector in the retained generation, and no second file identity domain. Project,
+Source, and Assign declarations are rejected on duplicate physical path during
+composition; repeat Header references remain valid. The storage may grow when
+later preprocessing discovers a new Header `file_id`.
 
 ## Parallel Per-File Lexical Stream
 

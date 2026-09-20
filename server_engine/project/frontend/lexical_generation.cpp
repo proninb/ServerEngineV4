@@ -188,12 +188,14 @@ server_status lexical_generation::publish(
     const auto values =
         stream.words();
 
-    if (word_arena.size() >
-            static_cast<std::size_t>(
-                (std::numeric_limits<std::uint32_t>::max)()) ||
+    const auto invalid_offset =
+        static_cast<std::size_t>(
+            invalid_lexical_offset);
+
+    if (word_arena.size() >=
+            invalid_offset ||
         values.size() >
-            static_cast<std::size_t>(
-                (std::numeric_limits<std::uint32_t>::max)()) -
+            invalid_offset -
                 word_arena.size()) {
 
         return server_status::io_error;

@@ -632,10 +632,8 @@ private:
                 return kind_status;
             }
 
-            if (dependency.kind ==
-                    file_kind::source ||
-                dependency.kind ==
-                    file_kind::assign) {
+            if (dependency.kind !=
+                file_kind::header) {
 
                 const auto inserted =
                     unique_inputs.insert(
@@ -651,7 +649,10 @@ private:
                                 dependency.kind ==
                                         file_kind::source
                                     ? "Source file is declared more than once"
-                                    : "Assign file is declared more than once")
+                                    : dependency.kind ==
+                                            file_kind::assign
+                                        ? "Assign file is declared more than once"
+                                        : "Project configuration is referenced more than once")
                             .build());
 
                     return server_status::
@@ -704,30 +705,6 @@ private:
             // All child Project file_id resolution is complete before
             // prepare_acquire(). Borrowed path views remain stable while reads
             // run because File Context path storage is not mutated until join.
-            if (acquire_marks.size() < files->size()) {
-                try {
-                    acquire_marks.resize(
-                        files->size(),
-                        0);
-                }
-                catch (...) {
-                    return server_status::io_error;
-                }
-            }
-
-            if (acquire_generation ==
-                (std::numeric_limits<std::uint32_t>::max)()) {
-
-                std::fill(
-                    acquire_marks.begin(),
-                    acquire_marks.end(),
-                    0);
-
-                acquire_generation = 1;
-            } else {
-                ++acquire_generation;
-            }
-
             for (auto& input : pending) {
                 const auto* physical =
                     files->physical(
@@ -741,19 +718,6 @@ private:
                 if (physical->present()) {
                     continue;
                 }
-
-                const auto index =
-                    static_cast<std::size_t>(
-                        input.file.value() - 1);
-
-                if (acquire_marks[index] ==
-                    acquire_generation) {
-
-                    continue;
-                }
-
-                acquire_marks[index] =
-                    acquire_generation;
 
                 const auto prepared =
                     files->prepare_acquire(
@@ -868,11 +832,6 @@ private:
         project_path_key,
         file_kind,
         project_path_key_hash> kinds;
-
-    // Direct-indexed construction scratch. Generation marking avoids clearing
-    // O(file_count) state for every Project configuration node.
-    std::vector<std::uint32_t> acquire_marks;
-    std::uint32_t acquire_generation = 0;
 
 };
 
