@@ -463,10 +463,21 @@ optional native change token
 direct dependency topology
 ```
 
-Unchanged files are proved without reading bytes when possible. If proof is not
-available, BUILD reads exact bytes and compares the content hash.
+`source.bin` deliberately does not copy Project file contents. The physical
+Project files remain the source of exact bytes; retained lexical state belongs
+to `database.bin` when BUILD reuse requires it.
 
-BUILD first derives the exact physical dirty set.
+The committed SourceSave image is fully validated once when the baseline is
+opened. `source_save_view::bind()` then establishes bounded zero-copy section
+views without allocation or a second O(F + E) topology-validation pass.
+
+Unchanged files are proved without reading bytes when possible.
+If proof is unavailable, BUILD reads the current physical file and compares its
+SHA-256 with the persisted content hash.
+
+`scan_source_save_changes()` derives the exact dirty `file_id` set in ascending
+identity order. `collect_source_save_affected()` then walks the OLD committed
+reverse topology before any affected dependency relation is replaced.
 
 ### Affected closure
 

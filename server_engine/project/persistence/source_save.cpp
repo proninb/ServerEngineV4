@@ -181,6 +181,472 @@ void append_bytes(
 
 }
 
+void source_save_view::reset() noexcept {
+    bytes = {};
+    records_offset = 0;
+    paths_offset = 0;
+    forward_offset = 0;
+    reverse_offset = 0;
+    file_count_value = 0;
+    path_bytes_value = 0;
+    forward_count_value = 0;
+    reverse_count_value = 0;
+}
+
+source_save_result source_save_view::bind(
+    std::span<const std::byte> image) noexcept {
+
+    reset();
+
+    if (image.size() <
+            header_size +
+            record_size +
+            checksum_size ||
+        !std::equal(
+            magic.begin(),
+            magic.end(),
+            image.begin())) {
+
+        return source_save_result::invalid_image;
+    }
+
+    std::size_t offset =
+        magic.size();
+
+    std::uint32_t version = 0;
+    std::uint32_t reserved = 0;
+
+    if (!read_u32(image, offset, version) ||
+        version != format_version ||
+        !read_u32(
+            image,
+            offset,
+            file_count_value) ||
+        file_count_value == 0 ||
+        !read_u32(
+            image,
+            offset,
+            path_bytes_value) ||
+        !read_u32(
+            image,
+            offset,
+            forward_count_value) ||
+        !read_u32(
+            image,
+            offset,
+            reverse_count_value) ||
+        forward_count_value !=
+            reverse_count_value ||
+        !read_u32(
+            image,
+            offset,
+            reserved) ||
+        reserved != 0 ||
+        offset != header_size) {
+
+        reset();
+        return source_save_result::invalid_image;
+    }
+
+    std::size_t records_size = 0;
+    std::size_t forward_size = 0;
+    std::size_t reverse_size = 0;
+
+    if (!multiply_size(
+            file_count_value,
+            record_size,
+            records_size) ||
+        !multiply_size(
+            forward_count_value,
+            sizeof(std::uint32_t),
+            forward_size) ||
+        !multiply_size(
+            reverse_count_value,
+            sizeof(std::uint32_t),
+            reverse_size)) {
+
+        reset();
+        return source_save_result::invalid_image;
+    }
+
+    std::size_t expected_size =
+        header_size;
+
+    if (!add_size(
+            expected_size,
+            records_size) ||
+        !add_size(
+            expected_size,
+            path_bytes_value) ||
+        !add_size(
+            expected_size,
+            forward_size) ||
+        !add_size(
+            expected_size,
+            reverse_size) ||
+        !add_size(
+            expected_size,
+            checksum_size) ||
+        expected_size !=
+            image.size()) {
+
+        reset();
+        return source_save_result::invalid_image;
+    }
+
+    records_offset =
+        header_size;
+
+    paths_offset =
+        records_offset +
+        records_size;
+
+    forward_offset =
+        paths_offset +
+        path_bytes_value;
+
+    reverse_offset =
+        forward_offset +
+        forward_size;
+
+    bytes = image;
+    return source_save_result::success;
+}
+
+bool source_save_view::contains(
+    file_id file) const noexcept {
+
+    return valid() &&
+        file &&
+        file.value() <=
+            file_count_value;
+}
+
+namespace {
+
+[[nodiscard]] bool read_view_record(
+    const source_save_view& view,
+    std::span<const std::byte> image,
+    file_id file,
+    decoded_record& output) noexcept {
+
+    if (!view.contains(file)) {
+        return false;
+    }
+
+    auto offset =
+        header_size +
+        static_cast<std::size_t>(
+            file.value() - 1) *
+            record_size;
+
+    std::uint32_t kind = 0;
+    std::uint64_t volume = 0;
+    std::uint64_t reference = 0;
+    std::uint64_t usn = 0;
+
+    if (!read_u32(
+            image,
+            offset,
+            output.path_offset) ||
+        !read_u32(
+            image,
+            offset,
+            output.path_size) ||
+        !read_u32(
+            image,
+            offset,
+            kind) ||
+        kind >
+            static_cast<std::uint32_t>(
+                file_kind::assign) ||
+        !read_u32(
+            image,
+            offset,
+            output.flags)) {
+
+        return false;
+    }
+
+    output.kind =
+        static_cast<file_kind>(kind);
+
+    if (offset > image.size() ||
+        image.size() - offset <
+            output.content_hash.bytes.size()) {
+
+        return false;
+    }
+
+    std::copy_n(
+        image.begin() +
+            static_cast<std::ptrdiff_t>(
+                offset),
+        output.content_hash.bytes.size(),
+        output.content_hash.bytes.begin());
+
+    offset +=
+        output.content_hash.bytes.size();
+
+    if (!read_u64(
+            image,
+            offset,
+            volume) ||
+        !read_u64(
+            image,
+            offset,
+            reference) ||
+        !read_u64(
+            image,
+            offset,
+            usn) ||
+        !read_u32(
+            image,
+            offset,
+            output.dependency_offset) ||
+        !read_u32(
+            image,
+            offset,
+            output.dependency_count) ||
+        !read_u32(
+            image,
+            offset,
+            output.dependent_offset) ||
+        !read_u32(
+            image,
+            offset,
+            output.dependent_count)) {
+
+        return false;
+    }
+
+    output.change_token = {
+        volume,
+        reference,
+        static_cast<std::int64_t>(
+            usn),
+    };
+
+    return true;
+}
+
+}
+
+bool source_save_view::current_member(
+    file_id file) const noexcept {
+
+    decoded_record record;
+
+    return read_view_record(
+        *this,
+        bytes,
+        file,
+        record) &&
+        (record.flags &
+            current_member_flag) != 0;
+}
+
+file_kind source_save_view::kind(
+    file_id file) const noexcept {
+
+    decoded_record record;
+
+    if (!read_view_record(
+            *this,
+            bytes,
+            file,
+            record)) {
+
+        return file_kind::project;
+    }
+
+    return record.kind;
+}
+
+std::string_view source_save_view::path_utf8(
+    file_id file) const noexcept {
+
+    decoded_record record;
+
+    if (!read_view_record(
+            *this,
+            bytes,
+            file,
+            record) ||
+        record.path_offset >
+            path_bytes_value ||
+        record.path_size >
+            path_bytes_value -
+                record.path_offset) {
+
+        return {};
+    }
+
+    return {
+        reinterpret_cast<const char*>(
+            bytes.data() +
+            paths_offset +
+            record.path_offset),
+        record.path_size,
+    };
+}
+
+bool source_save_view::physical(
+    file_id file,
+    file_physical_record& output) const noexcept {
+
+    output = {};
+
+    decoded_record record;
+
+    if (!read_view_record(
+            *this,
+            bytes,
+            file,
+            record)) {
+
+        return false;
+    }
+
+    output.content_hash =
+        record.content_hash;
+
+    if ((record.flags &
+            physical_present_flag) != 0) {
+
+        output.flags |=
+            file_physical_present;
+    }
+
+    if ((record.flags &
+            change_token_flag) != 0) {
+
+        output.change_token =
+            record.change_token;
+
+        output.flags |=
+            file_physical_change_token;
+    }
+
+    return true;
+}
+
+std::size_t source_save_view::dependency_count(
+    file_id file) const noexcept {
+
+    decoded_record record;
+
+    if (!read_view_record(
+            *this,
+            bytes,
+            file,
+            record)) {
+
+        return 0;
+    }
+
+    return record.dependency_count;
+}
+
+file_id source_save_view::dependency_at(
+    file_id file,
+    std::size_t index) const noexcept {
+
+    decoded_record record;
+
+    if (!read_view_record(
+            *this,
+            bytes,
+            file,
+            record) ||
+        index >=
+            record.dependency_count ||
+        index >
+            (std::numeric_limits<
+                std::uint32_t>::max)()) {
+
+        return {};
+    }
+
+    std::size_t cursor =
+        forward_offset +
+        static_cast<std::size_t>(
+            record.dependency_offset +
+            static_cast<std::uint32_t>(
+                index)) *
+            sizeof(std::uint32_t);
+
+    std::uint32_t value = 0;
+
+    if (!read_u32(
+            bytes,
+            cursor,
+            value)) {
+
+        return {};
+    }
+
+    return file_id{value};
+}
+
+std::size_t source_save_view::dependent_count(
+    file_id file) const noexcept {
+
+    decoded_record record;
+
+    if (!read_view_record(
+            *this,
+            bytes,
+            file,
+            record)) {
+
+        return 0;
+    }
+
+    return record.dependent_count;
+}
+
+file_id source_save_view::dependent_at(
+    file_id file,
+    std::size_t index) const noexcept {
+
+    decoded_record record;
+
+    if (!read_view_record(
+            *this,
+            bytes,
+            file,
+            record) ||
+        index >=
+            record.dependent_count ||
+        index >
+            (std::numeric_limits<
+                std::uint32_t>::max)()) {
+
+        return {};
+    }
+
+    std::size_t cursor =
+        reverse_offset +
+        static_cast<std::size_t>(
+            record.dependent_offset +
+            static_cast<std::uint32_t>(
+                index)) *
+            sizeof(std::uint32_t);
+
+    std::uint32_t value = 0;
+
+    if (!read_u32(
+            bytes,
+            cursor,
+            value)) {
+
+        return {};
+    }
+
+    return file_id{value};
+}
+
 source_save_result build_source_save_image(
     const file_context& files,
     project_artifact_image& output) noexcept {
@@ -924,6 +1390,259 @@ source_save_result validate_source_save_image(
         return source_save_result::failed;
     }
 }
+
+
+server_status scan_source_save_changes(
+    const source_save_view& baseline,
+    std::vector<file_id>& dirty,
+    source_save_change_scan_metrics* metrics) noexcept {
+
+    dirty.clear();
+
+    if (metrics != nullptr) {
+        *metrics = {};
+    }
+
+    if (!baseline.valid()) {
+        return server_status::project_artifact_invalid;
+    }
+
+    try {
+        dirty.reserve(
+            baseline.file_count() / 32 + 1);
+
+        for (std::size_t index = 0;
+             index < baseline.file_count();
+             ++index) {
+
+            const file_id file{
+                static_cast<std::uint32_t>(
+                    index + 1)};
+
+            if (!baseline.current_member(file)) {
+                continue;
+            }
+
+            if (metrics != nullptr) {
+                ++metrics->current_files;
+            }
+
+            file_physical_record physical;
+
+            if (!baseline.physical(
+                    file,
+                    physical) ||
+                !physical.present()) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            std::filesystem::path path;
+
+            if (filesystem_path_from_utf8(
+                    baseline.path_utf8(file),
+                    path) !=
+                    filesystem_path_result::success ||
+                path.empty()) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            if (physical.has_change_token()) {
+                bool unchanged = false;
+
+                const auto proof =
+                    prove_file_unchanged(
+                        path,
+                        physical.change_token,
+                        unchanged);
+
+                if (proof ==
+                        file_token_result::available &&
+                    unchanged) {
+
+                    if (metrics != nullptr) {
+                        ++metrics->
+                            token_proved_unchanged;
+                    }
+
+                    continue;
+                }
+
+                if (proof ==
+                    file_token_result::missing) {
+
+                    dirty.push_back(file);
+
+                    if (metrics != nullptr) {
+                        ++metrics->dirty_files;
+                        ++metrics->missing_files;
+                    }
+
+                    continue;
+                }
+
+                if (proof ==
+                    file_token_result::failed) {
+
+                    return server_status::io_error;
+                }
+            }
+
+            file_content_snapshot snapshot;
+
+            const auto acquired =
+                acquire_file_content(
+                    path,
+                    snapshot);
+
+            if (acquired ==
+                file_content_result::missing) {
+
+                dirty.push_back(file);
+
+                if (metrics != nullptr) {
+                    ++metrics->dirty_files;
+                    ++metrics->missing_files;
+                }
+
+                continue;
+            }
+
+            if (acquired !=
+                file_content_result::acquired) {
+
+                return server_status::io_error;
+            }
+
+            if (metrics != nullptr) {
+                ++metrics->files_read;
+
+                metrics->bytes_read +=
+                    static_cast<std::uint64_t>(
+                        snapshot.bytes.size());
+            }
+
+            if (snapshot.content_hash ==
+                physical.content_hash) {
+
+                continue;
+            }
+
+            dirty.push_back(file);
+
+            if (metrics != nullptr) {
+                ++metrics->dirty_files;
+            }
+        }
+
+        return server_status::success;
+    }
+    catch (...) {
+        dirty.clear();
+
+        if (metrics != nullptr) {
+            *metrics = {};
+        }
+
+        return server_status::io_error;
+    }
+}
+
+server_status collect_source_save_affected(
+    const source_save_view& baseline,
+    std::span<const file_id> dirty,
+    std::vector<file_id>& affected) noexcept {
+
+    affected.clear();
+
+    if (!baseline.valid()) {
+        return server_status::project_artifact_invalid;
+    }
+
+    try {
+        std::vector<std::uint8_t>
+            visited(
+                baseline.file_count());
+
+        affected.reserve(
+            dirty.size());
+
+        for (const auto file : dirty) {
+            if (!baseline.contains(file) ||
+                !baseline.current_member(file)) {
+
+                affected.clear();
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            auto& marker =
+                visited[
+                    file.value() - 1];
+
+            if (marker != 0) {
+                continue;
+            }
+
+            marker = 1;
+            affected.push_back(file);
+        }
+
+        for (std::size_t position = 0;
+             position < affected.size();
+             ++position) {
+
+            const auto file =
+                affected[position];
+
+            const auto count =
+                baseline.dependent_count(
+                    file);
+
+            for (std::size_t index = 0;
+                 index < count;
+                 ++index) {
+
+                const auto dependent =
+                    baseline.dependent_at(
+                        file,
+                        index);
+
+                if (!baseline.contains(dependent) ||
+                    !baseline.current_member(
+                        dependent)) {
+
+                    affected.clear();
+
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                auto& marker =
+                    visited[
+                        dependent.value() - 1];
+
+                if (marker != 0) {
+                    continue;
+                }
+
+                marker = 1;
+                affected.push_back(dependent);
+            }
+        }
+
+        return server_status::success;
+    }
+    catch (...) {
+        affected.clear();
+        return server_status::io_error;
+    }
+}
+
 
 }
 

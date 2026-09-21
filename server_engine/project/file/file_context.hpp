@@ -2,7 +2,7 @@
  * Project construction file context.
  *
  * file_context owns construction-file identity, cold physical-content state,
- * and compact direct dependency topology for one candidate construction.
+ * and compact direct dependency topology for one construction operation.
  * Parser state, semantic Graph, Runtime, and resident Project state remain
  * outside this class.
  */
@@ -169,9 +169,9 @@ struct construction_content_hash final {
         const construction_content_hash&) noexcept = default;
 };
 
-// Mutable physical-file state for one candidate construction. The candidate
-// construction owner is the rollback boundary, so File Context has no nested
-// update transaction and no mutex.
+// Mutable physical-file state for one construction operation. The operation
+// owner is the rollback boundary, so File Context has no nested update
+// transaction and no mutex.
 class file_context final {
 public:
     file_context() = default;

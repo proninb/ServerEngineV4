@@ -423,8 +423,18 @@ represent Graph versions, generations, or runtime state.
 
 `source.bin` has a versioned/checksummed image contract for finalized File
 Context state. It records file_id order, UTF-8 physical paths, file kind,
-content/change proof, and direct forward/reverse topology. The encoder refuses
-a File Context whose dependency topology is not terminally finalized.
+content/change proof, and direct forward/reverse topology. It does not duplicate
+Project file contents. The encoder refuses a File Context whose dependency
+topology is not terminally finalized.
+
+The committed SourceSave image is fully validated once at baseline open.
+`source_save_view::bind()` is then an allocation-free zero-copy binding step; it
+does not repeat full forward/reverse topology validation.
+
+BUILD first uses native change-token proof where available; only files that
+cannot be proved unchanged are read and compared by SHA-256. The resulting exact
+dirty set is expanded through the OLD committed reverse topology before affected
+dependency relations are recomputed.
 
 `database.bin` has a sectioned versioned/checksummed base image. Current sections
 persist dense `string_id` spelling order, retained lexical state in canonical

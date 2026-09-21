@@ -1083,17 +1083,34 @@ Assign input materialization
     exact immutable bytes only
 ```
 
-Architecture already specified but not implemented:
+Implemented physical BUILD analysis foundation:
 
 ```text
-BUILD File Context baseline reuse
+source_save_view
+    zero-copy source.bin baseline view
+
+scan_source_save_changes()
+    native change-token fast path
+    SHA-256 fallback
+    exact dirty file_id set
+
+collect_source_save_affected()
+    OLD reverse-topology closure
+    deterministic
+    no sort
+```
+
+Architecture still not integrated/implemented:
+
+```text
+BUILD File Context sparse mutation over source_save_view
 BUILD string_table / identity_ref lineage reuse
 Parser/Semantic -> G
 Assign grammar / semantic reference resolution -> G
-BUILD sparse dependency update
-REBUILD terminal dependency finalization
+BUILD affected dependency replacement
+REBUILD terminal dependency finalization at the final producer boundary
+authoritative A/B multi-artifact commit
 compiled-G persistence
-coordinated multi-artifact commit
 LOAD compiled-G restore
 ```
 
