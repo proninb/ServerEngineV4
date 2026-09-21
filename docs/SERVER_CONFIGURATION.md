@@ -13,11 +13,19 @@ The JSON parser supports:
 
 ```jsonc
 {
-  "version": 1,
+  "version": 2,
 
   "abi": {
     "target": "windows-x64",
     "pack": 8
+  },
+
+  "project_files": {
+    "manifest": "project.manifest",
+    "source_save": "source.bin",
+    "database": "database.bin",
+    "compiled": "compiled.bin",
+    "baseline": "baseline.bin"
   },
 
   "communication": {
@@ -73,6 +81,53 @@ Supported pack values:
 One Server owns one ABI and one SHM layout contract. Every Project and
 subproject constructed or restored by that Server uses this ABI.
 `project.json` cannot override it.
+
+## Project Files
+
+`project_files` is required Server configuration and exists independently of
+the optional startup `project`.
+
+```jsonc
+"project_files": {
+  "manifest": "project.manifest",
+  "source_save": "source.bin",
+  "database": "database.bin",
+  "compiled": "compiled.bin",
+  "baseline": "baseline.bin"
+}
+```
+
+Each value is one non-empty relative filename:
+
+```text
+no absolute path
+no directory component
+no "." / ".."
+all five names are distinct
+```
+
+The filenames are Server-wide policy and exist even when `server.json` has no startup Project entry.
+
+Mode usage:
+
+```text
+LOAD
+    baseline
+    compiled
+
+BUILD
+    baseline
+    manifest
+    source_save
+    database
+    compiled
+
+REBUILD
+    produces fresh manifest/source_save/database/compiled
+    and publishes them through baseline
+```
+
+The current implementation already wires `project_files.manifest` into `project_configuration_manifest_store`.
 
 ## Project Startup
 

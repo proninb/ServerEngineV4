@@ -364,11 +364,12 @@ The Project artifact root remains:
 <root-project-dir>/.serverengine/<root-project.json filename>/
 ```
 
-One successful BUILD/REBUILD baseline logically contains:
+One successful BUILD/REBUILD baseline logically contains files whose standard
+names come from process-wide `server.json.project_files`:
 
 ```text
 configuration proof
-    project.manifest
+    project_files.manifest
 
 SourceSave
     physical file identity/state
@@ -382,7 +383,9 @@ final G
     one compiled Project result used by LOAD/Runtime
 ```
 
-The exact SourceSave/DB/final-G filenames and binary formats are not frozen yet.
+The artifact roles and filenames are configured by `project_files.manifest`,
+`project_files.source_save`, `project_files.database`, `project_files.compiled`,
+and `project_files.baseline`. Binary formats remain versioned persistence contracts.
 
 The existing `project_configuration_manifest_store` remains a narrow codec/store
 for the configuration-proof component. Its standalone replacement operation is

@@ -615,11 +615,12 @@ artifact directory:
             committed baseline
 ```
 
-Logically one successful baseline contains:
+Logically one successful baseline contains files whose Server-wide names come
+from `server.json.project_files`:
 
 ```text
 configuration proof
-    project.manifest
+    project_files.manifest
 
 SourceSave
     physical file identity/state
@@ -636,8 +637,9 @@ final G
     the one compiled result required by LOAD/Runtime
 ```
 
-The exact physical split and filenames for SourceSave, DB, and final G are not
-frozen by this document yet.
+The artifact roles use the Server-wide configured names
+`project_files.manifest/source_save/database/compiled/baseline`. Their binary
+formats remain versioned implementation contracts.
 
 `project.manifest` remains versioned, checksummed, and fail-closed, but its own
 temporary-file replacement is not the final multi-artifact commit model.
