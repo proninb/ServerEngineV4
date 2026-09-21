@@ -55,10 +55,16 @@ struct include_directive final {
     source_range locator;
 };
 
+struct identifier_directive final {
+    source_range name;
+    source_range replacement;
+};
+
 struct preprocessing_directive final {
     directive_kind kind = directive_kind::invalid;
     directive_range range;
     include_directive include;
+    identifier_directive identifier;
 };
 
 // Stateless decoder for one preprocessing directive at the current input

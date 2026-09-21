@@ -90,7 +90,9 @@ server_status directive_decoder::decode(
     }
 
     include_directive include;
-    bool include_argument_seen = false;
+    identifier_directive identifier;
+
+    std::uint32_t argument_count = 0;
     bool direct_include = false;
 
     frontend_token current = first;
@@ -117,6 +119,34 @@ server_status directive_decoder::decode(
                 return server_status::project_configuration_invalid;
             }
 
+            switch (kind) {
+            case directive_kind::define:
+                if (argument_count < 1 ||
+                    argument_count > 2) {
+
+                    return server_status::project_configuration_invalid;
+                }
+                break;
+
+            case directive_kind::undef:
+            case directive_kind::ifdef:
+            case directive_kind::ifndef:
+                if (argument_count != 1) {
+                    return server_status::project_configuration_invalid;
+                }
+                break;
+
+            case directive_kind::else_:
+            case directive_kind::endif:
+                if (argument_count != 0) {
+                    return server_status::project_configuration_invalid;
+                }
+                break;
+
+            default:
+                break;
+            }
+
             const auto word_count =
                 word_end - word_begin;
 
@@ -136,35 +166,81 @@ server_status directive_decoder::decode(
                 },
             };
             output.include = include;
+            output.identifier = identifier;
 
             return server_status::success;
         }
 
-        if (kind != directive_kind::include) {
-            continue;
-        }
+        switch (kind) {
+        case directive_kind::include:
+            if (argument_count == 0) {
+                const auto form =
+                    decode_include_form(
+                        current.kind);
 
-        if (!include_argument_seen) {
-            include_argument_seen = true;
+                if (form != include_form::none) {
+                    direct_include = true;
+                    include.form = form;
+                    include.locator = {
+                        current.source_offset,
+                        current.source_length,
+                    };
+                }
+            }
+            else if (direct_include) {
+                return server_status::project_configuration_invalid;
+            }
 
-            const auto form =
-                decode_include_form(
-                    current.kind);
+            ++argument_count;
+            break;
 
-            if (form != include_form::none) {
-                direct_include = true;
-                include.form = form;
-                include.locator = {
+        case directive_kind::define:
+            if (current.kind != token_kind::identifier ||
+                argument_count >= 2) {
+
+                return server_status::project_configuration_invalid;
+            }
+
+            if (argument_count == 0) {
+                identifier.name = {
+                    current.source_offset,
+                    current.source_length,
+                };
+            }
+            else {
+                identifier.replacement = {
                     current.source_offset,
                     current.source_length,
                 };
             }
 
-            continue;
-        }
+            ++argument_count;
+            break;
 
-        if (direct_include) {
+        case directive_kind::undef:
+        case directive_kind::ifdef:
+        case directive_kind::ifndef:
+            if (current.kind != token_kind::identifier ||
+                argument_count != 0) {
+
+                return server_status::project_configuration_invalid;
+            }
+
+            identifier.name = {
+                current.source_offset,
+                current.source_length,
+            };
+
+            ++argument_count;
+            break;
+
+        case directive_kind::else_:
+        case directive_kind::endif:
             return server_status::project_configuration_invalid;
+
+        default:
+            ++argument_count;
+            break;
         }
     }
 }

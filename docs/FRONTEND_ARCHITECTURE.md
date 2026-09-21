@@ -882,8 +882,20 @@ frontend_input
 directive_decoder
     consumes exactly one pp_* ... pp_end directive
     retains exact file-local lexical/source ranges
-    direct quoted/angled include payload only
+    typed identifier operands for define/undef/ifdef/ifndef
+    direct quoted/angled include payload
     no include resolution / macro execution / File Context mutation
+
+directive_executor
+    initializes mutable state from root preprocessor_configuration
+    fixed 256-level conditional stack
+    conditional groups are balanced within one physical file
+    #define NAME / #define NAME IDENTIFIER / #undef
+    #ifdef / #ifndef / #else / #endif
+    inactive-branch suppression for normal directives
+    direct #include -> transient include_request
+    typed execution error + exact source range
+    no include resolution / File Context mutation
 
 lexical_token
     one 32-bit word
@@ -898,11 +910,10 @@ lexical_token
 Not implemented yet:
 
 ```text
-directive execution
-#ifdef / #ifndef / #else / #endif execution
-include request execution/resolution
+include request resolution
 include path resolver / configured include roots
 #include traversal through the frontend_input boundary
+construction-owner diagnostic presentation for directive_execution_error
 Semantic identity_space
 identity_ref integration
 Graph semantic construction
@@ -912,11 +923,22 @@ Graph semantic construction
 
 ## Next Construction Step
 
-The next slice is directive execution over the already decoded `pp_*` /
-`pp_end` sequences. It must initialize each frontend execution from the single
-root preprocessing configuration, execute the restricted preprocessing contract,
-and emit include requests without absorbing include resolution or File Context
-ownership.
+The next slice is construction-owned include execution:
 
-It must not introduce a second file identity domain, a semantic token graph,
-per-file semantic cache, AST persistence, or a generic frontend manager/context.
+```text
+include_request
+    -> resolve physical path
+    -> resolve/register file_id
+    -> File Context add_dependency(source, target)
+    -> materialize/lex target if needed
+    -> frontend_input.enter(target)
+```
+
+It must continue the same mutable preprocessor state through the included file.
+Conditional execution state remains structurally file-bound: before
+`frontend_input.leave()`, construction calls `directive_executor::finish_file()`
+so an included file cannot close or leave open a conditional group belonging to
+another physical file.
+
+Filesystem, file identity, and dependency-topology ownership must not move into
+`directive_executor`.
