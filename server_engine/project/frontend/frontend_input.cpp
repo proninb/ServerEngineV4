@@ -11,6 +11,38 @@ server_status frontend_input::start(
     return enter(root);
 }
 
+server_status frontend_input::start_at(
+    file_id file,
+    std::uint32_t word_offset_value,
+    std::uint32_t source_base) noexcept {
+
+    stack_size = 0;
+
+    if (!lexical.contains(file)) {
+        return server_status::project_configuration_invalid;
+    }
+
+    const auto words =
+        lexical.words(file);
+
+    if (static_cast<std::size_t>(
+            word_offset_value) >=
+        words.size()) {
+
+        return server_status::project_configuration_invalid;
+    }
+
+    stack[0] = {
+        file,
+        word_offset_value,
+        source_base,
+    };
+
+    stack_size = 1;
+
+    return server_status::success;
+}
+
 server_status frontend_input::enter(
     file_id file) noexcept {
 

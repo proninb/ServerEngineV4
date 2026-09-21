@@ -60,6 +60,7 @@ inline constexpr std::array diagnostic_descriptors{
     diagnostics::project_duplicate_construction_input,
     diagnostics::project_lexical_error,
     diagnostics::project_configuration_depth_exceeded,
+    diagnostics::project_preprocessing_error,
     diagnostics::project_startup_unsupported,
     diagnostics::project_invalid_json,
     diagnostics::project_invalid_configuration,

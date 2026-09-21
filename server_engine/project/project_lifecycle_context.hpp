@@ -10,6 +10,7 @@
 #include "preprocessor_configuration.hpp"
 #include "file/file_context.hpp"
 #include "frontend/lexical_generation.hpp"
+#include "string/string_table.hpp"
 #include "../configuration/server_configuration.hpp"
 
 namespace cw::server {
@@ -51,6 +52,7 @@ public:
     project_configuration_manifest manifest;
     file_context files;
     lexical_generation lexical;
+    string_table strings;
 
     preprocessor_configuration preprocessor;
 };

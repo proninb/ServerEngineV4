@@ -2,8 +2,8 @@
  * Streaming Frontend lexical-input stack.
  *
  * frontend_input owns only active per-file lexical positions. Lexical storage
- * remains owned by lexical_generation; frames retain no pointer/span, so lexical
- * arena growth during include discovery cannot invalidate suspended parents.
+ * remains owned by lexical_generation; frames retain no pointer/span, so arena
+ * growth during include discovery cannot invalidate suspended positions.
  */
 #pragma once
 
@@ -17,8 +17,6 @@
 
 namespace cw::server {
 
-// Hard fail-closed limit for active physical include nesting. The limit is
-// independent of Project file count and keeps frontend traversal allocation-free.
 inline constexpr std::size_t frontend_include_depth_limit = 256;
 
 struct frontend_token final {
@@ -30,9 +28,9 @@ struct frontend_token final {
 
 static_assert(sizeof(frontend_token) == 16);
 
-// Active lexical-input stack for one streaming frontend execution. A frame keeps
-// the word position plus the previous token start required by delta decoding.
-// No lexical arena address survives an include/mutation boundary.
+// Active lexical-input stack for Parser/Semantic streaming and exact directive
+// decoding. start_at() enters a sparse lexer-recorded directive anchor without
+// scanning the ordinary tokens that precede it.
 class frontend_input final {
 public:
     explicit frontend_input(
@@ -45,6 +43,11 @@ public:
 
     [[nodiscard]] server_status start(
         file_id root) noexcept;
+
+    [[nodiscard]] server_status start_at(
+        file_id file,
+        std::uint32_t word_offset,
+        std::uint32_t source_base) noexcept;
 
     [[nodiscard]] server_status enter(
         file_id file) noexcept;

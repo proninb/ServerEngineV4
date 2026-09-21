@@ -81,6 +81,12 @@ public:
     directive_executor(const directive_executor&) = delete;
     directive_executor& operator=(const directive_executor&) = delete;
 
+    // Starts another frontend root using the already-reset mutable
+    // preprocessor state. Conditional groups never cross root executions.
+    void reset() noexcept {
+        conditional_depth = 0;
+    }
+
     [[nodiscard]] server_status execute(
         const preprocessing_directive& directive,
         std::string_view source,

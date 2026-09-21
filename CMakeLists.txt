@@ -31,6 +31,7 @@ add_executable(ServerEngineV4
     server_engine/project/frontend/frontend_input.cpp
     server_engine/project/frontend/directive_decoder.cpp
     server_engine/project/frontend/directive_executor.cpp
+    server_engine/project/frontend/source_discovery.cpp
     server_engine/project/frontend/lexical_stream.cpp
     server_engine/project/frontend/lexer.cpp
     server_engine/project/frontend/lexical_generation.cpp
@@ -49,12 +50,18 @@ if(WIN32)
     target_sources(ServerEngineV4 PRIVATE
         server_engine/communication/console/console_input_windows.cpp
         server_engine/project/project_path_windows.cpp
+        server_engine/project/frontend/execution_lanes_windows.cpp
     )
 else()
+    find_package(Threads REQUIRED)
+
     target_sources(ServerEngineV4 PRIVATE
         server_engine/communication/console/console_input_posix.cpp
         server_engine/project/project_path_posix.cpp
+        server_engine/project/frontend/execution_lanes_posix.cpp
     )
+
+    target_link_libraries(ServerEngineV4 PRIVATE Threads::Threads)
 endif()
 
 target_include_directories(ServerEngineV4 PRIVATE

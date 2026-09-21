@@ -155,6 +155,15 @@ server_status preprocessor::ensure_capacity(
     }
 }
 
+void preprocessor::reset() noexcept {
+
+    for (auto& slot : definitions) {
+        slot = {};
+    }
+
+    definition_count = 0;
+}
+
 server_status preprocessor::define_impl(
     string_id name,
     string_id replacement) noexcept {

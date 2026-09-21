@@ -567,157 +567,129 @@ traversal therefore remains bounded, allocation-free execution state.
 
 ---
 
-## Project Composition and Frontend Boundary
+## Project Composition and Source-Closure Boundary
 
-Each parsed `project.json` is a dynamic producer of physical `file_id`
-registrations and Project-declared dependency edges. Composition reads only
-Project configuration files because child `project.json` bytes are required to
-continue recursive discovery.
+Project composition creates the initial dense `file_id` universe and stages
+Project-declared dependency edges. Child `project.json` files are materialized
+during composition because their bytes are required to continue recursive
+composition.
+
+Header/Source construction then runs in two distinct stages.
+
+### Stage 1: physical lexical facts and executed-include closure
+
+For every Project-declared Header/Source, the complete physical file is
+materialized before physical lexing begins. Immutable files are partitioned into
+contiguous `file_id` pools balanced by materialized byte weight. One execution
+lane owns one reusable `lexical_stream` and one retained lexical arena. Worker
+threads are created once for the source-closure lifetime and reused by every
+physical lex run; there is no task array, shared append arena, mutex, atomic work
+index, or sort.
+
+The complete physical file is lexed to EOF before preprocessing directive
+execution begins.
+The lexer never pauses at `#include` and never depends on preprocessor state.
+During that same pass it records a sparse directive anchor for each `pp_*`
+directive start. Directive execution therefore visits only preprocessing
+directives and their directive-line tokens; ordinary C++ tokens are not decoded
+again during source closure.
 
 ```text
-project.json
-    -> resolve/register all direct inputs
-    -> stage Project-declared file edges
-    -> parallel prefetch child project.json
-    -> parse child project.json
-    -> continue discovery
+physical bytes
+    -> lexer to EOF
+    -> compact lexical facts
 ```
 
-Header, Source, and Assign bytes are not acquired by `manifest_composer`.
-After composition reaches closure, REBUILD owns the next construction stage.
+A syntactic direct include is therefore always represented lexically, including
+one inside an inactive conditional branch.
 
-Initial Header/Source lexical construction scans the dense `file_id` table:
+Directive execution runs afterward over those lexical facts. Every frontend root
+gets fresh mutable preprocessing state initialized from the one root
+`preprocessor_configuration`; an included file continues the same mutable state.
 
 ```text
-file_id table
-    -> Header/Source only
-    -> prepare acquisition
-    -> worker: read -> lex private snapshot
-    -> single-owner File Context publication
-    -> lexical_generation.publish(file_id, stream)
+#ifdef X
+#include "a.hpp"
+#endif
 ```
 
-`lexical_generation` is direct-indexed construction storage:
+`#include "a.hpp"` is always lexed/decoded. It is resolved and executed only when
+the active conditional state reaches that directive.
+
+Executed directives are traversed by one construction owner in ascending
+initial `file_id` root order. An active include is resolved immediately in that
+owner order. If the target Header has not been lexed yet, its immutable bytes are
+materialized and the persistent lexical lanes execute the causally available
+physical work before the owner enters the child:
+
+```text
+deterministic owner
+    -> active include_request
+    -> resolve/register Header file_id
+    -> stage source -> target edge
+    -> materialize immutable target bytes
+    -> persistent lexical lanes
+    -> complete-file lex to EOF
+    -> sparse directive anchors
+    -> enter child directive execution
+    -> child EOF
+    -> resume parent
+```
+
+The owner never advances another root while an earlier root can still discover a
+new include. Therefore dense `file_id` assignment and directive-driven
+`string_id` interning are independent of hardware concurrency. A single root's
+include chain remains sequential because a child may change that root's mutable
+preprocessing state before the parent continues.
+
+The same physical `file_id` is lexed once in the construction generation.
+Different frontend roots may execute its directives under different mutable
+preprocessor states without re-lexing its bytes.
+
+Only executed includes extend the physical dependency topology. Inactive
+includes do not resolve paths, do not allocate `file_id`, and do not add edges.
+
+After every Project-declared frontend root reaches directive closure, all
+Header/Source dependency relations remain staged in File Context. Source closure
+does not finalize topology. Assign and any later dependency-producing syntax
+domains run first; the construction coordinator calls
+`finalize_dependency_topology()` exactly once only after every producer reaches
+closure.
+
+The current include-search policy in this slice supports quoted includes relative
+to the including physical file. Angled includes remain fail-closed until include
+roots become an explicit root Project configuration contract.
+
+### Stage 2: Parser / Semantic
+
+Parser and Semantic consume the completed physical file universe, finalized
+dependency topology, and retained lexical facts. Stage 2 does not lex source
+bytes again.
+
+`lexical_generation` remains direct-indexed construction storage:
 
 ```text
 lexical_record[file_id - 1]
-    -> { offset, word_count, token_count }
+    -> { arena, word_offset, word_count, token_count }
 
-one uint32 word arena
-    -> all published lexical words
+lexical_directive_record[file_id - 1]
+    -> { directive_offset, directive_count }
+
+O(CPU lanes) lexical arenas
+    -> one producer per arena during parallel physical lex
+    -> persistent workers are created once for source closure
+    -> lane arenas are reused for later physical work
 ```
 
-There is no manifest-to-frontend dependency, no per-file heap-owned lexical
-vector in the retained generation, and no second file identity domain. Project,
-Source, and Assign declarations are rejected on duplicate physical path during
-composition; repeat Header references remain valid. The storage may grow when
-later preprocessing discovers a new Header `file_id`.
-
-## Parallel Per-File Lexical Stream
-
-Physical lexing is independent per `file_id` and may run concurrently across Project files. Each worker reads immutable file bytes and writes only its private `lexical_stream`; retained construction storage is published afterward into one shared lexical word arena.
-
-Base token representation:
+`frontend_input` stores only active per-file lexical positions:
 
 ```text
-[ token_kind : 8 ][ source-start delta : 16 ][ source length : 8 ]
+{ file_id, word_offset, source_offset }
 ```
 
-The payload stores a 16-bit byte delta from the previous token start plus an 8-bit lexeme length. `0xffff` and `0xff` are in-band escapes: the full 32-bit delta and/or full 32-bit lexeme length immediately follow the token header in the same word stream. There is no checkpoint array or extended-token side table.
-
-The lexer performs no `string_table` lookup and creates no `string_id` or `identity_ref`. It directly classifies fixed C++ keywords, punctuation/operators, and preprocessing directive names. Directive lines use `pp_*` markers plus `pp_end`; direct quoted/angled include names use dedicated token kinds.
-
-Current fail-closed lexical boundaries are non-ASCII identifiers and backslash-newline source splicing. Malformed comments, literals, and direct header names fail construction.
-
-## `#include`
-
-`#include` changes physical input but does not create or change semantic scope.
-
-The directive boundary preserves the two C/C++ include forms:
-
-```cpp
-#include "x/a.hpp"  // include_form::quoted
-#include <x/a.hpp>  // include_form::angled
-```
-
-At the exact directive position the directive executor emits a transient request
-carrying the source `file_id`, include form, and locator.
-
-That request belongs to directive execution, not to `frontend_input`, whose
-responsibility remains only physical input traversal.
-
-The locator is consumed synchronously and is not stored in dependency topology.
-
-Construction resolves the request according to the include-search policy:
-
-```text
-quoted
-    current physical file directory
-    -> configured include roots
-
-angled
-    configured include roots
-```
-
-The include-root configuration/resolver is a separate construction policy and is
-not defined by `frontend_input`.
-
-Execution is:
-
-```text
-parent frontend reaches #include
-    -> consume directive in parent
-    -> include_request { source, form, locator }
-    -> construction resolves/registers target file_id
-    -> File Context stages source -> target
-    -> target bytes are materialized
-    -> frontend_input.enter(target)
-    -> lexer/preprocessor/parser continue on child
-    -> child EOF
-    -> frontend_input.leave()
-    -> parent resumes at saved byte offset
-```
-
-There is no:
-
-```text
-scan includes pass
-    -> finalize dependency information
-    -> parse source again
-```
-
-File dependency topology is produced as a side effect of the same streaming
-frontend execution that performs preprocessing/parsing.
-
-Example:
-
-```cpp
-namespace AA {
-#include "A.hpp"
-}
-```
-
-At the directive:
-
-```text
-current semantic scope = AA
-```
-
-The child input executes under that same semantic scope. If `A.hpp` contains:
-
-```cpp
-struct B {};
-```
-
-Semantic creates:
-
-```text
-identity_ref(AA::B)
-```
-
-At child EOF the input frame is popped and the parent continues.
-
----
+Frames keep no pointer/span into the lexical arena. If a newly discovered Header
+causes lexical storage growth, suspended parent positions remain valid and
+reacquire their lexical span on the next decode.
 
 ## Include Guards
 
@@ -835,8 +807,9 @@ The following contracts are fail-closed architecture rules.
 16. Do not introduce manager/context abstractions without a demonstrated
     ownership or lifetime requirement.
 
-17. Do not run a separate include/dependency prepass. Executed includes stage
-    topology during the same streaming frontend execution.
+17. Source closure may execute preprocessing directives before Parser/Semantic,
+    but it must reuse the one retained lexical generation. Source bytes are
+    never lexed a second time only to discover dependencies.
 
 18. Active frontend include traversal is bounded execution state and must not
     allocate from the heap on include enter/leave.

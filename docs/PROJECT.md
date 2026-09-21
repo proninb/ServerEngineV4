@@ -661,11 +661,19 @@ file_kind::assign
 The topology layer stores only resolved `file_id` relations; it does not contain
 paths, parser state, or syntax-specific facts.
 
-Header/Source include dependencies are staged during the same streaming frontend
-execution that performs preprocessing/parsing. V4 does not run a separate source
-scan only to discover includes. At an executed `#include`, the frontend pauses,
-construction resolves/registers the target `file_id`, stages the direct edge,
-enters the child input, and resumes the parent after child EOF.
+Header/Source dependency construction is two-stage. Physical files are lexed
+once into retained compact lexical facts plus sparse directive anchors. Physical
+lex uses persistent CPU lanes, but directive execution remains a deterministic
+single-owner traversal in ascending initial `file_id` root order. Executed
+includes therefore assign new dense `file_id` values and intern directive names
+in the same order regardless of hardware concurrency.
+
+An include-discovered Header is materialized and lexed before that owner enters
+the child, so one root's mutable preprocessing state remains strictly ordered.
+Source closure does not finalize File Context topology. Assign and any later
+dependency-producing domains stage their relations first. Parser/Semantic runs
+after the single terminal topology finalization and reuses the retained lexical
+facts without lexing source bytes again.
 
 ### Storage contract
 

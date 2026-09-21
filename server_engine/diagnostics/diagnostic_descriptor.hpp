@@ -238,6 +238,14 @@ inline constexpr diagnostic_descriptor project_configuration_depth_exceeded{
     "Project configuration nesting depth exceeds the supported limit",
 };
 
+inline constexpr diagnostic_descriptor project_preprocessing_error{
+    diagnostic_id{2019},
+    diagnostic_domain::parser,
+    diagnostic_severity::error,
+    "project.preprocessing_error",
+    "Project source preprocessing failed",
+};
+
 } // namespace diagnostics
 
 }

@@ -41,6 +41,10 @@ public:
     preprocessor(const preprocessor&) = delete;
     preprocessor& operator=(const preprocessor&) = delete;
 
+    // Starts another frontend root while retaining construction-local table
+    // capacity. No string_id survives here as an active macro binding.
+    void reset() noexcept;
+
     // Equivalent to "#define NAME": NAME is defined with an empty replacement.
     [[nodiscard]] server_status define(
         string_id name) noexcept;

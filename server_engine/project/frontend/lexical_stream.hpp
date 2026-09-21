@@ -1,9 +1,9 @@
 /*
  * Compact per-file lexical stream.
  *
- * lexical_stream owns one construction-time uint32 word stream for one
- * physical file. Common tokens occupy one word; rare extended source delta or
- * lexeme length values are encoded immediately after the token header.
+ * One physical file is lexed once into compact words. The same pass records
+ * sparse preprocessing-directive anchors so directive execution never rescans
+ * ordinary C++ tokens.
  */
 #pragma once
 
@@ -13,11 +13,19 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
-#include <vector>
 
 namespace cw::server {
 
+struct lexical_directive_anchor final {
+    std::uint32_t word_offset = 0;
+    std::uint32_t source_base = 0;
+};
+
+static_assert(sizeof(lexical_directive_anchor) == 8);
+
+// Private reusable output of one physical-file lexer execution.
 class lexical_stream final {
 public:
     lexical_stream() = default;
@@ -42,11 +50,26 @@ public:
     }
 
     [[nodiscard]] std::span<const std::uint32_t> words() const noexcept {
-        return values;
+        return {
+            values.get(),
+            value_count,
+        };
+    }
+
+    [[nodiscard]] std::span<const lexical_directive_anchor>
+    directives() const noexcept {
+        return {
+            directive_values.get(),
+            directive_count_value,
+        };
     }
 
     [[nodiscard]] std::size_t word_count() const noexcept {
-        return values.size();
+        return value_count;
+    }
+
+    [[nodiscard]] std::size_t directive_count() const noexcept {
+        return directive_count_value;
     }
 
     [[nodiscard]] std::uint32_t token_count() const noexcept {
@@ -58,8 +81,22 @@ public:
     }
 
 private:
+    [[nodiscard]] server_status reserve_words(
+        std::size_t required) noexcept;
+
+    [[nodiscard]] server_status reserve_directives(
+        std::size_t required) noexcept;
+
     file_id source_file{};
-    std::vector<std::uint32_t> values;
+
+    std::unique_ptr<std::uint32_t[]> values;
+    std::size_t value_count = 0;
+    std::size_t value_capacity = 0;
+
+    std::unique_ptr<lexical_directive_anchor[]> directive_values;
+    std::size_t directive_count_value = 0;
+    std::size_t directive_capacity = 0;
+
     std::uint32_t source_size = 0;
     std::uint32_t last_source_offset = 0;
     std::uint32_t tokens = 0;
