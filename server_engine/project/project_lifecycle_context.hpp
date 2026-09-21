@@ -18,37 +18,46 @@ namespace cw::server {
 // Temporary LOAD state; borrows the process-wide Server ABI.
 class load_context final {
 public:
-    explicit load_context(
-        const server_abi_configuration& abi) noexcept
-        : abi(abi) {
+    load_context(
+        const server_abi_configuration& abi,
+        const project_files_configuration& project_files) noexcept
+        : abi(abi),
+          project_files(project_files) {
     }
 
     const server_abi_configuration& abi;
+    const project_files_configuration& project_files;
 };
 
-// Temporary BUILD state for constructing Gn+1 from resident Gn.
+// Temporary BUILD state over the last successful persisted construction baseline.
 class build_context final {
 public:
-    explicit build_context(
-        const server_abi_configuration& abi) noexcept
-        : abi(abi) {
+    build_context(
+        const server_abi_configuration& abi,
+        const project_files_configuration& project_files) noexcept
+        : abi(abi),
+          project_files(project_files) {
     }
 
     const server_abi_configuration& abi;
+    const project_files_configuration& project_files;
     project_configuration_manifest manifest;
 
     preprocessor_configuration preprocessor;
 };
 
-// Temporary REBUILD state for constructing a fresh G0.
+// Temporary REBUILD state for constructing a fresh Project lineage.
 class rebuild_context final {
 public:
-    explicit rebuild_context(
-        const server_abi_configuration& abi) noexcept
-        : abi(abi) {
+    rebuild_context(
+        const server_abi_configuration& abi,
+        const project_files_configuration& project_files) noexcept
+        : abi(abi),
+          project_files(project_files) {
     }
 
     const server_abi_configuration& abi;
+    const project_files_configuration& project_files;
     project_configuration_manifest manifest;
     file_context files;
     lexical_generation lexical;

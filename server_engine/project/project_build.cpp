@@ -28,19 +28,23 @@ namespace {
 server_status build_project(
     const project& resident,
     const server_abi_configuration& abi,
+    const project_files_configuration& project_files,
     operation_id operation,
     diagnostic_collection& diagnostics,
     std::unique_ptr<project>& output) {
 
     (void)output;
 
-    build_context context{abi};
+    build_context context{
+        abi,
+        project_files};
 
     const auto& project_path =
         resident.path();
 
     project_configuration_manifest_store store{
-        project_path};
+        project_path,
+        context.project_files.manifest};
 
     const auto stored =
         store.load(

@@ -216,6 +216,7 @@ server_status server::load(
         load_project(
             path,
             context.configuration.abi,
+            context.configuration.project_files,
             operation,
             diagnostics,
             candidate);
@@ -252,6 +253,7 @@ server_status server::build(
         build_project(
             *context.project,
             context.configuration.abi,
+            context.configuration.project_files,
             operation,
             diagnostics,
             candidate);
@@ -294,6 +296,7 @@ server_status server::rebuild(
         rebuild_project(
             path,
             context.configuration.abi,
+            context.configuration.project_files,
             operation,
             diagnostics,
             candidate);

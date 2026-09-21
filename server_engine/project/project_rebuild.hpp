@@ -1,8 +1,8 @@
 /*
  * Project REBUILD pipeline.
  *
- * REBUILD ignores incremental construction state, streams project.json through
- * the ordered Project schema, then constructs a new G0 from explicit roots.
+ * REBUILD ignores incremental construction state and constructs a fresh Project
+ * lineage from project.json and its explicit inputs.
  */
 #pragma once
 
@@ -20,6 +20,7 @@ namespace cw::server {
 [[nodiscard]] server_status rebuild_project(
     const std::filesystem::path& project_path,
     const server_abi_configuration& abi,
+    const project_files_configuration& project_files,
     operation_id operation,
     diagnostic_collection& diagnostics,
     std::unique_ptr<project>& output);

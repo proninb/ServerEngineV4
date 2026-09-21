@@ -129,13 +129,16 @@ namespace {
 server_status rebuild_project(
     const std::filesystem::path& project_path,
     const server_abi_configuration& abi,
+    const project_files_configuration& project_files,
     operation_id operation,
     diagnostic_collection& diagnostics,
     std::unique_ptr<project>& output) {
 
     (void)output;
 
-    rebuild_context context{abi};
+    rebuild_context context{
+        abi,
+        project_files};
 
     const auto composed =
         compose_project_configuration(
@@ -219,7 +222,7 @@ server_status rebuild_project(
         return assignments_materialized;
     }
 
-    // The candidate manifest belongs to candidate G0. Persist it only as part
+    // The candidate manifest belongs to candidate final G. Persist it only as part
     // of the eventual coordinated successful REBUILD commit.
 
     diagnostics.emit(

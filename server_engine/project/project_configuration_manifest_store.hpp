@@ -22,8 +22,9 @@ enum class project_configuration_manifest_store_result : std::uint8_t {
 
 class project_configuration_manifest_store final {
 public:
-    explicit project_configuration_manifest_store(
-        const std::filesystem::path& root_project_path);
+    project_configuration_manifest_store(
+        const std::filesystem::path& root_project_path,
+        const std::filesystem::path& manifest_file);
 
     [[nodiscard]]
     project_configuration_manifest_store_result load(

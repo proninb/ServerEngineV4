@@ -52,10 +52,10 @@ struct communication_configuration {
 
 // Startup policy for the optional Project.
 enum class project_startup_mode {
-    // Restore persisted Graph state without Project/source change detection.
+    // Restore the committed final Project state without source construction.
     load,
 
-    // Reconstruct from project.json and sources as a full G0 build.
+    // Reconstruct the Project from project.json using a fresh lineage.
     rebuild,
 };
 
@@ -100,13 +100,26 @@ struct server_abi_configuration final {
     std::uint32_t pack = 8;
 };
 
+// Server-wide standard filenames used inside each Project artifact directory.
+// These names exist independently of the optional startup Project.
+struct project_files_configuration final {
+    std::filesystem::path manifest;
+    std::filesystem::path source_save;
+    std::filesystem::path database;
+    std::filesystem::path compiled;
+    std::filesystem::path baseline;
+};
+
 // Process-level configuration loaded before communication and Project lifecycle begin.
 struct server_configuration {
-    // server.json schema version. Current V4 schema value is 1.
+    // server.json schema version. Current V4 schema value is 2.
     std::uint32_t version = 0;
 
     // Required process-wide ABI used by all Project lifecycle modes.
     server_abi_configuration abi;
+
+    // Required Server-wide standard Project artifact filenames.
+    project_files_configuration project_files;
 
     // Required communication endpoint configuration.
     communication_configuration communication;

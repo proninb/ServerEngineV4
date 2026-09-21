@@ -1,9 +1,9 @@
 /*
  * Project BUILD pipeline.
  *
- * BUILD transforms the currently resident Project Gn into candidate Gn+1.
- * Persisted construction proof is loaded only for that active Project. On any
- * failure the Server owner discards Gn and transitions to UNLOADED.
+ * BUILD incrementally constructs from the last successful persisted baseline.
+ * The current implementation still receives the resident Project only as a
+ * temporary entry-path source until the lifecycle boundary is corrected.
  */
 #pragma once
 
@@ -21,6 +21,7 @@ namespace cw::server {
 [[nodiscard]] server_status build_project(
     const project& resident,
     const server_abi_configuration& abi,
+    const project_files_configuration& project_files,
     operation_id operation,
     diagnostic_collection& diagnostics,
     std::unique_ptr<project>& output);

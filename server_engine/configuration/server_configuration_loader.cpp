@@ -27,6 +27,7 @@ namespace {
 enum class schema_context : std::uint8_t {
     root,
     abi,
+    project_files,
     communication,
     endpoints,
     endpoint,
@@ -42,6 +43,12 @@ enum class schema_field : std::uint8_t {
     abi,
     target,
     pack,
+    project_files,
+    manifest,
+    source_save,
+    database,
+    compiled,
+    baseline,
     communication,
     project,
     logging,
@@ -170,6 +177,22 @@ public:
         if (parent.context ==
                 schema_context::root &&
             parent.field ==
+                schema_field::project_files) {
+
+            stack.back().field =
+                schema_field::none;
+
+            stack.push_back({
+                schema_context::project_files,
+                schema_field::none,
+                0,
+            });
+            return;
+        }
+
+        if (parent.context ==
+                schema_context::root &&
+            parent.field ==
                 schema_field::communication) {
 
             stack.back().field =
@@ -266,11 +289,12 @@ public:
         case schema_context::root:
             if (!seen(frame, schema_field::version) ||
                 !seen(frame, schema_field::abi) ||
+                !seen(frame, schema_field::project_files) ||
                 !seen(frame, schema_field::communication)) {
 
                 fail(
                     schema_failure::missing_required_field,
-                    "server configuration requires version, abi, and communication");
+                    "server configuration requires version, abi, project_files, and communication");
                 return;
             }
 
@@ -284,6 +308,12 @@ public:
                 fail(
                     schema_failure::missing_required_field,
                     "abi requires target and pack");
+                return;
+            }
+            break;
+
+        case schema_context::project_files:
+            if (!validate_project_files(frame)) {
                 return;
             }
             break;
@@ -512,6 +542,10 @@ public:
             read_abi(field, value);
             break;
 
+        case schema_context::project_files:
+            read_project_files(field, value);
+            break;
+
         case schema_context::endpoint:
             read_endpoint(field, value);
             break;
@@ -590,6 +624,7 @@ private:
         case schema_context::root:
             if (key == "version") return schema_field::version;
             if (key == "abi") return schema_field::abi;
+            if (key == "project_files") return schema_field::project_files;
             if (key == "communication") return schema_field::communication;
             if (key == "project") return schema_field::project;
             if (key == "logging") return schema_field::logging;
@@ -599,6 +634,14 @@ private:
         case schema_context::abi:
             if (key == "target") return schema_field::target;
             if (key == "pack") return schema_field::pack;
+            break;
+
+        case schema_context::project_files:
+            if (key == "manifest") return schema_field::manifest;
+            if (key == "source_save") return schema_field::source_save;
+            if (key == "database") return schema_field::database;
+            if (key == "compiled") return schema_field::compiled;
+            if (key == "baseline") return schema_field::baseline;
             break;
 
         case schema_context::communication:
@@ -657,7 +700,7 @@ private:
             return;
         }
 
-        if (version != 1) {
+        if (version != 2) {
             fail(
                 schema_failure::unsupported_version,
                 "unsupported server configuration version");
@@ -722,6 +765,112 @@ private:
         fail(
             schema_failure::invalid_structure,
             "invalid abi scalar field");
+    }
+
+    void read_project_files(
+        schema_field field,
+        json_value_view value) {
+
+        std::string name;
+
+        if (!value.get(name) ||
+            name.empty()) {
+
+            fail(
+                schema_failure::wrong_type,
+                "project_files entries must be non-empty strings");
+            return;
+        }
+
+        const char* field_name = nullptr;
+        std::filesystem::path* output = nullptr;
+
+        switch (field) {
+        case schema_field::manifest:
+            field_name = "manifest";
+            output = &configuration.project_files.manifest;
+            break;
+
+        case schema_field::source_save:
+            field_name = "source_save";
+            output = &configuration.project_files.source_save;
+            break;
+
+        case schema_field::database:
+            field_name = "database";
+            output = &configuration.project_files.database;
+            break;
+
+        case schema_field::compiled:
+            field_name = "compiled";
+            output = &configuration.project_files.compiled;
+            break;
+
+        case schema_field::baseline:
+            field_name = "baseline";
+            output = &configuration.project_files.baseline;
+            break;
+
+        default:
+            fail(
+                schema_failure::invalid_structure,
+                "invalid project_files scalar field");
+            return;
+        }
+
+        if (name == "." ||
+            name == ".." ||
+            name.find('/') != std::string::npos ||
+            name.find('\\') != std::string::npos) {
+
+            fail(
+                schema_failure::invalid_value,
+                std::string("project_files.") +
+                    field_name +
+                    " must be a single relative file name");
+            return;
+        }
+
+        std::filesystem::path native_path;
+
+        const auto converted =
+            filesystem_path_from_utf8(
+                name,
+                native_path);
+
+        if (converted !=
+            filesystem_path_result::success) {
+
+            fail(
+                schema_failure::invalid_value,
+                converted ==
+                        filesystem_path_result::invalid_utf8
+                    ? std::string("project_files.") +
+                        field_name +
+                        " must be valid UTF-8"
+                    : std::string("cannot convert project_files.") +
+                        field_name +
+                        " to native filesystem path");
+            return;
+        }
+
+        if (native_path.empty() ||
+            native_path.is_absolute() ||
+            native_path.has_root_name() ||
+            native_path.has_root_directory() ||
+            native_path.has_parent_path() ||
+            native_path.filename() != native_path) {
+
+            fail(
+                schema_failure::invalid_value,
+                std::string("project_files.") +
+                    field_name +
+                    " must be a single relative file name");
+            return;
+        }
+
+        *output =
+            std::move(native_path);
     }
 
     void read_endpoint(
@@ -974,6 +1123,51 @@ private:
         fail(
             schema_failure::invalid_structure,
             "telemetry.subsystems must be an array");
+    }
+
+    [[nodiscard]] bool validate_project_files(
+        const schema_frame& frame) {
+
+        if (!seen(frame, schema_field::manifest) ||
+            !seen(frame, schema_field::source_save) ||
+            !seen(frame, schema_field::database) ||
+            !seen(frame, schema_field::compiled) ||
+            !seen(frame, schema_field::baseline)) {
+
+            fail(
+                schema_failure::missing_required_field,
+                "project_files requires manifest, source_save, database, compiled, and baseline");
+            return false;
+        }
+
+        const std::array<const std::filesystem::path*, 5> files{
+            &configuration.project_files.manifest,
+            &configuration.project_files.source_save,
+            &configuration.project_files.database,
+            &configuration.project_files.compiled,
+            &configuration.project_files.baseline,
+        };
+
+        for (std::size_t left = 0;
+             left < files.size();
+             ++left) {
+
+            for (std::size_t right = left + 1;
+                 right < files.size();
+                 ++right) {
+
+                if (*files[left] ==
+                    *files[right]) {
+
+                    fail(
+                        schema_failure::invalid_value,
+                        "project_files entries must use distinct file names");
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     [[nodiscard]] bool validate_endpoint(

@@ -742,12 +742,13 @@ read_image(
 
 project_configuration_manifest_store::
 project_configuration_manifest_store(
-    const std::filesystem::path& root_project_path)
+    const std::filesystem::path& root_project_path,
+    const std::filesystem::path& manifest_file)
     : manifest_path(
           root_project_path.parent_path() /
           ".serverengine" /
           root_project_path.filename() /
-          "project.manifest") {
+          manifest_file) {
 }
 
 project_configuration_manifest_store_result
