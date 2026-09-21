@@ -94,24 +94,27 @@ one Server
 
 ABI is process configuration. `project.json` does not contain or override ABI.
 
-The same `server_abi_configuration` is borrowed by each mode-specific operation:
+Each mode-specific operation borrows the same process-wide
+`server_settings_configuration`. The explicit root Project path is an operation
+input; it is not resident Project state and is not stored in `server_context`.
 
 ```text
 LOAD
+    root Project path
     load_context
-        ABI
+        Server settings
 
 BUILD
+    root Project path
     build_context
-        ABI
-        root Project path
+        Server settings
         committed baseline views
         candidate sparse overlays
 
 REBUILD
+    root Project path
     rebuild_context
-        ABI
-        root Project path
+        Server settings
         fresh construction state
 ```
 
