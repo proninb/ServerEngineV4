@@ -87,24 +87,26 @@ Optional:
 
 `startup` defaults to `load`.
 
-Supported values:
+The currently configured startup schema supports:
 
 ```text
 load
 rebuild
 ```
 
-`startup=build` is invalid because BUILD requires an already resident Project.
-
-Startup state transitions:
+Both begin from `UNLOADED`.
 
 ```text
 startup=load
-    UNLOADED -> LOAD -> LOADED on success
+    UNLOADED -> LOAD <path> -> LOADED on success
 
 startup=rebuild
-    UNLOADED -> REBUILD -> LOADED on success
+    UNLOADED -> REBUILD <path> -> LOADED on success
 ```
+
+BUILD is now architecturally an `UNLOADED + path` operation as well, but
+`startup=build` is not added to the configuration schema by this documentation
+change. It can be enabled separately if desired.
 
 A failed startup Project operation leaves the Server UNLOADED and startup fails.
 
@@ -115,16 +117,18 @@ Relative Project paths are resolved relative to `server.json`.
 ```text
 LOAD <project-path>
     requires UNLOADED
+    restores the last committed final G
 
-BUILD
-    requires LOADED
-    uses the currently resident Project
-
-UNLOAD
-    requires LOADED
+BUILD <project-path>
+    requires UNLOADED
+    reuses the last successful SourceSave/DB baseline
 
 REBUILD <project-path>
     requires UNLOADED
+    ignores the old incremental baseline
+
+UNLOAD
+    requires LOADED
 
 SHUTDOWN
 EXIT
@@ -132,31 +136,54 @@ EXIT
 
 No Project lifecycle command silently invokes another mode.
 
+BUILD is no longer an operation on the currently resident Project.
+
 ## Current Project Pipeline Status
 
-Current V4 implementation:
+Target architecture:
 
 ```text
 LOAD
-    persisted Graph restore is still scaffolded
-
-REBUILD
-    recursively composes all project.json inputs
-    builds candidate project_configuration_manifest
-    computes aggregate project_configuration_hash
-    stops before Source Manager/G0
+    committed final G
+    -> Runtime / SHM
+    -> LOADED
 
 BUILD
-    requires resident Project
-    loads committed project.manifest
-    verifies all known configuration inputs
-    recomposes when configuration bytes changed
-    compares aggregate configuration hash
-    stops before Source Manager/Gn->Gn+1
+    committed configuration + SourceSave + DB + final-G baseline
+    -> exact dirty detection
+    -> affected reverse closure
+    -> sparse construction
+    -> coordinated durable commit
+    -> Runtime / SHM
+    -> LOADED
+
+REBUILD
+    fresh configuration composition
+    -> fresh SourceSave / DB
+    -> fresh final G
+    -> coordinated durable commit
+    -> Runtime / SHM
+    -> LOADED
 ```
 
-The incomplete REBUILD path does not persist its candidate manifest because no
-generation has been successfully published yet.
+Current implementation status:
+
+```text
+LOAD
+    final-G restore is still scaffolded
+
+REBUILD
+    implemented through deterministic source closure
+    and Assign byte materialization
+
+BUILD
+    configuration-manifest verification/recomposition implemented
+    SourceSave/DB incremental construction not implemented
+    C++ command entry still temporarily uses the obsolete resident-Project form
+```
+
+The next code correction changes BUILD command parsing and lifecycle to
+`BUILD <project-path>` from `UNLOADED`.
 
 ## Communication
 

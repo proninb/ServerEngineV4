@@ -202,9 +202,10 @@ BUILD manifest-only recomposition and REBUILD File Context population. File
 Context does not own these rules; it only owns physical identity and immutable
 `file_kind`.
 
-`file_id` belongs to the construction lineage, not one Graph generation. REBUILD
-creates a fresh File Context; BUILD restores the committed File Context slots so
-unchanged physical inputs keep the same `file_id` across `Gn -> Gn+1`.
+`file_id` belongs to one BUILD lineage, not one final Graph. REBUILD starts a
+fresh File Context identity space; BUILD restores/binds committed File Context
+slots so existing physical inputs keep the same `file_id` across successful
+BUILDs. BUILD never renumbers or recycles historical slots.
 
 ## Dependency Semantics
 
@@ -482,7 +483,9 @@ topology is preserved. Absolute locators are intentionally location-bound.
 
 ## BUILD Fast Path
 
-BUILD loads the manifest committed with resident Gn.
+BUILD starts from `UNLOADED` and receives the root Project path.
+
+It opens the configuration proof committed with the last successful baseline.
 
 For every entry:
 
@@ -500,7 +503,7 @@ If every SHA-256 matches:
 ```text
 no configuration parse
 no recomposition
--> File Context change detection
+-> SourceSave/File Context physical change detection
 ```
 
 If any entry differs or disappears:
@@ -510,9 +513,15 @@ recompose from root
 ```
 
 Full recomposition is required because one changed `project.json` may change the
-set or order of child Projects.
+set or order of child Projects and explicit inputs.
+
+Recomposition constructs candidate configuration state only. It does not make
+that state authoritative until BUILD successfully commits the complete
+SourceSave + DB + final-G baseline.
 
 ## Manifest Artifact
+
+The configuration-proof artifact currently uses:
 
 ```text
 <root-project-dir>/
@@ -521,7 +530,7 @@ set or order of child Projects.
             project.manifest
 ```
 
-The artifact contains:
+It contains:
 
 ```text
 magic
@@ -553,6 +562,11 @@ invalid token encoding
 truncated/extra bytes
 stored aggregate hash != recomputed aggregate hash
 ```
+
+`project.manifest` is one component of the future committed BUILD baseline. Once
+SourceSave, DB, and final-G artifacts exist, updating `project.manifest` alone
+must not publish a new Project construction baseline. All components participate
+in one coordinated successful BUILD/REBUILD commit.
 
 ## Validation
 

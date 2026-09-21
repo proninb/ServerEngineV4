@@ -149,10 +149,21 @@ No subsystem should parse human-readable messages to decide machine behavior.
 
 ## Lifecycle diagnostic boundary
 
-LOAD, BUILD, and REBUILD may use different Project subsystems, but one
-external operation still owns one `operation_id` and one
-`diagnostic_collection`. Nested construction layers append to that same
-caller-owned collection.
+LOAD, BUILD, and REBUILD all start from `UNLOADED`, receive a Project path, and
+may use different persisted/construction subsystems.
+
+One external operation still owns exactly:
+
+```text
+one operation_id
+one diagnostic_collection
+```
+
+Nested construction layers append to that same caller-owned collection.
+
+A failed BUILD leaves no resident Project. The previous successful persisted
+baseline may remain intact for future BUILD acceleration, but diagnostics for the
+failed operation describe the current attempted source state.
 
 ## Current Project Construction Diagnostics
 
@@ -178,6 +189,21 @@ The retired root-only `project.identity` artifact no longer exists. Diagnostic
 IDs 2009 and 2010 are intentionally unassigned; they are not reused for the
 manifest layer.
 
+
+Lifecycle use of the existing state diagnostics changes with the BUILD contract:
+
+```text
+project.already_loaded
+    LOAD / BUILD / REBUILD requested while a resident Project is active
+
+project.not_loaded
+    operation requiring resident runtime state (for example UNLOAD)
+    requested while UNLOADED
+```
+
+BUILD no longer reports `project.not_loaded` merely because no resident Project
+exists; `UNLOADED` is its required entry state.
+
 The manifest-specific diagnostics separate artifact state from configuration
 input state:
 
@@ -189,7 +215,7 @@ project.configuration_cycle
     recursive type:"project" composition contains a cycle
 
 project.manifest_missing
-    BUILD has resident Gn but no committed configuration manifest
+    BUILD has no committed configuration manifest in the selected Project baseline
 
 project.manifest_invalid
     manifest format/checksum/aggregate validation failed

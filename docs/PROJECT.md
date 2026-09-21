@@ -5,9 +5,9 @@
 Project lifecycle is mode-oriented:
 
 ```text
-LOAD
-BUILD
-REBUILD
+LOAD <project-path>
+BUILD <project-path>
+REBUILD <project-path>
 UNLOAD
 ```
 
@@ -15,40 +15,69 @@ There is no universal `project_context`.
 
 Each operation owns only the temporary state required by that operation.
 
-The state contract is:
+The state contract remains:
 
 ```text
 server_context.project == nullptr
     == UNLOADED
 ```
 
+`LOAD`, `BUILD`, and `REBUILD` are all entered from `UNLOADED`.
+
+The distinction is not whether a resident Project exists. The distinction is
+which persisted/construction state the operation is allowed to use:
+
+```text
+LOAD
+    restore the last committed final G
+
+BUILD
+    reuse the last successful construction baseline
+    and incrementally construct the current Project
+
+REBUILD
+    ignore the old incremental baseline
+    and construct a fresh lineage
+```
+
+There is no `SAVE` lifecycle stage. Durability is part of the successful
+`BUILD`/`REBUILD` coordinated commit.
+
 ## Lifecycle
 
 ```text
 UNLOADED
-    +-- LOAD success ------> LOADED
-    +-- LOAD failure ------> UNLOADED
-    +-- REBUILD success ---> LOADED
-    `-- REBUILD failure ---> UNLOADED
+    +-- LOAD <path> success ------> LOADED
+    +-- LOAD <path> failure ------> UNLOADED
+    +-- BUILD <path> success -----> LOADED
+    +-- BUILD <path> failure -----> UNLOADED
+    +-- REBUILD <path> success ---> LOADED
+    `-- REBUILD <path> failure ---> UNLOADED
 
 LOADED
-    +-- BUILD success -----> LOADED
-    +-- BUILD failure -----> UNLOADED
-    `-- UNLOAD -----------> UNLOADED
+    `-- UNLOAD -------------------> UNLOADED
 ```
 
 Preconditions:
 
 ```text
 LOAD     requires UNLOADED
+BUILD    requires UNLOADED
 REBUILD  requires UNLOADED
-BUILD    requires LOADED
 UNLOAD   requires LOADED
 ```
 
-LOAD, BUILD, and REBUILD never substitute for each other.
+A resident Project is never the input baseline for BUILD.
 
-Failure of LOAD, BUILD, or REBUILD always leaves the Server UNLOADED.
+If source/configuration files have changed, the previously compiled final G no
+longer represents the current Project. BUILD therefore never keeps an old
+resident Project published while constructing a new one.
+
+A failed BUILD discards only its candidate/overlay state. The last successful
+persisted baseline remains available as an acceleration baseline for a later
+BUILD, but no resident Project is published and the Server remains `UNLOADED`.
+
+LOAD, BUILD, and REBUILD never substitute for each other.
 
 ## Mode-specific construction contexts
 
@@ -61,21 +90,29 @@ load_context
 
 build_context
     ABI
-    manifest
+    root Project path
+    committed baseline views
+    candidate SourceSave/DB/final-G overlays
     root preprocessing configuration
-    incremental construction state
 
 rebuild_context
     ABI
+    root Project path
     manifest
-    File Context
-    lexical generation
+    fresh File Context
+    fresh lexical construction state
+    fresh string/semantic identity spaces
     root preprocessing configuration
-    fresh G0 construction state
 ```
 
-All three are temporary operation state and are discarded on publication or
-failure. ABI originates from `server.json`. Preprocessing configuration originates only from the root `project.json` and is construction-only.
+The context object is only the lifetime owner for one operation. SourceSave,
+File Context, string storage, Semantic DB, Parser state, Builder state, and
+final-G construction remain separate subsystems with explicit ownership.
+
+ABI originates from `server.json`.
+
+The root `preprocessor_configuration` originates from the root `project.json`
+and is construction input only.
 
 ## Resident Project
 
@@ -83,30 +120,43 @@ Target resident state:
 
 ```text
 project
-    +-- Graph
+    +-- final Graph / compiled G
     +-- Runtime
     `-- SHM
 ```
 
-Resident Project must not retain construction-only state:
+Resident Project contains only state required while the compiled Project is
+active.
+
+It must not own BUILD acceleration state:
 
 ```text
 project.json composition
 configuration manifest
+SourceSave
 File Context
-Parser/frontend
-Builder
+lexical cache
+string canonicalization index
+Semantic identity construction index
+Parser/frontend cache
+SourceContribution / Builder provenance
+other DB/build-cache state
 ```
 
-The current resident Project retains its entry path so BUILD can locate the
-persisted construction artifacts belonging to the current Project state.
+Those belong to the persisted construction baseline and to temporary BUILD or
+REBUILD operation state.
+
+BUILD receives the Project entry path explicitly. Resident `project` therefore
+does not exist merely to remember which baseline BUILD should open.
 
 ## LOAD
 
-LOAD restores persisted resident state:
+LOAD starts only from `UNLOADED`.
+
+It restores the last committed final compiled state:
 
 ```text
-persisted Graph
+persisted final G
     -> Runtime
     -> SHM
     -> resident Project
@@ -117,32 +167,53 @@ LOAD does not:
 ```text
 parse project.json for construction
 compose Project configuration
-run File Context
-perform source change detection
+open BUILD-only DB state
+run File Context change detection
+run Parser
+run Builder
+validate the current source tree
 ```
 
-LOAD failure leaves UNLOADED.
+BUILD-only SourceSave/DB artifacts are not required to enter runtime READY
+state.
+
+LOAD failure leaves `UNLOADED`.
 
 ## REBUILD
 
-REBUILD starts only from UNLOADED and constructs a fresh generation:
+REBUILD starts only from `UNLOADED` and starts a fresh construction lineage.
 
 ```text
 root project.json
     -> recursive Project configuration composition
     -> root preprocessor configuration
-    -> configuration manifest
-    -> explicit roots
-    -> new File Context
-    -> frontend / semantic construction
-    -> Graph G0
+    -> fresh configuration manifest
+    -> fresh File Context / SourceSave state
+    -> fresh lexical construction
+    -> fresh string_id space
+    -> fresh identity_ref space
+    -> Parser / Semantic
+    -> fresh DB
+    -> Assign resolution
+    -> complete dependency topology
+    -> fresh final G
     -> Runtime
     -> SHM
-    -> coordinated persisted-state commit
-    -> resident Project G0
+    -> coordinated persisted-baseline commit
+    -> resident Project
 ```
 
-REBUILD ignores previous incremental construction state.
+REBUILD ignores the previous incremental construction state.
+
+REBUILD is the reset/compaction boundary:
+
+```text
+file_id      may be reassigned
+string_id    may be reassigned
+identity_ref may be reassigned
+Graph handles may be reassigned
+stale BUILD-only history is reclaimed
+```
 
 ### Current implementation boundary
 
@@ -157,7 +228,7 @@ root project.json
     -> aggregate project_configuration_hash
     -> flat File Context population
          project/header/source/assign nodes
-         immutable file_id + file_kind
+         fresh file_id + file_kind
     -> Header/Source exact-byte materialization
     -> complete-file lexical generation
     -> sparse preprocessing directive anchors
@@ -179,39 +250,82 @@ project -> duplicate reference is an error
 
 File IDs are assigned root-first in declaration-order DFS. There is no sort.
 
-It currently stops before:
+The current implementation stops before:
 
 ```text
 Parser/Semantic construction
-Semantic identity_space / identity_ref integration
+identity_ref / identity_space
 Assign grammar and semantic variable resolution
-terminal File Context dependency-topology finalization
-Graph G0 construction
+terminal REBUILD dependency-topology finalization
+DB persistence
+final-G construction
 Runtime
 SHM
-coordinated commit
+coordinated baseline commit
 ```
 
-Because no G0 is published yet, the construction manifest is deliberately not
-persisted by the current incomplete REBUILD path.
+Because no final G is produced yet, the incomplete REBUILD path must not publish
+any candidate construction artifact as the new committed baseline.
 
 ## BUILD
 
-BUILD starts only from the current resident Project:
+BUILD starts only from `UNLOADED` and receives the root Project path explicitly.
+
+BUILD uses the last successful persisted construction baseline as acceleration
+state:
 
 ```text
-current resident Project
-    -> load committed project.manifest
-    -> verify complete configuration input set
-    -> File Context change detection
-    -> temporary BUILD construction state
-    -> coordinated commit
-    -> replace current resident Project
+last successful baseline
+    +-- configuration proof
+    +-- SourceSave
+    +-- DB
+    `-- final G / final-G build lineage state
+             |
+             + current Project files
+             |
+             v
+          BUILD
+             |
+             +-- exact dirty detection
+             +-- old reverse dependency closure
+             +-- sparse SourceSave candidate
+             +-- sparse DB candidate
+             +-- affected frontend / Semantic work
+             +-- sparse final-G construction
+             +-- validation
+             `-- coordinated commit
+                     |
+                     v
+                  LOADED
 ```
 
-BUILD has no external Project path argument. It uses the active Project.
+The previous final G is not kept published during BUILD. It is baseline data
+used only where sparse construction needs previous compiled slots/state.
 
-### Manifest verification
+### BUILD lineage identity
+
+A successful REBUILD starts a new BUILD lineage.
+
+Across successful BUILDs in that lineage:
+
+```text
+existing file_id      values are preserved
+existing string_id    values are preserved
+existing identity_ref values are preserved
+
+new files       append new file_id values
+new spellings   append new string_id values
+new semantic WHO values append new identity_ref values
+```
+
+IDs are not renumbered or recycled by BUILD.
+
+Removed entities/files may leave historical slots. REBUILD is the compaction
+boundary.
+
+### Configuration proof fast path
+
+BUILD first opens the committed configuration manifest.
 
 For every manifest entry:
 
@@ -229,21 +343,107 @@ If every participating `project.json` is byte-identical:
 
 ```text
 configuration unchanged
-    -> proceed directly to File Context change detection
+    -> no configuration parse
+    -> no recomposition
+    -> proceed directly to SourceSave/File Context change detection
 ```
 
-If any file differs or disappears:
+If any configuration input differs or disappears:
 
 ```text
 recompose from root
-    -> discover added/removed/reordered child Projects
-    -> rebuild the same BUILD manifest state
-    -> compare aggregate configuration hash with the previously loaded hash
+    -> discover added/removed/reordered Project inputs
+    -> construct candidate configuration proof
 ```
+
+Configuration recomposition does not itself destroy the old baseline.
+
+### Physical dirty detection
+
+SourceSave owns the persisted physical baseline:
+
+```text
+file_id
+path / file_kind
+current-lineage membership
+content hash
+optional native change token
+direct dependency topology
+```
+
+Unchanged files are proved without reading bytes when possible. If proof is not
+available, BUILD reads exact bytes and compares the content hash.
+
+BUILD first derives the exact physical dirty set.
+
+### Affected closure
+
+The affected set is computed from the **committed old reverse topology** before
+candidate dependency replacement:
+
+```text
+dirty file_id set
+    -> walk persisted dependents
+    -> affected closure
+```
+
+This is why direct reverse adjacency is first-class persisted construction data.
+
+BUILD must not rebuild the complete `O(F + E)` topology merely to discover the
+affected set.
+
+### Frontend reuse
+
+For a dirty physical file:
+
+```text
+new exact bytes
+    -> re-lex
+    -> new directive anchors
+    -> affected preprocessing / Parser work
+```
+
+For an unchanged but semantically affected file:
+
+```text
+reuse persisted exact bytes / lexical facts
+    -> rerun only required preprocessing / Parser / Semantic work
+```
+
+The compact lexical representation is therefore DB/build-cache data across
+BUILD, not resident runtime Project state.
+
+### Candidate and failure semantics
+
+BUILD works against immutable committed baseline state plus disposable mutable
+overlays/candidates.
+
+A failed BUILD:
+
+```text
+discard candidate SourceSave/DB/final-G changes
+keep the last successful persisted baseline intact
+publish no resident Project
+remain UNLOADED
+```
+
+The old baseline may accelerate the next BUILD after the user fixes the source
+tree. The old final G is not treated as the current runnable Project.
+
+A successful BUILD:
+
+```text
+validate all candidate artifacts
+    -> coordinated durable commit
+    -> make the new baseline authoritative
+    -> publish Runtime/SHM resident Project
+```
+
+There is no explicit SAVE stage.
 
 ### Current implementation boundary
 
-The current V4 BUILD implements:
+The current code already implements the configuration-manifest preflight:
 
 ```text
 load project.manifest
@@ -252,17 +452,26 @@ recompose when one input changed
 compare aggregate configuration hash
 ```
 
-It currently stops before File Context-driven construction.
+However, the current C++ entry path still uses the obsolete contract
+`LOADED -> BUILD` and takes the resident Project as its BUILD input.
 
-BUILD failure destroys the current resident Project and leaves UNLOADED.
+The next implementation correction must change that entry boundary to:
+
+```text
+UNLOADED
+    -> BUILD <project-path>
+    -> persisted baseline
+```
+
+before File Context/string/Semantic baseline restore is implemented.
 
 ## LOAD Implementation Boundary
 
-LOAD restores a committed Project generation. It does not validate `project.json`
-as a substitute for persisted runtime state and must never publish a placeholder
+LOAD restores a committed final G. It does not validate `project.json` as a
+substitute for persisted runtime state and must never publish a placeholder
 resident Project.
 
-Until committed Graph/Runtime/SHM generation restore exists:
+Until committed final-G/Runtime/SHM restore exists:
 
 ```text
 LOAD
@@ -394,33 +603,60 @@ It does not include change tokens.
 A whitespace/comment-only change modifies byte identity and therefore the
 configuration hash even if a later semantic stage may prove equivalent meaning.
 
-## Manifest Persistence
+## Persisted Build Baseline
 
-Committed manifest location:
+The committed construction/runtime baseline belongs under the root Project
+artifact directory:
 
 ```text
 <root-project-dir>/
     .serverengine/
         <root-project.json filename>/
-            project.manifest
+            committed baseline
 ```
 
-The file is:
+Logically one successful baseline contains:
 
 ```text
-versioned
-checksummed
-variable-size
-fail-closed
+configuration proof
+    project.manifest
+
+SourceSave
+    physical file identity/state
+    current-lineage membership
+    forward/reverse file topology
+
+DB
+    BUILD-only reusable construction state
+    string/semantic identity lineage
+    retained lexical/frontend facts
+    semantic contributions / Builder provenance
+
+final G
+    the one compiled result required by LOAD/Runtime
 ```
 
-The manifest checksum protects the artifact bytes.
+The exact physical split and filenames for SourceSave, DB, and final G are not
+frozen by this document yet.
 
-On load, the aggregate `project_configuration_hash` is also recomputed from the
-decoded entries and must match the stored aggregate.
+`project.manifest` remains versioned, checksummed, and fail-closed, but its own
+temporary-file replacement is not the final multi-artifact commit model.
 
-The manifest store is a narrow construction-persistence boundary. It does not
-own Graph, File Context, Runtime, SHM, or resident Project state.
+Once the full baseline exists, all candidate artifacts must be prepared and
+validated before one coordinated commit makes them authoritative.
+
+There is no Graph history:
+
+```text
+no persisted G0/G1/G2 chain
+no runtime generation history
+```
+
+Only the last successfully committed final G is current.
+
+An implementation may retain older immutable transaction files temporarily for
+crash-safe replacement, but those files are persistence mechanics, not Project
+semantic generations.
 
 ## Filesystem Text Boundary
 
@@ -461,6 +697,8 @@ file_context
     file_id
     canonical filesystem path
     immutable file_kind
+    physical proof state
+    dependency topology
 ```
 
 Syntax routing is explicit:
@@ -472,9 +710,7 @@ file_kind::source  -> Source syntax
 file_kind::assign  -> Assignment/connection syntax
 ```
 
-The same physical path cannot change kind inside one construction lineage.
-
-The parsers are separate semantic domains:
+The parsers remain separate semantic domains:
 
 ```text
 Type parser
@@ -494,134 +730,113 @@ Assign parser
     creates no declarations or objects
 ```
 
-`file_context` contains neither parser state nor parser facts. Dependency discovery is syntax-domain-specific: Project syntax emits project/header/source/assign dependencies, Header syntax discovers Header dependencies, Source syntax uses only Source-language dependency rules, and Assign syntax resolves user connection references.
+`file_context` contains neither Parser semantic state nor Graph state.
 
-`file_id` is dense and 1-based. REBUILD creates a fresh identity space. BUILD
-restores the previous File Context slots before change detection, preserving every
-existing `file_id`; new files append new IDs. IDs are never renumbered or recycled
-inside one construction lineage.
+### `file_id` lifetime
 
-File Context storage is compact and allocation-independent per file:
+`file_id` is dense and 1-based.
 
 ```text
-file_record[]          16 bytes / file
-native_path_chars[]    one contiguous native-character arena
-path_index[]            8 bytes / slot, <= 0.5 load factor
+REBUILD
+    fresh file_id space
+
+BUILD
+    restore/bind committed file slots
+    preserve existing file_id values
+    append IDs for newly discovered physical files
 ```
 
-At one million files the current path index capacity is 2,097,152 slots, about
-16 MiB, while file records consume about 16 MiB. Path storage depends only on the
-actual native path characters.
+A file removed from the current Project does not make its historical slot
+available for reuse inside the same BUILD lineage.
 
-The physical path is retained exactly for I/O. Each dense record keeps only a
-32-bit identity fingerprint so hash-table rebuilds never recanonicalize old
-paths. A full platform-equivalence `project_path_key` is transient lookup state
-and is not stored per file. Matching fingerprints are verified against the exact
-platform key, so filesystem identity remains fail-closed.
+Physical existence and current Project membership are distinct concepts:
 
-There is no `file_manager`, no nested `file_update` transaction, no sort, and no
-mutex. BUILD and REBUILD construct disposable candidate construction state, so
-the whole candidate is the transaction boundary. Failed construction destroys
-that candidate.
+```text
+known file_id
+current-lineage member?
+physical file present?
+```
 
-File Context keeps identity, cold physical state, and dependency topology in
-parallel SoA arrays indexed by the same `file_id`:
+BUILD may reactivate a previously known physical identity without inventing a
+different `file_id`.
+
+REBUILD may compact/reassign all slots.
+
+### Storage
+
+The logical storage remains compact SoA indexed by `file_id`:
 
 ```text
 file_record[]              16 bytes / file
 file_physical_record[]     64 bytes / file
 file_dependency_record[]   16 bytes / file
-native_path_chars[]        one contiguous native-character arena
+native_path_chars[]        native-character arena
 path_index[]                8 bytes / slot
 forward_edges[]             4 bytes / direct edge
 reverse_edges[]             4 bytes / direct edge
 ```
 
-`file_physical_record` contains exact content SHA-256 and the optional native
-change token. Filesystem timestamp/size observation is acquisition-local only; it
-is not persisted or trusted as an unchanged proof.
+The current implementation owns all of these arrays directly for a fresh
+construction.
 
-Acquisition is split for parallel execution:
+BUILD will add baseline-view + mutable-overlay capability; it must not begin by
+copying every committed file record merely to change a small subset.
+
+The physical path is retained exactly for I/O. Platform-equivalence keys remain
+transient lookup values.
+
+`path_hash` is never durable identity.
+
+### Physical acquisition
+
+The existing split remains the physical change-detection contract:
 
 ```text
 prepare_acquire()
     -> borrowed file_acquire_job
 
 execute_acquire()
-    -> token proof when available
+    -> native token proof when available
     -> otherwise stable read + SHA-256
 
 apply_acquire()
-    -> update cold physical state
+    -> update candidate physical state
     -> report exact content change
 ```
 
-`construction_content_hash` is SHA-256 over domain `CWFCNT01`, the ordered file
-count, and raw 32-byte per-file SHA-256 values. It intentionally contains no HEX
-encoding, path, role, or dependency topology. Those belong to higher construction
-identity layers.
+Change tokens are proof optimizations only.
 
-`path_hash` is never durable identity. It is rebuilt from physical paths when a
-persisted File Context is restored.
+`construction_content_hash` remains a byte-content aggregate only. Path, role,
+topology, semantic identity, and DB state belong to higher layers.
 
-Project composition now populates the flat File Context closure for every
-explicit `project`, `header`, `source`, and `assign` item. `project.json` uses
-the same stable snapshot for manifest proof and File Context physical state.
+### Composition rules
 
-Reuse policy is intentionally syntax-domain-specific:
+Project composition owns syntax-domain cardinality:
 
 ```text
 header
     reusable declaration input
-    multiple incoming uses are valid
 
 source
-    one semantic construction unit
-    repeated declaration anywhere in the composed Project is invalid
+    unique semantic construction unit
 
 assign
-    one user connection-description input
-    references existing variables only
-    repeated declaration anywhere in the composed Project is invalid
+    unique user connection-description input
 
 project
-    one composed subtree
-    repeated reference is invalid
-    recursion through an active ancestor is a cycle
+    unique composed subtree
+    active ancestor means cycle
 ```
 
-`file_context` itself owns identity only. These cardinality rules remain in the
-Project composition layer.
+`file_context` owns physical identity, not these language/configuration rules.
 
-BUILD recomposition and REBUILD use the same composition semantics before any
-File Context-specific work:
-
-```text
-same physical path + different file_kind -> error
-repeated source                       -> error
-repeated assign                       -> error
-repeated completed project            -> error
-active project ancestor               -> cycle error
-repeated header                       -> allowed
-```
-
-This keeps configuration acceptance identical whether composition is manifest-only
-or also populates a fresh File Context.
+The same acceptance rules apply to REBUILD and BUILD recomposition.
 
 ## File Dependency Topology
 
-`file_id` is the only identity of a construction-input node.
+`file_id` is the only identity of a construction-input dependency node.
 
-There is no separate graph-node identity:
-
-```text
-file_id
-    -> file_record
-    -> file_physical_record
-    -> file_dependency_record
-```
-
-The file itself is the dependency-graph node. V4 therefore does not introduce:
+There is no:
 
 ```text
 graph_node_id
@@ -630,117 +845,69 @@ edge_id
 stable_dependency_id
 ```
 
-A direct dependency relation is only:
+A direct relation is only:
 
 ```text
 file_id -> file_id
 ```
 
-For every file, construction needs two direct adjacency views:
+For every file the logical topology exposes:
 
 ```text
 dependencies(file_id)
 dependents(file_id)
 ```
 
-Only direct relations are stored. Transitive affected sets are discovered by
-walking `dependents` from changed files.
+Only direct relations are stored.
 
-Dependency discovery remains syntax-domain-specific:
+### REBUILD topology
 
-```text
-file_kind::project
-    Project configuration syntax
-    -> explicit project/header/source/assign inputs
+REBUILD stages every direct relation from all syntax domains and, after
+dependency discovery reaches closure, performs one complete finalization.
 
-file_kind::header
-    Type/Header syntax
-    -> Header-language dependencies
-
-file_kind::source
-    Source syntax
-    -> Source-language dependencies
-
-file_kind::assign
-    Assign syntax
-    -> references required for user connection validation
-```
-
-The topology layer stores only resolved `file_id` relations; it does not contain
-paths, parser state, or syntax-specific facts.
-
-Header/Source dependency construction is two-stage. Physical files are lexed
-once into retained compact lexical facts plus sparse directive anchors. Physical
-lex uses persistent CPU lanes, but directive execution remains a deterministic
-single-owner traversal in ascending initial `file_id` root order. Executed
-includes therefore assign new dense `file_id` values and intern directive names
-in the same order regardless of hardware concurrency.
-
-An include-discovered Header is materialized and lexed before that owner enters
-the child, so one root's mutable preprocessing state remains strictly ordered.
-Source closure does not finalize File Context topology. After source closure,
-Assign files are materialized as immutable construction byte images, but their
-grammar and variable references are not resolved at that boundary.
-
-Parser/Semantic must establish semantic variable identity before Assign can
-resolve its references. The Assign frontend then emits any file-level dependency
-relations required for BUILD invalidation. Only after every dependency-producing
-domain reaches closure does construction call the single terminal topology
-finalization. Parser/Semantic reuses the retained lexical facts without lexing
-source bytes again.
-
-### Storage contract
-
-There is one current File Context topology. V4 does not maintain separate `G0`
-and `Gn` dependency-storage models.
-
-Committed construction topology is compact:
+The existing algorithm is appropriate for REBUILD:
 
 ```text
-file_dependency_record[file_id - 1]
-forward_edges[]
-reverse_edges[]
+staged edges
+    -> linear counting/grouping
+    -> dense-marker duplicate collapse
+    -> exact forward arena
+    -> exact reverse arena
 ```
 
-Each range is:
-
-```cpp
-struct file_edge_range {
-    std::uint32_t offset;
-    std::uint32_t count;
-};
-```
-
-and each dependency record is 16 bytes:
-
-```cpp
-struct file_dependency_record {
-    file_edge_range dependencies;
-    file_edge_range dependents;
-};
-```
-
-All syntax domains stage temporary `(source file_id, target file_id)` relations
-into one File Context arena. Project composition is only the first producer;
-Header, Source, and Assign discovery append to the same arena.
-
-After dependency discovery reaches closure, topology is finalized exactly once.
-Finalization groups relations by source with a linear counting pass, collapses
-duplicate `(source,target)` pairs with dense `file_id` markers, and fills exact
-forward/reverse arenas. The algorithm is `O(F + E)` with no sort or hash lookup.
-After finalization no new file identity or dependency relation may be added.
-
-Architectural constraints:
+Complexity:
 
 ```text
-NO secondary node identity
-NO dependency_id / edge_id
+O(F + E)
 NO SORT
-NO per-node heap allocation
-NO vector<vector<file_id>>
+NO hash lookup for final grouping
 ```
 
-Project composition is the first producer and stages only explicit direct edges:
+### BUILD topology
+
+BUILD must not run the complete REBUILD finalizer merely because one or a few
+files changed.
+
+BUILD begins with committed forward/reverse adjacency.
+
+The order is:
+
+```text
+1. detect physical dirty files
+2. compute affected closure using OLD committed dependents
+3. rebuild only dependency contributions whose owners are affected/changed
+4. publish the candidate current topology as part of the coordinated commit
+```
+
+The physical encoding used to support sparse owner replacement is not frozen
+yet. It may use overlay/versioned/append-only techniques as long as the logical
+contract remains one direct file topology and lookup remains compact.
+
+There is still no separate BUILD graph identity.
+
+### Syntax producers
+
+Project composition stages explicit direct relations:
 
 ```text
 project -> child project
@@ -749,53 +916,87 @@ project -> source
 project -> assign
 ```
 
-Other syntax domains add only their own resolved direct dependencies later.
+Header, Source, and Assign syntax add only their own resolved direct relations.
 
-Dependency topology is construction state. It is not resident runtime Project
-state after Runtime/SHM construction is complete.
+Assign dependency emission occurs only after Semantic identity exists.
+
+Dependency topology belongs to SourceSave/DB construction state and is never
+resident runtime Project state.
 
 ## Publication Contract
 
-Candidate construction artifacts belong to the disposable candidate
-construction state.
+BUILD and REBUILD construct candidates against a non-authoritative operation
+state.
 
-They become authoritative only as part of the same successful coordinated commit
-that publishes the resulting Project state.
+Nothing becomes authoritative merely because an intermediate file was written
+or an in-memory subsystem completed.
 
-Therefore:
+Successful publication is one coordinated lifecycle boundary:
 
 ```text
-failed REBUILD
-    must not commit candidate manifest
-
-failed BUILD
-    must not commit candidate manifest/baseline
-    and destroys the current resident Project
+candidate configuration proof
+candidate SourceSave
+candidate DB
+candidate final G
+candidate Runtime/SHM preparation
+        |
+        v
+validate
+        |
+        v
+coordinated durable commit
+        |
+        v
+publish resident Project
 ```
+
+Failure before that boundary:
+
+```text
+REBUILD failure
+    -> discard fresh candidate
+    -> preserve previous persisted baseline if one exists
+    -> UNLOADED
+
+BUILD failure
+    -> discard sparse candidate overlays
+    -> preserve last successful persisted baseline
+    -> publish no resident Project
+    -> UNLOADED
+```
+
+The previous final G may remain persisted as the last successful baseline, but
+it is not treated as the current runnable Project after a failed BUILD against
+changed source state.
 
 ## Architectural Invariants
 
 1. One Server owns zero or one resident Project.
-2. `server_context.project == nullptr` exactly means UNLOADED.
-3. LOAD and REBUILD require UNLOADED.
-4. BUILD and UNLOAD require LOADED.
-5. BUILD operates on the one current resident Project and creates disposable candidate construction state.
-6. LOAD, BUILD, and REBUILD are distinct pipelines.
-7. Failure of LOAD, BUILD, or REBUILD leaves UNLOADED.
+2. `server_context.project == nullptr` exactly means `UNLOADED`.
+3. LOAD, BUILD, and REBUILD require `UNLOADED`.
+4. UNLOAD requires `LOADED`.
+5. LOAD, BUILD, and REBUILD receive the Project path explicitly.
+6. BUILD consumes the last successful persisted baseline, never the resident Project.
+7. Failure of LOAD, BUILD, or REBUILD leaves `UNLOADED`.
 8. Resident Project contains runtime-required state only.
 9. There is no universal `project_context`.
-10. File Context is construction state, never resident Project state.
-11. One normalized configuration path appears at most once in the manifest.
-12. Configuration composition is declaration-order DFS and is never sorted.
-13. Change tokens are proof optimizations, never identity.
-14. Per-file SHA-256 identifies exact configuration bytes.
-15. Aggregate configuration hash identifies the complete ordered configuration input set.
-16. Relative-locator configuration identity is relocation-stable while composed relative topology is preserved; absolute locators are location-bound.
-17. Semantic fingerprint remains separate from byte/configuration identity.
-18. Candidate persisted construction state is committed only with its successful generation.
-19. Project absolute-path resolution must fail closed; unresolved paths must never become construction identities.
-20. `file_id` is the only identity of a file-dependency node; no secondary graph-node ID exists.
-21. File dependency storage contains direct `file_id -> file_id` relations only.
-22. Forward and reverse adjacency are first-class construction data.
-23. File dependency records are indexed directly by `file_id - 1`.
-24. Dependency topology uses one compact forward/reverse representation; there is no generation-specific storage model.
+10. There is no SAVE lifecycle stage; BUILD/REBUILD own durability.
+11. One successful REBUILD starts one BUILD lineage.
+12. `file_id`, `string_id`, and `identity_ref` preserve existing numeric values across BUILD within that lineage.
+13. REBUILD may reassign/compact `file_id`, `string_id`, `identity_ref`, and Graph handles.
+14. Removed historical identity slots are not recycled by BUILD.
+15. Configuration composition is root-first declaration-order DFS and is never sorted.
+16. Change tokens are proof optimizations, never identity.
+17. Per-file SHA-256 identifies exact bytes.
+18. Candidate construction/persistence state becomes authoritative only at the coordinated commit boundary.
+19. Project absolute-path resolution is fail-closed.
+20. `file_id` is the only identity of a file-dependency node.
+21. Forward and reverse file adjacency are first-class persisted BUILD data.
+22. REBUILD may finalize topology with one `O(F + E)` pass.
+23. BUILD computes the affected closure from committed reverse topology before sparse dependency replacement.
+24. `string_id` is textual identity only.
+25. `identity_ref` is semantic WHO only.
+26. Semantic declaration/definition state is DB state, not identity state.
+27. Graph handles identify locations in the final compiled result and are not semantic identity.
+28. Only one final G is current; V4 does not persist a semantic Graph-generation history.
+

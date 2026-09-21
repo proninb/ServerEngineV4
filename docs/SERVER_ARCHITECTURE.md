@@ -4,114 +4,58 @@
 
 Visual Studio must mirror the physical file-system hierarchy exactly.
 
+Current Project construction subtrees include:
+
 ```text
-ServerEngineV4/
-├── server.json
-├── server_engine/
-│   ├── main.cpp
-│   ├── server.hpp
-│   ├── server.cpp
-│   ├── server_context.hpp
-│   ├── server_status.hpp
-│   │
-│   ├── diagnostics/
-│   │   ├── diagnostic.hpp
-│   │   ├── diagnostic_collection.hpp
-│   │   ├── diagnostic_collection.cpp
-│   │   ├── diagnostic_builder.hpp
-│   │   ├── diagnostic_source_cache.hpp
-│   │   ├── diagnostic_source_cache.cpp
-│   │   ├── diagnostic_formatter.hpp
-│   │   ├── diagnostic_formatter.cpp
-│   │   ├── diagnostic_descriptor.hpp
-│   │   └── diagnostic_registry.hpp
-│   │
-│   ├── json/
-│   │   ├── json.hpp
-│   │   ├── json_ascii.hpp
-│   │   ├── json_unicode.hpp
-│   │   ├── json_value.hpp
-│   │   ├── json_parser.hpp
-│   │   ├── json_parser.cpp
-│   │   ├── json_buffer.hpp
-│   │   ├── json_escape.hpp
-│   │   └── json_writer.hpp
-│   │
-│   ├── configuration/
-│   │   ├── server_configuration.hpp
-│   │   ├── server_configuration_loader.hpp
-│   │   └── server_configuration_loader.cpp
-│   │
-│   ├── communication/
-│   │   ├── server_command.hpp
-│   │   ├── server_command_request.hpp
-│   │   ├── server_command_result.hpp
-│   │   ├── command_queue.hpp
-│   │   ├── command_queue.cpp
-│   │   ├── communication.hpp
-│   │   ├── communication.cpp
-│   │   │
-│   │   └── console/
-│   │       ├── console_input.hpp
-│   │       ├── console_input_windows.cpp
-│   │       ├── console_input_posix.cpp
-│   │       ├── server_console.hpp
-│   │       └── server_console.cpp
-│   │
-│   └── project/
-│       ├── project.hpp
-│       ├── project.cpp
-│       ├── project_identity.hpp
-│       ├── project_lifecycle_context.hpp
-│       ├── preprocessor_configuration.hpp
-│       ├── project_configuration_manifest.hpp
-│       ├── project_configuration_manifest.cpp
-│       ├── project_configuration_manifest_store.hpp
-│       ├── project_configuration_manifest_store.cpp
-│       ├── project_path.cpp
-│       ├── project_path.hpp
-│       ├── project_path_windows.cpp
-│       ├── project_path_posix.cpp
-│       ├── file/
-│       │   ├── file_identity.hpp
-│       │   ├── file_identity.cpp
-│       │   ├── file_context.hpp
-│       │   └── file_context.cpp
-│       ├── project_load.hpp
-│       ├── project_load.cpp
-│       ├── project_build.hpp
-│       ├── project_build.cpp
-│       ├── project_rebuild.hpp
-│       ├── project_rebuild.cpp
-│       ├── project_configuration_loader.hpp
-│       └── project_configuration_loader.cpp
-│
+server_engine/
+├── project/
+│   ├── assign/
+│   ├── construction/
+│   ├── file/
+│   ├── frontend/
+│   ├── preprocessor/
+│   ├── string/
+│   ├── project.*
+│   ├── project_build.*
+│   ├── project_load.*
+│   ├── project_rebuild.*
+│   ├── project_configuration_*
+│   ├── project_identity.hpp
+│   ├── project_lifecycle_context.hpp
+│   ├── project_path.*
+│   └── preprocessor_configuration.hpp
 └── docs/
     ├── SERVER_ARCHITECTURE.md
     ├── SERVER_CONFIGURATION.md
     ├── PROJECT.md
     ├── PROJECT_CONFIGURATION.md
+    ├── FRONTEND_ARCHITECTURE.md
     ├── DIAGNOSTICS.md
     └── JSON.md
 ```
 
+As new Semantic/DB/persistence subtrees are introduced, the physical directory
+is the architecture; IDE filters mirror it rather than inventing logical-only
+groups.
+
 ## Visual Studio rule
 
-`.vcxproj.filters` must reproduce the physical folder tree:
-
-```text
-server_engine
-├── configuration
-├── communication
-│   └── console
-└── project
-    └── file
-
-docs
-```
+`.vcxproj.filters` must reproduce the physical source tree exactly.
 
 No artificial `Source Files`, `Header Files`, `Server`, or other logical-only
 groups are used.
+
+Current Project filters must include the physical:
+
+```text
+project
+├── assign
+├── construction
+├── file
+├── frontend
+├── preprocessor
+└── string
+```
 
 The physical tree is authoritative.
 
@@ -146,13 +90,11 @@ server.json
 one Server
     -> one ABI
     -> one SHM
-    -> all Projects/subprojects use the same physical layout contract
 ```
 
 ABI is process configuration. `project.json` does not contain or override ABI.
 
-The same parsed `server_abi_configuration` is passed into the mode-specific
-temporary lifecycle context:
+The same `server_abi_configuration` is borrowed by each mode-specific operation:
 
 ```text
 LOAD
@@ -162,13 +104,14 @@ LOAD
 BUILD
     build_context
         ABI
-        manifest
-        root preprocessor configuration
-        incremental construction state
+        root Project path
+        committed baseline views
+        candidate sparse overlays
 
 REBUILD
     rebuild_context
         ABI
+        root Project path
         fresh construction state
 ```
 
@@ -261,15 +204,18 @@ Console is one communication transport, not a mandatory Server component.
 
 1. Physical folders define architecture.
 2. Visual Studio mirrors physical folders exactly.
-3. `configuration/` contains configuration contracts and loaders.
+3. `configuration/` contains process configuration contracts/loaders.
 4. `communication/` contains shared command infrastructure.
-5. Each transport owns a dedicated communication subfolder.
-6. Platform-specific code remains inside the transport implementation subtree.
-7. Server lifecycle behavior remains transport-neutral.
-8. At most one Project is active.
-9. Project state is published only after the selected lifecycle operation succeeds.
-10. Runtime hot paths must not depend on control-plane command synchronization.
-
+5. Each transport owns its dedicated implementation subtree.
+6. Server/control thread is the sole lifecycle owner.
+7. At most one resident Project is active.
+8. `server_context.project == nullptr` exactly means `UNLOADED`.
+9. LOAD, BUILD, and REBUILD require `UNLOADED`.
+10. UNLOAD requires `LOADED`.
+11. Resident Project contains runtime state only.
+12. BUILD acceleration state belongs to the persisted baseline, not `server_context`.
+13. BUILD/REBUILD publish only after one successful coordinated commit.
+14. Runtime hot paths do not depend on control-plane synchronization.
 
 ## PIMPL construction rule
 
@@ -381,59 +327,71 @@ and does not bypass normal LOAD state validation.
 
 ## Project documentation
 
-Project construction is mode-oriented. There is no universal Project construction context.
+Project construction is mode-oriented. There is no universal Project
+construction context.
 
-Temporary construction state is owned by explicit `load_context`, `build_context`, and `rebuild_context` boundaries.
+Temporary operation state is owned by explicit `load_context`, `build_context`,
+and `rebuild_context` boundaries.
 
-Server architecture owns process lifecycle and the resident Project pointer.
-
-Detailed Project contracts are separated into:
+Detailed contracts are separated into:
 
 ```text
 PROJECT.md
-    Project ownership
-    resident vs construction lifetime
-    LOAD / BUILD / REBUILD
-    separate LOAD / BUILD / REBUILD pipelines
-    Graph -> Runtime -> SHM publication
+    lifecycle
+    persisted baseline
+    SourceSave / DB / final-G boundaries
+    BUILD / REBUILD / LOAD publication
 
 PROJECT_CONFIGURATION.md
     project.json schema
-    Project tree
-    group / header / source / project
-    path resolution
-    composition input
-    root preprocessing configuration
+    composition
+    configuration proof
+
+FRONTEND_ARCHITECTURE.md
+    file_id / string_id / identity_ref
+    preprocessing/frontend
+    lexical reuse
+    dependency topology
 ```
 
-Project lifecycle/configuration details belong in those documents instead of
-being duplicated in Server process configuration documentation.
+Server architecture owns process lifecycle and resident Project publication.
 
+## Persisted Project baseline
 
-## Project configuration manifest persistence
-
-The complete composed configuration proof is stored under:
+The Project artifact root remains:
 
 ```text
-<root-project-dir>/.serverengine/<root-project.json filename>/project.manifest
+<root-project-dir>/.serverengine/<root-project.json filename>/
 ```
 
-The manifest stores:
+One successful BUILD/REBUILD baseline logically contains:
 
 ```text
-root-first declaration-order composition
-declaring-file edges
-relative/absolute locator semantics
-per-file SHA-256
-optional file change tokens
-aggregate project_configuration_hash
-artifact checksum
+configuration proof
+    project.manifest
+
+SourceSave
+    physical file identity/state
+    forward/reverse file topology
+
+DB
+    BUILD-only reusable frontend/semantic/Builder state
+    string_id and identity_ref lineage
+
+final G
+    one compiled Project result used by LOAD/Runtime
 ```
 
-The manifest is construction state and never resident Project state.
+The exact SourceSave/DB/final-G filenames and binary formats are not frozen yet.
 
-`project_configuration_manifest_store` is a narrow persistence boundary, not a
-generic Project persistence manager.
+The existing `project_configuration_manifest_store` remains a narrow codec/store
+for the configuration-proof component. Its standalone replacement operation is
+not the final authoritative multi-artifact commit once the full baseline exists.
+
+There is no SAVE lifecycle command.
+
+Successful BUILD/REBUILD owns persistence. Failed construction must leave the
+last successful baseline intact.
 
 ## Project configuration locator graph
 
@@ -479,48 +437,66 @@ remain temporary construction state.
 
 ```text
 UNLOADED
-    +-- LOAD success ------> LOADED
-    +-- LOAD failure ------> UNLOADED
-    +-- REBUILD success ---> LOADED
-    `-- REBUILD failure ---> UNLOADED
+    +-- LOAD <path> success ------> LOADED
+    +-- LOAD <path> failure ------> UNLOADED
+    +-- BUILD <path> success -----> LOADED
+    +-- BUILD <path> failure -----> UNLOADED
+    +-- REBUILD <path> success ---> LOADED
+    `-- REBUILD <path> failure ---> UNLOADED
 
 LOADED
-    +-- BUILD success -----> LOADED
-    +-- BUILD failure -----> UNLOADED
-    `-- UNLOAD -----------> UNLOADED
+    `-- UNLOAD -------------------> UNLOADED
 ```
 
-BUILD operates on the resident Project and therefore has no Project path
-argument. REBUILD requires UNLOADED. Failure of LOAD, BUILD, or REBUILD always
-leaves `server_context.project == nullptr`.
+LOAD, BUILD, and REBUILD each receive a Project path.
+
+BUILD opens the last successful persisted baseline for that Project path. It
+does not consume `server_context.project`.
+
+If BUILD fails, the old persisted baseline remains available for later
+incremental reuse, but no resident Project remains active.
 
 ## Current Project construction boundary
 
-The current Project construction layer implements configuration composition and
-the initial lexical construction boundary:
+The implemented REBUILD path currently reaches:
 
 ```text
-REBUILD
-    recursive project.json composition
+recursive project.json composition
     -> root preprocessor configuration
     -> configuration manifest
-    -> flat File Context
-    -> Header/Source lexical generation
-    -> stops before directive execution / Semantic / G0
-
-BUILD
-    committed manifest verification
-    -> recomposition on changed configuration bytes
-    -> root preprocessor configuration
-    -> aggregate hash comparison
-    -> stops before Gn->Gn+1 source construction
+    -> fresh File Context
+    -> Header/Source exact-byte materialization
+    -> retained lexical generation
+    -> sparse directive anchors
+    -> deterministic executed quoted-include closure
+    -> Assign exact-byte materialization
 ```
 
-The temporary construction manifest is not committed until the generation it
-describes is successfully constructed and published.
+It stops before Semantic/DB/final-G construction and coordinated commit.
 
-Configuration traversal is root-first declaration-order DFS with normalized-path
-dedupe and cycle detection. It is not sorted.
+The implemented BUILD code currently reaches only:
+
+```text
+project.manifest load
+    -> configuration-input verification
+    -> recomposition when configuration bytes changed
+    -> aggregate hash comparison
+```
+
+The C++ BUILD entry still has the obsolete `LOADED -> BUILD` resident-Project
+contract.
+
+The next implementation slice must first correct BUILD to:
+
+```text
+UNLOADED
+    -> BUILD <project-path>
+    -> open committed baseline
+```
+
+After that, BUILD adds SourceSave/File Context change detection, affected reverse
+closure, DB reuse, Semantic delta construction, final-G construction, and
+coordinated commit.
 
 ## Project path platform boundary
 
@@ -574,36 +550,56 @@ silently produce an empty or wrong translation unit.
 
 ## File Context storage boundary
 
-`file_context` is temporary Project construction state.
+`file_context` is construction state, never resident Project runtime state.
+
+Identity lifetime:
 
 ```text
 REBUILD
-    fresh File Context identity space
+    fresh file_id space
 
 BUILD
-    restore committed File Context slots
-    preserve existing file_id values
-    append IDs only for newly discovered files
+    bind/restore committed slots
+    preserve existing file_id
+    append new file_id values only
 ```
 
-The physical path is stored once in one contiguous native-character arena.
-Platform-equivalence keys are transient lookup values and never replace the
-physical I/O path.
+Logical compact state:
 
 ```text
-file_record[]       dense file_id slots
-native_path_chars[] physical paths
-path_index[]        open-addressed path identity index
+file_record[]
+file_physical_record[]
+file_dependency_record[]
+native_path_chars[]
+path_index[]
+forward_edges[]
+reverse_edges[]
 ```
 
-There is no per-file `std::filesystem::path` allocation and no persisted
-`project_path_key` object in File Context. No sort or mutex is required.
+The current implementation materializes these arrays for a fresh construction.
 
-Physical acquisition is owned by `file/file_identity.*`, not Project semantic
-identity. The cold physical record stores exact SHA-256 plus an optional native
-change token; timestamp/size observation remains transient.
+BUILD will add committed-baseline views plus sparse mutable overlays. It must not
+copy or rebuild all file state merely to change a sparse subset.
 
-`construction_content_hash` aggregates ordered raw per-file SHA-256 values under
-domain `CWFCNT01`. It proves aggregate byte-content identity only; file path,
-role, configuration, and future dependency topology remain separate inputs to a
-higher construction identity.
+Physical acquisition retains the existing fast proof contract:
+
+```text
+native change token proves unchanged
+    -> no read
+
+otherwise
+    -> stable exact read
+    -> SHA-256
+```
+
+The direct reverse topology is persisted SourceSave/DB data because BUILD uses it
+to compute the affected closure before replacing candidate dependencies.
+
+REBUILD may build complete topology in `O(F + E)` with the current no-sort
+finalizer.
+
+BUILD must update topology sparsely while preserving the same logical
+`file_id -> file_id` adjacency model.
+
+There is no generation-specific dependency-node identity and no Graph history.
+

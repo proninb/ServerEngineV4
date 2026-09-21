@@ -82,12 +82,12 @@ file_id != semantic identity
 
 ### `string_id`
 
-`string_id` identifies one canonical interned spelling inside the current construction/current Project state.
+`string_id` identifies one canonical interned spelling inside one BUILD lineage.
 
 It answers:
 
 ```text
-What textual name is this?
+What textual spelling is this?
 ```
 
 It is a compact four-byte identity:
@@ -105,52 +105,135 @@ declaration state
 preprocessor state
 ```
 
-The canonical contract is:
+Canonical spelling contract:
 
 ```text
 same spelling      -> same string_id
 different spelling -> different string_id
 ```
 
+Lifetime contract:
+
+```text
+REBUILD
+    fresh string_id space
+
+BUILD
+    preserve every existing string_id
+    append only for new spellings
+```
+
+A removed spelling does not make its slot reusable during the same BUILD
+lineage. REBUILD is the compaction/reset boundary.
+
 There is no separate `name_id`.
-
-That abstraction would duplicate the same identity domain.
-
----
 
 ### `identity_ref`
 
-`identity_ref` belongs to Semantic.
+`identity_ref` belongs to Semantic/DB.
 
 It answers:
 
 ```text
-Which semantic entity does this name mean in this scope?
+Which semantic entity (WHO) does this name identify in this scope/domain?
 ```
 
-Conceptually:
+Canonical key:
 
 ```text
-(parent identity_ref, string_id, semantic kind)
+(parent identity_ref, string_id, identity_kind)
     -> identity_ref
 ```
 
-Examples:
+The supported coarse identity domains are:
 
 ```text
-(root, "B") -> ::B
-(X,    "B") -> X::B
-(Y,    "B") -> Y::B
+root
+namespace_scope
+type
+object
 ```
 
-Therefore:
+`type` is a semantic identity domain, not a concrete declaration category.
+Struct/class/union/enum/alias may all map to `identity_kind::type`; their
+concrete declaration state is stored above the identity foundation.
+
+The planned compact representation is:
 
 ```text
-string_id   = textual identity
-identity_ref = semantic identity
+identity_ref : uint32
+
+31        30 29                         0
++-----------+----------------------------+
+| kind : 2  |          slot : 30         |
++-----------+----------------------------+
 ```
 
----
+```text
+slot 0 -> invalid
+slot 1 -> root
+```
+
+The hot identity metadata is only:
+
+```cpp
+struct identity_record {
+    identity_ref parent;
+    string_id name;
+};
+
+static_assert(sizeof(identity_record) == 8);
+```
+
+`kind` is encoded in `identity_ref`; declaration/definition state, source
+location, defining `file_id`, members, ABI state, and Graph handles are not part
+of the identity record.
+
+The kind is part of the canonical key. Therefore different semantic domains may
+share one scoped spelling:
+
+```cpp
+struct A {};
+A A;
+```
+
+requires two distinct identities:
+
+```text
+(root, "A", type)   -> type identity
+(root, "A", object) -> object identity
+```
+
+Lifetime contract:
+
+```text
+REBUILD
+    fresh identity_ref space
+
+BUILD
+    preserve every existing identity_ref
+    append only for new semantic WHO values
+```
+
+An identity may remain in the DB lineage after its current declaration disappears.
+Identity existence therefore does not mean that the entity is currently present
+in final G.
+
+Conceptual separation:
+
+```text
+string_id
+    WHAT TEXT
+
+identity_ref
+    WHO
+
+Semantic DB state
+    WHAT IS CURRENTLY KNOWN ABOUT WHO
+
+Graph handle
+    WHERE WHO IS IN FINAL G
+```
 
 ## Construction Ownership
 
@@ -191,28 +274,50 @@ It must not become the owner of textual identity.
 
 ## `string_table`
 
-The V4 `string_table` is deliberately simpler than the V3 implementation.
+`string_table` remains single-owner and deterministic.
 
-Current architecture:
+It has two lifecycle modes:
 
 ```text
-single owner
+REBUILD
+    fresh dense table
+
+BUILD
+    committed baseline view
+    + append-only local overlay
+```
+
+Required properties:
+
+```text
 no mutex
-no atomics
-no baseline overlay
-no persistence coupling
+no atomic allocation
+no concurrent ID publication
 no semantic responsibility
 ```
 
-Storage:
+Logical storage:
 
 ```text
-string_record[]
-char bytes[]
-open-addressed index[]
+string records
+spelling bytes
+open-addressed lookup acceleration
 ```
 
-The table provides:
+BUILD must preserve baseline numeric IDs without copying/re-interning every
+baseline spelling merely to process a small delta.
+
+Lookup is conceptually:
+
+```text
+find(text)
+    local overlay?
+    committed baseline?
+```
+
+New spelling allocation begins after the committed baseline slot range.
+
+The public boundary remains:
 
 ```cpp
 intern(text) -> string_id
@@ -221,13 +326,10 @@ get(id)      -> string_view
 contains(id) -> bool
 ```
 
-`string_id` construction remains private to `string_table`.
+`string_id` creation remains private to `string_table`.
 
-Consumers must not reconstruct a `string_id` from a raw integer.
-
-This preserves the identity boundary and prevents unrelated subsystems from manufacturing textual identities.
-
----
+The **current implementation** is the fresh REBUILD form only. Baseline binding
+and append overlay are not implemented yet.
 
 ## Preprocessor
 
@@ -706,6 +808,38 @@ Frames keep no pointer/span into the lexical arena. If a newly discovered Header
 causes lexical storage growth, suspended parent positions remain valid and
 reacquire their lexical span on the next decode.
 
+## BUILD Frontend Reuse
+
+REBUILD constructs physical lexical facts from the current source closure.
+
+BUILD instead begins from the committed SourceSave/DB baseline.
+
+The physical dirty set is detected before semantic processing. The old committed
+reverse file topology then produces the affected closure.
+
+For a dirty file:
+
+```text
+new exact bytes
+    -> re-lex complete physical file
+    -> new sparse directive anchors
+```
+
+For an unchanged but affected file:
+
+```text
+reuse persisted exact bytes
+reuse persisted lexical words/directive anchors
+    -> rerun only required preprocessing / Parser / Semantic work
+```
+
+The compact lexical stream is therefore persisted BUILD acceleration data. It is
+not resident runtime state and does not become a semantic token graph.
+
+BUILD must preserve deterministic identity assignment. Identity-producing
+publication remains owned by deterministic construction order; worker count must
+not change `file_id`, `string_id`, or `identity_ref` values.
+
 ## Include Guards
 
 Example:
@@ -753,9 +887,26 @@ It is ordinary Preprocessor state.
 
 ## File Dependency Topology
 
-File Context owns dependency staging.
+File Context owns the logical direct file topology.
 
-All syntax producers use:
+All syntax producers resolve dependencies to:
+
+```text
+file_id -> file_id
+```
+
+There is no secondary node or edge identity.
+
+The logical views are:
+
+```text
+dependencies(file_id)
+dependents(file_id)
+```
+
+### REBUILD
+
+REBUILD stages all direct relations through:
 
 ```cpp
 file_context::add_dependency(
@@ -763,26 +914,31 @@ file_context::add_dependency(
     file_id target)
 ```
 
-There is one dependency staging owner.
+After all syntax domains reach closure, one terminal
+`finalize_dependency_topology()` may build exact compact forward/reverse arenas
+with the existing `O(F + E)` counting/dense-marker algorithm.
 
-No frontend/composer-local duplicate dependency vector is allowed.
+### BUILD
 
-After complete dependency discovery closure:
+BUILD begins from the committed direct topology.
 
-```cpp
-file_context::finalize_dependency_topology()
-```
-
-builds compact forward/reverse topology.
-
-After finalization:
+Order is mandatory:
 
 ```text
-no new file_id
-no new dependency edge
+dirty files
+    -> affected closure through OLD dependents
+    -> reconstruct affected dependency contributions
+    -> candidate current topology
 ```
 
----
+BUILD must not perform a complete topology rebuild solely to discover what was
+affected.
+
+The physical sparse-update encoding is not frozen yet; the logical topology is
+still one File Context/SourceSave topology.
+
+After successful coordinated commit, the candidate topology becomes the new
+committed baseline.
 
 ## Architectural Gates
 
@@ -813,27 +969,41 @@ The following contracts are fail-closed architecture rules.
 
 12. #include changes physical input, not semantic scope.
 
-13. File Context is the sole owner of dependency staging.
+13. File Context is the sole logical owner of direct file dependency topology.
 
-14. A retained per-file lexical stream is construction data, not a semantic token graph. Its common token is exactly four bytes and carries no string_id or identity_ref. Rare large source deltas or lexeme lengths use in-band extension words in the same uint32 stream.
+14. A retained per-file lexical stream is BUILD/REBUILD construction data, not
+    a semantic token graph.
 
-15. Do not store state that is authoritatively derivable elsewhere.
+15. The common lexical token is exactly four bytes and carries no string_id or
+    identity_ref.
 
-16. Do not introduce manager/context abstractions without a demonstrated
+16. Do not store state that is authoritatively derivable elsewhere.
+
+17. Do not introduce manager/context abstractions without a demonstrated
     ownership or lifetime requirement.
-
-17. Source closure may execute preprocessing directives before Parser/Semantic,
-    but it must reuse the one retained lexical generation. Source bytes are
-    never lexed a second time only to discover dependencies.
 
 18. Active frontend include traversal is bounded execution state and must not
     allocate from the heap on include enter/leave.
 
-19. Active frontend frames store no pointer/span into lexical_generation. Resume
-    state is file_id + word_offset + source_offset and reacquires the span.
-```
+19. Active frontend frames store no pointer/span into lexical_generation.
 
----
+20. REBUILD creates fresh file_id/string_id/identity_ref spaces.
+
+21. BUILD preserves existing file_id/string_id/identity_ref values and appends
+    only new values.
+
+22. identity_ref canonicalization key includes semantic kind.
+
+23. identity_ref owns WHO only; declaration/definition state belongs to DB.
+
+24. BUILD reuse state is persisted DB/SourceSave state, never resident Project
+    runtime state.
+
+25. BUILD affected closure is computed from the committed old reverse topology
+    before dependency replacement.
+
+26. There is no persisted Graph-generation history; construction produces one
+    final G.
 
 ## Current Implemented Slice
 
@@ -842,101 +1012,96 @@ Implemented:
 ```text
 string_id
     4-byte canonical textual identity
+    current fresh-construction implementation
 
 string_table
     single-owner interning
     dense IDs
     immutable spelling bytes
     open-addressed index
-    no mutex/atomics/baseline/persistence
+    no mutex/atomics
+    BUILD baseline binding not implemented yet
 
 preprocessor
     borrowed const string_table&
     sparse active define table
-    #define NAME
-    #define NAME OTHER
-    #undef
-    defined(name)
-    recursive identifier-only expansion
+    restricted object-like definitions
+    recursive identifier expansion
     cycle protection
 
 frontend_input
-    fixed 256-level { file_id, word_offset, source_offset } stack
+    fixed active include stack
     compact lexical token decoder
     no heap allocation on include enter/leave
-    no retained lexical span across include publication
-    O(1) parent resume after child include
 
-directive_decoder
-    consumes exactly one pp_* ... pp_end directive
-    retains exact file-local lexical/source ranges
-    typed identifier operands for define/undef/ifdef/ifndef
-    direct quoted/angled include payload
-    no include resolution / macro execution / File Context mutation
-
-directive_executor
-    initializes mutable state from root preprocessor_configuration
-    fixed 256-level conditional stack
-    conditional groups are balanced within one physical file
-    #define NAME / #define NAME IDENTIFIER / #undef
-    #ifdef / #ifndef / #else / #endif
-    inactive-branch suppression for normal directives
-    direct #include -> transient include_request
-    typed execution error + exact source range
-    no include resolution / File Context mutation
+directive_decoder / directive_executor
+    retained directive ranges
+    deterministic conditional/include execution
 
 lexical_token
-    one 32-bit word
-    8-bit token_kind
-    16-bit source-start delta + 8-bit lexeme length
-    in-band 32-bit extension words for large delta/length
-    one uint32 word stream; no side arrays
-    punctuation / keyword / preprocessing classification
-    no string_id / identity_ref
+    one 32-bit common word
+    in-band extensions for large source delta/length
+
+REBUILD source closure
+    deterministic dense file_id discovery
+    exact Header/Source bytes
+    retained lexical generation
+    sparse directive anchors
+    executed quoted-include closure
+
+Assign input materialization
+    exact immutable bytes only
 ```
 
-Not implemented yet:
+Architecture already specified but not implemented:
 
 ```text
-configured include roots / angled include resolution
-Parser/Semantic construction
-Semantic identity_space
-identity_ref integration
-Assign grammar and semantic variable resolution
-terminal File Context dependency-topology finalization
-Graph semantic construction
+persisted SourceSave baseline
+BUILD File Context baseline + sparse overlay
+BUILD string_table baseline + append overlay
+persisted lexical/frontend DB reuse
+identity_ref / identity_space
+Semantic DB
+Assign grammar / semantic reference resolution
+BUILD sparse dependency update
+REBUILD terminal dependency finalization
+final G
+coordinated multi-artifact commit
+LOAD final-G restore
 ```
-
----
 
 ## Next Construction Step
 
-The next slice is the Semantic identity foundation.
+Before implementing `identity_space`, V4 must correct the BUILD lifecycle and
+baseline boundary so semantic identity is created with the right lifetime.
 
-The identity domains remain strictly separated:
-
-```text
-file_id
-    physical construction input
-
-string_id
-    canonical textual spelling
-
-identity_ref
-    scoped semantic entity
-```
-
-Semantic identity is canonicalized by:
+Immediate implementation order:
 
 ```text
-(parent identity_ref, string_id, semantic kind)
-    -> identity_ref
+1. BUILD command/lifecycle
+       UNLOADED + BUILD <project-path>
+
+2. persisted baseline ownership
+       configuration proof
+       SourceSave
+       DB
+       final G
+
+3. File Context and string_table baseline-view contracts
+       preserve IDs across BUILD
+       append-only overlay
+
+4. Semantic identity foundation
+       32-bit identity_ref
+       root / namespace_scope / type / object
+       (parent, string_id, kind) canonical key
+       8-byte hot identity_record
+       baseline + append overlay
+       no mutex / no atomic allocation
 ```
 
-The foundation must be construction-local, deterministic, direct-indexed by
-`identity_ref`, and free of source/file ownership. Source locations,
-declaration/definition state, and defining `file_id` do not belong in the hot
-identity record.
+The identity foundation owns only canonical semantic WHO.
 
-Parser/Semantic later owns declaration legality and lookup policy. The identity
-foundation only owns canonical scoped identity.
+Parser/Semantic later owns declaration legality, current declaration/definition
+state, source locations, and lookup policy.
+
