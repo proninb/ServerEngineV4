@@ -252,6 +252,10 @@ public:
         return files.size();
     }
 
+    [[nodiscard]] bool dependency_topology_finalized() const noexcept {
+        return topology_finalized;
+    }
+
 private:
     struct file_record final {
         std::uint32_t path_offset = 0;

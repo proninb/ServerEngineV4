@@ -14,6 +14,7 @@ server_engine/
 │   ├── file/
 │   ├── frontend/
 │   ├── preprocessor/
+│   ├── persistence/
 │   ├── string/
 │   ├── project.*
 │   ├── project_build.*
@@ -53,6 +54,7 @@ project
 ├── construction
 ├── file
 ├── frontend
+├── persistence
 ├── preprocessor
 └── string
 ```
@@ -393,6 +395,31 @@ and `settings.files.baseline`. Binary formats remain versioned persistence contr
 The existing `project_configuration_manifest_store` remains a narrow codec/store
 for the configuration-proof component. Its standalone replacement operation is
 not the final authoritative multi-artifact commit once the full baseline exists.
+
+The persistence boundary now defines the final A/B physical layout:
+
+```text
+.serverengine/<root-project.json>/
+    baseline.bin
+    slot0/
+        project.manifest
+        source.bin
+        database.bin
+        compiled.bin
+    slot1/
+        project.manifest
+        source.bin
+        database.bin
+        compiled.bin
+```
+
+`slot0` and `slot1` are crash-safe replacement mechanics only. They are not
+semantic Graph generations.
+
+`source.bin` has a versioned/checksummed image contract for finalized File
+Context state. It records file_id order, UTF-8 physical paths, file kind,
+content/change proof, and direct forward/reverse topology. The encoder refuses
+a File Context whose dependency topology is not terminally finalized.
 
 There is no SAVE lifecycle command.
 

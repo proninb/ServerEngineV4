@@ -255,12 +255,18 @@ Parser/Semantic construction
 identity_ref / identity_space
 Assign grammar and semantic variable resolution
 terminal REBUILD dependency-topology finalization
+final SourceSave image construction
 DB persistence
 final-G construction
 Runtime
 SHM
 coordinated baseline commit
 ```
+
+The persistence subsystem already provides the final A/B artifact layout and
+the `source.bin` encoder/validator. REBUILD must not invoke the SourceSave
+encoder until Semantic/Assign processing has emitted every direct dependency
+and `finalize_dependency_topology()` has completed.
 
 Because no final G is produced yet, the incomplete REBUILD path must not publish
 any candidate construction artifact as the new committed baseline.
@@ -639,6 +645,37 @@ final G
 The artifact roles use the Server-wide configured names
 `settings.files.manifest/source_save/database/compiled/baseline`. Their binary
 formats remain versioned implementation contracts.
+
+The physical persistence layout is A/B:
+
+```text
+.serverengine/<root-project.json>/
+    baseline.bin
+    slot0/{project.manifest, source.bin, database.bin, compiled.bin}
+    slot1/{project.manifest, source.bin, database.bin, compiled.bin}
+```
+
+Only `baseline.bin` selects the authoritative slot. Slot names are persistence
+mechanics, not Project generations.
+
+`source.bin` now has a concrete versioned/checksummed image boundary. It is
+encoded only from terminally finalized File Context topology and contains:
+
+```text
+file_id order
+UTF-8 physical path
+file_kind
+current-lineage membership flag
+exact content hash
+optional native change token
+direct dependency range
+direct dependent range
+forward file_id arena
+reverse file_id arena
+```
+
+The image validator reconstructs reverse adjacency from forward adjacency in
+`O(F + E)` and rejects inconsistent topology.
 
 `project.manifest` remains versioned, checksummed, and fail-closed, but its own
 temporary-file replacement is not the final multi-artifact commit model.

@@ -40,6 +40,9 @@
     <Filter Include="server_engine\project\assign">
       <UniqueIdentifier>{E5555555-5555-5555-5555-555555555555}</UniqueIdentifier>
     </Filter>
+    <Filter Include="server_engine\project\persistence">
+      <UniqueIdentifier>{F6666666-6666-6666-6666-666666666666}</UniqueIdentifier>
+    </Filter>
     <Filter Include="docs">
       <UniqueIdentifier>{66666666-6666-6666-6666-666666666666}</UniqueIdentifier>
     </Filter>
@@ -135,7 +138,13 @@
     <ClCompile Include="server_engine\project\project_path.cpp">
       <Filter>server_engine\project</Filter>
     </ClCompile>
-<ClCompile Include="server_engine\project\file\file_context.cpp">
+    <ClCompile Include="server_engine\project\persistence\project_artifact.cpp">
+      <Filter>server_engine\project\persistence</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\persistence\source_save.cpp">
+      <Filter>server_engine\project\persistence</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\file\file_context.cpp">
       <Filter>server_engine\project\file</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\project\project_load.cpp">
@@ -268,6 +277,12 @@
     </ClInclude>
     <ClInclude Include="server_engine\project\project_path.hpp">
       <Filter>server_engine\project</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\persistence\project_artifact.hpp">
+      <Filter>server_engine\project\persistence</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\persistence\source_save.hpp">
+      <Filter>server_engine\project\persistence</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\string\string_table.hpp">
       <Filter>server_engine\project\string</Filter>
