@@ -84,8 +84,8 @@ One Server instance owns one ABI and one SHM layout contract.
 
 ```text
 server.json
-    -> abi.target
-    -> abi.pack
+    -> settings.abi.target
+    -> settings.abi.pack
 
 one Server
     -> one ABI
@@ -365,11 +365,11 @@ The Project artifact root remains:
 ```
 
 One successful BUILD/REBUILD baseline logically contains files whose standard
-names come from process-wide `server.json.project_files`:
+names come from process-wide `server.json.settings.files`:
 
 ```text
 configuration proof
-    project_files.manifest
+    settings.files.manifest
 
 SourceSave
     physical file identity/state
@@ -383,9 +383,9 @@ final G
     one compiled Project result used by LOAD/Runtime
 ```
 
-The artifact roles and filenames are configured by `project_files.manifest`,
-`project_files.source_save`, `project_files.database`, `project_files.compiled`,
-and `project_files.baseline`. Binary formats remain versioned persistence contracts.
+The artifact roles and filenames are configured by `settings.files.manifest`,
+`settings.files.source_save`, `settings.files.database`, `settings.files.compiled`,
+and `settings.files.baseline`. Binary formats remain versioned persistence contracts.
 
 The existing `project_configuration_manifest_store` remains a narrow codec/store
 for the configuration-proof component. Its standalone replacement operation is

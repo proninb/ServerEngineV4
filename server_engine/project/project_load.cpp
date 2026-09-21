@@ -11,8 +11,7 @@ namespace cw::server {
 
 server_status load_project(
     const std::filesystem::path& project_path,
-    const server_abi_configuration& abi,
-    const project_files_configuration& project_files,
+    const server_settings_configuration& settings,
     operation_id operation,
     diagnostic_collection& diagnostics,
     std::unique_ptr<project>& output) {
@@ -20,8 +19,7 @@ server_status load_project(
     output.reset();
 
     load_context context{
-        abi,
-        project_files};
+        settings};
     (void)context;
 
     diagnostics.emit(

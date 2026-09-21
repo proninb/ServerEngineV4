@@ -15,32 +15,26 @@
 
 namespace cw::server {
 
-// Temporary LOAD state; borrows the process-wide Server ABI.
+// Temporary LOAD state; borrows process-wide Server settings.
 class load_context final {
 public:
-    load_context(
-        const server_abi_configuration& abi,
-        const project_files_configuration& project_files) noexcept
-        : abi(abi),
-          project_files(project_files) {
+    explicit load_context(
+        const server_settings_configuration& settings) noexcept
+        : settings(settings) {
     }
 
-    const server_abi_configuration& abi;
-    const project_files_configuration& project_files;
+    const server_settings_configuration& settings;
 };
 
 // Temporary BUILD state over the last successful persisted construction baseline.
 class build_context final {
 public:
-    build_context(
-        const server_abi_configuration& abi,
-        const project_files_configuration& project_files) noexcept
-        : abi(abi),
-          project_files(project_files) {
+    explicit build_context(
+        const server_settings_configuration& settings) noexcept
+        : settings(settings) {
     }
 
-    const server_abi_configuration& abi;
-    const project_files_configuration& project_files;
+    const server_settings_configuration& settings;
     project_configuration_manifest manifest;
 
     preprocessor_configuration preprocessor;
@@ -49,15 +43,12 @@ public:
 // Temporary REBUILD state for constructing a fresh Project lineage.
 class rebuild_context final {
 public:
-    rebuild_context(
-        const server_abi_configuration& abi,
-        const project_files_configuration& project_files) noexcept
-        : abi(abi),
-          project_files(project_files) {
+    explicit rebuild_context(
+        const server_settings_configuration& settings) noexcept
+        : settings(settings) {
     }
 
-    const server_abi_configuration& abi;
-    const project_files_configuration& project_files;
+    const server_settings_configuration& settings;
     project_configuration_manifest manifest;
     file_context files;
     lexical_generation lexical;

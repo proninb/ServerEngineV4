@@ -26,8 +26,9 @@ namespace {
 
 enum class schema_context : std::uint8_t {
     root,
+    settings,
     abi,
-    project_files,
+    files,
     communication,
     endpoints,
     endpoint,
@@ -40,10 +41,11 @@ enum class schema_context : std::uint8_t {
 enum class schema_field : std::uint8_t {
     none = 0,
     version,
+    settings,
     abi,
     target,
     pack,
-    project_files,
+    files,
     manifest,
     source_save,
     database,
@@ -114,6 +116,26 @@ struct schema_frame {
            value == "critical";
 }
 
+[[nodiscard]] constexpr std::string_view schema_context_name(
+    schema_context context) noexcept {
+
+    switch (context) {
+    case schema_context::root: return "root";
+    case schema_context::settings: return "settings";
+    case schema_context::abi: return "settings.abi";
+    case schema_context::files: return "settings.files";
+    case schema_context::communication: return "communication";
+    case schema_context::endpoints: return "communication.endpoints";
+    case schema_context::endpoint: return "communication.endpoints[]";
+    case schema_context::project: return "project";
+    case schema_context::logging: return "logging";
+    case schema_context::telemetry: return "telemetry";
+    case schema_context::telemetry_subsystems: return "telemetry.subsystems";
+    }
+
+    return "server configuration";
+}
+
 class server_configuration_handler final
     : public json_event_handler {
 public:
@@ -161,6 +183,22 @@ public:
         if (parent.context ==
                 schema_context::root &&
             parent.field ==
+                schema_field::settings) {
+
+            stack.back().field =
+                schema_field::none;
+
+            stack.push_back({
+                schema_context::settings,
+                schema_field::none,
+                0,
+            });
+            return;
+        }
+
+        if (parent.context ==
+                schema_context::settings &&
+            parent.field ==
                 schema_field::abi) {
 
             stack.back().field =
@@ -175,15 +213,15 @@ public:
         }
 
         if (parent.context ==
-                schema_context::root &&
+                schema_context::settings &&
             parent.field ==
-                schema_field::project_files) {
+                schema_field::files) {
 
             stack.back().field =
                 schema_field::none;
 
             stack.push_back({
-                schema_context::project_files,
+                schema_context::files,
                 schema_field::none,
                 0,
             });
@@ -288,17 +326,27 @@ public:
         switch (frame.context) {
         case schema_context::root:
             if (!seen(frame, schema_field::version) ||
-                !seen(frame, schema_field::abi) ||
-                !seen(frame, schema_field::project_files) ||
+                !seen(frame, schema_field::settings) ||
                 !seen(frame, schema_field::communication)) {
 
                 fail(
                     schema_failure::missing_required_field,
-                    "server configuration requires version, abi, project_files, and communication");
+                    "server configuration requires version, settings, and communication");
                 return;
             }
 
             root_completed = true;
+            break;
+
+        case schema_context::settings:
+            if (!seen(frame, schema_field::abi) ||
+                !seen(frame, schema_field::files)) {
+
+                fail(
+                    schema_failure::missing_required_field,
+                    "settings requires abi and files");
+                return;
+            }
             break;
 
         case schema_context::abi:
@@ -307,13 +355,13 @@ public:
 
                 fail(
                     schema_failure::missing_required_field,
-                    "abi requires target and pack");
+                    "settings.abi requires target and pack");
                 return;
             }
             break;
 
-        case schema_context::project_files:
-            if (!validate_project_files(frame)) {
+        case schema_context::files:
+            if (!validate_files(frame)) {
                 return;
             }
             break;
@@ -465,7 +513,9 @@ public:
 
             fail(
                 schema_failure::unknown_property,
-                "unknown server configuration property: " +
+                "unknown property in " +
+                    std::string(schema_context_name(frame.context)) +
+                    ": " +
                     std::string(key));
             return;
         }
@@ -476,7 +526,9 @@ public:
         if ((frame.seen & bit) != 0) {
             fail(
                 schema_failure::duplicate_property,
-                "duplicate server configuration property: " +
+                "duplicate property in " +
+                    std::string(schema_context_name(frame.context)) +
+                    ": " +
                     std::string(key));
             return;
         }
@@ -542,8 +594,8 @@ public:
             read_abi(field, value);
             break;
 
-        case schema_context::project_files:
-            read_project_files(field, value);
+        case schema_context::files:
+            read_files(field, value);
             break;
 
         case schema_context::endpoint:
@@ -562,6 +614,7 @@ public:
             read_telemetry(field, value);
             break;
 
+        case schema_context::settings:
         case schema_context::communication:
         case schema_context::endpoints:
         case schema_context::telemetry_subsystems:
@@ -623,12 +676,16 @@ private:
         switch (context) {
         case schema_context::root:
             if (key == "version") return schema_field::version;
-            if (key == "abi") return schema_field::abi;
-            if (key == "project_files") return schema_field::project_files;
+            if (key == "settings") return schema_field::settings;
             if (key == "communication") return schema_field::communication;
             if (key == "project") return schema_field::project;
             if (key == "logging") return schema_field::logging;
             if (key == "telemetry") return schema_field::telemetry;
+            break;
+
+        case schema_context::settings:
+            if (key == "abi") return schema_field::abi;
+            if (key == "files") return schema_field::files;
             break;
 
         case schema_context::abi:
@@ -636,7 +693,7 @@ private:
             if (key == "pack") return schema_field::pack;
             break;
 
-        case schema_context::project_files:
+        case schema_context::files:
             if (key == "manifest") return schema_field::manifest;
             if (key == "source_save") return schema_field::source_save;
             if (key == "database") return schema_field::database;
@@ -700,10 +757,10 @@ private:
             return;
         }
 
-        if (version != 2) {
+        if (version != 3) {
             fail(
                 schema_failure::unsupported_version,
-                "unsupported server configuration version");
+                "unsupported server configuration version; expected version 3");
             return;
         }
 
@@ -720,25 +777,25 @@ private:
             if (!value.get(target)) {
                 fail(
                     schema_failure::wrong_type,
-                    "abi.target must be a string");
+                    "settings.abi.target must be a string");
                 return;
             }
 
             if (target == "windows-x64") {
-                configuration.abi.target =
+                configuration.settings.abi.target =
                     abi_target::windows_x64;
                 return;
             }
 
             if (target == "posix-x64") {
-                configuration.abi.target =
+                configuration.settings.abi.target =
                     abi_target::posix_x64;
                 return;
             }
 
             fail(
                 schema_failure::invalid_value,
-                "abi.target must be windows-x64 or posix-x64");
+                "settings.abi.target must be windows-x64 or posix-x64");
             return;
         }
 
@@ -754,11 +811,11 @@ private:
 
                 fail(
                     schema_failure::invalid_value,
-                    "abi.pack must be 1, 2, 4, 8, or 16");
+                    "settings.abi.pack must be 1, 2, 4, 8, or 16");
                 return;
             }
 
-            configuration.abi.pack = pack;
+            configuration.settings.abi.pack = pack;
             return;
         }
 
@@ -767,7 +824,7 @@ private:
             "invalid abi scalar field");
     }
 
-    void read_project_files(
+    void read_files(
         schema_field field,
         json_value_view value) {
 
@@ -778,7 +835,7 @@ private:
 
             fail(
                 schema_failure::wrong_type,
-                "project_files entries must be non-empty strings");
+                "settings.files entries must be non-empty strings");
             return;
         }
 
@@ -788,33 +845,33 @@ private:
         switch (field) {
         case schema_field::manifest:
             field_name = "manifest";
-            output = &configuration.project_files.manifest;
+            output = &configuration.settings.files.manifest;
             break;
 
         case schema_field::source_save:
             field_name = "source_save";
-            output = &configuration.project_files.source_save;
+            output = &configuration.settings.files.source_save;
             break;
 
         case schema_field::database:
             field_name = "database";
-            output = &configuration.project_files.database;
+            output = &configuration.settings.files.database;
             break;
 
         case schema_field::compiled:
             field_name = "compiled";
-            output = &configuration.project_files.compiled;
+            output = &configuration.settings.files.compiled;
             break;
 
         case schema_field::baseline:
             field_name = "baseline";
-            output = &configuration.project_files.baseline;
+            output = &configuration.settings.files.baseline;
             break;
 
         default:
             fail(
                 schema_failure::invalid_structure,
-                "invalid project_files scalar field");
+                "invalid settings.files scalar field");
             return;
         }
 
@@ -825,7 +882,7 @@ private:
 
             fail(
                 schema_failure::invalid_value,
-                std::string("project_files.") +
+                std::string("settings.files.") +
                     field_name +
                     " must be a single relative file name");
             return;
@@ -845,7 +902,7 @@ private:
                 schema_failure::invalid_value,
                 converted ==
                         filesystem_path_result::invalid_utf8
-                    ? std::string("project_files.") +
+                    ? std::string("settings.files.") +
                         field_name +
                         " must be valid UTF-8"
                     : std::string("cannot convert project_files.") +
@@ -863,7 +920,7 @@ private:
 
             fail(
                 schema_failure::invalid_value,
-                std::string("project_files.") +
+                std::string("settings.files.") +
                     field_name +
                     " must be a single relative file name");
             return;
@@ -1125,7 +1182,7 @@ private:
             "telemetry.subsystems must be an array");
     }
 
-    [[nodiscard]] bool validate_project_files(
+    [[nodiscard]] bool validate_files(
         const schema_frame& frame) {
 
         if (!seen(frame, schema_field::manifest) ||
@@ -1136,16 +1193,16 @@ private:
 
             fail(
                 schema_failure::missing_required_field,
-                "project_files requires manifest, source_save, database, compiled, and baseline");
+                "settings.files requires manifest, source_save, database, compiled, and baseline");
             return false;
         }
 
         const std::array<const std::filesystem::path*, 5> files{
-            &configuration.project_files.manifest,
-            &configuration.project_files.source_save,
-            &configuration.project_files.database,
-            &configuration.project_files.compiled,
-            &configuration.project_files.baseline,
+            &configuration.settings.files.manifest,
+            &configuration.settings.files.source_save,
+            &configuration.settings.files.database,
+            &configuration.settings.files.compiled,
+            &configuration.settings.files.baseline,
         };
 
         for (std::size_t left = 0;
@@ -1161,7 +1218,7 @@ private:
 
                     fail(
                         schema_failure::invalid_value,
-                        "project_files entries must use distinct file names");
+                        "settings.files entries must use distinct file names");
                     return false;
                 }
             }

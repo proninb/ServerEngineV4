@@ -616,11 +616,11 @@ artifact directory:
 ```
 
 Logically one successful baseline contains files whose Server-wide names come
-from `server.json.project_files`:
+from `server.json.settings.files`:
 
 ```text
 configuration proof
-    project_files.manifest
+    settings.files.manifest
 
 SourceSave
     physical file identity/state
@@ -638,7 +638,7 @@ final G
 ```
 
 The artifact roles use the Server-wide configured names
-`project_files.manifest/source_save/database/compiled/baseline`. Their binary
+`settings.files.manifest/source_save/database/compiled/baseline`. Their binary
 formats remain versioned implementation contracts.
 
 `project.manifest` remains versioned, checksummed, and fail-closed, but its own

@@ -19,8 +19,7 @@ namespace cw::server {
 
 [[nodiscard]] server_status rebuild_project(
     const std::filesystem::path& project_path,
-    const server_abi_configuration& abi,
-    const project_files_configuration& project_files,
+    const server_settings_configuration& settings,
     operation_id operation,
     diagnostic_collection& diagnostics,
     std::unique_ptr<project>& output);

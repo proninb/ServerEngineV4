@@ -102,7 +102,7 @@ struct server_abi_configuration final {
 
 // Server-wide standard filenames used inside each Project artifact directory.
 // These names exist independently of the optional startup Project.
-struct project_files_configuration final {
+struct server_files_configuration final {
     std::filesystem::path manifest;
     std::filesystem::path source_save;
     std::filesystem::path database;
@@ -110,16 +110,19 @@ struct project_files_configuration final {
     std::filesystem::path baseline;
 };
 
+// Process-wide low-level Server settings shared by all Project lifecycle modes.
+struct server_settings_configuration final {
+    server_abi_configuration abi;
+    server_files_configuration files;
+};
+
 // Process-level configuration loaded before communication and Project lifecycle begin.
 struct server_configuration {
-    // server.json schema version. Current V4 schema value is 2.
+    // server.json schema version. Current V4 schema value is 3.
     std::uint32_t version = 0;
 
-    // Required process-wide ABI used by all Project lifecycle modes.
-    server_abi_configuration abi;
-
-    // Required Server-wide standard Project artifact filenames.
-    project_files_configuration project_files;
+    // Required process-wide low-level Server settings.
+    server_settings_configuration settings;
 
     // Required communication endpoint configuration.
     communication_configuration communication;

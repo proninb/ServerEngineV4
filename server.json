@@ -1,21 +1,23 @@
 {
   // Server configuration schema version.
-  "version": 2,
+  "version": 3,
 
-  // One process-wide ABI governs all Projects and the single SHM layout.
-  "abi": {
-    "target": "windows-x64",
-    "pack": 8
-  },
+  // Process-wide low-level Server settings.
+  "settings": {
+    // One ABI governs all Projects and the single SHM layout.
+    "abi": {
+      "target": "windows-x64",
+      "pack": 8
+    },
 
-  // Standard filenames inside each Project artifact directory.
-  // This contract exists even when no startup Project is configured.
-  "project_files": {
-    "manifest": "project.manifest",
-    "source_save": "source.bin",
-    "database": "database.bin",
-    "compiled": "compiled.bin",
-    "baseline": "baseline.bin"
+    // Standard filenames inside each Project artifact directory.
+    "files": {
+      "manifest": "project.manifest",
+      "source_save": "source.bin",
+      "database": "database.bin",
+      "compiled": "compiled.bin",
+      "baseline": "baseline.bin"
+    }
   },
 
   // Only listed endpoints are created.

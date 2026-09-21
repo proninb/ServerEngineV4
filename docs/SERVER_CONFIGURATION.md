@@ -13,19 +13,21 @@ The JSON parser supports:
 
 ```jsonc
 {
-  "version": 2,
+  "version": 3,
 
-  "abi": {
-    "target": "windows-x64",
-    "pack": 8
-  },
+  "settings": {
+    "abi": {
+      "target": "windows-x64",
+      "pack": 8
+    },
 
-  "project_files": {
-    "manifest": "project.manifest",
-    "source_save": "source.bin",
-    "database": "database.bin",
-    "compiled": "compiled.bin",
-    "baseline": "baseline.bin"
+    "files": {
+      "manifest": "project.manifest",
+      "source_save": "source.bin",
+      "database": "database.bin",
+      "compiled": "compiled.bin",
+      "baseline": "baseline.bin"
+    }
   },
 
   "communication": {
@@ -50,14 +52,20 @@ The JSON parser supports:
 }
 ```
 
-## ABI
+## Settings
 
-Required process-wide ABI:
+`settings` is required process-level configuration. It contains low-level
+contracts shared by all Project lifecycle modes.
+
+### ABI
 
 ```jsonc
-"abi": {
-  "target": "windows-x64",
-  "pack": 8
+"settings": {
+  "abi": {
+    "target": "windows-x64",
+    "pack": 8
+  },
+  ...
 }
 ```
 
@@ -78,22 +86,21 @@ Supported pack values:
 16
 ```
 
-One Server owns one ABI and one SHM layout contract. Every Project and
-subproject constructed or restored by that Server uses this ABI.
-`project.json` cannot override it.
+One Server owns one ABI and one SHM layout contract. `project.json` cannot
+override it.
 
-## Project Files
-
-`project_files` is required Server configuration and exists independently of
-the optional startup `project`.
+### Files
 
 ```jsonc
-"project_files": {
-  "manifest": "project.manifest",
-  "source_save": "source.bin",
-  "database": "database.bin",
-  "compiled": "compiled.bin",
-  "baseline": "baseline.bin"
+"settings": {
+  ...
+  "files": {
+    "manifest": "project.manifest",
+    "source_save": "source.bin",
+    "database": "database.bin",
+    "compiled": "compiled.bin",
+    "baseline": "baseline.bin"
+  }
 }
 ```
 
@@ -106,7 +113,8 @@ no "." / ".."
 all five names are distinct
 ```
 
-The filenames are Server-wide policy and exist even when `server.json` has no startup Project entry.
+`settings.files` is Server-wide policy and exists independently of the optional
+startup `project`.
 
 Mode usage:
 
@@ -127,7 +135,18 @@ REBUILD
     and publishes them through baseline
 ```
 
-The current implementation already wires `project_files.manifest` into `project_configuration_manifest_store`.
+The configuration parser reports schema failures against their fully qualified
+context, for example:
+
+```text
+settings requires abi and files
+settings.abi requires target and pack
+settings.files.manifest must be a single relative file name
+settings.files entries must use distinct file names
+```
+
+The current implementation already wires `settings.files.manifest` into
+`project_configuration_manifest_store`.
 
 ## Project Startup
 

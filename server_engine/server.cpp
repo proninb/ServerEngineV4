@@ -215,8 +215,7 @@ server_status server::load(
     const auto status =
         load_project(
             path,
-            context.configuration.abi,
-            context.configuration.project_files,
+            context.configuration.settings,
             operation,
             diagnostics,
             candidate);
@@ -252,8 +251,7 @@ server_status server::build(
     const auto status =
         build_project(
             *context.project,
-            context.configuration.abi,
-            context.configuration.project_files,
+            context.configuration.settings,
             operation,
             diagnostics,
             candidate);
@@ -295,8 +293,7 @@ server_status server::rebuild(
     const auto status =
         rebuild_project(
             path,
-            context.configuration.abi,
-            context.configuration.project_files,
+            context.configuration.settings,
             operation,
             diagnostics,
             candidate);

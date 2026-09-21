@@ -147,6 +147,26 @@ diagnostic_formatter
 
 No subsystem should parse human-readable messages to decide machine behavior.
 
+## Server Configuration Schema Diagnostics
+
+`server.json` schema failures continue to use the stable Server configuration
+diagnostic descriptors. Nested `settings` errors are distinguished by precise
+source ranges and fully qualified detail text rather than by allocating one
+diagnostic ID per field.
+
+Examples:
+
+```text
+settings requires abi and files
+settings.abi requires target and pack
+settings.files requires manifest, source_save, database, compiled, and baseline
+settings.files.manifest must be a single relative file name
+unknown property in settings.files: foo
+duplicate property in settings.abi: pack
+```
+
+Unsupported schema versions report the expected current version explicitly.
+
 ## Lifecycle diagnostic boundary
 
 LOAD, BUILD, and REBUILD all start from `UNLOADED`, receive a Project path, and

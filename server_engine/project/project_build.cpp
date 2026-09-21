@@ -27,8 +27,7 @@ namespace {
 
 server_status build_project(
     const project& resident,
-    const server_abi_configuration& abi,
-    const project_files_configuration& project_files,
+    const server_settings_configuration& settings,
     operation_id operation,
     diagnostic_collection& diagnostics,
     std::unique_ptr<project>& output) {
@@ -36,15 +35,14 @@ server_status build_project(
     (void)output;
 
     build_context context{
-        abi,
-        project_files};
+        settings};
 
     const auto& project_path =
         resident.path();
 
     project_configuration_manifest_store store{
         project_path,
-        context.project_files.manifest};
+        context.settings.files.manifest};
 
     const auto stored =
         store.load(
@@ -153,7 +151,7 @@ server_status build_project(
     return report_build_incomplete(
         operation,
         diagnostics,
-        "Project configuration aggregate hash changed; Gn -> Gn+1 construction is not implemented yet");
+        "Project configuration aggregate hash changed; incremental Project construction is not implemented yet");
 }
 
 }
