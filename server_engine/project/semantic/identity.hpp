@@ -127,7 +127,7 @@ public:
         std::uint32_t slot) const noexcept;
 
     [[nodiscard]] std::size_t size() const noexcept {
-        return records.size();
+        return records.size() + 1;
     }
 
 private:
@@ -169,6 +169,11 @@ private:
         std::uint32_t fingerprint) const noexcept;
 
     const string_table& strings;
+
+    // Root is intrinsic slot 1 and therefore cannot fail allocation during
+    // identity_space construction. Dense vectors store slots 2..N only.
+    identity_record root_record{};
+
     std::vector<identity_record> records;
     std::vector<identity_kind> kinds;
     std::vector<identity_slot> index;

@@ -158,7 +158,7 @@ object
 Struct/class/union/enum/alias may all map to `identity_kind::type`; their
 concrete declaration state is stored above the identity foundation.
 
-The planned compact representation is:
+The implemented compact representation is:
 
 ```text
 identity_ref : uint32
@@ -1095,6 +1095,10 @@ identity_space
 `identity_space` borrows the construction `string_table` only to validate that
 incoming `string_id` values belong to the same construction. It owns no
 declaration/definition facts and no persistence policy.
+
+Root is intrinsic slot `1` stored in-place rather than allocated in the dense
+vectors. Construction therefore cannot silently lose the root on allocation
+failure; dense record/kind storage begins at slot `2`.
 
 The next Semantic slice is Parser/Semantic declaration state. BUILD baseline
 binding and append overlays remain separate later work.
