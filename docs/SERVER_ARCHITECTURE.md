@@ -486,20 +486,18 @@ project.manifest load
     -> aggregate hash comparison
 ```
 
-The C++ BUILD entry still has the obsolete `LOADED -> BUILD` resident-Project
-contract.
-
-The next implementation slice must first correct BUILD to:
+The C++ BUILD entry now matches the lifecycle contract:
 
 ```text
 UNLOADED
     -> BUILD <project-path>
+    -> resolve Project path relative to server.json
     -> open committed baseline
 ```
 
-After that, BUILD adds SourceSave/File Context change detection, affected reverse
-closure, DB reuse, Semantic delta construction, final-G construction, and
-coordinated commit.
+BUILD does not consume resident Project state. The next incremental slice adds
+SourceSave/File Context change detection, affected reverse closure, DB reuse,
+Semantic delta construction, final-G construction, and coordinated commit.
 
 ## Filesystem and Project path boundaries
 

@@ -95,7 +95,7 @@ inline constexpr diagnostic_descriptor communication_unsupported_transport{
     "Communication transport is not implemented",
 };
 
-// LOAD was requested while another Project is already active.
+// LOAD, BUILD, or REBUILD was requested while another Project is already active.
 inline constexpr diagnostic_descriptor project_already_loaded{
     diagnostic_id{2001},
     diagnostic_domain::project,

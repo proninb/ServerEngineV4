@@ -1,9 +1,9 @@
 /*
  * Project BUILD pipeline.
  *
- * BUILD incrementally constructs from the last successful persisted baseline.
- * The current implementation still receives the resident Project only as a
- * temporary entry-path source until the lifecycle boundary is corrected.
+ * BUILD incrementally constructs from the last successful persisted baseline
+ * selected by the explicit root Project path. Resident Project state is never
+ * a BUILD input.
  */
 #pragma once
 
@@ -19,7 +19,7 @@
 namespace cw::server {
 
 [[nodiscard]] server_status build_project(
-    const project& resident,
+    const std::filesystem::path& project_path,
     const server_settings_configuration& settings,
     operation_id operation,
     diagnostic_collection& diagnostics,

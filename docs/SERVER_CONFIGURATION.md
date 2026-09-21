@@ -261,13 +261,10 @@ REBUILD
     and Assign byte materialization
 
 BUILD
+    BUILD <project-path> enters only from UNLOADED
     configuration-manifest verification/recomposition implemented
     SourceSave/DB incremental construction not implemented
-    C++ command entry still temporarily uses the obsolete resident-Project form
 ```
-
-The next code correction changes BUILD command parsing and lifecycle to
-`BUILD <project-path>` from `UNLOADED`.
 
 ## Communication
 

@@ -89,15 +89,13 @@ load_context
     ABI
 
 build_context
-    ABI
-    root Project path
+    Server settings
     committed baseline views
     candidate SourceSave/DB/final-G overlays
     root preprocessing configuration
 
 rebuild_context
-    ABI
-    root Project path
+    Server settings
     manifest
     fresh File Context
     fresh lexical construction state
@@ -557,15 +555,16 @@ locator
 Resolved physical paths and `filesystem_path_key` values are temporary construction
 state and are never persisted in the manifest.
 
-Filesystem equivalence used for identity/cycle/duplicate detection remains isolated behind
-`project_path.hpp`:
+Filesystem equivalence used for identity/cycle/duplicate detection belongs
+to the common `filesystem_path.hpp` boundary:
 
 ```text
 Windows -> invariant Unicode case-insensitive key
 POSIX   -> case-sensitive key
 ```
 
-Both path resolution and platform-key construction are fail-closed.
+Project path resolution and filesystem-key construction are separate fail-closed
+boundaries.
 
 Relative locators remain relocation-stable when the composed relative topology is
 preserved. Absolute locators are location-bound by definition.

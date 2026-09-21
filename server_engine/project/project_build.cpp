@@ -26,7 +26,7 @@ namespace {
 }
 
 server_status build_project(
-    const project& resident,
+    const std::filesystem::path& project_path,
     const server_settings_configuration& settings,
     operation_id operation,
     diagnostic_collection& diagnostics,
@@ -36,9 +36,6 @@ server_status build_project(
 
     build_context context{
         settings};
-
-    const auto& project_path =
-        resident.path();
 
     project_configuration_manifest_store store{
         project_path,
@@ -58,7 +55,7 @@ server_status build_project(
                 operation)
                 .file(store.path())
                 .detail(
-                    "BUILD requires the configuration manifest committed by the resident generation")
+                    "BUILD requires the configuration manifest from the last successful persisted baseline")
                 .build());
 
         return server_status::

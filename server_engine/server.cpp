@@ -158,6 +158,7 @@ server_command_result server::execute(
     case server_command_kind::build:
         result.status =
             build(
+                command.path,
                 result.operation,
                 result.diagnostics);
         break;
@@ -232,25 +233,31 @@ server_status server::load(
 }
 
 server_status server::build(
+    const std::filesystem::path& project_path,
     operation_id operation,
     diagnostic_collection& diagnostics) {
 
-    if (!context.project) {
+    if (context.project) {
         diagnostics.emit(
             diagnostic(
-                diagnostics::project_not_loaded,
+                diagnostics::project_already_loaded,
                 operation)
-                .detail("BUILD requires an active Project")
+                .detail("UNLOAD the active Project before BUILD")
                 .build());
 
-        return server_status::project_not_loaded;
+        return server_status::project_already_loaded;
     }
+
+    const auto path =
+        resolve(
+            context.configuration_directory,
+            project_path);
 
     std::unique_ptr<project> candidate;
 
     const auto status =
         build_project(
-            *context.project,
+            path,
             context.configuration.settings,
             operation,
             diagnostics,

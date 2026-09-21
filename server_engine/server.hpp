@@ -37,8 +37,9 @@ public:
         operation_id operation,
         diagnostic_collection& diagnostics);
 
-    // Incremental mode over the currently resident Project Gn.
+    // Incremental construction from the last successful persisted baseline.
     [[nodiscard]] server_status build(
+        const std::filesystem::path& project_path,
         operation_id operation,
         diagnostic_collection& diagnostics);
 
