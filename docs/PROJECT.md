@@ -1017,8 +1017,8 @@ The order is:
 ```text
 1. detect physical dirty files
 2. compute affected closure using OLD committed dependents
-3. rebuild only dependency contributions whose owners are affected/changed
-4. publish the candidate current topology as part of the coordinated commit
+3. recompute only dependency relations whose owners are affected/changed
+4. persist the resulting current topology as part of the coordinated commit
 ```
 
 The physical encoding used to support sparse owner replacement is not frozen
@@ -1042,13 +1042,13 @@ Header, Source, and Assign syntax add only their own resolved direct relations.
 
 Assign dependency emission occurs only after Semantic identity exists.
 
-Dependency topology belongs to SourceSave/DB construction state and is never
+Dependency topology belongs to SourceSave construction state and is never
 resident runtime Project state.
 
 ## Publication Contract
 
-BUILD and REBUILD construct candidates against a non-authoritative operation
-state.
+BUILD and REBUILD own only temporary, non-authoritative operation state until
+the complete artifact set is ready.
 
 Nothing becomes authoritative merely because an intermediate file was written
 or an in-memory subsystem completed.
@@ -1056,17 +1056,20 @@ or an in-memory subsystem completed.
 Successful publication is one coordinated lifecycle boundary:
 
 ```text
-candidate configuration proof
-candidate SourceSave
-candidate DB
-candidate final G
-candidate Runtime/SHM preparation
+temporary configuration proof
+temporary SourceSave state
+temporary DB state
+constructed G
+prepared Runtime/SHM state
         |
         v
-validate
+validate complete artifact set
         |
         v
-coordinated durable commit
+write and validate inactive persistence slot
+        |
+        v
+coordinated durable baseline switch
         |
         v
 publish resident Project
@@ -1076,20 +1079,20 @@ Failure before that boundary:
 
 ```text
 REBUILD failure
-    -> discard fresh candidate
+    -> discard temporary REBUILD state
     -> preserve previous persisted baseline if one exists
     -> UNLOADED
 
 BUILD failure
-    -> discard sparse candidate overlays
+    -> discard temporary BUILD state
     -> preserve last successful persisted baseline
     -> publish no resident Project
     -> UNLOADED
 ```
 
-The previous final G may remain persisted as the last successful baseline, but
-it is not treated as the current runnable Project after a failed BUILD against
-changed source state.
+The previously persisted compiled artifact may remain as the last successful
+baseline, but it is not treated as the current runnable Project after a failed
+BUILD against changed source state.
 
 ## Architectural Invariants
 
@@ -1110,15 +1113,15 @@ changed source state.
 15. Configuration composition is root-first declaration-order DFS and is never sorted.
 16. Change tokens are proof optimizations, never identity.
 17. Per-file SHA-256 identifies exact bytes.
-18. Candidate construction/persistence state becomes authoritative only at the coordinated commit boundary.
+18. Temporary construction/persistence state becomes authoritative only at the coordinated commit boundary.
 19. Project absolute-path resolution is fail-closed.
 20. `file_id` is the only identity of a file-dependency node.
 21. Forward and reverse file adjacency are first-class persisted BUILD data.
 22. REBUILD may finalize topology with one `O(F + E)` pass.
-23. BUILD computes the affected closure from committed reverse topology before sparse dependency replacement.
+23. BUILD computes the affected closure from committed reverse topology before recomputing affected dependency relations.
 24. `string_id` is textual identity only.
 25. `identity_ref` is semantic WHO only.
-26. Semantic declaration/definition state is DB state, not identity state.
+26. `identity_ref` carries no declaration/definition state; Parser/Semantic writes the compiled semantic result directly into G.
 27. Graph handles identify locations in the final compiled result and are not semantic identity.
-28. Only one final G is current; V4 does not persist a semantic Graph-generation history.
+28. V4 has one Graph concept, `G`; persistence reuse does not create Graph generations.
 

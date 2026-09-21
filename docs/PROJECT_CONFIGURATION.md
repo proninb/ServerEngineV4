@@ -563,10 +563,10 @@ truncated/extra bytes
 stored aggregate hash != recomputed aggregate hash
 ```
 
-`project.manifest` is one component of the future committed BUILD baseline. Once
-SourceSave, DB, and final-G artifacts exist, updating `project.manifest` alone
-must not publish a new Project construction baseline. All components participate
-in one coordinated successful BUILD/REBUILD commit.
+`project.manifest` is one component of the committed BUILD/REBUILD baseline.
+Updating `project.manifest` alone must not publish a new Project baseline.
+Configuration proof, SourceSave, DB, and compiled G participate in one
+coordinated successful BUILD/REBUILD commit.
 
 ## Validation
 
