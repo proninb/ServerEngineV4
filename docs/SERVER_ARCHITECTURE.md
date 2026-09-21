@@ -15,6 +15,7 @@ server_engine/
 │   ├── frontend/
 │   ├── preprocessor/
 │   ├── persistence/
+│   ├── semantic/
 │   ├── string/
 │   ├── project.*
 │   ├── project_build.*
@@ -56,6 +57,7 @@ project
 ├── frontend
 ├── persistence
 ├── preprocessor
+├── semantic
 └── string
 ```
 

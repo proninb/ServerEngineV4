@@ -89,6 +89,7 @@
     <ClCompile Include="server_engine\communication\console\server_console.cpp" />
     <ClCompile Include="server_engine\project\project.cpp" />
     <ClCompile Include="server_engine\project\string\string_table.cpp" />
+    <ClCompile Include="server_engine\project\semantic\identity.cpp" />
     <ClCompile Include="server_engine\project\preprocessor\preprocessor.cpp" />
     <ClCompile Include="server_engine\project\frontend\frontend_input.cpp" />
     <ClCompile Include="server_engine\project\frontend\directive_decoder.cpp" />
@@ -154,6 +155,7 @@
     <ClInclude Include="server_engine\project\persistence\source_save.hpp" />
     <ClInclude Include="server_engine\project\persistence\database.hpp" />
     <ClInclude Include="server_engine\project\string\string_table.hpp" />
+    <ClInclude Include="server_engine\project\semantic\identity.hpp" />
     <ClInclude Include="server_engine\project\preprocessor\preprocessor.hpp" />
     <ClInclude Include="server_engine\project\frontend\frontend_input.hpp" />
     <ClInclude Include="server_engine\project\frontend\directive_decoder.hpp" />

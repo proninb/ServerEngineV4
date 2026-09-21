@@ -99,7 +99,8 @@ rebuild_context
     manifest
     fresh File Context
     fresh lexical construction state
-    fresh string/semantic identity spaces
+    fresh string_table
+    fresh identity_space
     root preprocessing configuration
 ```
 

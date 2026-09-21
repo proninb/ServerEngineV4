@@ -10,6 +10,7 @@
 #include "preprocessor_configuration.hpp"
 #include "file/file_context.hpp"
 #include "frontend/lexical_generation.hpp"
+#include "semantic/identity.hpp"
 #include "string/string_table.hpp"
 #include "../configuration/server_configuration.hpp"
 
@@ -45,7 +46,8 @@ class rebuild_context final {
 public:
     explicit rebuild_context(
         const server_settings_configuration& settings) noexcept
-        : settings(settings) {
+        : settings(settings),
+          identities(strings) {
     }
 
     const server_settings_configuration& settings;
@@ -53,6 +55,7 @@ public:
     file_context files;
     lexical_generation lexical;
     string_table strings;
+    identity_space identities;
 
     preprocessor_configuration preprocessor;
 };

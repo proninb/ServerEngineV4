@@ -1056,12 +1056,9 @@ Assign input materialization
 Architecture already specified but not implemented:
 
 ```text
-persisted SourceSave baseline
 BUILD File Context baseline + sparse overlay
 BUILD string_table baseline + append overlay
-persisted lexical/frontend DB reuse
-identity_ref / identity_space
-Semantic DB
+Semantic DB declaration/definition facts
 Assign grammar / semantic reference resolution
 BUILD sparse dependency update
 REBUILD terminal dependency finalization
@@ -1070,38 +1067,35 @@ coordinated multi-artifact commit
 LOAD final-G restore
 ```
 
-## Next Construction Step
+## Current Semantic Identity Foundation
 
-Before implementing `identity_space`, V4 must correct the BUILD lifecycle and
-baseline boundary so semantic identity is created with the right lifetime.
-
-Immediate implementation order:
+The fresh-REBUILD `identity_space` is implemented.
 
 ```text
-1. BUILD command/lifecycle
-       UNLOADED + BUILD <project-path>
+identity_ref
+    32 bits
+    [kind:2][slot:30]
 
-2. persisted baseline ownership
-       configuration proof
-       SourceSave
-       DB
-       final G
+slot 0
+    invalid
 
-3. File Context and string_table baseline-view contracts
-       preserve IDs across BUILD
-       append-only overlay
+slot 1
+    root
 
-4. Semantic identity foundation
-       32-bit identity_ref
-       root / namespace_scope / type / object
-       (parent, string_id, kind) canonical key
-       8-byte hot identity_record
-       baseline + append overlay
-       no mutex / no atomic allocation
+identity_space
+    deterministic single-owner allocation
+    canonical (parent, string_id, kind) lookup
+    dense 8-byte identity_record[]
+    compact kind sidecar
+    open-addressed construction index
+    no mutex
+    no atomics
 ```
 
-The identity foundation owns only canonical semantic WHO.
+`identity_space` borrows the construction `string_table` only to validate that
+incoming `string_id` values belong to the same construction. It owns no
+declaration/definition facts and no persistence policy.
 
-Parser/Semantic later owns declaration legality, current declaration/definition
-state, source locations, and lookup policy.
+The next Semantic slice is Parser/Semantic declaration state. BUILD baseline
+binding and append overlays remain separate later work.
 

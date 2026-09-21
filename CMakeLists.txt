@@ -27,6 +27,7 @@ add_executable(ServerEngineV4
 
     server_engine/project/project.cpp
     server_engine/project/string/string_table.cpp
+    server_engine/project/semantic/identity.cpp
     server_engine/project/preprocessor/preprocessor.cpp
     server_engine/project/frontend/frontend_input.cpp
     server_engine/project/frontend/directive_decoder.cpp
