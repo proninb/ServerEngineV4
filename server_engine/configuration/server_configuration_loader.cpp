@@ -9,6 +9,7 @@
 
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../filesystem_path.hpp"
+#include "../project/project_path.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 #include "../json/json_parser.hpp"
 
@@ -905,7 +906,7 @@ private:
                     ? std::string("settings.files.") +
                         field_name +
                         " must be valid UTF-8"
-                    : std::string("cannot convert project_files.") +
+                    : std::string("cannot convert settings.files.") +
                         field_name +
                         " to native filesystem path");
             return;
@@ -1205,20 +1206,47 @@ private:
             &configuration.settings.files.baseline,
         };
 
+        constexpr std::array<std::string_view, 5> names{
+            "manifest",
+            "source_save",
+            "database",
+            "compiled",
+            "baseline",
+        };
+
+        std::array<project_path_key, 5> keys;
+
+        for (std::size_t index = 0;
+             index < files.size();
+             ++index) {
+
+            if (make_project_path_key(
+                    *files[index],
+                    keys[index]) !=
+                project_path_result::success) {
+
+                fail(
+                    schema_failure::invalid_value,
+                    "cannot derive filesystem-equivalence key for settings.files." +
+                        std::string(names[index]));
+                return false;
+            }
+        }
+
         for (std::size_t left = 0;
-             left < files.size();
+             left < keys.size();
              ++left) {
 
             for (std::size_t right = left + 1;
-                 right < files.size();
+                 right < keys.size();
                  ++right) {
 
-                if (*files[left] ==
-                    *files[right]) {
+                if (keys[left] ==
+                    keys[right]) {
 
                     fail(
                         schema_failure::invalid_value,
-                        "settings.files entries must use distinct file names");
+                        "settings.files entries must use distinct file names under platform filesystem semantics");
                     return false;
                 }
             }

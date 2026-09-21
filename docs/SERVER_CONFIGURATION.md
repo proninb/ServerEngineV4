@@ -110,7 +110,14 @@ Each value is one non-empty relative filename:
 no absolute path
 no directory component
 no "." / ".."
-all five names are distinct
+all five names are distinct under platform filesystem semantics
+```
+
+Filename equivalence follows the platform filesystem contract used by Project path identity:
+
+```text
+Windows -> case-insensitive
+POSIX   -> case-sensitive
 ```
 
 `settings.files` is Server-wide policy and exists independently of the optional
