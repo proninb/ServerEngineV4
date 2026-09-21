@@ -1,6 +1,7 @@
 #include "project_rebuild.hpp"
 
 #include "project_lifecycle_context.hpp"
+#include "assign/assign_input.hpp"
 #include "frontend/source_discovery.hpp"
 
 #include "../diagnostics/diagnostic_builder.hpp"
@@ -208,6 +209,16 @@ server_status rebuild_project(
         return discovered;
     }
 
+    const auto assignments_materialized =
+        materialize_assign_inputs(
+            context.files);
+
+    if (!succeeded(
+            assignments_materialized)) {
+
+        return assignments_materialized;
+    }
+
     // The candidate manifest belongs to candidate G0. Persist it only as part
     // of the eventual coordinated successful REBUILD commit.
 
@@ -216,7 +227,7 @@ server_status rebuild_project(
             diagnostics::project_rebuild_incomplete,
             operation)
             .detail(
-                "Project configuration manifest, source lexical closure, and executed quoted-include discovery are complete; Assign processing, dependency-topology finalization, Parser/Semantic construction, and Graph construction are not implemented yet")
+                "Project configuration manifest, source lexical closure, executed quoted-include discovery, and Assign byte materialization are complete; Parser/Semantic construction, Assign grammar/resolution, terminal dependency-topology finalization, and Graph construction are not implemented yet")
             .build());
 
     return server_status::unsupported;

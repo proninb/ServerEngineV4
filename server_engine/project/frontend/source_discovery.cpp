@@ -1,7 +1,7 @@
 #include "source_discovery.hpp"
 
 #include "directive_decoder.hpp"
-#include "execution_lanes.hpp"
+#include "../construction/execution_lanes.hpp"
 #include "frontend_input.hpp"
 #include "lexer.hpp"
 #include "../preprocessor/preprocessor.hpp"

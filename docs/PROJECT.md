@@ -156,9 +156,15 @@ root project.json
     -> project_configuration_manifest
     -> aggregate project_configuration_hash
     -> flat File Context population
-         project/header/source nodes
+         project/header/source/assign nodes
          immutable file_id + file_kind
-         exact per-file SHA-256 physical state
+    -> Header/Source exact-byte materialization
+    -> complete-file lexical generation
+    -> sparse preprocessing directive anchors
+    -> deterministic executed quoted-include closure
+         append-only discovered Header file_id values
+         direct File Context dependency staging
+    -> Assign exact-byte materialization
 ```
 
 Cardinality is semantic, not generic identity policy:
@@ -166,6 +172,7 @@ Cardinality is semantic, not generic identity policy:
 ```text
 header  -> repeated use allowed
 source  -> duplicate declaration is an error
+assign  -> duplicate declaration is an error
 project -> duplicate reference is an error
            active ancestor reference is a cycle error
 ```
@@ -175,10 +182,11 @@ File IDs are assigned root-first in declaration-order DFS. There is no sort.
 It currently stops before:
 
 ```text
-directive execution
-executed-include dependency discovery
-Semantic construction
-G0
+Parser/Semantic construction
+Semantic identity_space / identity_ref integration
+Assign grammar and semantic variable resolution
+terminal File Context dependency-topology finalization
+Graph G0 construction
 Runtime
 SHM
 coordinated commit
@@ -670,10 +678,16 @@ in the same order regardless of hardware concurrency.
 
 An include-discovered Header is materialized and lexed before that owner enters
 the child, so one root's mutable preprocessing state remains strictly ordered.
-Source closure does not finalize File Context topology. Assign and any later
-dependency-producing domains stage their relations first. Parser/Semantic runs
-after the single terminal topology finalization and reuses the retained lexical
-facts without lexing source bytes again.
+Source closure does not finalize File Context topology. After source closure,
+Assign files are materialized as immutable construction byte images, but their
+grammar and variable references are not resolved at that boundary.
+
+Parser/Semantic must establish semantic variable identity before Assign can
+resolve its references. The Assign frontend then emits any file-level dependency
+relations required for BUILD invalidation. Only after every dependency-producing
+domain reaches closure does construction call the single terminal topology
+finalization. Parser/Semantic reuses the retained lexical facts without lexing
+source bytes again.
 
 ### Storage contract
 

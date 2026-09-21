@@ -34,6 +34,12 @@
     <Filter Include="server_engine\project\frontend">
       <UniqueIdentifier>{C3333333-3333-3333-3333-333333333333}</UniqueIdentifier>
     </Filter>
+    <Filter Include="server_engine\project\construction">
+      <UniqueIdentifier>{D4444444-4444-4444-4444-444444444444}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="server_engine\project\assign">
+      <UniqueIdentifier>{E5555555-5555-5555-5555-555555555555}</UniqueIdentifier>
+    </Filter>
     <Filter Include="docs">
       <UniqueIdentifier>{66666666-6666-6666-6666-666666666666}</UniqueIdentifier>
     </Filter>
@@ -102,8 +108,11 @@
     <ClCompile Include="server_engine\project\frontend\source_discovery.cpp">
       <Filter>server_engine\project\frontend</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\project\frontend\execution_lanes_windows.cpp">
-      <Filter>server_engine\project\frontend</Filter>
+    <ClCompile Include="server_engine\project\assign\assign_input.cpp">
+      <Filter>server_engine\project\assign</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\construction\execution_lanes_windows.cpp">
+      <Filter>server_engine\project\construction</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\project\frontend\lexical_stream.cpp">
       <Filter>server_engine\project\frontend</Filter>
@@ -281,8 +290,11 @@
     <ClInclude Include="server_engine\project\frontend\source_discovery.hpp">
       <Filter>server_engine\project\frontend</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\project\frontend\execution_lanes.hpp">
-      <Filter>server_engine\project\frontend</Filter>
+    <ClInclude Include="server_engine\project\assign\assign_input.hpp">
+      <Filter>server_engine\project\assign</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\construction\execution_lanes.hpp">
+      <Filter>server_engine\project\construction</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\frontend\lexical_stream.hpp">
       <Filter>server_engine\project\frontend</Filter>

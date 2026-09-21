@@ -651,20 +651,35 @@ includes do not resolve paths, do not allocate `file_id`, and do not add edges.
 
 After every Project-declared frontend root reaches directive closure, all
 Header/Source dependency relations remain staged in File Context. Source closure
-does not finalize topology. Assign and any later dependency-producing syntax
-domains run first; the construction coordinator calls
-`finalize_dependency_topology()` exactly once only after every producer reaches
+does not finalize topology. Assign bytes may be materialized next, but semantic
+variable identity must exist before Assign reference resolution. The construction
+coordinator calls `finalize_dependency_topology()` exactly once only after
+Semantic-backed Assign resolution and every other dependency producer reaches
 closure.
 
 The current include-search policy in this slice supports quoted includes relative
 to the including physical file. Angled includes remain fail-closed until include
 roots become an explicit root Project configuration contract.
 
-### Stage 2: Parser / Semantic
+### Stage 2: Assign Input Materialization
 
-Parser and Semantic consume the completed physical file universe, finalized
-dependency topology, and retained lexical facts. Stage 2 does not lex source
-bytes again.
+After Header/Source closure, each `file_kind::assign` input is materialized into
+File Context as one immutable exact-byte image. Acquisition is parallel in
+bounded `O(CPU lanes)` batches; File Context publication remains single-owner.
+
+This stage does not invent or parse an `.assign` grammar, does not resolve
+variables, and does not emit dependency edges.
+
+### Stage 3: Parser / Semantic, Assign Resolution, Topology Finalization
+
+Parser/Semantic consumes the completed Header/Source physical universe and
+retained lexical facts without lexing source bytes again. Semantic construction
+establishes the variable identities required by Assign resolution.
+
+After Semantic identity exists, the Assign syntax domain can parse its
+materialized bytes, resolve variable references, and stage any additional
+file-level dependency relations. Only then may the construction coordinator call
+`file_context::finalize_dependency_topology()` exactly once.
 
 `lexical_generation` remains direct-indexed construction storage:
 
@@ -883,12 +898,12 @@ lexical_token
 Not implemented yet:
 
 ```text
-include request resolution
-include path resolver / configured include roots
-#include traversal through the frontend_input boundary
-construction-owner diagnostic presentation for directive_execution_error
+configured include roots / angled include resolution
+Parser/Semantic construction
 Semantic identity_space
 identity_ref integration
+Assign grammar and semantic variable resolution
+terminal File Context dependency-topology finalization
 Graph semantic construction
 ```
 
@@ -896,22 +911,32 @@ Graph semantic construction
 
 ## Next Construction Step
 
-The next slice is construction-owned include execution:
+The next slice is the Semantic identity foundation.
+
+The identity domains remain strictly separated:
 
 ```text
-include_request
-    -> resolve physical path
-    -> resolve/register file_id
-    -> File Context add_dependency(source, target)
-    -> materialize/lex target if needed
-    -> frontend_input.enter(target)
+file_id
+    physical construction input
+
+string_id
+    canonical textual spelling
+
+identity_ref
+    scoped semantic entity
 ```
 
-It must continue the same mutable preprocessor state through the included file.
-Conditional execution state remains structurally file-bound: before
-`frontend_input.leave()`, construction calls `directive_executor::finish_file()`
-so an included file cannot close or leave open a conditional group belonging to
-another physical file.
+Semantic identity is canonicalized by:
 
-Filesystem, file identity, and dependency-topology ownership must not move into
-`directive_executor`.
+```text
+(parent identity_ref, string_id, semantic kind)
+    -> identity_ref
+```
+
+The foundation must be construction-local, deterministic, direct-indexed by
+`identity_ref`, and free of source/file ownership. Source locations,
+declaration/definition state, and defining `file_id` do not belong in the hot
+identity record.
+
+Parser/Semantic later owns declaration legality and lookup policy. The identity
+foundation only owns canonical scoped identity.

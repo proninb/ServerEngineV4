@@ -143,6 +143,11 @@ children
 tasks to describe user connections. It references existing variables and does
 not declare types or create runtime objects.
 
+Its exact bytes may be materialized before semantic construction, but variable
+resolution cannot occur until Parser/Semantic has established the referenced
+identities. The `.assign` grammar is a separate syntax-domain contract; Project
+configuration does not define or infer that grammar.
+
 ### project
 
 ```jsonc
