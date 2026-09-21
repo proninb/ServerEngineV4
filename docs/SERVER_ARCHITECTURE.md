@@ -424,9 +424,11 @@ content/change proof, and direct forward/reverse topology. The encoder refuses
 a File Context whose dependency topology is not terminally finalized.
 
 `database.bin` has a sectioned versioned/checksummed base image. Current sections
-persist dense `string_id` spelling order and retained lexical facts in canonical
-`file_id` order. CPU-lane arenas are construction-only and never persisted.
-Future Semantic/Builder sections extend this DB boundary.
+persist dense `string_id` spelling order, retained lexical facts in canonical
+`file_id` order, and semantic identity lineage in canonical `identity_ref` slot
+order. CPU-lane arenas and semantic lookup indexes are construction-only and
+never persisted. Future Semantic declaration/Builder sections extend this DB
+boundary.
 
 There is no SAVE lifecycle command.
 

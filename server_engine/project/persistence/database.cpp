@@ -13,11 +13,11 @@ namespace {
 
 constexpr std::array<std::byte, 8> magic{
     std::byte{'C'}, std::byte{'W'}, std::byte{'D'}, std::byte{'B'},
-    std::byte{'0'}, std::byte{'0'}, std::byte{'0'}, std::byte{'1'},
+    std::byte{'0'}, std::byte{'0'}, std::byte{'0'}, std::byte{'2'},
 };
 
-constexpr std::uint32_t format_version = 1;
-constexpr std::uint32_t section_count = 4;
+constexpr std::uint32_t format_version = 2;
+constexpr std::uint32_t section_count = 5;
 constexpr std::size_t header_size = 16;
 constexpr std::size_t section_record_size = 24;
 constexpr std::size_t section_table_size =
@@ -36,6 +36,7 @@ enum class section_kind : std::uint32_t {
     lexical_records = 2,
     lexical_words = 3,
     lexical_directives = 4,
+    identities = 5,
 };
 
 struct section_record final {
@@ -54,6 +55,53 @@ struct persisted_lexical_record final {
 };
 
 static_assert(sizeof(persisted_lexical_record) == 24);
+
+struct persisted_identity_record final {
+    std::uint32_t parent = 0;
+    std::uint32_t name = 0;
+    std::uint32_t kind = 0;
+};
+
+static_assert(sizeof(persisted_identity_record) == 12);
+
+struct persisted_identity_key_slot final {
+    std::uint64_t hash = 0;
+    std::uint32_t record = 0;
+};
+
+[[nodiscard]] constexpr std::uint64_t mix64(
+    std::uint64_t value) noexcept {
+
+    value ^= value >> 30;
+    value *= 0xbf58476d1ce4e5b9ULL;
+    value ^= value >> 27;
+    value *= 0x94d049bb133111ebULL;
+    value ^= value >> 31;
+    return value;
+}
+
+[[nodiscard]] std::uint64_t identity_key_hash(
+    std::uint32_t parent,
+    std::uint32_t name,
+    std::uint32_t kind) noexcept {
+
+    const auto value =
+        static_cast<std::uint64_t>(
+            parent) |
+        (static_cast<std::uint64_t>(
+             name) << 32);
+
+    auto hash =
+        mix64(
+            value ^
+            (static_cast<std::uint64_t>(
+                 kind) *
+             0x9e3779b97f4a7c15ULL));
+
+    return hash == 0
+        ? 1
+        : hash;
+}
 
 void append_u32(
     std::vector<std::byte>& output,
@@ -261,7 +309,7 @@ void append_section_record(
                 section_kind::strings) ||
         kind >
             static_cast<std::uint32_t>(
-                section_kind::lexical_directives)) {
+                section_kind::identities)) {
 
         return false;
     }
@@ -278,6 +326,7 @@ void append_section_record(
 database_image_result build_database_image(
     const file_context& files,
     const string_table& strings,
+    const identity_space& identities,
     const lexical_generation& lexical,
     project_artifact_image& output) noexcept {
 
@@ -285,8 +334,10 @@ database_image_result build_database_image(
 
     if (files.size() == 0 ||
         lexical.size() != files.size() ||
+        identities.size() == 0 ||
         !fits_u32(files.size()) ||
-        !fits_u32(strings.size())) {
+        !fits_u32(strings.size()) ||
+        !fits_u32(identities.size())) {
 
         return database_image_result::
             invalid_state;
@@ -598,6 +649,66 @@ database_image_result build_database_image(
                 anchor.source_base);
         }
 
+        std::vector<std::byte>
+            identity_section;
+
+        const auto identity_count =
+            static_cast<std::uint32_t>(
+                identities.size());
+
+        identity_section.reserve(
+            8 +
+            static_cast<std::size_t>(
+                identity_count - 1) *
+                sizeof(persisted_identity_record));
+
+        append_u32(
+            identity_section,
+            identity_count);
+
+        append_u32(
+            identity_section,
+            0);
+
+        for (std::uint32_t slot = 2;
+             slot <= identity_count;
+             ++slot) {
+
+            const auto identity =
+                identities.at_slot(
+                    slot);
+
+            const auto* record =
+                identities.record(
+                    identity);
+
+            if (!identity ||
+                identity.kind() ==
+                    identity_kind::root ||
+                record == nullptr ||
+                !identities.contains(
+                    record->parent) ||
+                !strings.contains(
+                    record->name)) {
+
+                return database_image_result::
+                    invalid_state;
+            }
+
+            append_u32(
+                identity_section,
+                record->parent.value());
+
+            append_u32(
+                identity_section,
+                record->name.value());
+
+            append_u32(
+                identity_section,
+                static_cast<std::uint32_t>(
+                    identity.kind()));
+        }
+
         const std::array<
             std::span<const std::byte>,
             section_count>
@@ -610,6 +721,8 @@ database_image_result build_database_image(
                     word_section},
                 std::span<const std::byte>{
                     directive_section},
+                std::span<const std::byte>{
+                    identity_section},
             };
 
         std::size_t total_size =
@@ -917,6 +1030,234 @@ database_image_result validate_database_image(
 
         return database_image_result::
             invalid_image;
+    }
+
+    const auto identities =
+        section_span(
+            section_kind::identities);
+
+    std::size_t identity_offset = 0;
+    std::uint32_t identity_count = 0;
+    std::uint32_t identity_reserved = 0;
+
+    if (!read_u32(
+            identities,
+            identity_offset,
+            identity_count) ||
+        identity_count == 0 ||
+        !read_u32(
+            identities,
+            identity_offset,
+            identity_reserved) ||
+        identity_reserved != 0) {
+
+        return database_image_result::
+            invalid_image;
+    }
+
+    std::size_t identity_records_size = 0;
+
+    if (!multiply_size(
+            identity_count - 1,
+            sizeof(persisted_identity_record),
+            identity_records_size) ||
+        identities.size() !=
+            8 +
+            identity_records_size) {
+
+        return database_image_result::
+            invalid_image;
+    }
+
+    std::vector<persisted_identity_record>
+        decoded_identities;
+
+    try {
+        decoded_identities.resize(
+            identity_count > 1
+                ? identity_count - 1
+                : 0);
+    }
+    catch (...) {
+        return database_image_result::
+            failed;
+    }
+
+    for (std::uint32_t slot = 2;
+         slot <= identity_count;
+         ++slot) {
+
+        auto& record =
+            decoded_identities[
+                slot - 2];
+
+        if (!read_u32(
+                identities,
+                identity_offset,
+                record.parent) ||
+            !read_u32(
+                identities,
+                identity_offset,
+                record.name) ||
+            !read_u32(
+                identities,
+                identity_offset,
+                record.kind) ||
+            record.kind <
+                static_cast<std::uint32_t>(
+                    identity_kind::namespace_scope) ||
+            record.kind >
+                static_cast<std::uint32_t>(
+                    identity_kind::object) ||
+            record.name == 0 ||
+            record.name > string_count) {
+
+            return database_image_result::
+                invalid_image;
+        }
+
+        const auto parent_slot =
+            record.parent &
+            identity_ref::slot_mask;
+
+        const auto parent_kind =
+            record.parent >>
+            identity_ref::kind_shift;
+
+        if (parent_slot == 0 ||
+            parent_slot >= slot ||
+            parent_kind >
+                static_cast<std::uint32_t>(
+                    identity_kind::object)) {
+
+            return database_image_result::
+                invalid_image;
+        }
+
+        if (parent_slot == 1) {
+            if (record.parent != 1) {
+                return database_image_result::
+                    invalid_image;
+            }
+        } else {
+            const auto& parent =
+                decoded_identities[
+                    parent_slot - 2];
+
+            const auto expected_parent =
+                (parent.kind <<
+                    identity_ref::kind_shift) |
+                parent_slot;
+
+            if (record.parent !=
+                expected_parent) {
+
+                return database_image_result::
+                    invalid_image;
+            }
+        }
+    }
+
+    if (identity_offset !=
+        identities.size()) {
+
+        return database_image_result::
+            invalid_image;
+    }
+
+    try {
+        const auto record_count =
+            decoded_identities.size();
+
+        std::size_t index_capacity = 8;
+
+        if (record_count >
+            (std::numeric_limits<std::size_t>::max)() / 2) {
+
+            return database_image_result::
+                invalid_image;
+        }
+
+        const auto required =
+            record_count * 2;
+
+        while (index_capacity < required) {
+            if (index_capacity >
+                (std::numeric_limits<std::size_t>::max)() / 2) {
+
+                return database_image_result::
+                    invalid_image;
+            }
+
+            index_capacity *= 2;
+        }
+
+        std::vector<persisted_identity_key_slot>
+            identity_index(
+                index_capacity);
+
+        const auto mask =
+            identity_index.size() - 1;
+
+        for (std::size_t index = 0;
+             index < decoded_identities.size();
+             ++index) {
+
+            const auto& record =
+                decoded_identities[index];
+
+            const auto hash =
+                identity_key_hash(
+                    record.parent,
+                    record.name,
+                    record.kind);
+
+            auto position =
+                static_cast<std::size_t>(
+                    hash) &
+                mask;
+
+            for (;;) {
+                auto& slot =
+                    identity_index[position];
+
+                if (slot.record == 0) {
+                    slot.hash =
+                        hash;
+
+                    slot.record =
+                        static_cast<std::uint32_t>(
+                            index + 1);
+
+                    break;
+                }
+
+                if (slot.hash == hash) {
+                    const auto& existing =
+                        decoded_identities[
+                            slot.record - 1];
+
+                    if (existing.parent ==
+                            record.parent &&
+                        existing.name ==
+                            record.name &&
+                        existing.kind ==
+                            record.kind) {
+
+                        return database_image_result::
+                            invalid_image;
+                    }
+                }
+
+                position =
+                    (position + 1) &
+                    mask;
+            }
+        }
+    }
+    catch (...) {
+        return database_image_result::
+            failed;
     }
 
     const auto lexical_records =

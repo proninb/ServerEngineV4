@@ -696,11 +696,22 @@ lexical words
 
 lexical directives
     one canonical flat anchor arena independent of CPU lanes
+
+identities
+    slot 1 implicit root
+    slots 2..N in identity_ref order
+    parent identity_ref
+    string_id
+    identity_kind
 ```
 
-Semantic identity/facts and Builder provenance will be added as additional DB
-sections. The persisted representation deliberately does not retain transient
-per-lane lexical arenas.
+The identity section preserves WHO lineage without persisting the construction
+hash index. Its validator requires parent-before-child structure and rejects
+duplicate `(parent, string_id, identity_kind)` keys.
+
+Semantic declaration/definition facts and Builder provenance will be added as
+additional DB sections. The persisted representation deliberately does not
+retain transient per-lane lexical or semantic lookup indexes.
 
 `project.manifest` remains versioned, checksummed, and fail-closed, but its own
 temporary-file replacement is not the final multi-artifact commit model.

@@ -1100,6 +1100,10 @@ Root is intrinsic slot `1` stored in-place rather than allocated in the dense
 vectors. Construction therefore cannot silently lose the root on allocation
 failure; dense record/kind storage begins at slot `2`.
 
+`database.bin` persists the identity lineage canonically: root slot `1` is
+implicit, while slots `2..N` store only parent, `string_id`, and kind. The
+construction open-addressed lookup index is deliberately not persisted.
+
 The next Semantic slice is Parser/Semantic declaration state. BUILD baseline
 binding and append overlays remain separate later work.
 
