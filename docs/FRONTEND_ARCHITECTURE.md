@@ -130,7 +130,7 @@ There is no separate `name_id`.
 
 ### `identity_ref`
 
-`identity_ref` belongs to Semantic/DB.
+`identity_ref` belongs to the construction semantic identity space.
 
 It answers:
 
@@ -155,8 +155,9 @@ object
 ```
 
 `type` is a semantic identity domain, not a concrete declaration category.
-Struct/class/union/enum/alias may all map to `identity_kind::type`; their
-concrete declaration state is stored above the identity foundation.
+Struct/class/union/enum/alias may all map to `identity_kind::type`.
+Declaration/definition processing belongs to Parser/Semantic and G
+construction; `identity_space` stores only WHO.
 
 The implemented compact representation is:
 
@@ -618,8 +619,9 @@ through the construction `string_table`, and then owns its mutable
 
 ## Streaming Frontend
 
-The frontend is a single streaming execution over the effective preprocessing
-input. V4 does not perform a separate include/dependency scan before parsing.
+The target frontend contract is one semantic execution over the effective
+preprocessing input. Include execution, active conditional state, Parser input,
+and semantic scope must remain one ordered stream.
 
 ```text
 active file bytes
@@ -645,7 +647,9 @@ The per-file lexer produces a compact construction-only lexical stream. Each bas
 
 The lexical stream classifies punctuation, C++ keywords, literal classes, and preprocessing directives. It does not intern identifiers and does not create `string_id` or `identity_ref`.
 
-The stream is reusable construction input for preprocessing and parallel type-level semantic work. There is still no retained semantic token graph and no second source-byte lexing pass used only to construct dependency topology.
+The stream is reusable construction input for preprocessing and Parser/Semantic
+work. There is no retained semantic token graph and no second source-byte
+lexing pass used only to construct dependency topology.
 
 The active lexical-input stack stores only:
 
@@ -676,9 +680,12 @@ Project-declared dependency edges. Child `project.json` files are materialized
 during composition because their bytes are required to continue recursive
 composition.
 
-Header/Source construction then runs in two distinct stages.
+The current implementation separates physical lexical preparation and a
+directive-only executed-include closure. This is an implementation boundary,
+not the final Parser architecture: Parser integration must not introduce a
+second independent preprocessing execution over the same semantic root.
 
-### Stage 1: physical lexical facts and executed-include closure
+### Stage 1: physical lexical state and current executed-include closure
 
 For every Project-declared Header/Source, the complete physical file is
 materialized before physical lexing begins. Immutable files are partitioned into
@@ -699,14 +706,14 @@ again during source closure.
 ```text
 physical bytes
     -> lexer to EOF
-    -> compact lexical facts
+    -> compact lexical state
 ```
 
 A syntactic direct include is therefore always represented lexically, including
 one inside an inactive conditional branch.
 
-Directive execution runs afterward over those lexical facts. Every frontend root
-gets fresh mutable preprocessing state initialized from the one root
+The current directive-only closure runs afterward over that lexical state. Every
+frontend root gets fresh mutable preprocessing state initialized from the one root
 `preprocessor_configuration`; an included file continues the same mutable state.
 
 ```text
@@ -744,7 +751,7 @@ new include. Therefore dense `file_id` assignment and directive-driven
 include chain remains sequential because a child may change that root's mutable
 preprocessing state before the parent continues.
 
-The same physical `file_id` is lexed once in the construction generation.
+The same physical `file_id` is lexed once in the construction operation.
 Different frontend roots may execute its directives under different mutable
 preprocessor states without re-lexing its bytes.
 
@@ -772,16 +779,23 @@ bounded `O(CPU lanes)` batches; File Context publication remains single-owner.
 This stage does not invent or parse an `.assign` grammar, does not resolve
 variables, and does not emit dependency edges.
 
-### Stage 3: Parser / Semantic, Assign Resolution, Topology Finalization
+### Stage 3: Parser / Semantic -> G, Assign Resolution, Topology Finalization
 
-Parser/Semantic consumes the completed Header/Source physical universe and
-retained lexical facts without lexing source bytes again. Semantic construction
-establishes the variable identities required by Assign resolution.
+Parser/Semantic consumes retained lexical state without lexing source bytes
+again and writes the compiled semantic result directly into `G`. There is no
+intermediate facts layer, Semantic DB, SourceContribution layer, or Builder
+stage.
 
-After Semantic identity exists, the Assign syntax domain can parse its
-materialized bytes, resolve variable references, and stage any additional
-file-level dependency relations. Only then may the construction coordinator call
-`file_context::finalize_dependency_topology()` exactly once.
+Parser integration must preserve one effective preprocessing execution per
+semantic root: ordinary active tokens flow to Parser/Semantic, while active
+includes synchronously enter the included physical input under the same
+preprocessor and semantic scope.
+
+After the required identities/objects exist in G, the Assign syntax domain can
+parse its materialized bytes, resolve references, write the resolved connection
+into G, and stage any additional file-level dependency relations. Only then may
+the construction coordinator call `file_context::finalize_dependency_topology()`
+exactly once.
 
 `lexical_generation` remains direct-indexed construction storage:
 
@@ -810,7 +824,7 @@ reacquire their lexical span on the next decode.
 
 ## BUILD Frontend Reuse
 
-REBUILD constructs physical lexical facts from the current source closure.
+REBUILD constructs physical lexical state from the current source closure.
 
 BUILD instead begins from the committed SourceSave/DB baseline.
 
@@ -831,6 +845,7 @@ For an unchanged but affected file:
 reuse persisted exact bytes
 reuse persisted lexical words/directive anchors
     -> rerun only required preprocessing / Parser / Semantic work
+    -> G
 ```
 
 The compact lexical stream is therefore persisted BUILD acceleration data. It is
@@ -927,8 +942,8 @@ Order is mandatory:
 ```text
 dirty files
     -> affected closure through OLD dependents
-    -> reconstruct affected dependency contributions
-    -> candidate current topology
+    -> recompute affected dependency relations
+    -> current construction topology
 ```
 
 BUILD must not perform a complete topology rebuild solely to discover what was
@@ -937,8 +952,8 @@ affected.
 The physical sparse-update encoding is not frozen yet; the logical topology is
 still one File Context/SourceSave topology.
 
-After successful coordinated commit, the candidate topology becomes the new
-committed baseline.
+After successful coordinated commit, the resulting topology is stored in the
+new committed baseline.
 
 ## Architectural Gates
 
@@ -994,7 +1009,8 @@ The following contracts are fail-closed architecture rules.
 
 22. identity_ref canonicalization key includes semantic kind.
 
-23. identity_ref owns WHO only; declaration/definition state belongs to DB.
+23. identity_ref owns WHO only; declaration/definition processing belongs to
+    Parser/Semantic and G construction, not identity_space or a Semantic DB.
 
 24. BUILD reuse state is persisted DB/SourceSave state, never resident Project
     runtime state.
@@ -1002,8 +1018,11 @@ The following contracts are fail-closed architecture rules.
 25. BUILD affected closure is computed from the committed old reverse topology
     before dependency replacement.
 
-26. There is no persisted Graph-generation history; construction produces one
-    final G.
+26. V4 has no Graph-generation model. LOAD, BUILD, and REBUILD each produce or
+    restore one `G`; persistence reuse does not create G0/Gn/Gn+1 semantics.
+
+27. There is no facts -> Semantic DB -> Builder -> G pipeline. Parser/Semantic
+    writes G directly.
 
 ## Current Implemented Slice
 
@@ -1056,15 +1075,15 @@ Assign input materialization
 Architecture already specified but not implemented:
 
 ```text
-BUILD File Context baseline + sparse overlay
-BUILD string_table baseline + append overlay
-Semantic DB declaration/definition facts
-Assign grammar / semantic reference resolution
+BUILD File Context baseline reuse
+BUILD string_table / identity_ref lineage reuse
+Parser/Semantic -> G
+Assign grammar / semantic reference resolution -> G
 BUILD sparse dependency update
 REBUILD terminal dependency finalization
-final G
+compiled-G persistence
 coordinated multi-artifact commit
-LOAD final-G restore
+LOAD compiled-G restore
 ```
 
 ## Current Semantic Identity Foundation
@@ -1094,7 +1113,7 @@ identity_space
 
 `identity_space` borrows the construction `string_table` only to validate that
 incoming `string_id` values belong to the same construction. It owns no
-declaration/definition facts and no persistence policy.
+declaration/definition state and no persistence policy.
 
 Root is intrinsic slot `1` stored in-place rather than allocated in the dense
 vectors. Construction therefore cannot silently lose the root on allocation
@@ -1104,6 +1123,7 @@ failure; dense record/kind storage begins at slot `2`.
 implicit, while slots `2..N` store only parent, `string_id`, and kind. The
 construction open-addressed lookup index is deliberately not persisted.
 
-The next Semantic slice is Parser/Semantic declaration state. BUILD baseline
-binding and append overlays remain separate later work.
+The next semantic construction work is Parser/Semantic writing `G` directly.
+There is no intermediate semantic database or Builder boundary. BUILD baseline
+binding/reuse remains separate later work.
 

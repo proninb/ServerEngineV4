@@ -1,10 +1,9 @@
 /*
  * Persisted BUILD database image boundary.
  *
- * database.bin is sectioned and canonical. The initial persisted sections own
- * string_id lineage and retained lexical facts in file_id order. Semantic and
- * Builder sections extend this persistence boundary without exposing temporary
- * construction layouts.
+ * database.bin is sectioned and canonical BUILD acceleration/lineage state.
+ * Current sections preserve string_id/identity_ref continuity and retained
+ * lexical state without becoming a second semantic representation of Project.
  */
 #pragma once
 

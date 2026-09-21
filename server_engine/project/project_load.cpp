@@ -28,7 +28,7 @@ server_status load_project(
             operation)
             .file(project_path)
             .detail(
-                "Committed Project generation restore is not implemented")
+                "Committed compiled G restore is not implemented")
             .build());
 
     return server_status::unsupported;

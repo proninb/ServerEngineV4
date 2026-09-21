@@ -36,9 +36,8 @@ server_engine/
     └── JSON.md
 ```
 
-As new Semantic/DB/persistence subtrees are introduced, the physical directory
-is the architecture; IDE filters mirror it rather than inventing logical-only
-groups.
+As new Project subtrees are introduced, the physical directory is the
+architecture; IDE filters mirror it rather than inventing logical-only groups.
 
 ## Visual Studio rule
 
@@ -113,7 +112,7 @@ BUILD
     build_context
         Server settings
         committed baseline views
-        candidate sparse overlays
+        temporary BUILD reuse/change state
 
 REBUILD
     root Project path
@@ -223,6 +222,8 @@ Console is one communication transport, not a mandatory Server component.
 12. BUILD acceleration state belongs to the persisted baseline, not `server_context`.
 13. BUILD/REBUILD publish only after one successful coordinated commit.
 14. Runtime hot paths do not depend on control-plane synchronization.
+15. V4 has one Graph concept: `G`. BUILD/REBUILD do not create Graph generations.
+16. A/B slots and baseline switching are persistence mechanics, not Graph state.
 
 ## PIMPL construction rule
 
@@ -346,7 +347,7 @@ Detailed contracts are separated into:
 PROJECT.md
     lifecycle
     persisted baseline
-    SourceSave / DB / final-G boundaries
+    SourceSave / DB / compiled-G boundaries
     BUILD / REBUILD / LOAD publication
 
 PROJECT_CONFIGURATION.md
@@ -383,11 +384,12 @@ SourceSave
     forward/reverse file topology
 
 DB
-    BUILD-only reusable frontend/semantic/Builder state
-    string_id and identity_ref lineage
+    BUILD-only lineage and acceleration state
+    retained lexical state
+    string_id and identity_ref continuity
 
-final G
-    one compiled Project result used by LOAD/Runtime
+compiled G
+    the one compiled Project result used by LOAD/Runtime
 ```
 
 The artifact roles and filenames are configured by `settings.files.manifest`,
@@ -415,8 +417,8 @@ The persistence boundary now defines the final A/B physical layout:
         compiled.bin
 ```
 
-`slot0` and `slot1` are crash-safe replacement mechanics only. They are not
-semantic Graph generations.
+`slot0` and `slot1` are crash-safe replacement mechanics only. They do not
+represent Graph versions, generations, or runtime state.
 
 `source.bin` has a versioned/checksummed image contract for finalized File
 Context state. It records file_id order, UTF-8 physical paths, file kind,
@@ -424,11 +426,15 @@ content/change proof, and direct forward/reverse topology. The encoder refuses
 a File Context whose dependency topology is not terminally finalized.
 
 `database.bin` has a sectioned versioned/checksummed base image. Current sections
-persist dense `string_id` spelling order, retained lexical facts in canonical
+persist dense `string_id` spelling order, retained lexical state in canonical
 `file_id` order, and semantic identity lineage in canonical `identity_ref` slot
 order. CPU-lane arenas and semantic lookup indexes are construction-only and
-never persisted. Future Semantic declaration/Builder sections extend this DB
-boundary.
+never persisted.
+
+`database.bin` is BUILD acceleration/lineage state. It is not a Semantic DB, is
+not an intermediate representation of the Project, and is not input to a
+Builder stage. Additional sections are justified only when they let BUILD avoid
+repeating work while preserving the same one-G construction model.
 
 There is no SAVE lifecycle command.
 
@@ -514,7 +520,9 @@ recursive project.json composition
     -> Assign exact-byte materialization
 ```
 
-It stops before Semantic/DB/final-G construction and coordinated commit.
+It stops before Parser/Semantic construction of G, Assign resolution,
+terminal dependency-topology finalization, compiled-G persistence, and the
+coordinated commit.
 
 The implemented BUILD code currently reaches only:
 
@@ -534,9 +542,10 @@ UNLOADED
     -> open committed baseline
 ```
 
-BUILD does not consume resident Project state. The next incremental slice adds
+BUILD does not consume resident Project state. Remaining BUILD work includes
 SourceSave/File Context change detection, affected reverse closure, DB reuse,
-Semantic delta construction, final-G construction, and coordinated commit.
+affected frontend/Parser/Semantic work, construction of G, and coordinated
+persistence.
 
 ## Filesystem and Project path boundaries
 
@@ -647,8 +656,9 @@ otherwise
     -> SHA-256
 ```
 
-The direct reverse topology is persisted SourceSave/DB data because BUILD uses it
-to compute the affected closure before replacing candidate dependencies.
+The direct reverse topology is persisted SourceSave data because BUILD uses it
+to compute the affected closure before updating dependency relations for the
+current construction.
 
 REBUILD may build complete topology in `O(F + E)` with the current no-sort
 finalizer.
@@ -656,5 +666,7 @@ finalizer.
 BUILD must update topology sparsely while preserving the same logical
 `file_id -> file_id` adjacency model.
 
-There is no generation-specific dependency-node identity and no Graph history.
+There is no generation-specific dependency-node identity and no Graph-generation
+model. BUILD may reuse persisted storage internally, but the architectural
+result of LOAD, BUILD, or REBUILD is always one `G`.
 

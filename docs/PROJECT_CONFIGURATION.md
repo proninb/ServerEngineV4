@@ -229,9 +229,9 @@ relations produced later by Type, Source, or Assign frontends.
 ```text
 assign file
     -> parse user connection descriptions
-    -> resolve referenced variables
+    -> resolve referenced variables/endpoints
     -> diagnose missing/invalid references
-    -> emit resolved assignment/connection facts
+    -> write the resolved connection into G
 ```
 
 The eventual assignment relation in Graph is distinct from the file dependency
@@ -474,8 +474,8 @@ file_content_hash
 project_configuration_hash
     exact identity of the complete ordered configuration dependency graph
 
-project_semantic_fingerprint
-    future canonical semantic identity
+G
+    compiled semantic result
 ```
 
 Relative-locator identity is relocation-stable while the composed relative
@@ -515,9 +515,9 @@ recompose from root
 Full recomposition is required because one changed `project.json` may change the
 set or order of child Projects and explicit inputs.
 
-Recomposition constructs candidate configuration state only. It does not make
-that state authoritative until BUILD successfully commits the complete
-SourceSave + DB + final-G baseline.
+Recomposition exists only in temporary BUILD state. It does not make that state
+authoritative until BUILD successfully commits the complete SourceSave + DB +
+compiled-G baseline.
 
 ## Manifest Artifact
 

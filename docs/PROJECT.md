@@ -29,15 +29,17 @@ which persisted/construction state the operation is allowed to use:
 
 ```text
 LOAD
-    restore the last committed final G
+    restore G from the last committed compiled artifact
 
 BUILD
     reuse the last successful construction baseline
-    and incrementally construct the current Project
+    to avoid repeating unchanged work
+    -> G
 
 REBUILD
-    ignore the old incremental baseline
-    and construct a fresh lineage
+    ignore previous BUILD acceleration state
+    construct fresh build lineage state
+    -> G
 ```
 
 There is no `SAVE` lifecycle stage. Durability is part of the successful
@@ -73,11 +75,54 @@ If source/configuration files have changed, the previously compiled final G no
 longer represents the current Project. BUILD therefore never keeps an old
 resident Project published while constructing a new one.
 
-A failed BUILD discards only its candidate/overlay state. The last successful
+A failed BUILD discards only its temporary operation state. The last successful
 persisted baseline remains available as an acceleration baseline for a later
 BUILD, but no resident Project is published and the Server remains `UNLOADED`.
 
 LOAD, BUILD, and REBUILD never substitute for each other.
+
+## One-G construction model
+
+Server Engine V4 has one Graph concept:
+
+```text
+G
+```
+
+There is no architectural:
+
+```text
+G0
+Gn
+Gn+1
+candidate G
+current G + next G
+Graph publication generation
+```
+
+The three lifecycle operations differ only in how `G` is obtained:
+
+```text
+LOAD
+    compiled.bin
+        -> G
+
+BUILD
+    last successful BUILD baseline
+    + current inputs
+        -> reuse unchanged construction work where useful
+        -> G
+
+REBUILD
+    current inputs
+        -> fresh construction lineage
+        -> G
+```
+
+A/B slots and `baseline.bin` provide crash-safe persistence. They do not create
+Graph generations. BUILD may borrow unchanged persisted bytes or preserve stable
+construction IDs as an implementation optimization; those reuse mechanisms do
+not change the one-G architecture.
 
 ## Mode-specific construction contexts
 
@@ -91,7 +136,7 @@ load_context
 build_context
     Server settings
     committed baseline views
-    candidate SourceSave/DB/final-G overlays
+    temporary BUILD reuse/change state
     root preprocessing configuration
 
 rebuild_context
@@ -105,8 +150,9 @@ rebuild_context
 ```
 
 The context object is only the lifetime owner for one operation. SourceSave,
-File Context, string storage, Semantic DB, Parser state, Builder state, and
-final-G construction remain separate subsystems with explicit ownership.
+File Context, string storage, identity construction, lexical/frontend state,
+Parser/Semantic execution, G construction, and persistence remain separate
+responsibilities with explicit ownership.
 
 ABI originates from `server.json`.
 
@@ -137,9 +183,9 @@ File Context
 lexical cache
 string canonicalization index
 Semantic identity construction index
-Parser/frontend cache
-SourceContribution / Builder provenance
-other DB/build-cache state
+Parser/frontend temporary state
+BUILD lineage/reuse metadata
+other DB/build-acceleration state
 ```
 
 Those belong to the persisted construction baseline and to temporary BUILD or
@@ -168,8 +214,7 @@ parse project.json for construction
 compose Project configuration
 open BUILD-only DB state
 run File Context change detection
-run Parser
-run Builder
+run Parser/Semantic construction
 validate the current source tree
 ```
 
@@ -191,11 +236,11 @@ root project.json
     -> fresh lexical construction
     -> fresh string_id space
     -> fresh identity_ref space
-    -> Parser / Semantic
-    -> fresh DB
-    -> Assign resolution
+    -> Parser / Semantic -> G
+    -> Assign resolution -> G
     -> complete dependency topology
-    -> fresh final G
+    -> encode BUILD acceleration state
+    -> persist compiled G
     -> Runtime
     -> SHM
     -> coordinated persisted-baseline commit
@@ -252,25 +297,27 @@ File IDs are assigned root-first in declaration-order DFS. There is no sort.
 The current implementation stops before:
 
 ```text
-Parser/Semantic construction
-identity_ref / identity_space
-Assign grammar and semantic variable resolution
+Parser/Semantic use of identity_space to construct G
+Assign grammar and semantic variable resolution into G
 terminal REBUILD dependency-topology finalization
 final SourceSave image construction
-DB persistence
-final-G construction
+completed DB persistence
+compiled-G persistence
 Runtime
 SHM
 coordinated baseline commit
 ```
+
+The `identity_ref`/`identity_space` foundation already exists. Parser/Semantic has
+not yet populated the Project semantic identities or G.
 
 The persistence subsystem already provides the final A/B artifact layout and
 the `source.bin` encoder/validator. REBUILD must not invoke the SourceSave
 encoder until Semantic/Assign processing has emitted every direct dependency
 and `finalize_dependency_topology()` has completed.
 
-Because no final G is produced yet, the incomplete REBUILD path must not publish
-any candidate construction artifact as the new committed baseline.
+Because no G is produced yet, the incomplete REBUILD path must not publish any
+partial construction artifact as the new committed baseline.
 
 ## BUILD
 
@@ -284,7 +331,7 @@ last successful baseline
     +-- configuration proof
     +-- SourceSave
     +-- DB
-    `-- final G / final-G build lineage state
+    `-- compiled G
              |
              + current Project files
              |
@@ -293,19 +340,20 @@ last successful baseline
              |
              +-- exact dirty detection
              +-- old reverse dependency closure
-             +-- sparse SourceSave candidate
-             +-- sparse DB candidate
-             +-- affected frontend / Semantic work
-             +-- sparse final-G construction
-             +-- validation
+             +-- reuse unchanged persisted construction state
+             +-- affected frontend / Parser / Semantic work
+             +-- construct G
+             +-- validate complete artifact set
              `-- coordinated commit
                      |
                      v
                   LOADED
 ```
 
-The previous final G is not kept published during BUILD. It is baseline data
-used only where sparse construction needs previous compiled slots/state.
+The previously persisted compiled G is not a `Gn` object and BUILD does not
+create a `Gn+1` object. Reusing unchanged compiled storage, if an implementation
+chooses to do so, is only a storage/performance optimization while constructing
+the one resulting `G`.
 
 ### BUILD lineage identity
 
@@ -358,7 +406,7 @@ If any configuration input differs or disappears:
 ```text
 recompose from root
     -> discover added/removed/reordered Project inputs
-    -> construct candidate configuration proof
+    -> construct the current configuration proof in temporary BUILD state
 ```
 
 Configuration recomposition does not itself destroy the old baseline.
@@ -411,22 +459,22 @@ new exact bytes
 For an unchanged but semantically affected file:
 
 ```text
-reuse persisted exact bytes / lexical facts
+reuse persisted exact bytes / lexical state
     -> rerun only required preprocessing / Parser / Semantic work
 ```
 
 The compact lexical representation is therefore DB/build-cache data across
 BUILD, not resident runtime Project state.
 
-### Candidate and failure semantics
+### Failure and commit semantics
 
-BUILD works against immutable committed baseline state plus disposable mutable
-overlays/candidates.
+BUILD reads the immutable committed baseline and owns only temporary operation
+state until the complete new artifact set is ready.
 
 A failed BUILD:
 
 ```text
-discard candidate SourceSave/DB/final-G changes
+discard temporary BUILD state
 keep the last successful persisted baseline intact
 publish no resident Project
 remain UNLOADED
@@ -438,9 +486,9 @@ tree. The old final G is not treated as the current runnable Project.
 A successful BUILD:
 
 ```text
-validate all candidate artifacts
-    -> coordinated durable commit
-    -> make the new baseline authoritative
+validate the complete artifact set
+    -> write/validate the inactive persistence slot
+    -> coordinated durable baseline switch
     -> publish Runtime/SHM resident Project
 ```
 
@@ -457,10 +505,7 @@ recompose when one input changed
 compare aggregate configuration hash
 ```
 
-However, the current C++ entry path still uses the obsolete contract
-`LOADED -> BUILD` and takes the resident Project as its BUILD input.
-
-The next implementation correction must change that entry boundary to:
+The current C++ BUILD entry already matches the lifecycle contract:
 
 ```text
 UNLOADED
@@ -468,7 +513,8 @@ UNLOADED
     -> persisted baseline
 ```
 
-before File Context/string/Semantic baseline restore is implemented.
+File Context/string/identity restore and the remaining BUILD reuse path are not
+implemented yet.
 
 ## LOAD Implementation Boundary
 
@@ -592,8 +638,8 @@ file_content_hash
 project_configuration_hash
     SHA-256 of the complete ordered configuration-input manifest
 
-project_semantic_fingerprint
-    future canonical semantic identity after semantic composition
+G
+    the compiled semantic result; it is not another Project identity namespace
 ```
 
 `project_configuration_hash` includes:
@@ -635,11 +681,11 @@ SourceSave
 
 DB
     BUILD-only reusable construction state
-    string/semantic identity lineage
-    retained lexical/frontend facts
-    semantic contributions / Builder provenance
+    string_id / identity_ref lineage
+    retained lexical state
+    only additional provenance/acceleration needed to avoid repeated BUILD work
 
-final G
+compiled G
     the one compiled result required by LOAD/Runtime
 ```
 
@@ -709,28 +755,30 @@ The identity section preserves WHO lineage without persisting the construction
 hash index. Its validator requires parent-before-child structure and rejects
 duplicate `(parent, string_id, identity_kind)` keys.
 
-Semantic declaration/definition facts and Builder provenance will be added as
-additional DB sections. The persisted representation deliberately does not
-retain transient per-lane lexical or semantic lookup indexes.
+Additional DB sections are justified only by BUILD reuse requirements. The DB
+must not become a second semantic representation of the Project. The persisted
+representation deliberately does not retain transient per-lane lexical or
+semantic lookup indexes.
 
 `project.manifest` remains versioned, checksummed, and fail-closed, but its own
 temporary-file replacement is not the final multi-artifact commit model.
 
-Once the full baseline exists, all candidate artifacts must be prepared and
-validated before one coordinated commit makes them authoritative.
+Once the full baseline exists, the complete artifact set must be prepared and
+validated in the inactive persistence slot before one coordinated baseline
+switch makes it authoritative.
 
-There is no Graph history:
+There is no Graph-generation model:
 
 ```text
-no persisted G0/G1/G2 chain
-no runtime generation history
+no G0 / Gn / Gn+1 architecture
+no candidate G
+no current/next Graph pair
+no runtime Graph history
 ```
 
-Only the last successfully committed final G is current.
-
-An implementation may retain older immutable transaction files temporarily for
-crash-safe replacement, but those files are persistence mechanics, not Project
-semantic generations.
+There is only `G`, the compiled result of LOAD/BUILD/REBUILD. An implementation
+may retain old immutable persistence files temporarily for crash-safe
+replacement, but those files are transaction mechanics, not Graph state.
 
 ## Filesystem Text Boundary
 
