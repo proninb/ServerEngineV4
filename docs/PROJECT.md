@@ -432,7 +432,7 @@ BUILD first derives the exact physical dirty set.
 ### Affected closure
 
 The affected set is computed from the **committed old reverse topology** before
-candidate dependency replacement:
+affected dependency relations are recomputed:
 
 ```text
 dirty file_id set
@@ -847,8 +847,8 @@ Source parser
     initialization
 
 Assign parser
-    references existing variables
-    emits user connection/assignment facts
+    references existing variables/endpoints
+    writes resolved connections into G
     creates no declarations or objects
 ```
 

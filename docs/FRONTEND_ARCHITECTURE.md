@@ -216,9 +216,9 @@ BUILD
     append only for new semantic WHO values
 ```
 
-An identity may remain in the DB lineage after its current declaration disappears.
-Identity existence therefore does not mean that the entity is currently present
-in final G.
+An identity may remain in BUILD lineage state after its current declaration
+disappears. Identity existence therefore does not mean that the entity is
+currently present in `G`.
 
 Conceptual separation:
 
@@ -229,12 +229,15 @@ string_id
 identity_ref
     WHO
 
-Semantic DB state
-    WHAT IS CURRENTLY KNOWN ABOUT WHO
+G
+    COMPILED SEMANTIC RESULT
 
-Graph handle
-    WHERE WHO IS IN FINAL G
+database.bin
+    BUILD LINEAGE / REUSE STATE
 ```
+
+`database.bin` may preserve an `identity_ref` after that identity no longer
+appears in G. This is BUILD continuity, not a second semantic state.
 
 ## Construction Ownership
 
@@ -255,13 +258,21 @@ Construction
     +-- Streaming Frontend
     |      owns active input/parser traversal state
     |
-    `-- Semantic
-           owns identity_ref and semantic state
+    +-- identity_space
+    |      owns identity_ref canonicalization
+    |
+    +-- Parser / Semantic
+    |      owns transient parse/resolution execution
+    |      writes G directly
+    |
+    `-- G
+           owns the compiled semantic result
 ```
 
 `string_table` is not owned by Preprocessor.
 
-Both Preprocessor and Semantic use the same canonical `string_id` domain.
+Preprocessor, identity construction, and Parser/Semantic use the same canonical
+`string_id` domain.
 
 Preprocessor therefore borrows:
 
