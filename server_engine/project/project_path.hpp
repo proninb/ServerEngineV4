@@ -1,9 +1,8 @@
 /*
  * Project filesystem path boundary.
  *
- * Portable resolution establishes absolute normalized locators. Platform
- * implementations derive filesystem-equivalence keys used at Project
- * construction identity boundaries without changing the physical I/O path.
+ * Establishes absolute normalized Project locators. Platform filesystem
+ * equivalence belongs to the common filesystem_path boundary.
  */
 #pragma once
 

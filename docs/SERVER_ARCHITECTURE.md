@@ -501,55 +501,70 @@ After that, BUILD adds SourceSave/File Context change detection, affected revers
 closure, DB reuse, Semantic delta construction, final-G construction, and
 coordinated commit.
 
-## Project path platform boundary
+## Filesystem and Project path boundaries
 
-Project composition is platform-neutral.
+Filesystem path concerns are split by ownership.
 
-Filesystem path processing is isolated behind:
+The common boundary:
+
+```text
+filesystem_path.hpp
+filesystem_path.cpp
+```
+
+owns:
+
+```text
+strict UTF-8 <-> native path conversion
+filesystem_path_key
+filesystem_path_key_hash
+make_filesystem_path_key()
+```
+
+Filesystem-equivalence semantics are platform-defined inside that common
+boundary:
+
+```text
+Windows
+    lexically normalized path
+        -> invariant Unicode lowercase key
+        -> case-insensitive equivalence
+
+POSIX
+    lexically normalized path
+        -> case-sensitive equivalence
+```
+
+This contract is shared by Server configuration validation and Project
+construction. `configuration/` does not depend on `project/`.
+
+The Project-specific boundary:
 
 ```text
 project_path.hpp
 project_path.cpp
-project_path_windows.cpp
-project_path_posix.cpp
 ```
 
-The generic composition layer uses:
+owns only:
 
 ```text
-resolve_project_path(path, output) -> success | failed
-make_filesystem_path_key(path, output) -> success | failed
+resolve_project_path(path, output)
+    -> absolute
+    -> lexically normalized
+    -> success | failed
 ```
 
-`project_path.cpp` owns portable absolute-path resolution and lexical
-normalization.
-
-Windows:
+Project construction therefore uses the two boundaries in sequence:
 
 ```text
-lexically normalized path
-    -> invariant Unicode lowercase key
-    -> case-insensitive dedupe/cycle detection
+input locator
+    -> resolve_project_path()
+    -> make_filesystem_path_key()
 ```
 
-POSIX:
-
-```text
-lexically normalized path
-    -> case-sensitive dedupe/cycle detection
-```
-
-`project_path_windows.cpp` and `project_path_posix.cpp` own only
-filesystem-equivalence key construction. The generic manifest layer contains no
-Windows/POSIX API code.
-
-Both path operations are status-returning no-exception boundaries. Failure at
-either boundary stops Project composition. There is no unresolved-path fallback
-and Windows never falls back to case-sensitive semantics.
-
-CMake selects exactly one platform key implementation. Each platform `.cpp`
-contains a compile-time fail-closed guard so an incorrect build selection cannot
-silently produce an empty or wrong translation unit.
+Both operations are status-returning no-exception boundaries. Failure stops
+construction; there is no fallback to different filesystem-equivalence
+semantics.
 
 ## File Context storage boundary
 
