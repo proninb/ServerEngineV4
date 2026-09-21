@@ -138,6 +138,13 @@ server_status rebuild_project(
     rebuild_context context{
         settings};
 
+    // Capture before file acquisition. Any later physical change is visible to
+    // the next BUILD journal scan; no journal support is only an acceleration
+    // fallback.
+    (void)capture_file_change_checkpoint(
+        project_path,
+        context.change_checkpoint);
+
     const auto composed =
         compose_project_configuration(
             project_path,

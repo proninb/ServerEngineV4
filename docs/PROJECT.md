@@ -467,17 +467,47 @@ direct dependency topology
 Project files remain the source of exact bytes; retained lexical state belongs
 to `database.bin` when BUILD reuse requires it.
 
-The committed SourceSave image is fully validated once when the baseline is
-opened. `source_save_view::bind()` then establishes bounded zero-copy section
-views without allocation or a second O(F + E) topology-validation pass.
+A successful commit fully validates SourceSave before `baseline.bin` becomes
+authoritative. BUILD authenticates the selected `source.bin` against the exact
+artifact proof in `baseline.bin`, memory-maps it read-only, and then performs an
+O(1), allocation-free `source_save_view::bind()`. Records and edges fail closed
+as BUILD naturally visits them; BUILD does not perform a separate O(F + E)
+topology-validation pass merely to open the baseline.
 
-Unchanged files are proved without reading bytes when possible.
-If proof is unavailable, BUILD reads the current physical file and compares its
-SHA-256 with the persisted content hash.
+On Windows/NTFS, `source.bin` persists one volume USN checkpoint plus compact
+open-addressed identity indexes:
 
-`scan_source_save_changes()` derives the exact dirty `file_id` set in ascending
-identity order. `collect_source_save_affected()` then walks the OLD committed
-reverse topology before any affected dependency relation is replaced.
+```text
+file_reference -> file_id
+directory file_reference -> topology-watch flags
+```
+
+Before BUILD dirty detection starts, V4 captures the journal checkpoint that may
+be persisted by the resulting BUILD. The existing committed checkpoint is still
+the start of dirty detection.
+
+BUILD then reads the volume journal once from the committed `next_usn` to the
+current journal position. Matching data-change records mark files for rebuild.
+A dense bitset emits them in ascending `file_id` order without sorting and
+without reopening every file on the normal journal path.
+
+Any filesystem event after the newly captured checkpoint remains visible to the
+next BUILD. It is acceptable for an event near that boundary to be rebuilt by
+both BUILDs; the contract prevents loss rather than requiring a filesystem
+snapshot.
+
+Journal discontinuity, unsupported filesystems, mixed-volume construction, or a
+rename/create/delete/hard-link/reparse event that invalidates the fast path
+falls back to the portable full scan. That fallback does not advance the
+persisted journal checkpoint.
+
+The portable fallback deliberately hashes current file bytes; size/mtime equality
+is not treated as exact content proof.
+
+`scan_source_save_changes()` therefore produces the exact dirty `file_id` set
+without O(F) per-file USN opens on the normal Windows path.
+`collect_source_save_affected()` then walks the OLD committed reverse topology
+before any affected dependency relation is replaced.
 
 ### Affected closure
 
@@ -509,9 +539,12 @@ new exact bytes
 For an unchanged but semantically affected file:
 
 ```text
-reuse persisted exact bytes / lexical state
+reuse persisted lexical state where sufficient
+materialize current physical bytes only when the frontend needs source spelling
     -> rerun only required preprocessing / Parser / Semantic work
 ```
+
+`source.bin` never stores a second copy of Project source bytes.
 
 The compact lexical representation is therefore DB/build-cache data across
 BUILD, not resident runtime Project state.
@@ -754,6 +787,20 @@ The physical persistence layout is A/B:
 
 Only `baseline.bin` selects the authoritative slot. Slot names are persistence
 mechanics, not Project generations.
+
+`baseline.bin` is a small checksummed descriptor containing:
+
+```text
+active slot
+manifest  { size, SHA-256, optional change token }
+source    { size, SHA-256, optional change token }
+database  { size, SHA-256, optional change token }
+compiled  { size, SHA-256, optional change token }
+```
+
+BUILD memory-maps committed artifacts. If the stored native change token proves
+an artifact unchanged, no artifact-wide hash pass is required. Otherwise SHA-256
+is computed directly over mapped pages and compared with the descriptor proof.
 
 `source.bin` now has a concrete versioned/checksummed image boundary. It is
 encoded only from terminally finalized File Context topology and contains:

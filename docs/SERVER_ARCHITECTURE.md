@@ -397,9 +397,9 @@ The artifact roles and filenames are configured by `settings.files.manifest`,
 `settings.files.source_save`, `settings.files.database`, `settings.files.compiled`,
 and `settings.files.baseline`. Binary formats remain versioned persistence contracts.
 
-The existing `project_configuration_manifest_store` remains a narrow codec/store
-for the configuration-proof component. Its standalone replacement operation is
-not the final authoritative multi-artifact commit once the full baseline exists.
+Project configuration manifest encoding/decoding is independent of artifact
+slot selection. `project_configuration_manifest_store` is only a thin explicit-
+path I/O adapter; the A/B persistence owner chooses the path.
 
 The persistence boundary now defines the final A/B physical layout:
 
@@ -427,14 +427,29 @@ content/change proof, and direct forward/reverse topology. It does not duplicate
 Project file contents. The encoder refuses a File Context whose dependency
 topology is not terminally finalized.
 
-The committed SourceSave image is fully validated once at baseline open.
-`source_save_view::bind()` is then an allocation-free zero-copy binding step; it
-does not repeat full forward/reverse topology validation.
+SourceSave is fully validated before coordinated commit. On BUILD, the selected
+`source.bin` is authenticated by its `baseline.bin` artifact proof and memory-
+mapped read-only. `source_save_view::bind()` is O(1) and allocation-free; record
+and edge validation happens fail-closed along the paths BUILD actually visits.
 
-BUILD first uses native change-token proof where available; only files that
-cannot be proved unchanged are read and compared by SHA-256. The resulting exact
-dirty set is expanded through the OLD committed reverse topology before affected
-dependency relations are recomputed.
+BUILD change discovery is journal-first, not per-file-token polling. Before
+dirty detection, BUILD captures the checkpoint for its resulting baseline. Dirty
+detection itself still starts from the committed SourceSave checkpoint.
+
+A valid Windows/NTFS SourceSave checkpoint reads the volume USN journal once and
+maps changed file references through the persisted `file_reference -> file_id`
+index. Matching data events are rebuilt directly. A dense bitset emits ascending
+`file_id` order without sorting or per-file opens.
+
+Events after the newly captured checkpoint remain visible to the next BUILD.
+Portable fallback clears the next checkpoint instead of claiming journal
+continuity it did not use.
+
+Tracked directory identities fail closed on topology-changing journal events.
+
+If journal continuity/support is unavailable, BUILD performs the portable exact
+SHA-256 file scan. The resulting exact dirty set is expanded through the OLD
+committed reverse topology before affected dependency relations are recomputed.
 
 `database.bin` has a sectioned versioned/checksummed base image. Current sections
 persist dense `string_id` spelling order, retained lexical state in canonical

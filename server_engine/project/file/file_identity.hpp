@@ -1,8 +1,9 @@
 /*
  * Physical-file stable acquisition and exact byte-identity boundary.
  *
- * file_change_token may prove unchanged state without reading content on
- * supported filesystems. file_content_hash is SHA-256 of exact file bytes.
+ * Per-file change tokens are transient construction identity. A persisted
+ * volume-journal checkpoint may accelerate BUILD change discovery, but exact
+ * content equality is always SHA-256.
  */
 #pragma once
 
@@ -22,6 +23,25 @@ struct file_snapshot_observation final {
     friend constexpr bool operator==(
         const file_snapshot_observation&,
         const file_snapshot_observation&) noexcept = default;
+};
+
+enum class file_change_backend : std::uint32_t {
+    none = 0,
+    windows_usn = 1,
+};
+
+struct file_change_checkpoint final {
+    file_change_backend backend =
+        file_change_backend::none;
+
+    std::uint64_t volume_serial = 0;
+    std::uint64_t journal_id = 0;
+    std::int64_t next_usn = 0;
+
+    [[nodiscard]] constexpr explicit operator bool() const noexcept {
+        return backend !=
+            file_change_backend::none;
+    }
 };
 
 struct file_change_token final {
@@ -52,6 +72,14 @@ struct file_content_snapshot final {
     bool change_token_available = false;
 };
 
+// Stable physical proof when callers need byte identity but not the bytes.
+struct file_content_proof final {
+    file_snapshot_observation observation{};
+    file_content_hash content_hash{};
+    file_change_token change_token{};
+    bool change_token_available = false;
+};
+
 enum class file_content_result : std::uint8_t {
     acquired,
     missing,
@@ -79,8 +107,18 @@ enum class file_token_result : std::uint8_t {
     const file_change_token& token,
     bool& unchanged) noexcept;
 
+// Captures the volume USN position used by source.bin. unavailable is a normal
+// acceleration fallback and never makes Project construction fail.
+[[nodiscard]] file_token_result capture_file_change_checkpoint(
+    const std::filesystem::path& anchor,
+    file_change_checkpoint& output) noexcept;
+
 [[nodiscard]] file_content_result acquire_file_content(
     const std::filesystem::path& path,
     file_content_snapshot& output) noexcept;
+
+[[nodiscard]] file_content_result acquire_file_content_proof(
+    const std::filesystem::path& path,
+    file_content_proof& output) noexcept;
 
 }

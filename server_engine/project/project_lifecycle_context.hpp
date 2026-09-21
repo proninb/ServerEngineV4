@@ -52,6 +52,7 @@ public:
 
     const server_settings_configuration& settings;
     project_configuration_manifest manifest;
+    file_change_checkpoint change_checkpoint;
     file_context files;
     lexical_generation lexical;
     string_table strings;

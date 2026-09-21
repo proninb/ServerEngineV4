@@ -13,6 +13,7 @@ add_executable(ServerEngineV4
     server_engine/main.cpp
     server_engine/server.cpp
     server_engine/filesystem_path.cpp
+    server_engine/read_only_file_mapping.cpp
     server_engine/diagnostics/diagnostic_collection.cpp
     server_engine/diagnostics/diagnostic_formatter.cpp
     server_engine/diagnostics/diagnostic_source_cache.cpp

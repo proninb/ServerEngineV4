@@ -742,13 +742,66 @@ read_image(
 
 project_configuration_manifest_store::
 project_configuration_manifest_store(
-    const std::filesystem::path& root_project_path,
-    const std::filesystem::path& manifest_file)
+    std::filesystem::path path)
     : manifest_path(
-          root_project_path.parent_path() /
-          ".serverengine" /
-          root_project_path.filename() /
-          manifest_file) {
+          std::move(path)) {
+}
+
+project_configuration_manifest_store_result
+encode_project_configuration_manifest(
+    const project_configuration_manifest& value,
+    std::vector<std::byte>& output) noexcept {
+
+    output.clear();
+
+    try {
+        return encode(
+            value,
+            output)
+            ? project_configuration_manifest_store_result::
+                success
+            : project_configuration_manifest_store_result::
+                invalid;
+    }
+    catch (...) {
+        output.clear();
+
+        return project_configuration_manifest_store_result::
+            io_failed;
+    }
+}
+
+project_configuration_manifest_store_result
+decode_project_configuration_manifest(
+    std::span<const std::byte> image,
+    project_configuration_manifest& output) noexcept {
+
+    output = {};
+
+    try {
+        std::vector<std::byte> copy{
+            image.begin(),
+            image.end()};
+
+        if (!decode(
+                copy,
+                output)) {
+
+            output = {};
+
+            return project_configuration_manifest_store_result::
+                invalid;
+        }
+
+        return project_configuration_manifest_store_result::
+            success;
+    }
+    catch (...) {
+        output = {};
+
+        return project_configuration_manifest_store_result::
+            io_failed;
+    }
 }
 
 project_configuration_manifest_store_result

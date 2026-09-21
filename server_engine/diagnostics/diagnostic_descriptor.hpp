@@ -246,6 +246,47 @@ inline constexpr diagnostic_descriptor project_preprocessing_error{
     "Project source preprocessing failed",
 };
 
+
+inline constexpr diagnostic_descriptor project_baseline_missing{
+    diagnostic_id{2020},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.baseline_missing",
+    "Committed Project baseline is missing",
+};
+
+inline constexpr diagnostic_descriptor project_baseline_invalid{
+    diagnostic_id{2021},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.baseline_invalid",
+    "Committed Project baseline is invalid",
+};
+
+inline constexpr diagnostic_descriptor project_baseline_io_failed{
+    diagnostic_id{2022},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.baseline_io_failed",
+    "Committed Project baseline I/O failed",
+};
+
+inline constexpr diagnostic_descriptor project_source_save_invalid{
+    diagnostic_id{2023},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.source_save_invalid",
+    "Committed Project SourceSave is invalid",
+};
+
+inline constexpr diagnostic_descriptor project_source_save_io_failed{
+    diagnostic_id{2024},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.source_save_io_failed",
+    "Committed Project SourceSave I/O failed",
+};
+
 } // namespace diagnostics
 
 }

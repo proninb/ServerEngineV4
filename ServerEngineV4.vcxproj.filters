@@ -28,9 +28,6 @@
     <Filter Include="server_engine\project\abi">
       <UniqueIdentifier>{B8A6D52E-6A90-4A1F-8FD7-C12FBE6817A4}</UniqueIdentifier>
     </Filter>
-    <Filter Include="server_engine\project\abi">
-      <UniqueIdentifier>{B8A6D52E-6A90-4A1F-8FD7-C12FBE6817A4}</UniqueIdentifier>
-    </Filter>
     <Filter Include="server_engine\project\string">
       <UniqueIdentifier>{A1111111-1111-1111-1111-111111111111}</UniqueIdentifier>
     </Filter>
@@ -67,6 +64,9 @@
     <ClCompile Include="server_engine\filesystem_path.cpp">
       <Filter>server_engine</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\read_only_file_mapping.cpp">
+      <Filter>server_engine</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\diagnostics\diagnostic_collection.cpp">
       <Filter>server_engine\diagnostics</Filter>
     </ClCompile>
@@ -101,9 +101,6 @@
 
     <ClCompile Include="server_engine\project\project.cpp">
       <Filter>server_engine\project</Filter>
-    </ClCompile>
-    <ClCompile Include="server_engine\project\abi\abi_layout.cpp">
-      <Filter>server_engine\project\abi</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\project\abi\abi_layout.cpp">
       <Filter>server_engine\project\abi</Filter>
@@ -187,6 +184,9 @@
       <Filter>server_engine</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\filesystem_path.hpp">
+      <Filter>server_engine</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\read_only_file_mapping.hpp">
       <Filter>server_engine</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\server_context.hpp">
@@ -280,9 +280,6 @@
 
     <ClInclude Include="server_engine\project\project.hpp">
       <Filter>server_engine\project</Filter>
-    </ClInclude>
-    <ClInclude Include="server_engine\project\abi\abi_layout.hpp">
-      <Filter>server_engine\project\abi</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\abi\abi_layout.hpp">
       <Filter>server_engine\project\abi</Filter>

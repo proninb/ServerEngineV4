@@ -689,6 +689,325 @@ acquire_windows_snapshot(
     }
 }
 
+
+[[nodiscard]] file_content_result
+acquire_windows_proof(
+    const std::filesystem::path& path,
+    file_content_proof& output) noexcept {
+
+    output = {};
+
+    windows_handle file{
+        CreateFileW(
+            path.c_str(),
+            GENERIC_READ,
+            FILE_SHARE_READ,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL |
+                FILE_FLAG_SEQUENTIAL_SCAN,
+            nullptr)};
+
+    if (!file) {
+        const auto error =
+            GetLastError();
+
+        if (error == ERROR_FILE_NOT_FOUND ||
+            error == ERROR_PATH_NOT_FOUND) {
+
+            return file_content_result::missing;
+        }
+
+        if (error == ERROR_SHARING_VIOLATION ||
+            error == ERROR_LOCK_VIOLATION) {
+
+            return file_content_result::
+                changed_during_read;
+        }
+
+        return file_content_result::failed;
+    }
+
+    BY_HANDLE_FILE_INFORMATION before{};
+
+    if (GetFileInformationByHandle(
+            file.get(),
+            &before) == 0) {
+
+        return file_content_result::failed;
+    }
+
+    const auto native_size =
+        (static_cast<std::uint64_t>(
+            before.nFileSizeHigh) << 32) |
+        before.nFileSizeLow;
+
+    sha256_state hash;
+    std::array<char, 64 * 1024> buffer{};
+    std::uint64_t remaining =
+        native_size;
+
+    while (remaining != 0) {
+        const auto chunk =
+            static_cast<DWORD>(
+                (std::min<std::uint64_t>)(
+                    remaining,
+                    buffer.size()));
+
+        DWORD read = 0;
+
+        if (ReadFile(
+                file.get(),
+                buffer.data(),
+                chunk,
+                &read,
+                nullptr) == 0 ||
+            read != chunk) {
+
+            return file_content_result::
+                changed_during_read;
+        }
+
+        hash.update(
+            std::string_view{
+                buffer.data(),
+                static_cast<std::size_t>(
+                    read)});
+
+        remaining -= read;
+    }
+
+    BY_HANDLE_FILE_INFORMATION after{};
+
+    if (GetFileInformationByHandle(
+            file.get(),
+            &after) == 0) {
+
+        return file_content_result::failed;
+    }
+
+    const bool same =
+        before.dwVolumeSerialNumber ==
+            after.dwVolumeSerialNumber &&
+        before.nFileIndexHigh ==
+            after.nFileIndexHigh &&
+        before.nFileIndexLow ==
+            after.nFileIndexLow &&
+        before.nFileSizeHigh ==
+            after.nFileSizeHigh &&
+        before.nFileSizeLow ==
+            after.nFileSizeLow &&
+        before.ftLastWriteTime.dwHighDateTime ==
+            after.ftLastWriteTime.dwHighDateTime &&
+        before.ftLastWriteTime.dwLowDateTime ==
+            after.ftLastWriteTime.dwLowDateTime;
+
+    if (!same) {
+        return file_content_result::
+            changed_during_read;
+    }
+
+    std::error_code error;
+
+    const auto write_time =
+        std::filesystem::last_write_time(
+            path,
+            error);
+
+    if (error) {
+        return file_content_result::failed;
+    }
+
+    output.observation.size =
+        native_size;
+
+    output.observation.write_time_ticks =
+        static_cast<std::int64_t>(
+            write_time.time_since_epoch().count());
+
+    output.content_hash =
+        hash.finish();
+
+    observed_file_change_state state;
+
+    if (query_file_change_state(
+            path,
+            state) ==
+        file_token_result::available) {
+
+        output.change_token = {
+            state.volume_serial,
+            state.file_reference,
+            state.file_usn,
+        };
+
+        output.change_token_available = true;
+    }
+
+    return file_content_result::acquired;
+}
+
+[[nodiscard]] bool windows_volume_paths(
+    const std::filesystem::path& source,
+    std::wstring& root,
+    std::wstring& device) noexcept {
+
+    try {
+        wchar_t root_buffer[MAX_PATH]{};
+
+        if (GetVolumePathNameW(
+                source.c_str(),
+                root_buffer,
+                static_cast<DWORD>(
+                    std::size(root_buffer))) == 0) {
+
+            return false;
+        }
+
+        root.assign(root_buffer);
+
+        if (root.size() >= 2 &&
+            root[1] == L':') {
+
+            device = L"\\\\.\\";
+            device.push_back(root[0]);
+            device.push_back(L':');
+            return true;
+        }
+
+        wchar_t volume_buffer[MAX_PATH]{};
+
+        if (GetVolumeNameForVolumeMountPointW(
+                root.c_str(),
+                volume_buffer,
+                static_cast<DWORD>(
+                    std::size(volume_buffer))) == 0) {
+
+            return false;
+        }
+
+        device.assign(volume_buffer);
+
+        while (!device.empty() &&
+               (device.back() == L'\\' ||
+                device.back() == L'/')) {
+
+            device.pop_back();
+        }
+
+        return !device.empty();
+    }
+    catch (...) {
+        return false;
+    }
+}
+
+[[nodiscard]] bool windows_volume_serial(
+    const std::wstring& root,
+    std::uint64_t& output) noexcept {
+
+    output = 0;
+
+    DWORD serial = 0;
+
+    if (GetVolumeInformationW(
+            root.c_str(),
+            nullptr,
+            0,
+            &serial,
+            nullptr,
+            nullptr,
+            nullptr,
+            0) == 0) {
+
+        return false;
+    }
+
+    output = serial;
+    return output != 0;
+}
+
+[[nodiscard]] bool windows_change_checkpoint(
+    const std::filesystem::path& anchor,
+    file_change_checkpoint& output) noexcept {
+
+    output = {};
+
+    std::wstring root;
+    std::wstring device;
+
+    if (!windows_volume_paths(
+            anchor,
+            root,
+            device)) {
+
+        return false;
+    }
+
+    std::uint64_t serial = 0;
+
+    if (!windows_volume_serial(
+            root,
+            serial)) {
+
+        return false;
+    }
+
+    windows_handle volume{
+        CreateFileW(
+            device.c_str(),
+            GENERIC_READ,
+            FILE_SHARE_READ |
+                FILE_SHARE_WRITE,
+            nullptr,
+            OPEN_EXISTING,
+            0,
+            nullptr)};
+
+    if (!volume) {
+        return false;
+    }
+
+    USN_JOURNAL_DATA_V0 journal{};
+    DWORD returned = 0;
+
+    if (DeviceIoControl(
+            volume.get(),
+            FSCTL_QUERY_USN_JOURNAL,
+            nullptr,
+            0,
+            &journal,
+            sizeof(journal),
+            &returned,
+            nullptr) == 0 ||
+        returned <
+            sizeof(journal)) {
+
+        return false;
+    }
+
+    if (journal.UsnJournalID == 0 ||
+        journal.NextUsn < 0) {
+
+        return false;
+    }
+
+    output.backend =
+        file_change_backend::windows_usn;
+
+    output.volume_serial =
+        serial;
+
+    output.journal_id =
+        journal.UsnJournalID;
+
+    output.next_usn =
+        static_cast<std::int64_t>(
+            journal.NextUsn);
+
+    return true;
+}
+
 #endif
 
 } // namespace
@@ -767,6 +1086,24 @@ file_token_result prove_file_unchanged(
             token.file_usn;
 
     return file_token_result::available;
+#endif
+}
+
+file_token_result capture_file_change_checkpoint(
+    const std::filesystem::path& anchor,
+    file_change_checkpoint& output) noexcept {
+
+    output = {};
+
+#if !defined(_WIN32)
+    (void)anchor;
+    return file_token_result::unavailable;
+#else
+    return windows_change_checkpoint(
+        anchor,
+        output)
+        ? file_token_result::available
+        : file_token_result::unavailable;
 #endif
 }
 
@@ -866,5 +1203,108 @@ file_content_result acquire_file_content(
     }
 #endif
 }
+
+
+file_content_result acquire_file_content_proof(
+    const std::filesystem::path& path,
+    file_content_proof& output) noexcept {
+
+#if defined(_WIN32)
+    return acquire_windows_proof(
+        path,
+        output);
+#else
+    output = {};
+
+    file_snapshot_observation before;
+    bool missing = false;
+
+    if (!observe(
+            path,
+            before,
+            missing)) {
+
+        return file_content_result::failed;
+    }
+
+    if (missing) {
+        return file_content_result::missing;
+    }
+
+    try {
+        std::ifstream stream(
+            path,
+            std::ios::binary);
+
+        if (!stream) {
+            return file_content_result::failed;
+        }
+
+        sha256_state hash;
+        std::array<char, 64 * 1024> buffer{};
+
+        std::uintmax_t remaining =
+            before.size;
+
+        while (remaining != 0) {
+            const auto chunk =
+                static_cast<std::size_t>(
+                    (std::min<std::uintmax_t>)(
+                        remaining,
+                        buffer.size()));
+
+            stream.read(
+                buffer.data(),
+                static_cast<std::streamsize>(
+                    chunk));
+
+            if (stream.gcount() !=
+                static_cast<std::streamsize>(
+                    chunk)) {
+
+                return file_content_result::
+                    changed_during_read;
+            }
+
+            hash.update(
+                std::string_view{
+                    buffer.data(),
+                    chunk});
+
+            remaining -=
+                static_cast<std::uintmax_t>(
+                    chunk);
+        }
+
+        file_snapshot_observation after;
+
+        if (!observe(
+                path,
+                after,
+                missing)) {
+
+            return file_content_result::failed;
+        }
+
+        if (missing ||
+            before != after) {
+
+            return file_content_result::
+                changed_during_read;
+        }
+
+        output.observation = after;
+        output.content_hash =
+            hash.finish();
+
+        return file_content_result::acquired;
+    }
+    catch (...) {
+        output = {};
+        return file_content_result::failed;
+    }
+#endif
+}
+
 
 }

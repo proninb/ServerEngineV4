@@ -1090,9 +1090,11 @@ source_save_view
     zero-copy source.bin baseline view
 
 scan_source_save_changes()
-    native change-token fast path
-    SHA-256 fallback
-    exact dirty file_id set
+    capture next checkpoint before dirty detection
+    one Windows USN journal pass from committed checkpoint
+    persisted file/directory identity indexes
+    dense dirty bitset, ascending file_id without sort
+    portable full-scan fallback clears next checkpoint
 
 collect_source_save_affected()
     OLD reverse-topology closure
