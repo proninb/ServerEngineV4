@@ -9,7 +9,6 @@
 
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../filesystem_path.hpp"
-#include "../project/project_path.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 #include "../json/json_parser.hpp"
 
@@ -1214,16 +1213,16 @@ private:
             "baseline",
         };
 
-        std::array<project_path_key, 5> keys;
+        std::array<filesystem_path_key, 5> keys;
 
         for (std::size_t index = 0;
              index < files.size();
              ++index) {
 
-            if (make_project_path_key(
+            if (make_filesystem_path_key(
                     *files[index],
                     keys[index]) !=
-                project_path_result::success) {
+                filesystem_path_result::success) {
 
                 fail(
                     schema_failure::invalid_value,

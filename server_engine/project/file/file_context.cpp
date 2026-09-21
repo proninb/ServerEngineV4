@@ -55,11 +55,11 @@ void append_u64(
 }
 
 std::uint32_t file_context::fingerprint(
-    const project_path_key& key) noexcept {
+    const filesystem_path_key& key) noexcept {
 
     const auto value =
         static_cast<std::uint64_t>(
-            project_path_key_hash{}(key));
+            filesystem_path_key_hash{}(key));
 
     auto output =
         static_cast<std::uint32_t>(value) ^
@@ -74,7 +74,7 @@ std::uint32_t file_context::fingerprint(
 
 server_status file_context::same_key(
     file_id file,
-    const project_path_key& key,
+    const filesystem_path_key& key,
     bool& output) const noexcept {
 
     output = false;
@@ -84,12 +84,12 @@ server_status file_context::same_key(
     }
 
     try {
-        project_path_key stored_key;
+        filesystem_path_key stored_key;
 
-        if (make_project_path_key(
+        if (make_filesystem_path_key(
                 make_path(path(file)),
                 stored_key) !=
-            project_path_result::success) {
+            filesystem_path_result::success) {
 
             return server_status::io_error;
         }
@@ -105,7 +105,7 @@ server_status file_context::same_key(
 }
 
 server_status file_context::find_key(
-    const project_path_key& key,
+    const filesystem_path_key& key,
     std::uint32_t hash,
     file_id& output) const noexcept {
 
@@ -256,12 +256,12 @@ server_status file_context::resolve(
         return server_status::io_error;
     }
 
-    project_path_key key;
+    filesystem_path_key key;
 
-    if (make_project_path_key(
+    if (make_filesystem_path_key(
             resolved,
             key) !=
-        project_path_result::success) {
+        filesystem_path_result::success) {
 
         return server_status::io_error;
     }
@@ -399,12 +399,12 @@ server_status file_context::find(
         return server_status::io_error;
     }
 
-    project_path_key key;
+    filesystem_path_key key;
 
-    if (make_project_path_key(
+    if (make_filesystem_path_key(
             resolved,
             key) !=
-        project_path_result::success) {
+        filesystem_path_result::success) {
 
         return server_status::io_error;
     }

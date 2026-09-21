@@ -554,7 +554,7 @@ locator
     -> absolute normalized physical path
 ```
 
-Resolved physical paths and `project_path_key` values are temporary construction
+Resolved physical paths and `filesystem_path_key` values are temporary construction
 state and are never persisted in the manifest.
 
 Filesystem equivalence used for identity/cycle/duplicate detection remains isolated behind
@@ -682,7 +682,7 @@ Project-specific path handling begins only after conversion to native form:
 UTF-8 locator
     -> native path
     -> resolve_project_path()
-    -> make_project_path_key()
+    -> make_filesystem_path_key()
 ```
 
 `project_configuration_hash` hashes the same UTF-8 generic path representation

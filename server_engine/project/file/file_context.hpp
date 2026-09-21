@@ -11,6 +11,7 @@
 #include "file_identity.hpp"
 #include "file_kind.hpp"
 #include "../project_path.hpp"
+#include "../../filesystem_path.hpp"
 #include "../../server_status.hpp"
 
 #include <array>
@@ -273,15 +274,15 @@ private:
     static_assert(sizeof(path_slot) == 8);
 
     [[nodiscard]] static std::uint32_t fingerprint(
-        const project_path_key& key) noexcept;
+        const filesystem_path_key& key) noexcept;
 
     [[nodiscard]] server_status same_key(
         file_id file,
-        const project_path_key& key,
+        const filesystem_path_key& key,
         bool& output) const noexcept;
 
     [[nodiscard]] server_status find_key(
-        const project_path_key& key,
+        const filesystem_path_key& key,
         std::uint32_t hash,
         file_id& output) const noexcept;
 

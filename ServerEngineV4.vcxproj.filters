@@ -135,10 +135,7 @@
     <ClCompile Include="server_engine\project\project_path.cpp">
       <Filter>server_engine\project</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\project\project_path_windows.cpp">
-      <Filter>server_engine\project</Filter>
-    </ClCompile>
-    <ClCompile Include="server_engine\project\file\file_context.cpp">
+<ClCompile Include="server_engine\project\file\file_context.cpp">
       <Filter>server_engine\project\file</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\project\project_load.cpp">

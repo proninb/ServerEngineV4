@@ -345,15 +345,15 @@ private:
                 project_configuration_invalid;
         }
 
-        project_path_key key;
+        filesystem_path_key key;
 
         const auto key_result =
-            make_project_path_key(
+            make_filesystem_path_key(
                 absolute_path,
                 key);
 
         if (key_result !=
-            project_path_result::
+            filesystem_path_result::
                 success) {
 
             diagnostics.emit(
@@ -650,15 +650,15 @@ private:
                 return server_status::io_error;
             }
 
-            project_path_key child_key;
+            filesystem_path_key child_key;
 
             const auto key_result =
-                make_project_path_key(
+                make_filesystem_path_key(
                     child,
                     child_key);
 
             if (key_result !=
-                project_path_result::success) {
+                filesystem_path_result::success) {
 
                 return server_status::io_error;
             }
@@ -833,7 +833,7 @@ private:
     }
 
     [[nodiscard]] server_status register_kind(
-        const project_path_key& key,
+        const filesystem_path_key& key,
         file_kind kind,
         const std::filesystem::path& path) {
 
@@ -868,13 +868,13 @@ private:
     project_configuration_manifest& output;
     file_context* files = nullptr;
     preprocessor_configuration& preprocessor;
-    std::unordered_set<project_path_key, project_path_key_hash> visited;
-    std::unordered_set<project_path_key, project_path_key_hash> active;
-    std::unordered_set<project_path_key, project_path_key_hash> unique_inputs;
+    std::unordered_set<filesystem_path_key, filesystem_path_key_hash> visited;
+    std::unordered_set<filesystem_path_key, filesystem_path_key_hash> active;
+    std::unordered_set<filesystem_path_key, filesystem_path_key_hash> unique_inputs;
     std::unordered_map<
-        project_path_key,
+        filesystem_path_key,
         file_kind,
-        project_path_key_hash> kinds;
+        filesystem_path_key_hash> kinds;
 
 };
 

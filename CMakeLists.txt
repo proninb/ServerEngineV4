@@ -50,7 +50,6 @@ add_executable(ServerEngineV4
 if(WIN32)
     target_sources(ServerEngineV4 PRIVATE
         server_engine/communication/console/console_input_windows.cpp
-        server_engine/project/project_path_windows.cpp
         server_engine/project/construction/execution_lanes_windows.cpp
     )
 else()
@@ -58,7 +57,6 @@ else()
 
     target_sources(ServerEngineV4 PRIVATE
         server_engine/communication/console/console_input_posix.cpp
-        server_engine/project/project_path_posix.cpp
         server_engine/project/construction/execution_lanes_posix.cpp
     )
 

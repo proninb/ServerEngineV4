@@ -518,7 +518,7 @@ The generic composition layer uses:
 
 ```text
 resolve_project_path(path, output) -> success | failed
-make_project_path_key(path, output) -> success | failed
+make_filesystem_path_key(path, output) -> success | failed
 ```
 
 `project_path.cpp` owns portable absolute-path resolution and lexical

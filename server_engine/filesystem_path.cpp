@@ -224,4 +224,97 @@ filesystem_path_result filesystem_path_to_utf8(
     }
 }
 
+filesystem_path_result make_filesystem_path_key(
+    const std::filesystem::path& path,
+    filesystem_path_key& output) noexcept {
+
+    output = {};
+
+    try {
+        const auto normalized =
+            path.lexically_normal();
+
+#if defined(_WIN32)
+        const auto native =
+            normalized.native();
+
+        if (native.empty()) {
+            output.value =
+                normalized;
+
+            return filesystem_path_result::
+                success;
+        }
+
+        if (native.size() >
+            static_cast<std::size_t>(
+                (std::numeric_limits<int>::max)())) {
+
+            return filesystem_path_result::
+                failed;
+        }
+
+        const auto length =
+            static_cast<int>(
+                native.size());
+
+        const auto required =
+            LCMapStringEx(
+                LOCALE_NAME_INVARIANT,
+                LCMAP_LOWERCASE,
+                native.data(),
+                length,
+                nullptr,
+                0,
+                nullptr,
+                nullptr,
+                0);
+
+        if (required <= 0) {
+            return filesystem_path_result::
+                failed;
+        }
+
+        std::wstring lowered(
+            static_cast<std::size_t>(
+                required),
+            L'\0');
+
+        const auto written =
+            LCMapStringEx(
+                LOCALE_NAME_INVARIANT,
+                LCMAP_LOWERCASE,
+                native.data(),
+                length,
+                lowered.data(),
+                required,
+                nullptr,
+                nullptr,
+                0);
+
+        if (written != required) {
+            return filesystem_path_result::
+                failed;
+        }
+
+        output.value =
+            std::filesystem::path{
+                std::move(lowered)};
+#else
+        output.value =
+            normalized;
+#endif
+
+        return filesystem_path_result::
+            success;
+    }
+    catch (...) {
+        output = {};
+
+        return filesystem_path_result::
+            failed;
+    }
+}
+
+
 }

@@ -113,12 +113,15 @@ no "." / ".."
 all five names are distinct under platform filesystem semantics
 ```
 
-Filename equivalence follows the platform filesystem contract used by Project path identity:
+Filename equivalence follows the common filesystem path contract:
 
 ```text
 Windows -> case-insensitive
 POSIX   -> case-sensitive
 ```
+
+The configuration layer uses `make_filesystem_path_key()` directly and does not
+depend on Project construction code.
 
 `settings.files` is Server-wide policy and exists independently of the optional
 startup `project`.
