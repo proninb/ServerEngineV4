@@ -12,8 +12,6 @@
 #include "frontend/lexical_generation.hpp"
 #include "../configuration/server_configuration.hpp"
 
-#include <vector>
-
 namespace cw::server {
 
 // Temporary LOAD state; borrows the process-wide Server ABI.

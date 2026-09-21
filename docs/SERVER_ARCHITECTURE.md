@@ -162,7 +162,9 @@ LOAD
 BUILD
     build_context
         ABI
-        persisted/candidate construction state
+        manifest
+        root preprocessor configuration
+        incremental construction state
 
 REBUILD
     rebuild_context
