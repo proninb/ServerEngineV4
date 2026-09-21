@@ -91,6 +91,32 @@ std::string_view string_table::get(
     };
 }
 
+std::string_view string_table::spelling(
+    std::uint32_t slot) const noexcept {
+
+    if (slot == 0 ||
+        slot > records.size()) {
+
+        return {};
+    }
+
+    const auto& record =
+        records[slot - 1];
+
+    if (record.offset > bytes.size() ||
+        record.length == 0 ||
+        record.length >
+            bytes.size() - record.offset) {
+
+        return {};
+    }
+
+    return {
+        bytes.data() + record.offset,
+        record.length,
+    };
+}
+
 string_id string_table::find(
     std::string_view value) const noexcept {
 

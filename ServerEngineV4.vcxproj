@@ -105,6 +105,7 @@
     <ClCompile Include="server_engine\project\project_path.cpp" />
     <ClCompile Include="server_engine\project\persistence\project_artifact.cpp" />
     <ClCompile Include="server_engine\project\persistence\source_save.cpp" />
+    <ClCompile Include="server_engine\project\persistence\database.cpp" />
     <ClCompile Include="server_engine\project\file\file_context.cpp" />
     <ClCompile Include="server_engine\project\project_load.cpp" />
     <ClCompile Include="server_engine\project\project_build.cpp" />
@@ -151,6 +152,7 @@
     <ClInclude Include="server_engine\project\project_path.hpp" />
     <ClInclude Include="server_engine\project\persistence\project_artifact.hpp" />
     <ClInclude Include="server_engine\project\persistence\source_save.hpp" />
+    <ClInclude Include="server_engine\project\persistence\database.hpp" />
     <ClInclude Include="server_engine\project\string\string_table.hpp" />
     <ClInclude Include="server_engine\project\preprocessor\preprocessor.hpp" />
     <ClInclude Include="server_engine\project\frontend\frontend_input.hpp" />

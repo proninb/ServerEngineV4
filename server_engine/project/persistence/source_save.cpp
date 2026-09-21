@@ -583,6 +583,9 @@ source_save_result validate_source_save_image(
         std::vector<decoded_record> records(
             file_count);
 
+        std::uint32_t expected_path_offset = 0;
+        std::uint32_t expected_dependency_offset = 0;
+
         for (std::uint32_t index = 0;
              index < file_count;
              ++index) {
@@ -688,15 +691,16 @@ source_save_result validate_source_save_image(
                 return source_save_result::invalid_image;
             }
 
-            if (record.path_offset > path_bytes ||
+            if (record.path_offset !=
+                    expected_path_offset ||
                 record.path_size >
                     path_bytes -
-                        record.path_offset ||
-                record.dependency_offset >
-                    forward_count ||
+                        expected_path_offset ||
+                record.dependency_offset !=
+                    expected_dependency_offset ||
                 record.dependency_count >
                     forward_count -
-                        record.dependency_offset ||
+                        expected_dependency_offset ||
                 record.dependent_offset >
                     reverse_count ||
                 record.dependent_count >
@@ -705,6 +709,21 @@ source_save_result validate_source_save_image(
 
                 return source_save_result::invalid_image;
             }
+
+            expected_path_offset +=
+                record.path_size;
+
+            expected_dependency_offset +=
+                record.dependency_count;
+        }
+
+        if (expected_path_offset !=
+                path_bytes ||
+            expected_dependency_offset !=
+                forward_count) {
+
+            return source_save_result::
+                invalid_image;
         }
 
         const auto path_section =

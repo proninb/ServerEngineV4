@@ -34,6 +34,10 @@ public:
     [[nodiscard]] std::string_view get(
         string_id id) const noexcept;
 
+    // Dense persistence-order spelling view. slot is the numeric string_id.
+    [[nodiscard]] std::string_view spelling(
+        std::uint32_t slot) const noexcept;
+
     [[nodiscard]] bool contains(
         string_id id) const noexcept;
 

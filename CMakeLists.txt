@@ -42,6 +42,7 @@ add_executable(ServerEngineV4
     server_engine/project/project_path.cpp
     server_engine/project/persistence/project_artifact.cpp
     server_engine/project/persistence/source_save.cpp
+    server_engine/project/persistence/database.cpp
     server_engine/project/file/file_context.cpp
     server_engine/project/project_load.cpp
     server_engine/project/project_build.cpp

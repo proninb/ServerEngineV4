@@ -675,7 +675,31 @@ reverse file_id arena
 ```
 
 The image validator reconstructs reverse adjacency from forward adjacency in
-`O(F + E)` and rejects inconsistent topology.
+`O(F + E)` and rejects inconsistent topology. Path and forward-edge ranges are
+also required to use one canonical contiguous encoding.
+
+`database.bin` now has a sectioned versioned/checksummed base image:
+
+```text
+strings
+    dense string_id order
+    canonical spelling bytes
+
+lexical records
+    dense file_id order
+    word/directive ranges
+    token counts
+
+lexical words
+    one canonical flat word arena independent of CPU lanes
+
+lexical directives
+    one canonical flat anchor arena independent of CPU lanes
+```
+
+Semantic identity/facts and Builder provenance will be added as additional DB
+sections. The persisted representation deliberately does not retain transient
+per-lane lexical arenas.
 
 `project.manifest` remains versioned, checksummed, and fail-closed, but its own
 temporary-file replacement is not the final multi-artifact commit model.
