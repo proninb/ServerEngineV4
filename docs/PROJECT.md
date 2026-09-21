@@ -61,23 +61,21 @@ load_context
 
 build_context
     ABI
-    persisted manifest
-    candidate manifest
-    per-project preprocessing configurations
+    manifest
+    root preprocessing configuration
     incremental construction state
 
 rebuild_context
     ABI
-    candidate manifest
+    manifest
     File Context
     lexical generation
-    per-project preprocessing configurations
+    root preprocessing configuration
     fresh G0 construction state
 ```
 
 All three are temporary operation state and are discarded on publication or
-failure. ABI originates from `server.json`. Local preprocessing configuration
-originates from each participating `project.json` and is construction-only.
+failure. ABI originates from `server.json`. Preprocessing configuration originates only from the root `project.json` and is construction-only.
 
 ## Resident Project
 
@@ -132,8 +130,8 @@ REBUILD starts only from UNLOADED and constructs a fresh generation:
 ```text
 root project.json
     -> recursive Project configuration composition
-    -> local preprocessor configuration per project.json
-    -> candidate configuration manifest
+    -> root preprocessor configuration
+    -> configuration manifest
     -> explicit roots
     -> new File Context
     -> frontend / semantic construction
@@ -154,8 +152,8 @@ The current V4 implementation completes:
 root project.json
     -> recursive type:"project" composition
     -> validation of every participating project.json
-    -> local project_preprocessor_configuration per project.json
-    -> candidate project_configuration_manifest
+    -> root preprocessor_configuration
+    -> project_configuration_manifest
     -> aggregate project_configuration_hash
     -> flat File Context population
          project/header/source nodes
@@ -186,7 +184,7 @@ SHM
 coordinated commit
 ```
 
-Because no G0 is published yet, the candidate manifest is deliberately not
+Because no G0 is published yet, the construction manifest is deliberately not
 persisted by the current incomplete REBUILD path.
 
 ## BUILD
@@ -198,7 +196,7 @@ current resident Project
     -> load committed project.manifest
     -> verify complete configuration input set
     -> File Context change detection
-    -> disposable candidate construction state
+    -> temporary BUILD construction state
     -> coordinated commit
     -> replace current resident Project
 ```
@@ -231,8 +229,8 @@ If any file differs or disappears:
 ```text
 recompose from root
     -> discover added/removed/reordered child Projects
-    -> candidate manifest
-    -> candidate aggregate configuration hash
+    -> rebuild the same BUILD manifest state
+    -> compare aggregate configuration hash with the previously loaded hash
 ```
 
 ### Current implementation boundary

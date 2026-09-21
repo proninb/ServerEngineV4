@@ -201,6 +201,23 @@ project.manifest_io_failed
 Human-readable detail text may evolve. Numeric IDs and symbolic names are the
 stable machine-facing contracts.
 
+Project schema diagnostics keep one stable class:
+
+```text
+project.invalid_configuration
+```
+
+Root/nested preprocessing scope errors do not allocate new diagnostic IDs. The
+schema validator reports the exact offending source range and a specific detail.
+For example, a nested `preprocessor` property points at that property and reports:
+
+```text
+preprocessor is allowed only in the root Project configuration
+```
+
+A missing root `preprocessor` points at the root object boundary and reports the
+required root field order.
+
 A changed or missing configuration input during BUILD is not itself a corrupt
 manifest. It triggers recomposition. Manifest diagnostics are reserved for the
 persisted manifest artifact itself.

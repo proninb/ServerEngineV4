@@ -67,6 +67,17 @@ project
 preprocessor
 ```
 
+Nested `project.json` field order:
+
+```text
+version
+name
+project
+```
+
+`preprocessor` is required only on the root configuration and forbidden on
+nested configurations.
+
 ## Project Tree
 
 Supported node types:
@@ -324,12 +335,12 @@ composition fails with a cycle diagnostic.
 
 ## Preprocessor
 
-Every `project.json` owns one local immutable preprocessing configuration.
+Only the root `project.json` owns immutable preprocessing configuration.
 
 ```jsonc
 "preprocessor": {
   "predefines": [
-    { "name": "LOCAL_FEATURE" },
+    { "name": "ROOT_FEATURE" },
     { "name": "ALIAS", "replacement": "TARGET" }
   ]
 }
@@ -342,22 +353,34 @@ NAME
 NAME -> IDENTIFIER
 ```
 
-`project_preprocessor_configuration` is construction input only. Mutable
-`#define/#undef` state belongs to frontend execution.
+`preprocessor_configuration` is construction input only. Mutable
+`#define/#undef` state belongs to one frontend execution.
 
-Recursive composition retains one local preprocessor configuration for every
-participating `project.json` in the same root-first order as manifest entries:
+Nested `project.json` files are composition only and must end after `project`.
+They cannot declare `preprocessor`; no preprocessing inheritance, merge, or
+`project_id` is required.
 
 ```text
-preprocessors[i]
-    <-> manifest.files[i]
+root project.json
+    -> one preprocessor_configuration
+
+nested project.json
+    -> composition only
 ```
 
-No separate `project_id` is introduced.
+A nested `preprocessor` property is rejected at that property's source location
+with `project.invalid_configuration` and detail:
 
-A child `project.json` may declare different local predefines. Composition does
-not silently merge parent/child configurations; the effective application rule
-belongs to the directive/frontend execution stage.
+```text
+preprocessor is allowed only in the root Project configuration
+```
+
+A root configuration that omits `preprocessor` is rejected at the root object
+boundary with detail:
+
+```text
+root Project configuration requires fields in order: version, name, project, preprocessor
+```
 
 ABI is absent from `project.json`. Target and pack are Server-wide because one
 Server owns one SHM layout contract.
@@ -538,7 +561,7 @@ wrong types
 missing required fields
 invalid node types
 empty required names/paths
-invalid predefine objects
+invalid root predefine objects
 unsupported version
 missing referenced project.json
 recursive Project cycle

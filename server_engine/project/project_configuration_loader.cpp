@@ -67,8 +67,10 @@ class project_configuration_handler final : public json_event_handler {
 public:
     project_configuration_handler(
         std::vector<project_configuration_dependency>& dependencies,
-        project_preprocessor_configuration& preprocessor)
+        project_configuration_scope scope,
+        preprocessor_configuration* preprocessor)
         : dependencies(dependencies),
+          scope(scope),
           preprocessor(preprocessor) {
 
         stack.reserve(16);
@@ -109,7 +111,13 @@ public:
         }
 
         if (parent.context == schema_context::root &&
+            scope == project_configuration_scope::root &&
             parent.index == 3) {
+
+            if (preprocessor == nullptr) {
+                fail("internal root preprocessor output mismatch");
+                return;
+            }
 
             parent.index = 4;
             stack.push_back({schema_context::preprocessor});
@@ -117,8 +125,13 @@ public:
         }
 
         if (parent.context == schema_context::predefines) {
+            if (preprocessor == nullptr) {
+                fail("internal preprocessor output mismatch");
+                return;
+            }
+
             try {
-                preprocessor.predefines.emplace_back();
+                preprocessor->predefines.emplace_back();
             }
             catch (...) {
                 fail("cannot allocate Project predefine");
@@ -143,16 +156,23 @@ public:
         stack.pop_back();
 
         switch (ended.context) {
-        case schema_context::root:
-            if (ended.index != 4) {
+        case schema_context::root: {
+            const auto required =
+                scope == project_configuration_scope::root
+                    ? std::uint8_t{4}
+                    : std::uint8_t{3};
+
+            if (ended.index != required) {
                 fail(
-                    "Project root requires fields in order: "
-                    "version, name, project, preprocessor");
+                    scope == project_configuration_scope::root
+                        ? "root Project configuration requires fields in order: version, name, project, preprocessor"
+                        : "nested Project configuration requires fields in order: version, name, project");
                 return;
             }
 
             root_completed = true;
             return;
+        }
 
         case schema_context::preprocessor:
             if (ended.index != 1) {
@@ -360,22 +380,40 @@ private:
         const frame& current,
         std::string_view key) {
 
-        static constexpr std::array<std::string_view, 4> keys{
+        static constexpr std::array<std::string_view, 4> root_keys{
             "version",
             "name",
             "project",
             "preprocessor",
         };
 
-        if (current.index >= keys.size()) {
-            fail("Project root contains extra field");
+        if (scope == project_configuration_scope::nested &&
+            current.index == 3 &&
+            key == "preprocessor") {
+
+            fail(
+                "preprocessor is allowed only in the root Project configuration");
             return;
         }
 
-        if (key != keys[current.index]) {
+        const auto key_count =
+            scope == project_configuration_scope::root
+                ? std::size_t{4}
+                : std::size_t{3};
+
+        if (current.index >= key_count) {
             fail(
-                "Project root fields must be ordered: "
-                "version, name, project, preprocessor");
+                scope == project_configuration_scope::root
+                    ? "root Project configuration contains extra field"
+                    : "nested Project configuration contains extra field");
+            return;
+        }
+
+        if (key != root_keys[current.index]) {
+            fail(
+                scope == project_configuration_scope::root
+                    ? "root Project configuration fields must be ordered: version, name, project, preprocessor"
+                    : "nested Project configuration fields must be ordered: version, name, project");
         }
     }
 
@@ -494,13 +532,15 @@ private:
         frame& current,
         json_value_view value) {
 
-        if (preprocessor.predefines.empty()) {
+        if (preprocessor == nullptr ||
+            preprocessor->predefines.empty()) {
+
             fail("internal predefine state mismatch");
             return;
         }
 
         auto& predefine =
-            preprocessor.predefines.back();
+            preprocessor->predefines.back();
 
         if (current.index == 0) {
             if (!value.get(predefine.name) ||
@@ -667,7 +707,8 @@ private:
     }
 
     std::vector<project_configuration_dependency>& dependencies;
-    project_preprocessor_configuration& preprocessor;
+    project_configuration_scope scope = project_configuration_scope::nested;
+    preprocessor_configuration* preprocessor = nullptr;
     std::vector<frame> stack;
 
     std::size_t current_offset = 0;
@@ -685,13 +726,24 @@ server_status read_project_configuration(
     operation_id operation,
     diagnostic_collection& diagnostics,
     std::vector<project_configuration_dependency>& dependencies,
-    project_preprocessor_configuration& preprocessor) {
+    project_configuration_scope scope,
+    preprocessor_configuration* preprocessor) {
 
     dependencies.clear();
-    preprocessor.predefines.clear();
+
+    if (scope == project_configuration_scope::root) {
+        if (preprocessor == nullptr) {
+            return server_status::project_configuration_invalid;
+        }
+
+        preprocessor->predefines.clear();
+    } else if (preprocessor != nullptr) {
+        return server_status::project_configuration_invalid;
+    }
 
     project_configuration_handler handler{
         dependencies,
+        scope,
         preprocessor};
 
     const auto parsed =
@@ -701,7 +753,9 @@ server_status read_project_configuration(
 
     if (!parsed.ok()) {
         dependencies.clear();
-        preprocessor.predefines.clear();
+        if (preprocessor != nullptr) {
+            preprocessor->predefines.clear();
+        }
 
         const auto file_id =
             diagnostics.add_source(
@@ -727,7 +781,9 @@ server_status read_project_configuration(
 
     if (!handler.valid()) {
         dependencies.clear();
-        preprocessor.predefines.clear();
+        if (preprocessor != nullptr) {
+            preprocessor->predefines.clear();
+        }
 
         const auto& error =
             handler.error();

@@ -27,7 +27,7 @@ server_status rebuild_project(
             diagnostics,
             context.manifest,
             context.files,
-            context.preprocessors);
+            context.preprocessor);
 
     if (!succeeded(composed)) {
         return composed;

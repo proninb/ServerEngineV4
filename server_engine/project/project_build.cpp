@@ -44,7 +44,7 @@ server_status build_project(
 
     const auto stored =
         store.load(
-            context.persisted);
+            context.manifest);
 
     if (stored ==
         project_configuration_manifest_store_result::
@@ -103,7 +103,7 @@ server_status build_project(
     const auto verified =
         verify_project_configuration_manifest(
             project_path,
-            context.persisted,
+            context.manifest,
             operation,
             diagnostics,
             verification);
@@ -122,20 +122,23 @@ server_status build_project(
             "Complete Project configuration manifest is unchanged; File Context change detection is not implemented yet");
     }
 
+    const auto previous_configuration_hash =
+        context.manifest.configuration_hash;
+
     const auto composed =
         compose_project_configuration_manifest(
             project_path,
             operation,
             diagnostics,
-            context.candidate,
-            context.preprocessors);
+            context.manifest,
+            context.preprocessor);
 
     if (!succeeded(composed)) {
         return composed;
     }
 
-    if (context.candidate.configuration_hash ==
-        context.persisted.configuration_hash) {
+    if (context.manifest.configuration_hash ==
+        previous_configuration_hash) {
 
         return report_build_incomplete(
             operation,

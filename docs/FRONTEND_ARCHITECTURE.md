@@ -494,33 +494,25 @@ Preprocessor never assigns semantic meaning.
 
 ---
 
-## Project-local Preprocessor Configuration
+## Preprocessor Configuration
 
-Each participating `project.json` contributes one immutable
-`project_preprocessor_configuration` containing its local predefines.
+The root `project.json` contributes one immutable `preprocessor_configuration`.
+Nested Project configurations only compose inputs and cannot introduce another
+preprocessing scope.
 
 ```text
-project.json
+root project.json
     -> preprocessor.predefines[]
-    -> project_preprocessor_configuration
+    -> preprocessor_configuration
 ```
 
-Composition keeps these configurations aligned with the root-first
-`project_configuration_manifest::files` order:
+There is no per-Project preprocessing configuration, no inheritance/merge rule,
+and no `project_id` for preprocessing.
 
-```text
-preprocessors[i]
-    <-> manifest.files[i]
-```
-
-This introduces no new `project_id` and no second preprocessing identity domain.
-
-Configuration is distinct from mutable preprocessing state. During frontend
-execution, spellings are interned through the construction `string_table` and
-used to initialize the appropriate `preprocessor` state.
-
-Parent/child effective-predefine application is deliberately not decided by
-composition. That rule belongs to directive/frontend execution.
+Configuration is distinct from mutable preprocessing state. Each frontend
+execution starts from the root configuration, interns its configured spellings
+through the construction `string_table`, and then owns its mutable
+`preprocessor` state. `#include` continues that same mutable state.
 
 ## Streaming Frontend
 
@@ -921,10 +913,10 @@ Graph semantic construction
 ## Next Construction Step
 
 The next slice is directive execution over the already decoded `pp_*` /
-`pp_end` sequences. It must initialize mutable preprocessing state from the
-appropriate project-local predefines, execute the restricted preprocessing
-contract, and emit include requests without absorbing include resolution or File
-Context ownership.
+`pp_end` sequences. It must initialize each frontend execution from the single
+root preprocessing configuration, execute the restricted preprocessing contract,
+and emit include requests without absorbing include resolution or File Context
+ownership.
 
 It must not introduce a second file identity domain, a semantic token graph,
 per-file semantic cache, AST persistence, or a generic frontend manager/context.

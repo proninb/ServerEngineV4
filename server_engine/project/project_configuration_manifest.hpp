@@ -9,7 +9,7 @@
 #pragma once
 
 #include "file/file_identity.hpp"
-#include "project_preprocessor_configuration.hpp"
+#include "preprocessor_configuration.hpp"
 #include "../diagnostics/diagnostic_collection.hpp"
 #include "../operation.hpp"
 #include "../server_status.hpp"
@@ -75,7 +75,7 @@ enum class project_configuration_manifest_verification : std::uint8_t {
     operation_id operation,
     diagnostic_collection& diagnostics,
     project_configuration_manifest& output,
-    std::vector<project_preprocessor_configuration>& preprocessors);
+    preprocessor_configuration& preprocessor);
 
 [[nodiscard]] server_status compose_project_configuration(
     const std::filesystem::path& root_project_path,
@@ -83,7 +83,7 @@ enum class project_configuration_manifest_verification : std::uint8_t {
     diagnostic_collection& diagnostics,
     project_configuration_manifest& manifest,
     file_context& files,
-    std::vector<project_preprocessor_configuration>& preprocessors);
+    preprocessor_configuration& preprocessor);
 
 [[nodiscard]] server_status verify_project_configuration_manifest(
     const std::filesystem::path& root_project_path,

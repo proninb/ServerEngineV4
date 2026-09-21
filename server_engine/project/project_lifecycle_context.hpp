@@ -7,7 +7,7 @@
 #pragma once
 
 #include "project_configuration_manifest.hpp"
-#include "project_preprocessor_configuration.hpp"
+#include "preprocessor_configuration.hpp"
 #include "file/file_context.hpp"
 #include "frontend/lexical_generation.hpp"
 #include "../configuration/server_configuration.hpp"
@@ -27,7 +27,7 @@ public:
     const server_abi_configuration& abi;
 };
 
-// Temporary BUILD state for constructing candidate Gn+1.
+// Temporary BUILD state for constructing Gn+1 from resident Gn.
 class build_context final {
 public:
     explicit build_context(
@@ -36,11 +36,9 @@ public:
     }
 
     const server_abi_configuration& abi;
-    project_configuration_manifest persisted;
-    project_configuration_manifest candidate;
+    project_configuration_manifest manifest;
 
-    // Entry i belongs to candidate.files[i]; no second Project identity exists.
-    std::vector<project_preprocessor_configuration> preprocessors;
+    preprocessor_configuration preprocessor;
 };
 
 // Temporary REBUILD state for constructing a fresh G0.
@@ -56,8 +54,7 @@ public:
     file_context files;
     lexical_generation lexical;
 
-    // Entry i belongs to manifest.files[i]; no second Project identity exists.
-    std::vector<project_preprocessor_configuration> preprocessors;
+    preprocessor_configuration preprocessor;
 };
 
 }

@@ -63,7 +63,7 @@ ServerEngineV4/
 │       ├── project.cpp
 │       ├── project_identity.hpp
 │       ├── project_lifecycle_context.hpp
-│       ├── project_preprocessor_configuration.hpp
+│       ├── preprocessor_configuration.hpp
 │       ├── project_configuration_manifest.hpp
 │       ├── project_configuration_manifest.cpp
 │       ├── project_configuration_manifest_store.hpp
@@ -401,7 +401,7 @@ PROJECT_CONFIGURATION.md
     group / header / source / project
     path resolution
     composition input
-    per-project preprocessing configuration
+    root preprocessing configuration
 ```
 
 Project lifecycle/configuration details belong in those documents instead of
@@ -500,8 +500,8 @@ the initial lexical construction boundary:
 ```text
 REBUILD
     recursive project.json composition
-    -> local preprocessor configuration per project.json
-    -> candidate manifest
+    -> root preprocessor configuration
+    -> configuration manifest
     -> flat File Context
     -> Header/Source lexical generation
     -> stops before directive execution / Semantic / G0
@@ -509,13 +509,13 @@ REBUILD
 BUILD
     committed manifest verification
     -> recomposition on changed configuration bytes
-    -> local preprocessor configuration per project.json
+    -> root preprocessor configuration
     -> aggregate hash comparison
     -> stops before Gn->Gn+1 source construction
 ```
 
-A candidate manifest is not committed until the generation it describes is
-successfully constructed and published.
+The temporary construction manifest is not committed until the generation it
+describes is successfully constructed and published.
 
 Configuration traversal is root-first declaration-order DFS with normalized-path
 dedupe and cycle detection. It is not sorted.

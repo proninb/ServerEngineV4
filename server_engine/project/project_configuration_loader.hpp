@@ -9,17 +9,23 @@
 #pragma once
 
 #include "project_configuration_manifest.hpp"
-#include "project_preprocessor_configuration.hpp"
+#include "preprocessor_configuration.hpp"
 #include "file/file_kind.hpp"
 #include "../diagnostics/diagnostic_collection.hpp"
 #include "../operation.hpp"
 #include "../server_status.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
 
 namespace cw::server {
+
+enum class project_configuration_scope : std::uint8_t {
+    root,
+    nested,
+};
 
 struct project_configuration_dependency final {
     file_kind kind = file_kind::project;
@@ -34,6 +40,7 @@ struct project_configuration_dependency final {
     operation_id operation,
     diagnostic_collection& diagnostics,
     std::vector<project_configuration_dependency>& dependencies,
-    project_preprocessor_configuration& preprocessor);
+    project_configuration_scope scope,
+    preprocessor_configuration* preprocessor);
 
 }

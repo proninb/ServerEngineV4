@@ -250,14 +250,14 @@ public:
         diagnostic_collection& diagnostics,
         project_configuration_manifest& output,
         file_context* files,
-        std::vector<project_preprocessor_configuration>& preprocessors)
+        preprocessor_configuration& preprocessor)
         : root_project_path(
               root_project_path),
           operation(operation),
           diagnostics(diagnostics),
           output(output),
           files(files),
-          preprocessors(preprocessors) {
+          preprocessor(preprocessor) {
 
         visited.reserve(32);
         active.reserve(16);
@@ -267,7 +267,7 @@ public:
 
     [[nodiscard]] server_status compose() {
         output = {};
-        preprocessors.clear();
+        preprocessor.predefines.clear();
 
         const auto root_result =
             resolve_project_path(
@@ -302,7 +302,7 @@ public:
 
         if (!succeeded(status)) {
             output = {};
-            preprocessors.clear();
+            preprocessor.predefines.clear();
             return status;
         }
 
@@ -513,8 +513,15 @@ private:
         std::vector<project_configuration_dependency>
             dependencies;
 
-        project_preprocessor_configuration
-            preprocessor;
+        const auto scope =
+            declaring_file == invalid_configuration_file
+                ? project_configuration_scope::root
+                : project_configuration_scope::nested;
+
+        auto* preprocessor_output =
+            scope == project_configuration_scope::root
+                ? &preprocessor
+                : nullptr;
 
         const auto status =
             read_project_configuration(
@@ -523,7 +530,8 @@ private:
                 operation,
                 diagnostics,
                 dependencies,
-                preprocessor);
+                scope,
+                preprocessor_output);
 
         if (!succeeded(status)) {
             active.erase(key);
@@ -564,9 +572,6 @@ private:
 
             output.files.push_back(
                 std::move(proof));
-
-            preprocessors.push_back(
-                std::move(preprocessor));
 
             visited.insert(key);
 
@@ -862,7 +867,7 @@ private:
     diagnostic_collection& diagnostics;
     project_configuration_manifest& output;
     file_context* files = nullptr;
-    std::vector<project_preprocessor_configuration>& preprocessors;
+    preprocessor_configuration& preprocessor;
     std::unordered_set<project_path_key, project_path_key_hash> visited;
     std::unordered_set<project_path_key, project_path_key_hash> active;
     std::unordered_set<project_path_key, project_path_key_hash> unique_inputs;
@@ -887,7 +892,7 @@ server_status compose_project_configuration_manifest(
     operation_id operation,
     diagnostic_collection& diagnostics,
     project_configuration_manifest& output,
-    std::vector<project_preprocessor_configuration>& preprocessors) {
+    preprocessor_configuration& preprocessor) {
 
     manifest_composer composer{
         root_project_path,
@@ -895,7 +900,7 @@ server_status compose_project_configuration_manifest(
         diagnostics,
         output,
         nullptr,
-        preprocessors};
+        preprocessor};
 
     return composer.compose();
 }
@@ -906,7 +911,7 @@ server_status compose_project_configuration(
     diagnostic_collection& diagnostics,
     project_configuration_manifest& manifest,
     file_context& files,
-    std::vector<project_preprocessor_configuration>& preprocessors) {
+    preprocessor_configuration& preprocessor) {
 
     manifest_composer composer{
         root_project_path,
@@ -914,7 +919,7 @@ server_status compose_project_configuration(
         diagnostics,
         manifest,
         &files,
-        preprocessors};
+        preprocessor};
 
     return composer.compose();
 }
