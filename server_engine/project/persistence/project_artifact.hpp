@@ -1,9 +1,9 @@
 /*
  * Project persisted-artifact layout boundary.
  *
- * The layout defines two inactive/active candidate slots plus one baseline
- * selector path. Slot choice is persistence mechanics, not a Project semantic
- * generation identity.
+ * The layout defines two persistence slots plus one authoritative baseline
+ * selector path. Slot choice is crash-safe persistence mechanics, not Project
+ * or Graph state.
  */
 #pragma once
 

@@ -88,6 +88,7 @@
     <ClCompile Include="server_engine\communication\console\console_input_windows.cpp" />
     <ClCompile Include="server_engine\communication\console\server_console.cpp" />
     <ClCompile Include="server_engine\project\project.cpp" />
+    <ClCompile Include="server_engine\project\abi\abi_layout.cpp" />
     <ClCompile Include="server_engine\project\string\string_table.cpp" />
     <ClCompile Include="server_engine\project\semantic\identity.cpp" />
     <ClCompile Include="server_engine\project\preprocessor\preprocessor.cpp" />
@@ -145,6 +146,7 @@
     <ClInclude Include="server_engine\communication\console\console_input.hpp" />
     <ClInclude Include="server_engine\communication\console\server_console.hpp" />
     <ClInclude Include="server_engine\project\project.hpp" />
+    <ClInclude Include="server_engine\project\abi\abi_layout.hpp" />
     <ClInclude Include="server_engine\project\project_lifecycle_context.hpp" />
     <ClInclude Include="server_engine\project\preprocessor_configuration.hpp" />
     <ClInclude Include="server_engine\project\project_identity.hpp" />

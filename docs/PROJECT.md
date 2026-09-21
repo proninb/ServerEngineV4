@@ -156,6 +156,38 @@ responsibilities with explicit ownership.
 
 ABI originates from `server.json`.
 
+## ABI-derived Runtime layout
+
+ABI layout is derived state, not part of `G`:
+
+```text
+G
++ server_settings_configuration.abi
+    -> ABI layout
+    -> Runtime / SHM
+```
+
+The exact reuse identity of a persisted ABI layout is:
+
+```text
+abi_layout_key
+    target
+    pack
+```
+
+`abi_layout_key` is compared exactly; it is not a hash. A compatible persisted
+layout may be reused to accelerate LOAD or BUILD. A mismatch means the layout
+must be recomputed from `G` under the current Server ABI; it does not make `G`
+a different Graph or introduce another Graph state.
+
+If ABI layout is persisted, it belongs with the compiled/runtime artifact as
+derived acceleration. It is not BUILD semantic state and does not belong in
+`database.bin`.
+
+The current implementation provides only the ABI compatibility key boundary.
+Actual ABI layout records are intentionally deferred until the type contract of
+`G` exists.
+
 The root `preprocessor_configuration` originates from the root `project.json`
 and is construction input only.
 
@@ -202,6 +234,10 @@ It restores the last committed final compiled state:
 
 ```text
 persisted final G
+    + compatible persisted ABI layout, when available
+        -> reuse layout
+    otherwise
+        -> derive layout from G + Server ABI
     -> Runtime
     -> SHM
     -> resident Project
@@ -240,7 +276,9 @@ root project.json
     -> Assign resolution -> G
     -> complete dependency topology
     -> encode BUILD acceleration state
+    -> derive ABI layout from G + Server ABI
     -> persist compiled G
+       + optional compatible ABI-layout acceleration
     -> Runtime
     -> SHM
     -> coordinated persisted-baseline commit
@@ -303,6 +341,7 @@ terminal REBUILD dependency-topology finalization
 final SourceSave image construction
 completed DB persistence
 compiled-G persistence
+ABI-layout derivation/persistence
 Runtime
 SHM
 coordinated baseline commit

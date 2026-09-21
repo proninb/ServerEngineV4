@@ -25,6 +25,12 @@
     <Filter Include="server_engine\project\file">
       <UniqueIdentifier>{99999999-9999-9999-9999-999999999999}</UniqueIdentifier>
     </Filter>
+    <Filter Include="server_engine\project\abi">
+      <UniqueIdentifier>{B8A6D52E-6A90-4A1F-8FD7-C12FBE6817A4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="server_engine\project\abi">
+      <UniqueIdentifier>{B8A6D52E-6A90-4A1F-8FD7-C12FBE6817A4}</UniqueIdentifier>
+    </Filter>
     <Filter Include="server_engine\project\string">
       <UniqueIdentifier>{A1111111-1111-1111-1111-111111111111}</UniqueIdentifier>
     </Filter>
@@ -95,6 +101,12 @@
 
     <ClCompile Include="server_engine\project\project.cpp">
       <Filter>server_engine\project</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\abi\abi_layout.cpp">
+      <Filter>server_engine\project\abi</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\abi\abi_layout.cpp">
+      <Filter>server_engine\project\abi</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\project\string\string_table.cpp">
       <Filter>server_engine\project\string</Filter>
@@ -268,6 +280,12 @@
 
     <ClInclude Include="server_engine\project\project.hpp">
       <Filter>server_engine\project</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\abi\abi_layout.hpp">
+      <Filter>server_engine\project\abi</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\abi\abi_layout.hpp">
+      <Filter>server_engine\project\abi</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\project_lifecycle_context.hpp">
       <Filter>server_engine\project</Filter>

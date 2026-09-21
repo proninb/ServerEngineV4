@@ -90,8 +90,8 @@ struct telemetry_configuration {
 };
 
 enum class abi_target : std::uint8_t {
-    windows_x64,
-    posix_x64,
+    windows_x64 = 1,
+    posix_x64 = 2,
 };
 
 // Process-wide physical layout contract shared by all Projects and the one SHM.

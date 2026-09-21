@@ -390,6 +390,7 @@ DB
 
 compiled G
     the one compiled Project result used by LOAD/Runtime
+    may also carry derived ABI-layout acceleration keyed by exact {target, pack}
 ```
 
 The artifact roles and filenames are configured by `settings.files.manifest`,
@@ -435,6 +436,18 @@ never persisted.
 not an intermediate representation of the Project, and is not input to a
 Builder stage. Additional sections are justified only when they let BUILD avoid
 repeating work while preserving the same one-G construction model.
+
+Persisted ABI layout, when present, is derived acceleration beside `G`.
+It is reusable only when its exact `abi_layout_key {target, pack}` matches the
+current process-wide Server ABI. An ABI mismatch requires layout recomputation
+from `G`; it does not create another Graph and does not move ABI state into
+`database.bin`.
+
+Persisted ABI layout, when present, is derived acceleration beside `G`.
+It is reusable only when its exact `abi_layout_key {target, pack}` matches the
+current process-wide Server ABI. An ABI mismatch requires layout recomputation
+from `G`; it does not create another Graph and does not move ABI state into
+`database.bin`.
 
 There is no SAVE lifecycle command.
 
