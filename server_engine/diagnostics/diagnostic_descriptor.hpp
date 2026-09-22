@@ -246,7 +246,13 @@ inline constexpr diagnostic_descriptor project_preprocessing_error{
     "Project source preprocessing failed",
 };
 
-
+inline constexpr diagnostic_descriptor project_rebuild_cleanup_failed{
+    diagnostic_id{2020},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.rebuild_cleanup_failed",
+    "REBUILD artifact cleanup failed",
+};
 
 inline constexpr diagnostic_descriptor project_semantic_error{
     diagnostic_id{2025},

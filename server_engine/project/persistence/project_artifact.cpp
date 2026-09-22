@@ -96,11 +96,12 @@ remove_project_artifacts(
 
     bool failed = false;
 
+    // compiled.bin is removed first because LOAD consumes it independently.
     const std::filesystem::path* paths[]{
+        &layout.compiled,
         &layout.manifest,
         &layout.source_save,
         &layout.database,
-        &layout.compiled,
     };
 
     for (const auto* path : paths) {

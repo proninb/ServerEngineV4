@@ -17,35 +17,6 @@
 namespace cw::server {
 namespace {
 
-class rebuild_artifact_cleanup final {
-public:
-    explicit rebuild_artifact_cleanup(
-        const project_artifact_layout& layout) noexcept
-        : layout(layout) {
-    }
-
-    ~rebuild_artifact_cleanup() {
-        if (active) {
-            (void)remove_project_artifacts(
-                layout);
-        }
-    }
-
-    rebuild_artifact_cleanup(
-        const rebuild_artifact_cleanup&) = delete;
-
-    rebuild_artifact_cleanup& operator=(
-        const rebuild_artifact_cleanup&) = delete;
-
-    void release() noexcept {
-        active = false;
-    }
-
-private:
-    const project_artifact_layout& layout;
-    bool active = true;
-};
-
 [[nodiscard]] server_status emit_source_failure(
     file_context& files,
     file_id file,
@@ -132,24 +103,24 @@ server_status rebuild_project(
         return server_status::io_error;
     }
 
-    rebuild_artifact_cleanup cleanup{
-        layout};
-
     if (remove_project_artifacts(
             layout) !=
         project_artifact_io_result::success) {
 
         diagnostics.emit(
             diagnostic(
-                diagnostics::project_rebuild_incomplete,
+                diagnostics::project_rebuild_cleanup_failed,
                 operation)
                 .file(layout.root)
                 .detail(
-                    "REBUILD could not remove the previous persisted artifact set")
+                    "REBUILD could not remove the complete persisted artifact set before starting the fresh lineage")
                 .build());
 
         return server_status::io_error;
     }
+
+    const auto rebuilt =
+        [&]() -> server_status {
 
     rebuild_context context{
         settings};
@@ -445,6 +416,31 @@ server_status rebuild_project(
             .build());
 
     return server_status::unsupported;
+        }();
+
+    if (succeeded(rebuilt)) {
+        return rebuilt;
+    }
+
+    // The operation scope above is already destroyed here, including any open
+    // artifact mappings. Failed REBUILD must leave no persisted Project state.
+    if (remove_project_artifacts(
+            layout) !=
+        project_artifact_io_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_rebuild_cleanup_failed,
+                operation)
+                .file(layout.root)
+                .detail(
+                    "Failed REBUILD could not remove the complete persisted artifact set")
+                .build());
+
+        return server_status::io_error;
+    }
+
+    return rebuilt;
 }
 
 }

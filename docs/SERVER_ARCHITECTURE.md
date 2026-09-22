@@ -402,11 +402,11 @@ REBUILD
     replaces the produced artifacts
 ```
 
-`compiled.bin` contains the one compiled Project result used by LOAD/Runtime.
-It is mmap-native: semantic strings/identities, G arrays, persisted read indexes,
-and the ordered Studio-facing Assign table are bound directly from the mapped
-file without reconstructing mutable containers. It may also carry derived
-ABI-layout acceleration keyed by exact `{target, pack}`.
+`compiled.bin` contains the one compiled Project result used by LOAD to obtain
+G. It is mmap-native: semantic strings/identities, G arrays, persisted read
+indexes, and the ordered Studio-facing Assign table are bound directly from the
+mapped file without reconstructing mutable containers. ABI-derived Runtime
+layout belongs to Phase 2 and is not part of the current compiled format.
 
 `project.manifest`, `source.bin`, and `database.bin` are BUILD
 acceleration/lineage state. LOAD does not open them.
@@ -435,9 +435,9 @@ SHA-256 file scan. The dirty set is expanded through persisted reverse topology.
 `database.bin` is BUILD acceleration/lineage state. It is not a Semantic DB and
 is not an intermediate representation of the Project.
 
-Persisted ABI layout, when present, is derived acceleration in the compiled
-artifact and is reusable only when its exact `abi_layout_key {target, pack}`
-matches the current Server ABI.
+ABI-derived Runtime layout is deferred to Phase 2. Its representation and any
+future persistence/reuse policy are not part of the current Phase-1 artifact
+contract.
 
 There is no SAVE lifecycle command.
 
@@ -551,8 +551,9 @@ resolution, G mutation, Runtime binding, or file dependency emission.
 REBUILD starts a fresh persisted lineage by removing
 `project.manifest`, `source.bin`, `database.bin`, and `compiled.bin`. It uses
 the final artifact names directly; there are no `.tmp` files, A/B slots,
-selector files, or rollback generations. Any REBUILD failure removes all four
-artifacts again.
+selector files, or rollback generations. Any REBUILD failure closes
+operation-local mappings before removing all four artifacts again. Cleanup I/O
+failure is reported explicitly and leaves the Server `UNLOADED`.
 
 After topology finalization, the current REBUILD implementation computes the
 exact compiled layout, creates `compiled.bin` at its final size, writable-mmaps

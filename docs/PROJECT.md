@@ -347,7 +347,8 @@ ABI originates from `server.json`.
 
 ## ABI-derived Runtime layout
 
-ABI layout is derived state, not part of `G`:
+ABI layout is Phase-2 derived state, not part of `G` and not part of the current
+Phase-1 persisted compiled format:
 
 ```text
 G
@@ -356,26 +357,8 @@ G
     -> Runtime / SHM
 ```
 
-The exact reuse identity of a persisted ABI layout is:
-
-```text
-abi_layout_key
-    target
-    pack
-```
-
-`abi_layout_key` is compared exactly; it is not a hash. A compatible persisted
-layout may be reused to accelerate LOAD or BUILD. A mismatch means the layout
-must be recomputed from `G` under the current Server ABI; it does not make `G`
-a different Graph or introduce another Graph state.
-
-If ABI layout is persisted, it belongs with the compiled/runtime artifact as
-derived acceleration. It is not BUILD semantic state and does not belong in
-`database.bin`.
-
-The current implementation provides only the ABI compatibility key boundary.
-Actual ABI layout records are intentionally deferred until the type contract of
-`G` exists.
+Its exact representation and any future persistence/reuse policy are intentionally
+deferred until Phase 1 is complete.
 
 The root `preprocessor_configuration` originates from the root `project.json`
 and is construction input only.
@@ -419,18 +402,16 @@ does not exist merely to remember which persisted BUILD state should be opened.
 
 LOAD starts only from `UNLOADED`.
 
-It restores the last committed final compiled state:
+Its Phase-1 responsibility is:
 
 ```text
-persisted final G
-    + compatible persisted ABI layout, when available
-        -> reuse layout
-    otherwise
-        -> derive layout from G + Server ABI
-    -> Runtime
-    -> SHM
-    -> resident Project
+compiled.bin
+    -> read-only mmap
+    -> compiled_project_view
+    -> G
 ```
+
+Runtime/SHM construction from G belongs to Phase 2.
 
 LOAD does not:
 
@@ -1044,7 +1025,6 @@ compiled.bin
     mmap-native semantic string/identity state
     compiled G arrays + read indexes
     ordered Assign user table
-    optional ABI-layout acceleration
     required by LOAD
 
 project.manifest
@@ -1356,8 +1336,10 @@ REBUILD start
 ```
 
 There is no inactive slot, `.tmp` artifact, A/B generation, selector, rollback
-artifact, or coordinated persistence generation. Any REBUILD failure removes all
-four files again and leaves the Server `UNLOADED`.
+artifact, or coordinated persistence generation. Any REBUILD failure closes its
+operation-local artifact mappings and removes all four files again. If the
+filesystem refuses any cleanup deletion, REBUILD reports
+`project.rebuild_cleanup_failed`, returns `io_error`, and remains `UNLOADED`.
 
 BUILD continues an existing lineage. A failed BUILD discards only its temporary
 operation state, preserves the previously persisted BUILD state, publishes no
