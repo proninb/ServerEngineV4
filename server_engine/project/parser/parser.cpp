@@ -120,7 +120,8 @@ public:
 
         return parse_scope(
             identities.root(),
-            false);
+            false,
+            0);
     }
 
 private:
@@ -1439,7 +1440,16 @@ private:
     }
 
     [[nodiscard]] server_status parse_namespace(
-        identity_ref parent) noexcept {
+        identity_ref parent,
+        std::size_t scope_depth) noexcept {
+
+        if (scope_depth >=
+            parser_scope_depth_limit) {
+
+            return fail(
+                parser_failure_kind::unsupported,
+                "Namespace nesting exceeds the supported parser scope depth");
+        }
 
         auto status = advance();
         if (!succeeded(status)) {
@@ -1512,7 +1522,8 @@ private:
         status =
             parse_scope(
                 scope,
-                true);
+                true,
+                scope_depth + 1);
 
         if (!succeeded(status)) {
             return status;
@@ -2261,7 +2272,8 @@ private:
 
     [[nodiscard]] server_status parse_scope(
         identity_ref scope,
-        bool expect_close) noexcept {
+        bool expect_close,
+        std::size_t scope_depth) noexcept {
 
         for (;;) {
             if (at(token_kind::invalid)) {
@@ -2288,7 +2300,9 @@ private:
 
             if (at(token_kind::kw_namespace)) {
                 const auto status =
-                    parse_namespace(scope);
+                    parse_namespace(
+                        scope,
+                        scope_depth);
 
                 if (!succeeded(status)) {
                     return status;

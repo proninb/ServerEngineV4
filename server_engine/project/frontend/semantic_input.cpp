@@ -155,6 +155,17 @@ server_status semantic_input::start(
             opened);
     }
 
+    const auto execution_entered =
+        executor.enter_file(root);
+
+    if (!succeeded(execution_entered)) {
+        return fail(
+            root,
+            {},
+            "Preprocessing execution could not enter semantic root",
+            execution_entered);
+    }
+
     started = true;
     return server_status::success;
 }
@@ -535,6 +546,17 @@ server_status semantic_input::consume_directive(
             result.include.locator,
             "Included Header nesting exceeds the supported frontend depth",
             entered);
+    }
+
+    const auto execution_entered =
+        executor.enter_file(target);
+
+    if (!succeeded(execution_entered)) {
+        return fail(
+            result.include.source,
+            result.include.locator,
+            "Preprocessing execution could not enter included Header",
+            execution_entered);
     }
 
     return server_status::success;

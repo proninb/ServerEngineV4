@@ -199,6 +199,7 @@
   <ItemGroup>
     <None Include="server.json" />
     <None Include="tests\compiled_project_tests.cpp" />
+    <None Include="tests\frontend_regression_tests.cpp" />
     <None Include="docs\SERVER_ARCHITECTURE.md" />
     <None Include="docs\DIAGNOSTICS.md" />
     <None Include="docs\JSON.md" />

@@ -22,6 +22,10 @@
 
 namespace cw::server {
 
+// Bounds source-controlled recursive semantic-scope descent before it can
+// consume the process stack.
+inline constexpr std::size_t parser_scope_depth_limit = 256;
+
 enum class parser_failure_kind : std::uint8_t {
     none = 0,
     lexical,

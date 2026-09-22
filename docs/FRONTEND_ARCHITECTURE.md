@@ -678,9 +678,21 @@ a fresh `lexical_generation::words(file_id)` view for each decode, so publishing
 an include-discovered Header may reallocate the lexical word arena without
 invalidating a suspended parent frame.
 
+Conditional execution keeps a parallel fixed-capacity file-entry stack. Each
+entry records the conditional depth that existed when that include entry began.
+This boundary is intentionally not inferred from `file_id`: recursive inclusion
+may enter the same physical Header while an outer conditional from that same
+`file_id` is still active. `#else`, `#endif`, and EOF validation may operate only
+at or above the current entry's conditional floor.
+
 At child EOF the child frame is removed. Parent execution resumes from its saved
 word/source offsets and reacquires the parent lexical span. The active include
 traversal therefore remains bounded, allocation-free execution state.
+
+Parser/Semantic recursive scope descent has an explicit 256-level supported
+limit. Input exceeding that limit fails with an `unsupported` parser diagnostic
+before another recursive scope call, so source-controlled nesting cannot exhaust
+the process stack.
 
 ---
 

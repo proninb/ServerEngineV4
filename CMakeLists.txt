@@ -112,4 +112,39 @@ if(BUILD_TESTING)
         NAME compiled_project
         COMMAND ServerEngineV4Tests
     )
+
+    add_executable(ServerEngineV4FrontendTests
+        tests/frontend_regression_tests.cpp
+        server_engine/filesystem_path.cpp
+        server_engine/project/project_path.cpp
+        server_engine/project/string/string_table.cpp
+        server_engine/project/semantic/identity.cpp
+        server_engine/project/graph/graph.cpp
+        server_engine/project/parser/parser.cpp
+        server_engine/project/preprocessor/preprocessor.cpp
+        server_engine/project/frontend/frontend_input.cpp
+        server_engine/project/frontend/semantic_input.cpp
+        server_engine/project/frontend/directive_decoder.cpp
+        server_engine/project/frontend/directive_executor.cpp
+        server_engine/project/frontend/lexical_stream.cpp
+        server_engine/project/frontend/lexer.cpp
+        server_engine/project/frontend/lexical_generation.cpp
+        server_engine/project/file/file_identity.cpp
+        server_engine/project/file/file_context.cpp
+    )
+
+    target_include_directories(ServerEngineV4FrontendTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(ServerEngineV4FrontendTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4FrontendTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(
+        NAME frontend_regressions
+        COMMAND ServerEngineV4FrontendTests
+    )
 endif()

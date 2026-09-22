@@ -438,6 +438,9 @@
     <None Include="tests\compiled_project_tests.cpp">
       <Filter>tests</Filter>
     </None>
+    <None Include="tests\frontend_regression_tests.cpp">
+      <Filter>tests</Filter>
+    </None>
 
     <None Include="docs\SERVER_ARCHITECTURE.md">
       <Filter>docs</Filter>

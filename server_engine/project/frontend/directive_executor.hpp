@@ -1,10 +1,10 @@
 /*
  * Restricted preprocessing directive execution.
  *
- * directive_executor owns only conditional execution state for one frontend
- * execution. It borrows the shared textual identity table and that execution's
- * mutable preprocessor state. Include resolution and File Context mutation stay
- * outside this layer.
+ * directive_executor owns conditional execution state plus the conditional
+ * floor of each active frontend file entry. The entry boundary is distinct from
+ * file_id because recursive inclusion may enter the same physical file more
+ * than once. Include resolution and File Context mutation stay outside here.
  */
 #pragma once
 
@@ -35,6 +35,7 @@ enum class directive_execution_error_kind : std::uint8_t {
     invalid_macro_definition,
     unsupported_directive,
     invalid_include,
+    file_entry_mismatch,
     unmatched_else,
     duplicate_else,
     unmatched_endif,
@@ -85,7 +86,13 @@ public:
     // preprocessor state. Conditional groups never cross root executions.
     void reset() noexcept {
         conditional_depth = 0;
+        file_depth = 0;
     }
+
+    // Records the conditional floor for one physical frontend entry. Recursive
+    // inclusion of the same file_id therefore remains a distinct entry.
+    [[nodiscard]] server_status enter_file(
+        file_id file) noexcept;
 
     [[nodiscard]] server_status execute(
         const preprocessing_directive& directive,
@@ -93,11 +100,11 @@ public:
         directive_execution_result& output,
         directive_execution_error* error = nullptr) noexcept;
 
-    // Validates that all conditional groups opened in this physical
-    // file were closed before frontend_input leaves that file.
+    // Validates only conditional groups opened since the matching file entry
+    // and then leaves that entry.
     [[nodiscard]] server_status finish_file(
         file_id file,
-        directive_execution_error* error = nullptr) const noexcept;
+        directive_execution_error* error = nullptr) noexcept;
 
     [[nodiscard]] bool active() const noexcept;
 
@@ -114,6 +121,15 @@ private:
         bool branch_active = false;
         bool else_seen = false;
     };
+
+    struct file_entry_frame final {
+        file_id file{};
+        std::size_t conditional_floor = 0;
+    };
+
+    [[nodiscard]] bool current_file_entry(
+        file_id file,
+        std::size_t& conditional_floor) const noexcept;
 
     [[nodiscard]] server_status fail(
         directive_execution_error_kind kind,
@@ -132,6 +148,10 @@ private:
     std::array<conditional_frame, directive_conditional_depth_limit>
         conditionals{};
     std::size_t conditional_depth = 0;
+
+    std::array<file_entry_frame, frontend_include_depth_limit>
+        file_entries{};
+    std::size_t file_depth = 0;
 };
 
 }

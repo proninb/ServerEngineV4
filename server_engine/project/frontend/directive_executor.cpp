@@ -119,6 +119,49 @@ bool directive_executor::active() const noexcept {
             .branch_active;
 }
 
+bool directive_executor::current_file_entry(
+    file_id file,
+    std::size_t& conditional_floor) const noexcept {
+
+    conditional_floor = 0;
+
+    if (!file ||
+        file_depth == 0 ||
+        file_entries[
+            file_depth - 1].file != file) {
+
+        return false;
+    }
+
+    conditional_floor =
+        file_entries[
+            file_depth - 1].
+            conditional_floor;
+
+    return conditional_floor <=
+        conditional_depth;
+}
+
+server_status directive_executor::enter_file(
+    file_id file) noexcept {
+
+    if (!file ||
+        file_depth ==
+            file_entries.size()) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    file_entries[
+        file_depth++] = {
+            file,
+            conditional_depth,
+        };
+
+    return server_status::success;
+}
+
 server_status directive_executor::fail(
     directive_execution_error_kind kind,
     file_id file,
@@ -210,6 +253,20 @@ server_status directive_executor::execute(
         *error = {};
     }
 
+    std::size_t conditional_floor = 0;
+
+    if (!current_file_entry(
+            directive.range.file,
+            conditional_floor)) {
+
+        return fail(
+            directive_execution_error_kind::
+                file_entry_mismatch,
+            directive.range.file,
+            directive.range.source,
+            error);
+    }
+
     switch (directive.kind) {
     case directive_kind::ifdef:
         return begin_conditional(
@@ -226,7 +283,8 @@ server_status directive_executor::execute(
             error);
 
     case directive_kind::else_: {
-        if (conditional_depth == 0 ||
+        if (conditional_depth <=
+                conditional_floor ||
             conditionals[
                 conditional_depth - 1]
                 .file != directive.range.file) {
@@ -261,7 +319,8 @@ server_status directive_executor::execute(
     }
 
     case directive_kind::endif:
-        if (conditional_depth == 0 ||
+        if (conditional_depth <=
+                conditional_floor ||
             conditionals[
                 conditional_depth - 1]
                 .file != directive.range.file) {
@@ -451,34 +510,54 @@ server_status directive_executor::execute(
 
 server_status directive_executor::finish_file(
     file_id file,
-    directive_execution_error* error) const noexcept {
+    directive_execution_error* error) noexcept {
 
     if (error != nullptr) {
         *error = {};
     }
 
-    if (!file) {
-        return server_status::project_configuration_invalid;
+    std::size_t conditional_floor = 0;
+
+    if (!current_file_entry(
+            file,
+            conditional_floor)) {
+
+        return fail(
+            directive_execution_error_kind::
+                file_entry_mismatch,
+            file,
+            {},
+            error);
     }
 
-    if (conditional_depth == 0 ||
-        conditionals[
-            conditional_depth - 1]
-            .file != file) {
+    if (conditional_depth >
+        conditional_floor) {
 
-        return server_status::success;
+        const auto& opening =
+            conditionals[
+                conditional_depth - 1];
+
+        return fail(
+            directive_execution_error_kind::
+                unterminated_conditional,
+            opening.file,
+            opening.source,
+            error);
     }
 
-    const auto& opening =
-        conditionals[
-            conditional_depth - 1];
+    if (conditional_depth !=
+        conditional_floor) {
 
-    return fail(
-        directive_execution_error_kind::
-            unterminated_conditional,
-        opening.file,
-        opening.source,
-        error);
+        return fail(
+            directive_execution_error_kind::
+                file_entry_mismatch,
+            file,
+            {},
+            error);
+    }
+
+    --file_depth;
+    return server_status::success;
 }
 
 }

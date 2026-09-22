@@ -732,7 +732,11 @@ server_status lexer::tokenize(
                        source[position] != '"') {
                     std::size_t header_newline = 0;
                     if (newline_at(source, position, header_newline)) {
-                        return server_status::project_configuration_invalid;
+                        return fail(
+                            server_status::project_configuration_invalid,
+                            start,
+                            position - start,
+                            lexical_error_reason::unterminated_header_name);
                     }
                     ++position;
                 }
@@ -762,7 +766,11 @@ server_status lexer::tokenize(
                        source[position] != '>') {
                     std::size_t header_newline = 0;
                     if (newline_at(source, position, header_newline)) {
-                        return server_status::project_configuration_invalid;
+                        return fail(
+                            server_status::project_configuration_invalid,
+                            start,
+                            position - start,
+                            lexical_error_reason::unterminated_header_name);
                     }
                     ++position;
                 }
