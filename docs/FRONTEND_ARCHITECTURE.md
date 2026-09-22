@@ -796,15 +796,28 @@ declarations/definitions, record members, namespace objects, intrinsic/named
 types, and const/volatile/pointer/reference modifiers. Unsupported declarations
 fail closed.
 
-`semantic_input` replays preprocessing over retained lexical words. It yields
-only active C++ tokens, expands the supported object-like identifier macros, and
-enters already-discovered quoted Headers synchronously. It stores no semantic
-token arena.
+`semantic_input` performs the one preprocessing execution over retained lexical
+words. It yields only active C++ tokens, expands the supported object-like
+identifier macros, and resolves/registers active quoted includes synchronously.
+An include-discovered Header is materialized and lexed once if it has not yet
+entered the construction file universe, then entered under the same mutable
+preprocessor state and semantic scope. `semantic_input` stores no semantic token
+arena.
 
-Parser/Semantic also writes normalized construction values directly into G.
-Scalar member/object defaults and local reference-member bindings become
+Parser/Semantic writes normalized record-member construction values directly
+into G. Scalar member defaults and local reference-member bindings become
 source-independent `construction_value` records; source spans do not survive
-this boundary. Namespace-scope `static`/`inline` do not alter `identity_ref`.
+this boundary.
+
+Managed constructor syntax is folded before `G.define_record()`: member defaults,
+constructor initializer-list operations, and constructor-body field assignments
+become one final `construction_value` per member. No constructor representation
+or executable constructor program survives in G.
+
+Project object initialization is represented by compact object capability flags,
+not an object `construction_value`. Namespace-scope `static`/`inline` do not
+alter `identity_ref`.
+
 Static Project links are resolved immediately to `object_endpoint` pairs and
 stored directly in G.
 
@@ -1083,12 +1096,13 @@ lexical_token
     one 32-bit common word
     in-band extensions for large source delta/length
 
-REBUILD source closure
-    deterministic dense file_id discovery
-    exact Header/Source bytes
+REBUILD physical source preparation
+    deterministic dense initial file_id set from Project composition
+    exact Project-declared Header/Source bytes
     retained lexical generation
     sparse directive anchors
-    executed quoted-include closure
+    no preprocessing execution
+    active includes discovered only by Parser/Semantic
 
 Assign input materialization
     exact immutable bytes only
@@ -1118,11 +1132,9 @@ Architecture still not integrated/implemented:
 ```text
 BUILD File Context sparse mutation over source_save_view
 BUILD string_table / identity_ref lineage reuse
-Parser/Semantic -> G
 Assign grammar / semantic reference resolution -> G
 BUILD affected dependency replacement
 REBUILD terminal dependency finalization at the final producer boundary
-authoritative A/B multi-artifact commit
 compiled-G persistence
 LOAD compiled-G restore
 ```
@@ -1164,7 +1176,8 @@ failure; dense record/kind storage begins at slot `2`.
 implicit, while slots `2..N` store only parent, `string_id`, and kind. The
 construction open-addressed lookup index is deliberately not persisted.
 
-The next semantic construction work is Parser/Semantic writing `G` directly.
-There is no intermediate semantic database or Builder boundary. BUILD persisted state
-binding/reuse remains separate later work.
+Parser/Semantic now writes `G` directly for the implemented namespace,
+record/member, Project-object, construction, managed-constructor, and static-link
+slice. There is no intermediate semantic database or Builder boundary. BUILD
+persisted-state binding/reuse remains separate later work.
 

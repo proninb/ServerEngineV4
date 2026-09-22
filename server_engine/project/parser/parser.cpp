@@ -71,6 +71,11 @@ struct pending_construction final {
         pending_construction_kind::value;
 };
 
+struct constructor_operation final {
+    string_id target{};
+    pending_construction expression;
+};
+
 class semantic_parser final {
 public:
     semantic_parser(
@@ -161,6 +166,13 @@ private:
 
         current = {};
 
+        if (has_buffered) {
+            current = buffered;
+            buffered = {};
+            has_buffered = false;
+            return server_status::success;
+        }
+
         if (input.finished()) {
             return server_status::success;
         }
@@ -171,6 +183,33 @@ private:
         return succeeded(result)
             ? result
             : input_failure(result);
+    }
+
+    [[nodiscard]] server_status peek(
+        semantic_token& output) noexcept {
+
+        output = {};
+
+        if (has_buffered) {
+            output = buffered;
+            return server_status::success;
+        }
+
+        if (input.finished()) {
+            return server_status::success;
+        }
+
+        const auto result =
+            input.next(buffered);
+
+        if (!succeeded(result)) {
+            return input_failure(result);
+        }
+
+        has_buffered = true;
+        output = buffered;
+
+        return server_status::success;
     }
 
     [[nodiscard]] bool at(
@@ -904,6 +943,501 @@ private:
         return server_status::success;
     }
 
+    [[nodiscard]] server_status parse_constructor_expression(
+        pending_construction& output) noexcept {
+
+        output = {};
+
+        if (at(token_kind::kw_this)) {
+            auto status = advance();
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            status =
+                expect(
+                    token_kind::dot,
+                    "Expected '.' after this in constructor expression");
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            status = advance();
+
+            if (!succeeded(status)) {
+                return status;
+            }
+        }
+
+        if (at(token_kind::identifier) &&
+            current.identifier) {
+
+            output.kind =
+                pending_construction_kind::member_name;
+            output.member_name =
+                current.identifier;
+
+            return advance();
+        }
+
+        if (at(token_kind::kw_false) ||
+            at(token_kind::kw_nullptr)) {
+
+            output.value = {};
+            return advance();
+        }
+
+        if (at(token_kind::kw_true)) {
+            output.value =
+                construction_value::constant(
+                    construction_kind::unsigned_integer,
+                    1);
+
+            return advance();
+        }
+
+        bool negative = false;
+
+        if (at(token_kind::plus) ||
+            at(token_kind::minus)) {
+
+            negative =
+                at(token_kind::minus);
+
+            const auto status =
+                advance();
+
+            if (!succeeded(status)) {
+                return status;
+            }
+        }
+
+        if (at(token_kind::pp_number)) {
+            return parse_number(
+                negative,
+                output.value);
+        }
+
+        return fail(
+            parser_failure_kind::unsupported,
+            "Managed constructor supports scalar constants and local member bindings only");
+    }
+
+    [[nodiscard]] server_status append_constructor_operation(
+        std::vector<constructor_operation>& operations,
+        string_id target,
+        pending_construction expression) noexcept {
+
+        if (!target) {
+            return fail(
+                parser_failure_kind::syntax,
+                "Managed constructor target is invalid");
+        }
+
+        try {
+            operations.push_back({
+                target,
+                expression,
+            });
+
+            return server_status::success;
+        }
+        catch (...) {
+            return server_status::io_error;
+        }
+    }
+
+    [[nodiscard]] server_status parse_constructor(
+        string_id record_name,
+        std::vector<constructor_operation>& operations) noexcept {
+
+        if (!at(token_kind::identifier) ||
+            current.identifier != record_name) {
+
+            return fail(
+                parser_failure_kind::syntax,
+                "Managed constructor name must match its record");
+        }
+
+        auto status = advance();
+
+        if (!succeeded(status)) {
+            return status;
+        }
+
+        status =
+            expect(
+                token_kind::l_paren,
+                "Expected '(' after managed constructor name");
+
+        if (!succeeded(status)) {
+            return status;
+        }
+
+        status = advance();
+
+        if (!succeeded(status)) {
+            return status;
+        }
+
+        if (!at(token_kind::r_paren)) {
+            return fail(
+                parser_failure_kind::unsupported,
+                "Managed constructors must have no parameters");
+        }
+
+        status = advance();
+
+        if (!succeeded(status)) {
+            return status;
+        }
+
+        if (at(token_kind::kw_noexcept)) {
+            status = advance();
+
+            if (!succeeded(status)) {
+                return status;
+            }
+        }
+
+        if (at(token_kind::semicolon)) {
+            return advance();
+        }
+
+        if (at(token_kind::assign)) {
+            status = advance();
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            status =
+                expect(
+                    token_kind::kw_default,
+                    "Managed constructors support '= default' only");
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            status = advance();
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            status =
+                expect(
+                    token_kind::semicolon,
+                    "Expected ';' after '= default'");
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            return advance();
+        }
+
+        if (at(token_kind::colon)) {
+            status = advance();
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            for (;;) {
+                if (!at(token_kind::identifier) ||
+                    !current.identifier) {
+
+                    return fail(
+                        parser_failure_kind::syntax,
+                        "Expected constructor member name");
+                }
+
+                const auto target =
+                    current.identifier;
+
+                status = advance();
+
+                if (!succeeded(status)) {
+                    return status;
+                }
+
+                token_kind close =
+                    token_kind::invalid;
+
+                if (at(token_kind::l_paren)) {
+                    close =
+                        token_kind::r_paren;
+                }
+                else if (at(token_kind::l_brace)) {
+                    close =
+                        token_kind::r_brace;
+                }
+                else {
+                    return fail(
+                        parser_failure_kind::syntax,
+                        "Expected constructor member initializer");
+                }
+
+                status = advance();
+
+                if (!succeeded(status)) {
+                    return status;
+                }
+
+                pending_construction expression;
+
+                if (!at(close)) {
+                    status =
+                        parse_constructor_expression(
+                            expression);
+
+                    if (!succeeded(status)) {
+                        return status;
+                    }
+                }
+
+                status =
+                    expect(
+                        close,
+                        "Expected end of constructor member initializer");
+
+                if (!succeeded(status)) {
+                    return status;
+                }
+
+                status =
+                    append_constructor_operation(
+                        operations,
+                        target,
+                        expression);
+
+                if (!succeeded(status)) {
+                    return status;
+                }
+
+                status = advance();
+
+                if (!succeeded(status)) {
+                    return status;
+                }
+
+                if (!at(token_kind::comma)) {
+                    break;
+                }
+
+                status = advance();
+
+                if (!succeeded(status)) {
+                    return status;
+                }
+            }
+        }
+
+        status =
+            expect(
+                token_kind::l_brace,
+                "Expected managed constructor body");
+
+        if (!succeeded(status)) {
+            return status;
+        }
+
+        status = advance();
+
+        if (!succeeded(status)) {
+            return status;
+        }
+
+        while (!at(token_kind::r_brace)) {
+            if (at(token_kind::invalid)) {
+                return fail(
+                    parser_failure_kind::syntax,
+                    "Managed constructor body is not closed");
+            }
+
+            if (!at(token_kind::identifier) ||
+                !current.identifier) {
+
+                return fail(
+                    parser_failure_kind::unsupported,
+                    "Managed constructor body supports field assignments only");
+            }
+
+            const auto target =
+                current.identifier;
+
+            status = advance();
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            status =
+                expect(
+                    token_kind::assign,
+                    "Managed constructor body supports field assignments only");
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            status = advance();
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            pending_construction expression;
+
+            status =
+                parse_constructor_expression(
+                    expression);
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            status =
+                expect(
+                    token_kind::semicolon,
+                    "Expected ';' after constructor field assignment");
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            status =
+                append_constructor_operation(
+                    operations,
+                    target,
+                    expression);
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            status = advance();
+
+            if (!succeeded(status)) {
+                return status;
+            }
+        }
+
+        return advance();
+    }
+
+    [[nodiscard]] server_status normalize_constructor_operations(
+        const std::vector<member_record>& members,
+        const std::vector<constructor_operation>& operations,
+        std::vector<construction_value>& construction) noexcept {
+
+        std::vector<bool> assigned;
+
+        try {
+            assigned.resize(
+                members.size());
+        }
+        catch (...) {
+            return server_status::io_error;
+        }
+
+        for (const auto& operation : operations) {
+            std::size_t target_index = 0;
+
+            for (;
+                 target_index < members.size();
+                 ++target_index) {
+
+                if (members[target_index].name ==
+                    operation.target) {
+
+                    break;
+                }
+            }
+
+            if (target_index == members.size()) {
+                return fail(
+                    parser_failure_kind::syntax,
+                    "Constructor target is not a field of this record");
+            }
+
+            construction_value value;
+
+            if (reference_type(
+                    members[target_index].type)) {
+
+                if (operation.expression.kind !=
+                        pending_construction_kind::member_name ||
+                    !operation.expression.member_name) {
+
+                    return fail(
+                        parser_failure_kind::unsupported,
+                        "Reference constructor operation requires a local member binding");
+                }
+
+                std::size_t source_index = 0;
+
+                for (;
+                     source_index < members.size();
+                     ++source_index) {
+
+                    if (members[source_index].name ==
+                        operation.expression.member_name) {
+
+                        break;
+                    }
+                }
+
+                if (source_index == members.size() ||
+                    source_index >=
+                        (std::numeric_limits<std::uint32_t>::max)()) {
+
+                    return fail(
+                        parser_failure_kind::semantic,
+                        "Constructor reference binding does not name a member of this record");
+                }
+
+                value =
+                    construction_value::member_binding(
+                        static_cast<std::uint32_t>(
+                            source_index + 1));
+            }
+            else {
+                if (operation.expression.kind !=
+                        pending_construction_kind::value) {
+
+                    return fail(
+                        parser_failure_kind::unsupported,
+                        "Value constructor operation requires a scalar constant");
+                }
+
+                value =
+                    operation.expression.value;
+            }
+
+            if (assigned[target_index] &&
+                construction[target_index].kind ==
+                    construction_kind::member_binding &&
+                construction[target_index] != value) {
+
+                return fail(
+                    parser_failure_kind::syntax,
+                    "Conflicting constructor reference bindings");
+            }
+
+            construction[target_index] =
+                value;
+            assigned[target_index] =
+                true;
+        }
+
+        return server_status::success;
+    }
+
     [[nodiscard]] server_status parse_namespace(
         identity_ref parent) noexcept {
 
@@ -1024,12 +1558,15 @@ private:
                 "Expected record identifier");
         }
 
+        const auto record_name =
+            current.identifier;
+
         identity_ref identity;
 
         status =
             identities.resolve(
                 scope,
-                current.identifier,
+                record_name,
                 identity_kind::type,
                 identity);
 
@@ -1076,6 +1613,9 @@ private:
 
         std::vector<member_record> members;
         std::vector<pending_construction> pending;
+        std::vector<constructor_operation> constructor_operations;
+
+        bool constructor_seen = false;
 
         auto access =
             default_access(kind);
@@ -1128,6 +1668,42 @@ private:
                     return status;
                 }
                 continue;
+            }
+
+            if (at(token_kind::identifier) &&
+                current.identifier == record_name) {
+
+                semantic_token next;
+
+                status =
+                    peek(next);
+
+                if (!succeeded(status)) {
+                    return status;
+                }
+
+                if (next.kind ==
+                    token_kind::l_paren) {
+
+                    if (constructor_seen) {
+                        return fail(
+                            parser_failure_kind::semantic,
+                            "Multiple managed default constructors are not supported");
+                    }
+
+                    constructor_seen = true;
+
+                    status =
+                        parse_constructor(
+                            record_name,
+                            constructor_operations);
+
+                    if (!succeeded(status)) {
+                        return status;
+                    }
+
+                    continue;
+                }
             }
 
             if (at(token_kind::kw_static)) {
@@ -1263,6 +1839,16 @@ private:
                 construction_value::member_binding(
                     static_cast<std::uint32_t>(
                         target + 1));
+        }
+
+        status =
+            normalize_constructor_operations(
+                members,
+                constructor_operations,
+                construction);
+
+        if (!succeeded(status)) {
+            return status;
         }
 
         status = advance();
@@ -1766,6 +2352,8 @@ private:
     graph& G;
     parser_failure* failure = nullptr;
     semantic_token current;
+    semantic_token buffered;
+    bool has_buffered = false;
 };
 
 }

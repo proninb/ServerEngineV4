@@ -189,35 +189,87 @@ type_ref
     WHAT TYPE
 
 construction_value
-    HOW DEFAULT/INITIAL VALUE IS CONSTRUCTED
+    HOW A RECORD MEMBER IS DEFAULT/INITIALIZED
+
+object flags
+    WHETHER A PROJECT OBJECT USES NON-DEFAULT INITIALIZATION
 
 link_record
     HOW PROJECT OBJECT FIELDS ARE CONNECTED
 ```
 
-`construction_value` is a pointer-free 16-byte normalized value. The first
+`construction_value` is a pointer-free 16-byte normalized value. The current
 construction slice supports zero/default, signed/unsigned decimal constants,
 real constants, booleans/null, and local record-member reference bindings.
 
-To keep hot Graph records compact, construction data is stored in parallel cold
-arrays:
+To keep hot member records compact, normalized member construction is stored in
+a parallel cold array:
 
 ```text
 member_record[12 B]    member_construction[16 B]
-object_entry[4 B]      object_construction[16 B]
+object_entry[8 B]      { type_ref, flags }
 ```
 
-Namespace-scope `static` and `inline` are declaration semantics and do not alter
-the canonical object identity key `(parent, name, identity_kind::object)`.
+Project object initialization is not normalized into an object
+`construction_value`. `object_entry.flags` records whether the declaration uses
+non-default object initialization. Runtime/ABI construction remains responsible
+for deciding whether that capability is supported.
 
-The direct Parser slice accepts:
+Namespace-scope `static` and `inline` do not alter the canonical object identity
+key `(parent, name, identity_kind::object)`.
+
+Managed constructor syntax is normalized before `G.define_record()` and does not
+survive as a constructor object or executable program in G.
 
 ```cpp
-struct Device {
-    int OUT = 5;
-    int& IN = OUT;
-};
+struct A {
+    int& in;
+    int out;
 
+    A() : in(out), out(5) {
+        in = out;
+        out = 5;
+    }
+};
+```
+
+normalizes to:
+
+```text
+in  -> member_binding(out)
+out -> unsigned_integer(5)
+```
+
+Construction precedence is:
+
+```text
+member declaration default
+    -> constructor initializer list
+    -> constructor body assignments
+    -> final member_construction[]
+```
+
+For reference members, repeating the same constructor binding is accepted.
+Rebinding the same reference member to a different member in a later constructor
+operation is a semantic error. For value members, a later constructor operation
+replaces the earlier/default construction value.
+
+The supported constructor forms are no-argument managed constructors:
+
+```cpp
+A();
+A() = default;
+A() noexcept { ... }
+A() : field(value), ref(other) { field = value; ref = other; }
+```
+
+Constructor parameters and arbitrary constructor statements/expressions remain
+fail-closed. Nonempty aggregate member construction, arrays, and Runtime
+materialization remain later capabilities.
+
+The direct Parser slice also accepts Project objects and static links:
+
+```cpp
 Device A;
 Device B{};
 
@@ -226,9 +278,6 @@ B.IN = A.OUT;
 
 A repeated identical link is idempotent. A second different source for the same
 target endpoint is a semantic conflict.
-
-Constructor bodies/initializer lists, nonempty record aggregate initializers,
-arrays, and Runtime materialization remain later capabilities.
 
 ## Mode-specific construction contexts
 
