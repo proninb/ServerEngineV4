@@ -264,6 +264,22 @@ inline constexpr diagnostic_descriptor project_assign_invalid{
     "Project Assign input is invalid",
 };
 
+inline constexpr diagnostic_descriptor project_compiled_invalid{
+    diagnostic_id{2027},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.compiled_invalid",
+    "Compiled Project artifact is invalid",
+};
+
+inline constexpr diagnostic_descriptor project_compiled_io_failed{
+    diagnostic_id{2028},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.compiled_io_failed",
+    "Compiled Project artifact I/O failed",
+};
+
 inline constexpr diagnostic_descriptor project_source_save_invalid{
     diagnostic_id{2023},
     diagnostic_domain::project,

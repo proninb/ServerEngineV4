@@ -55,6 +55,9 @@
     <Filter Include="server_engine\project\persistence">
       <UniqueIdentifier>{F6666666-6666-6666-6666-666666666666}</UniqueIdentifier>
     </Filter>
+    <Filter Include="tests">
+      <UniqueIdentifier>{0F5D5C54-5BD2-4A49-BEEE-5422EE125E37}</UniqueIdentifier>
+    </Filter>
     <Filter Include="docs">
       <UniqueIdentifier>{66666666-6666-6666-6666-666666666666}</UniqueIdentifier>
     </Filter>
@@ -172,6 +175,9 @@
       <Filter>server_engine\project</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\project\persistence\project_artifact.cpp">
+      <Filter>server_engine\project\persistence</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\persistence\compiled_project.cpp">
       <Filter>server_engine\project\persistence</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\project\persistence\source_save.cpp">
@@ -323,6 +329,12 @@
     <ClInclude Include="server_engine\project\persistence\project_artifact.hpp">
       <Filter>server_engine\project\persistence</Filter>
     </ClInclude>
+    <ClInclude Include="server_engine\project\persistence\compiled_project.hpp">
+      <Filter>server_engine\project\persistence</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\persistence\crc64_ecma.hpp">
+      <Filter>server_engine\project\persistence</Filter>
+    </ClInclude>
     <ClInclude Include="server_engine\project\persistence\source_save.hpp">
       <Filter>server_engine\project\persistence</Filter>
     </ClInclude>
@@ -423,6 +435,9 @@
 
   <ItemGroup>
     <None Include="server.json" />
+    <None Include="tests\compiled_project_tests.cpp">
+      <Filter>tests</Filter>
+    </None>
 
     <None Include="docs\SERVER_ARCHITECTURE.md">
       <Filter>docs</Filter>

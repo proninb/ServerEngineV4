@@ -4,6 +4,7 @@
 #include "assign/assign_input.hpp"
 #include "frontend/source_discovery.hpp"
 #include "parser/parser.hpp"
+#include "persistence/compiled_project.hpp"
 
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
@@ -244,6 +245,30 @@ server_status rebuild_project(
         return topology_finalized;
     }
 
+    project_artifact_image compiled_image;
+
+    const auto compiled =
+        build_compiled_project_image(
+            context.strings,
+            context.identities,
+            context.G,
+            context.assigns,
+            compiled_image);
+
+    if (compiled !=
+        compiled_project_image_result::success) {
+
+        return compiled ==
+                compiled_project_image_result::failed
+            ? server_status::io_error
+            : server_status::
+                project_artifact_invalid;
+    }
+
+    // REBUILD still fails at Runtime/SHM. Do not replace a committed
+    // compiled.bin from an unsuccessful lifecycle operation.
+    (void)compiled_image;
+
     // The manifest becomes authoritative only with the complete successful
     // REBUILD artifact persistence is not implemented yet.
 
@@ -252,7 +277,7 @@ server_status rebuild_project(
             diagnostics::project_rebuild_incomplete,
             operation)
             .detail(
-                "Project configuration manifest, physical source lexical preparation, Assign user-table construction, single-pass preprocessing/include discovery with direct Parser/Semantic G construction, and terminal dependency-topology finalization are complete; remaining C++ declaration semantics, compiled Project persistence, Runtime/SHM construction, and persisted artifact replacement are not implemented yet")
+                "Project configuration manifest, physical source lexical preparation, Assign user-table construction, single-pass preprocessing/include discovery with direct Parser/Semantic G construction, terminal dependency-topology finalization, and mmap-native compiled Project image construction are complete; remaining C++ declaration semantics, Runtime/SHM construction, and successful-operation artifact replacement are not implemented yet")
             .build());
 
     return server_status::unsupported;

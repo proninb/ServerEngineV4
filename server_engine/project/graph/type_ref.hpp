@@ -14,6 +14,7 @@
 namespace cw::server {
 
 class graph;
+class compiled_project_view;
 
 enum class intrinsic_type : std::uint8_t {
     none = 0,
@@ -116,6 +117,7 @@ private:
     std::uint32_t packed = 0;
 
     friend class graph;
+    friend class compiled_project_view;
 };
 
 static_assert(sizeof(type_ref) == 4);

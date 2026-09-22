@@ -111,6 +111,7 @@
     <ClCompile Include="server_engine\project\project_configuration_manifest_store.cpp" />
     <ClCompile Include="server_engine\project\project_path.cpp" />
     <ClCompile Include="server_engine\project\persistence\project_artifact.cpp" />
+    <ClCompile Include="server_engine\project\persistence\compiled_project.cpp" />
     <ClCompile Include="server_engine\project\persistence\source_save.cpp" />
     <ClCompile Include="server_engine\project\persistence\database.cpp" />
     <ClCompile Include="server_engine\project\file\file_context.cpp" />
@@ -160,6 +161,8 @@
     <ClInclude Include="server_engine\project\project_configuration_manifest_store.hpp" />
     <ClInclude Include="server_engine\project\project_path.hpp" />
     <ClInclude Include="server_engine\project\persistence\project_artifact.hpp" />
+    <ClInclude Include="server_engine\project\persistence\compiled_project.hpp" />
+    <ClInclude Include="server_engine\project\persistence\crc64_ecma.hpp" />
     <ClInclude Include="server_engine\project\persistence\source_save.hpp" />
     <ClInclude Include="server_engine\project\persistence\database.hpp" />
     <ClInclude Include="server_engine\project\string\string_table.hpp" />
@@ -195,6 +198,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="server.json" />
+    <None Include="tests\compiled_project_tests.cpp" />
     <None Include="docs\SERVER_ARCHITECTURE.md" />
     <None Include="docs\DIAGNOSTICS.md" />
     <None Include="docs\JSON.md" />

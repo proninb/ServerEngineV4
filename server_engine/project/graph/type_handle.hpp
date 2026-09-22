@@ -12,6 +12,7 @@
 namespace cw::server {
 
 class graph;
+class compiled_project_view;
 
 class type_handle final {
 public:
@@ -45,6 +46,7 @@ private:
     std::uint32_t slot = 0;
 
     friend class graph;
+    friend class compiled_project_view;
 };
 
 static_assert(sizeof(type_handle) == 4);

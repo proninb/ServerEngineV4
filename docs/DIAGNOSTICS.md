@@ -204,6 +204,8 @@ Project construction diagnostics use stable IDs:
 2014 project.manifest_io_failed
 2015 project.manifest_missing
 2026 project.assign_invalid
+2027 project.compiled_invalid
+2028 project.compiled_io_failed
 ```
 
 The retired root-only `project.identity` artifact no longer exists. Diagnostic

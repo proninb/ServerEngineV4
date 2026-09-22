@@ -402,8 +402,10 @@ REBUILD
     replaces the produced artifacts
 ```
 
-`compiled.bin` contains the one compiled Project result used by LOAD/Runtime:
-semantic G plus the ordered Studio-facing Assign table. It may also carry derived
+`compiled.bin` contains the one compiled Project result used by LOAD/Runtime.
+It is mmap-native: semantic strings/identities, G arrays, persisted read indexes,
+and the ordered Studio-facing Assign table are bound directly from the mapped
+file without reconstructing mutable containers. It may also carry derived
 ABI-layout acceleration keyed by exact `{target, pack}`.
 
 `project.manifest`, `source.bin`, and `database.bin` are BUILD
@@ -525,8 +527,15 @@ recursive project.json composition
 Assign is Studio-facing user data only. It performs no semantic variable
 resolution, G mutation, Runtime binding, or file dependency emission.
 
-REBUILD still stops before compiled Project persistence, Runtime/SHM
-construction, and artifact replacement.
+REBUILD now constructs the mmap-native compiled Project image in memory after
+topology finalization. It does not replace `compiled.bin` while Runtime/SHM is
+still incomplete because an unsuccessful lifecycle operation must not publish
+new committed artifacts.
+
+LOAD maps and structurally binds an existing `compiled.bin` without rebuilding
+Graph/string/identity containers. `verify_contents()` remains a separate cold
+integrity/semantic audit and is not part of the normal LOAD hot path. Resident
+mapping ownership and Runtime/SHM construction remain the next boundary.
 
 The implemented BUILD code currently reaches only:
 
@@ -673,4 +682,3 @@ BUILD must update topology sparsely while preserving the same logical
 There is no generation-specific dependency-node identity and no Graph-generation
 model. BUILD may reuse persisted storage internally, but the architectural
 result of LOAD, BUILD, or REBUILD is always one `G`.
-

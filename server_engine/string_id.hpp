@@ -11,6 +11,7 @@
 namespace cw::server {
 
 class string_table;
+class compiled_project_view;
 
 class string_id final {
 public:
@@ -41,6 +42,7 @@ private:
     std::uint32_t slot = 0;
 
     friend class string_table;
+    friend class compiled_project_view;
 };
 
 static_assert(sizeof(string_id) == 4);

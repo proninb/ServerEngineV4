@@ -63,6 +63,8 @@ inline constexpr std::array diagnostic_descriptors{
     diagnostics::project_preprocessing_error,
     diagnostics::project_semantic_error,
     diagnostics::project_assign_invalid,
+    diagnostics::project_compiled_invalid,
+    diagnostics::project_compiled_io_failed,
     diagnostics::project_source_save_invalid,
     diagnostics::project_source_save_io_failed,
     diagnostics::project_startup_unsupported,

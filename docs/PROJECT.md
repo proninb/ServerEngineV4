@@ -528,7 +528,7 @@ The current implementation stops before:
 remaining C++ declaration semantics beyond the first direct Parser slice
 final SourceSave image construction
 completed DB persistence
-compiled-G persistence
+successful-operation compiled.bin replacement
 ABI-layout derivation/persistence
 Runtime
 SHM
@@ -733,6 +733,60 @@ materialize current physical bytes only when the frontend needs source spelling
 The compact lexical representation is therefore DB/build-cache data across
 BUILD, not resident runtime Project state.
 
+### mmap-native compiled Project
+
+The compiled artifact follows the proven V3 persistence principle but not the
+V3 generation/baseline architecture:
+
+```text
+compiled.bin
+    -> mmap
+    -> compiled_project_view
+```
+
+LOAD does not reconstruct `string_table`, `identity_space`, or mutable `graph`.
+The mapped bytes are the read-only compiled Project representation.
+
+V4 `compiled.bin` v1 uses a 256-byte header, a fixed 16-entry section directory,
+64-byte aligned sections, canonical little-endian integers, per-section CRC64,
+directory CRC64, and header CRC64.
+
+Sections are:
+
+```text
+string_core
+string_index
+string_bytes
+identity_core
+identity_index
+types
+type_identities
+members
+member_construction
+derived_types
+objects
+object_identities
+links
+graph_identity_index
+assign_records
+assign_bytes
+```
+
+Numeric `string_id`, `identity_ref`, `type_handle`, `object_handle`,
+`link_handle`, `member_index`, and `type_ref` slots are preserved exactly.
+There is no ID remap and no mutable-container reconstruction on LOAD.
+
+`string_index`, `identity_index`, and `graph_identity_index` are persisted read
+accelerators. They are not another semantic representation and do not create a
+Semantic DB.
+
+Assign remains user data: its records/bytes are persisted beside G but do not use
+semantic IDs and do not participate in Graph lookup or Runtime binding.
+
+The V3 concepts deliberately not carried into V4 are generations, baseline/A-B
+slots, Project Manager, SAVE, and V3 build-cache/source-manager architecture.
+V4 still has one G and the direct artifact layout.
+
 ### Persistence semantics
 
 BUILD owns temporary operation state while constructing the new result.
@@ -785,17 +839,33 @@ implemented yet.
 
 ## LOAD Implementation Boundary
 
-LOAD restores a committed final G. It does not validate `project.json` as a
-substitute for persisted runtime state and must never publish a placeholder
-resident Project.
+LOAD opens only `compiled.bin`; it never validates `project.json` as a substitute
+for persisted compiled state.
 
-Until committed final-G/Runtime/SHM restore exists:
+The normal LOAD hot path is:
 
 ```text
-LOAD
-    -> project.load_incomplete diagnostic
-    -> server_status::unsupported
-    -> no resident Project publication
+compiled.bin
+    -> read-only mmap
+    -> compiled_project_view::bind()
+```
+
+`bind()` validates the fixed format, header/directory CRCs, aligned section
+extents, numeric slot bounds, and persisted index capacities. It does not scan
+section payloads.
+
+`verify_contents()` is the separate cold integrity/semantic audit. It verifies
+per-section CRCs and deep persisted invariants and is not part of normal LOAD.
+
+There is no mutable Graph/string/identity reconstruction and therefore no
+allocation proportional to Project semantic size on LOAD.
+
+Runtime/SHM construction and resident Project ownership of the mapping are still
+not implemented, so successful structural bind currently ends with:
+
+```text
+project.load_incomplete
+server_status::unsupported
 ```
 
 Opening or parsing `project.json` is not part of the LOAD proof.
@@ -940,7 +1010,8 @@ The artifacts have different consumers:
 
 ```text
 compiled.bin
-    compiled G
+    mmap-native semantic string/identity state
+    compiled G arrays + read indexes
     ordered Assign user table
     optional ABI-layout acceleration
     required by LOAD
@@ -1316,4 +1387,3 @@ BUILD against changed source state.
 26. `identity_ref` carries no declaration/definition state; Parser/Semantic writes the compiled semantic result directly into G.
 27. Graph handles identify locations in the final compiled result and are not semantic identity.
 28. V4 has one Graph concept, `G`; persistence reuse does not create Graph generations.
-

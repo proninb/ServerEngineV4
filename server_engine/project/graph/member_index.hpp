@@ -13,6 +13,7 @@
 namespace cw::server {
 
 class graph;
+class compiled_project_view;
 
 class member_index final {
 public:
@@ -46,6 +47,7 @@ private:
     std::uint32_t index = invalid_value;
 
     friend class graph;
+    friend class compiled_project_view;
 };
 
 static_assert(sizeof(member_index) == 4);

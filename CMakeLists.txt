@@ -48,6 +48,7 @@ add_executable(ServerEngineV4
     server_engine/project/project_configuration_manifest_store.cpp
     server_engine/project/project_path.cpp
     server_engine/project/persistence/project_artifact.cpp
+    server_engine/project/persistence/compiled_project.cpp
     server_engine/project/persistence/source_save.cpp
     server_engine/project/persistence/database.cpp
     server_engine/project/file/file_context.cpp
@@ -81,4 +82,34 @@ if(MSVC)
     target_compile_options(ServerEngineV4 PRIVATE /W4 /permissive-)
 else()
     target_compile_options(ServerEngineV4 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+include(CTest)
+
+if(BUILD_TESTING)
+    add_executable(ServerEngineV4Tests
+        tests/compiled_project_tests.cpp
+        server_engine/project/string/string_table.cpp
+        server_engine/project/semantic/identity.cpp
+        server_engine/project/graph/graph.cpp
+        server_engine/project/assign/assign_table.cpp
+        server_engine/project/file/file_identity.cpp
+        server_engine/project/persistence/project_artifact.cpp
+        server_engine/project/persistence/compiled_project.cpp
+    )
+
+    target_include_directories(ServerEngineV4Tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(ServerEngineV4Tests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4Tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(
+        NAME compiled_project
+        COMMAND ServerEngineV4Tests
+    )
 endif()

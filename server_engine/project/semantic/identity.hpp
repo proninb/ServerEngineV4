@@ -24,6 +24,7 @@ enum class identity_kind : std::uint8_t {
 };
 
 class identity_space;
+class compiled_project_view;
 
 class identity_ref final {
 public:
@@ -79,6 +80,7 @@ private:
     std::uint32_t packed = 0;
 
     friend class identity_space;
+    friend class compiled_project_view;
 };
 
 static_assert(sizeof(identity_ref) == 4);
