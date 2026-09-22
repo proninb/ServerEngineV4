@@ -400,13 +400,14 @@ struct directory_index_slot final {
 
 #if defined(_WIN32)
 
-// Compact construction-only directory dedupe. Keys follow the same platform
-// filesystem-equivalence contract as File Context; original paths are retained
-// only for the later native directory-identity query.
+// Compact construction-only directory dedupe. The canonical key owns lookup
+// equivalence only; the original normalized path is retained separately because
+// filesystem I/O must not use a case-folded lookup key on case-sensitive paths.
 class unique_directory_set final {
 public:
     struct entry final {
         filesystem_path_key key;
+        std::filesystem::path path;
         std::uint32_t flags = 0;
     };
 
@@ -483,6 +484,7 @@ public:
 
                     entries.push_back({
                         std::move(key),
+                        path.lexically_normal(),
                         flags,
                     });
 
@@ -920,7 +922,7 @@ private:
             std::uint64_t reference = 0;
 
             if (!query_directory_identity(
-                    directory.key.value,
+                    directory.path,
                     volume,
                     reference) ||
                 volume !=
