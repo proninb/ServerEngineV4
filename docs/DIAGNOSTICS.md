@@ -203,6 +203,7 @@ Project construction diagnostics use stable IDs:
 2013 project.manifest_invalid
 2014 project.manifest_io_failed
 2015 project.manifest_missing
+2026 project.assign_invalid
 ```
 
 The retired root-only `project.identity` artifact no longer exists. Diagnostic
@@ -243,6 +244,15 @@ project.manifest_invalid
 project.manifest_io_failed
     manifest storage I/O failed
 ```
+
+Assign syntax failures use:
+
+```text
+2026 project.assign_invalid
+```
+
+The diagnostic points at the offending `.assign` line. Assign syntax validation
+does not perform semantic variable lookup or Graph validation.
 
 Human-readable detail text may evolve. Numeric IDs and symbolic names are the
 stable machine-facing contracts.

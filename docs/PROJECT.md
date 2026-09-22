@@ -279,6 +279,38 @@ B.IN = A.OUT;
 A repeated identical link is idempotent. A second different source for the same
 target endpoint is a semantic conflict.
 
+## Assign user-data boundary
+
+Assign is not part of C++ semantic G.
+
+```text
+.assign bytes
+    -> assign parser
+    -> assign_table
+```
+
+Supported line forms are:
+
+```text
+source<TAB>target
+target=source
+```
+
+Both produce the same ordered record:
+
+```text
+{ source, target }
+```
+
+`assign_table` stores 16-byte offset/length records over one compact char arena.
+It intentionally has no `string_id`, `identity_ref`, Graph handle, hash lookup,
+sort, semantic variable validation, Runtime binding, or dependency-edge
+emission.
+
+Assign data belongs to the compiled Project result because Studio/user consumers
+need it. When `compiled.bin` persistence is implemented, the ordered Assign
+table is persisted/restored alongside G; it is not BUILD acceleration state.
+
 ## Mode-specific construction contexts
 
 There is no universal Project construction context and no shared
@@ -427,8 +459,8 @@ root project.json
     -> fresh lexical construction
     -> fresh string_id space
     -> fresh identity_ref space
+    -> parse Assign inputs -> assign_table
     -> Parser / Semantic -> G
-    -> Assign resolution -> G
     -> complete dependency topology
     -> encode BUILD acceleration state
     -> derive ABI layout from G + Server ABI
@@ -470,6 +502,7 @@ root project.json
     -> complete-file lexical generation
     -> sparse preprocessing directive anchors
     -> Assign exact-byte materialization
+    -> ordered Assign user-table construction
     -> single Parser/Semantic preprocessing execution
          active quoted-include discovery
          append-only discovered Header file_id values
@@ -493,8 +526,6 @@ The current implementation stops before:
 
 ```text
 remaining C++ declaration semantics beyond the first direct Parser slice
-Assign grammar and semantic variable resolution into G
-terminal REBUILD dependency-topology finalization
 final SourceSave image construction
 completed DB persistence
 compiled-G persistence
@@ -508,9 +539,9 @@ The `identity_ref`/`identity_space` foundation already exists. Parser/Semantic h
 not yet populated the Project semantic identities or G.
 
 The persistence subsystem provides direct artifact paths and the `source.bin`
-encoder/validator. REBUILD must not invoke the SourceSave
-encoder until Semantic/Assign processing has emitted every direct dependency
-and `finalize_dependency_topology()` has completed.
+encoder/validator. Assign does not emit file dependencies. REBUILD finalizes the
+File Context topology after Parser/Semantic include discovery; SourceSave
+encoding may consume that finalized topology.
 
 Because no G is produced yet, the incomplete REBUILD path must not publish any
 partial construction artifact as newly persisted Project state.
@@ -910,6 +941,7 @@ The artifacts have different consumers:
 ```text
 compiled.bin
     compiled G
+    ordered Assign user table
     optional ABI-layout acceleration
     required by LOAD
 

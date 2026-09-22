@@ -100,6 +100,7 @@
     <ClCompile Include="server_engine\project\frontend\directive_decoder.cpp" />
     <ClCompile Include="server_engine\project\frontend\directive_executor.cpp" />
     <ClCompile Include="server_engine\project\frontend\source_discovery.cpp" />
+    <ClCompile Include="server_engine\project\assign\assign_table.cpp" />
     <ClCompile Include="server_engine\project\assign\assign_input.cpp" />
     <ClCompile Include="server_engine\project\construction\execution_lanes_windows.cpp" />
     <ClCompile Include="server_engine\project\frontend\lexical_stream.cpp" />
@@ -177,6 +178,7 @@
     <ClInclude Include="server_engine\project\frontend\directive_decoder.hpp" />
     <ClInclude Include="server_engine\project\frontend\directive_executor.hpp" />
     <ClInclude Include="server_engine\project\frontend\source_discovery.hpp" />
+    <ClInclude Include="server_engine\project\assign\assign_table.hpp" />
     <ClInclude Include="server_engine\project\assign\assign_input.hpp" />
     <ClInclude Include="server_engine\project\construction\execution_lanes.hpp" />
     <ClInclude Include="server_engine\project\frontend\lexical_stream.hpp" />

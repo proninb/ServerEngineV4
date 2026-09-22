@@ -153,6 +153,42 @@ server_status rebuild_project(
         return assignments_materialized;
     }
 
+    assign_parse_failure assign_failure;
+
+    const auto assignments_parsed =
+        parse_assign_inputs(
+            context.files,
+            context.assigns,
+            &assign_failure);
+
+    if (!succeeded(assignments_parsed)) {
+        if (assign_failure.file) {
+            const source_range range{
+                assign_failure.offset,
+                assign_failure.length,
+            };
+
+            const auto emitted =
+                emit_source_failure(
+                    context.files,
+                    assign_failure.file,
+                    range,
+                    diagnostics::project_assign_invalid,
+                    assign_failure.detail.empty()
+                        ? std::string_view{
+                            "Assign input is invalid"}
+                        : assign_failure.detail,
+                    operation,
+                    diagnostics);
+
+            return succeeded(emitted)
+                ? assignments_parsed
+                : emitted;
+        }
+
+        return assignments_parsed;
+    }
+
     parser_failure semantic_failure;
 
     const auto parsed =
@@ -200,6 +236,14 @@ server_status rebuild_project(
         return parsed;
     }
 
+    const auto topology_finalized =
+        context.files.
+            finalize_dependency_topology();
+
+    if (!succeeded(topology_finalized)) {
+        return topology_finalized;
+    }
+
     // The manifest becomes authoritative only with the complete successful
     // REBUILD artifact persistence is not implemented yet.
 
@@ -208,7 +252,7 @@ server_status rebuild_project(
             diagnostics::project_rebuild_incomplete,
             operation)
             .detail(
-                "Project configuration manifest, initial physical source lexical preparation, Assign byte materialization, and single-pass preprocessing/include discovery with direct Parser/Semantic construction of record/object G state are complete; remaining C++ declaration semantics, Assign grammar/resolution into G, terminal dependency-topology finalization, compiled-G persistence, Runtime/SHM construction, and persisted artifact replacement are not implemented yet")
+                "Project configuration manifest, physical source lexical preparation, Assign user-table construction, single-pass preprocessing/include discovery with direct Parser/Semantic G construction, and terminal dependency-topology finalization are complete; remaining C++ declaration semantics, compiled Project persistence, Runtime/SHM construction, and persisted artifact replacement are not implemented yet")
             .build());
 
     return server_status::unsupported;

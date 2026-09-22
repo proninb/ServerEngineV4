@@ -139,14 +139,21 @@ children
 }
 ```
 
-`assign` is a lightweight construction input used by Studio-facing special
-tasks to describe user connections. It references existing variables and does
-not declare types or create runtime objects.
+`assign` is lightweight Studio-facing user data for a special task. It does
+not declare types, create runtime objects, resolve `identity_ref`, mutate G, or
+create File Context dependency edges.
 
-Its exact bytes may be materialized before semantic construction, but variable
-resolution cannot occur until Parser/Semantic has established the referenced
-identities. The `.assign` grammar is a separate syntax-domain contract; Project
-configuration does not define or infer that grammar.
+The current line grammar accepts either:
+
+```text
+source<TAB>target
+target=source
+```
+
+Both forms normalize to the same ordered `{source, target}` record in
+`assign_table`. Leading/trailing spaces and tabs around each value are removed.
+Blank lines are ignored. Records preserve Project/file/line order; there is no
+sort, lookup, or semantic existence check for either name.
 
 ### project
 

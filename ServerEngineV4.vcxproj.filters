@@ -141,6 +141,9 @@
     <ClCompile Include="server_engine\project\frontend\source_discovery.cpp">
       <Filter>server_engine\project\frontend</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\project\assign\assign_table.cpp">
+      <Filter>server_engine\project\assign</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\project\assign\assign_input.cpp">
       <Filter>server_engine\project\assign</Filter>
     </ClCompile>
@@ -373,6 +376,9 @@
     </ClInclude>
     <ClInclude Include="server_engine\project\frontend\source_discovery.hpp">
       <Filter>server_engine\project\frontend</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\assign\assign_table.hpp">
+      <Filter>server_engine\project\assign</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\assign\assign_input.hpp">
       <Filter>server_engine\project\assign</Filter>

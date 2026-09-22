@@ -7,6 +7,7 @@
 #pragma once
 
 #include "project_configuration_manifest.hpp"
+#include "assign/assign_table.hpp"
 #include "preprocessor_configuration.hpp"
 #include "file/file_context.hpp"
 #include "frontend/lexical_generation.hpp"
@@ -59,6 +60,7 @@ public:
     string_table strings;
     identity_space identities;
     graph G;
+    assign_table assigns;
 
     preprocessor_configuration preprocessor;
 };

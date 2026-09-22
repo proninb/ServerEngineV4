@@ -38,6 +38,7 @@ add_executable(ServerEngineV4
     server_engine/project/frontend/directive_decoder.cpp
     server_engine/project/frontend/directive_executor.cpp
     server_engine/project/frontend/source_discovery.cpp
+    server_engine/project/assign/assign_table.cpp
     server_engine/project/assign/assign_input.cpp
     server_engine/project/frontend/lexical_stream.cpp
     server_engine/project/frontend/lexer.cpp

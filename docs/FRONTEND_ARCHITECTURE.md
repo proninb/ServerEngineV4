@@ -767,24 +767,35 @@ Either may contribute declarations/objects when supported by Parser/Semantic;
 linkage/storage-duration semantics such as namespace-scope `static` remain a
 separate semantic contract.
 
-Topology remains staged until Semantic-backed Assign resolution and every other
-dependency producer reaches closure. The construction coordinator then calls
-`finalize_dependency_topology()` exactly once.
+Topology remains staged through Parser/Semantic include discovery. Assign input
+does not emit dependency relations. After Parser/Semantic reaches closure, the
+construction coordinator calls `finalize_dependency_topology()` exactly once.
 
 The current include-search policy in this slice supports quoted includes relative
 to the including physical file. Angled includes remain fail-closed until include
 roots become an explicit root Project configuration contract.
 
-### Stage 2: Assign Input Materialization
+### Stage 2: Assign User Table
 
-After Header/Source closure, each `file_kind::assign` input is materialized into
-File Context as one immutable exact-byte image. Acquisition is parallel in
-bounded `O(CPU lanes)` batches; File Context publication remains single-owner.
+Each `file_kind::assign` input is materialized into File Context as one immutable
+exact-byte image. Acquisition is parallel in bounded `O(CPU lanes)` batches;
+File Context publication remains single-owner.
 
-This stage does not invent or parse an `.assign` grammar, does not resolve
-variables, and does not emit dependency edges.
+The Assign parser is deliberately independent of C++ Semantic. It accepts:
 
-### Stage 3: Parser / Semantic -> G, Assign Resolution, Topology Finalization
+```text
+source<TAB>target
+target=source
+```
+
+and appends normalized `{source, target}` text pairs to one ordered
+`assign_table`. The table uses a compact text arena and 16-byte records. It has
+no `string_id`, `identity_ref`, Graph handle, lookup/hash table, or sort.
+
+Assign parsing performs no variable existence/type validation, no G mutation,
+and no dependency-topology emission.
+
+### Stage 3: Parser / Semantic -> G and Topology Finalization
 
 Parser/Semantic consumes retained lexical state without lexing source bytes
 again and writes the compiled semantic result directly into `G`. There is no
@@ -826,11 +837,10 @@ semantic root: ordinary active tokens flow to Parser/Semantic, while active
 includes synchronously enter the included physical input under the same
 preprocessor and semantic scope.
 
-After the required identities/objects exist in G, the Assign syntax domain can
-parse its materialized bytes, resolve references, write the resolved connection
-into G, and stage any additional file-level dependency relations. Only then may
-the construction coordinator call `file_context::finalize_dependency_topology()`
-exactly once.
+Assign is not a semantic producer and never waits for identities/objects in G.
+Once Parser/Semantic has completed active include discovery, no remaining Assign
+dependency producer exists. The construction coordinator may therefore call
+`file_context::finalize_dependency_topology()` exactly once.
 
 `lexical_generation` remains direct-indexed construction storage:
 
@@ -1104,8 +1114,11 @@ REBUILD physical source preparation
     no preprocessing execution
     active includes discovered only by Parser/Semantic
 
-Assign input materialization
-    exact immutable bytes only
+Assign user table
+    exact immutable input bytes
+    source<TAB>target | target=source
+    ordered compact {source,target} records
+    no semantic resolution / G mutation / dependency edges
 ```
 
 Implemented physical BUILD analysis foundation:
@@ -1132,7 +1145,6 @@ Architecture still not integrated/implemented:
 ```text
 BUILD File Context sparse mutation over source_save_view
 BUILD string_table / identity_ref lineage reuse
-Assign grammar / semantic reference resolution -> G
 BUILD affected dependency replacement
 REBUILD terminal dependency finalization at the final producer boundary
 compiled-G persistence

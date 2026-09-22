@@ -256,6 +256,14 @@ inline constexpr diagnostic_descriptor project_semantic_error{
     "Project source semantic construction failed",
 };
 
+inline constexpr diagnostic_descriptor project_assign_invalid{
+    diagnostic_id{2026},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.assign_invalid",
+    "Project Assign input is invalid",
+};
+
 inline constexpr diagnostic_descriptor project_source_save_invalid{
     diagnostic_id{2023},
     diagnostic_domain::project,

@@ -402,8 +402,9 @@ REBUILD
     replaces the produced artifacts
 ```
 
-`compiled.bin` contains the one compiled Project result used by LOAD/Runtime and
-may carry derived ABI-layout acceleration keyed by exact `{target, pack}`.
+`compiled.bin` contains the one compiled Project result used by LOAD/Runtime:
+semantic G plus the ordered Studio-facing Assign table. It may also carry derived
+ABI-layout acceleration keyed by exact `{target, pack}`.
 
 `project.manifest`, `source.bin`, and `database.bin` are BUILD
 acceleration/lineage state. LOAD does not open them.
@@ -513,13 +514,19 @@ recursive project.json composition
     -> Header/Source exact-byte materialization
     -> retained lexical generation
     -> sparse directive anchors
-    -> deterministic executed quoted-include closure
     -> Assign exact-byte materialization
+    -> ordered Assign user-table construction
+    -> one Parser/Semantic preprocessing execution
+         -> active quoted-include discovery
+         -> direct G construction
+    -> terminal dependency-topology finalization
 ```
 
-It stops before Parser/Semantic construction of G, Assign resolution,
-terminal dependency-topology finalization, compiled-G persistence, and the
-artifact replacement.
+Assign is Studio-facing user data only. It performs no semantic variable
+resolution, G mutation, Runtime binding, or file dependency emission.
+
+REBUILD still stops before compiled Project persistence, Runtime/SHM
+construction, and artifact replacement.
 
 The implemented BUILD code currently reaches only:
 
