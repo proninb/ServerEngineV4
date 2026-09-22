@@ -30,75 +30,19 @@ namespace {
     return server_status::unsupported;
 }
 
-[[nodiscard]] server_status report_baseline_open(
+[[nodiscard]] server_status report_manifest_open(
     read_only_file_mapping_result result,
     const std::filesystem::path& path,
     operation_id operation,
     diagnostic_collection& diagnostics) {
 
-    if (result ==
-        read_only_file_mapping_result::
-            not_found) {
-
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_baseline_missing,
-                operation)
-                .file(path)
-                .detail(
-                    "BUILD requires baseline.bin from the last successful coordinated commit")
-                .build());
-
-        return server_status::
-            project_artifact_invalid;
-    }
-
-    if (result ==
-        read_only_file_mapping_result::
-            empty) {
-
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_baseline_invalid,
-                operation)
-                .file(path)
-                .detail(
-                    "baseline.bin is empty")
-                .build());
-
-        return server_status::
-            project_artifact_invalid;
-    }
-
-    diagnostics.emit(
-        diagnostic(
-            diagnostics::project_baseline_io_failed,
-            operation)
-            .file(path)
-            .detail(
-                "Cannot memory-map baseline.bin")
-            .build());
-
-    return server_status::io_error;
-}
-
-[[nodiscard]] server_status report_manifest_open(
-    project_artifact_open_result result,
-    const std::filesystem::path& path,
-    operation_id operation,
-    diagnostic_collection& diagnostics) {
-
-    if (result ==
-        project_artifact_open_result::
-            io_failed) {
-
+    if (result == read_only_file_mapping_result::failed) {
         diagnostics.emit(
             diagnostic(
                 diagnostics::project_manifest_io_failed,
                 operation)
                 .file(path)
-                .detail(
-                    "Cannot open committed Project configuration manifest")
+                .detail("Cannot memory-map project.manifest")
                 .build());
 
         return server_status::io_error;
@@ -106,42 +50,33 @@ namespace {
 
     diagnostics.emit(
         diagnostic(
-            result ==
-                    project_artifact_open_result::
-                        not_found
+            result == read_only_file_mapping_result::not_found
                 ? diagnostics::project_manifest_missing
                 : diagnostics::project_manifest_invalid,
             operation)
             .file(path)
             .detail(
-                result ==
-                        project_artifact_open_result::
-                            not_found
-                    ? "Active baseline slot does not contain project.manifest"
-                    : "Committed project.manifest does not match baseline.bin artifact proof")
+                result == read_only_file_mapping_result::not_found
+                    ? "BUILD requires project.manifest; REBUILD is required when persisted BUILD state is missing"
+                    : "Persisted project.manifest is empty")
             .build());
 
-    return server_status::
-        project_artifact_invalid;
+    return server_status::project_artifact_invalid;
 }
 
 [[nodiscard]] server_status report_source_open(
-    project_artifact_open_result result,
+    read_only_file_mapping_result result,
     const std::filesystem::path& path,
     operation_id operation,
     diagnostic_collection& diagnostics) {
 
-    if (result ==
-        project_artifact_open_result::
-            io_failed) {
-
+    if (result == read_only_file_mapping_result::failed) {
         diagnostics.emit(
             diagnostic(
                 diagnostics::project_source_save_io_failed,
                 operation)
                 .file(path)
-                .detail(
-                    "Cannot open committed SourceSave artifact")
+                .detail("Cannot memory-map source.bin")
                 .build());
 
         return server_status::io_error;
@@ -153,15 +88,12 @@ namespace {
             operation)
             .file(path)
             .detail(
-                result ==
-                        project_artifact_open_result::
-                            not_found
-                    ? "Active baseline slot does not contain source.bin"
-                    : "Committed source.bin does not match baseline.bin artifact proof")
+                result == read_only_file_mapping_result::not_found
+                    ? "BUILD requires source.bin; REBUILD is required when persisted BUILD state is missing"
+                    : "Persisted source.bin is empty")
             .build());
 
-    return server_status::
-        project_artifact_invalid;
+    return server_status::project_artifact_invalid;
 }
 
 }
@@ -183,93 +115,33 @@ server_status build_project(
     if (make_project_artifact_layout(
             project_path,
             context.settings.files,
-            layout) !=
-        project_artifact_layout_result::
-            success) {
+            layout) != project_artifact_layout_result::success) {
 
         diagnostics.emit(
             diagnostic(
-                diagnostics::project_baseline_io_failed,
+                diagnostics::project_build_incomplete,
                 operation)
                 .file(project_path)
-                .detail(
-                    "Cannot construct Project persistence layout")
+                .detail("Cannot construct Project artifact layout")
                 .build());
 
         return server_status::io_error;
     }
 
     read_only_file_mapping
-        baseline_mapping;
-
-    const auto baseline_opened =
-        baseline_mapping.open(
-            layout.baseline);
-
-    if (baseline_opened !=
-        read_only_file_mapping_result::
-            success) {
-
-        return report_baseline_open(
-            baseline_opened,
-            layout.baseline,
-            operation,
-            diagnostics);
-    }
-
-    project_baseline_descriptor baseline;
-
-    if (decode_project_baseline_image(
-            baseline_mapping.bytes(),
-            baseline) !=
-        project_baseline_image_result::
-            success) {
-
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_baseline_invalid,
-                operation)
-                .file(layout.baseline)
-                .detail(
-                    "baseline.bin failed format or checksum validation")
-                .build());
-
-        return server_status::
-            project_artifact_invalid;
-    }
-
-    const auto slot_index =
-        static_cast<std::size_t>(
-            baseline.slot);
-
-    if (slot_index >=
-        layout.slots.size()) {
-
-        return server_status::
-            project_artifact_invalid;
-    }
-
-    const auto& slot =
-        layout.slots[slot_index];
-
-    read_only_file_mapping
         manifest_mapping;
 
     const auto manifest_opened =
-        open_verified_project_artifact(
-            slot.manifest,
-            baseline.artifact(
-                project_artifact_kind::
-                    manifest),
-            manifest_mapping);
+        manifest_mapping.open(
+            layout.manifest);
 
     if (manifest_opened !=
-        project_artifact_open_result::
+        read_only_file_mapping_result::
             success) {
 
         return report_manifest_open(
             manifest_opened,
-            slot.manifest,
+            layout.manifest,
             operation,
             diagnostics);
     }
@@ -293,7 +165,7 @@ server_status build_project(
                     : diagnostics::
                         project_manifest_invalid,
                 operation)
-                .file(slot.manifest)
+                .file(layout.manifest)
                 .detail(
                     "Committed Project configuration manifest could not be decoded")
                 .build());
@@ -358,20 +230,16 @@ server_status build_project(
         source_mapping;
 
     const auto source_opened =
-        open_verified_project_artifact(
-            slot.source_save,
-            baseline.artifact(
-                project_artifact_kind::
-                    source_save),
-            source_mapping);
+        source_mapping.open(
+            layout.source_save);
 
     if (source_opened !=
-        project_artifact_open_result::
+        read_only_file_mapping_result::
             success) {
 
         return report_source_open(
             source_opened,
-            slot.source_save,
+            layout.source_save,
             operation,
             diagnostics);
     }
@@ -386,7 +254,7 @@ server_status build_project(
             diagnostic(
                 diagnostics::project_source_save_invalid,
                 operation)
-                .file(slot.source_save)
+                .file(layout.source_save)
                 .detail(
                     "Committed source.bin failed structural binding")
                 .build());
@@ -414,7 +282,7 @@ server_status build_project(
                     : diagnostics::
                         project_source_save_invalid,
                 operation)
-                .file(slot.source_save)
+                .file(layout.source_save)
                 .detail(
                     "Physical change detection over committed SourceSave failed")
                 .build());
@@ -435,7 +303,7 @@ server_status build_project(
             diagnostic(
                 diagnostics::project_source_save_invalid,
                 operation)
-                .file(slot.source_save)
+                .file(layout.source_save)
                 .detail(
                     "OLD reverse dependency topology failed while computing affected closure")
                 .build());
@@ -447,7 +315,7 @@ server_status build_project(
 
     try {
         detail =
-            "Physical baseline analysis complete: backend=" +
+            "Persisted SourceSave analysis complete: backend=" +
             std::to_string(
                 static_cast<std::uint32_t>(
                     scan.metrics.backend)) +

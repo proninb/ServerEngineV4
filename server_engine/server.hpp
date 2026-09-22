@@ -37,7 +37,7 @@ public:
         operation_id operation,
         diagnostic_collection& diagnostics);
 
-    // Incremental construction from the last successful persisted baseline.
+    // Incremental construction from persisted BUILD state.
     [[nodiscard]] server_status build(
         const std::filesystem::path& project_path,
         operation_id operation,

@@ -1,5 +1,5 @@
 /*
- * Persisted SourceSave physical baseline.
+ * Persisted SourceSave BUILD state.
  *
  * source.bin stores file_id lineage, physical paths, SHA-256 byte identity,
  * direct forward/reverse topology, and optional Windows USN journal acceleration
@@ -132,7 +132,7 @@ struct source_save_change_scan_metrics final {
     bool fallback = false;
 };
 
-// Checkpoint for the baseline produced by this BUILD. It is captured before
+// Checkpoint for source.bin produced by this BUILD. It is captured before
 // dirty detection begins. Filesystem changes after that point remain visible to
 // the next BUILD. Portable fallback clears it because journal identity
 // continuity was not used to establish this BUILD.
@@ -154,12 +154,12 @@ struct source_save_change_scan final {
     std::span<const std::byte> image) noexcept;
 
 [[nodiscard]] server_status scan_source_save_changes(
-    const source_save_view& baseline,
+    const source_save_view& persisted,
     std::vector<file_id>& dirty,
     source_save_change_scan* scan = nullptr) noexcept;
 
 [[nodiscard]] server_status collect_source_save_affected(
-    const source_save_view& baseline,
+    const source_save_view& persisted,
     std::span<const file_id> dirty,
     std::vector<file_id>& affected) noexcept;
 

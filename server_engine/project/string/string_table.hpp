@@ -3,7 +3,7 @@
  *
  * string_table owns one dense string_id space and immutable spelling bytes for
  * the current construction. It is single-owner and intentionally has no mutex,
- * baseline overlay, persistence policy, or semantic responsibility.
+ * persisted-state overlay, persistence policy, or semantic responsibility.
  */
 #pragma once
 

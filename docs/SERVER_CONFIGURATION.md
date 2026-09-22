@@ -13,7 +13,7 @@ The JSON parser supports:
 
 ```jsonc
 {
-  "version": 3,
+  "version": 4,
 
   "settings": {
     "abi": {
@@ -25,8 +25,7 @@ The JSON parser supports:
       "manifest": "project.manifest",
       "source_save": "source.bin",
       "database": "database.bin",
-      "compiled": "compiled.bin",
-      "baseline": "baseline.bin"
+      "compiled": "compiled.bin"
     }
   },
 
@@ -98,8 +97,7 @@ override it.
     "manifest": "project.manifest",
     "source_save": "source.bin",
     "database": "database.bin",
-    "compiled": "compiled.bin",
-    "baseline": "baseline.bin"
+    "compiled": "compiled.bin"
   }
 }
 ```
@@ -110,7 +108,7 @@ Each value is one non-empty relative filename:
 no absolute path
 no directory component
 no "." / ".."
-all five names are distinct under platform filesystem semantics
+all four names are distinct under platform filesystem semantics
 ```
 
 Filename equivalence follows the common filesystem path contract:
@@ -130,20 +128,23 @@ Mode usage:
 
 ```text
 LOAD
-    baseline
     compiled
 
 BUILD
-    baseline
     manifest
     source_save
     database
     compiled
 
 REBUILD
-    produces fresh manifest/source_save/database/compiled
-    and publishes them through baseline
+    constructs fresh state and replaces
+    manifest/source_save/database/compiled
 ```
+
+`compiled` is the only persisted artifact required by LOAD.
+`manifest`, `source_save`, and `database` are BUILD acceleration/lineage state.
+If required BUILD state is missing or invalid, incremental BUILD cannot proceed
+and REBUILD is required.
 
 The configuration parser reports schema failures against their fully qualified
 context, for example:
@@ -205,11 +206,11 @@ LOAD <project-path>
 
 BUILD <project-path>
     requires UNLOADED
-    reuses the last successful SourceSave/DB baseline
+    reuses persisted SourceSave/DB BUILD state
 
 REBUILD <project-path>
     requires UNLOADED
-    ignores the old incremental baseline
+    ignores persisted incremental BUILD state
 
 UNLOAD
     requires LOADED
@@ -233,11 +234,11 @@ LOAD
     -> LOADED
 
 BUILD
-    committed configuration + SourceSave + DB + final-G baseline
+    persisted configuration + SourceSave + DB + compiled G
     -> exact dirty detection
     -> affected reverse closure
     -> sparse construction
-    -> coordinated durable commit
+    -> replace persisted artifacts
     -> Runtime / SHM
     -> LOADED
 
@@ -245,7 +246,7 @@ REBUILD
     fresh configuration composition
     -> fresh SourceSave / DB
     -> fresh final G
-    -> coordinated durable commit
+    -> replace persisted artifacts
     -> Runtime / SHM
     -> LOADED
 ```

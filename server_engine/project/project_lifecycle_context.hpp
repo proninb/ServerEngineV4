@@ -27,7 +27,7 @@ public:
     const server_settings_configuration& settings;
 };
 
-// Temporary BUILD state over the last successful persisted construction baseline.
+// Temporary BUILD state over persisted construction state.
 class build_context final {
 public:
     explicit build_context(

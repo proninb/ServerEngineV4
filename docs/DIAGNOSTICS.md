@@ -159,7 +159,7 @@ Examples:
 ```text
 settings requires abi and files
 settings.abi requires target and pack
-settings.files requires manifest, source_save, database, compiled, and baseline
+settings.files requires manifest, source_save, database, and compiled
 settings.files.manifest must be a single relative file name
 unknown property in settings.files: foo
 duplicate property in settings.abi: pack
@@ -182,7 +182,7 @@ one diagnostic_collection
 Nested construction layers append to that same caller-owned collection.
 
 A failed BUILD leaves no resident Project. The previous successful persisted
-baseline may remain intact for future BUILD acceleration, but diagnostics for the
+persisted BUILD state may remain available for future BUILD acceleration, but diagnostics for the
 failed operation describe the current attempted source state.
 
 ## Current Project Construction Diagnostics
@@ -235,7 +235,7 @@ project.configuration_cycle
     recursive type:"project" composition contains a cycle
 
 project.manifest_missing
-    BUILD has no committed configuration manifest in the selected Project baseline
+    BUILD has no persisted project.manifest; REBUILD is required
 
 project.manifest_invalid
     manifest format/checksum/aggregate validation failed

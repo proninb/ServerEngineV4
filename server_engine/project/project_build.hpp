@@ -1,7 +1,7 @@
 /*
  * Project BUILD pipeline.
  *
- * BUILD incrementally constructs from the last successful persisted baseline
+ * BUILD incrementally constructs from persisted BUILD state
  * selected by the explicit root Project path. Resident Project state is never
  * a BUILD input.
  */

@@ -107,7 +107,6 @@ struct server_files_configuration final {
     std::filesystem::path source_save;
     std::filesystem::path database;
     std::filesystem::path compiled;
-    std::filesystem::path baseline;
 };
 
 // Process-wide low-level Server settings shared by all Project lifecycle modes.
@@ -118,7 +117,7 @@ struct server_settings_configuration final {
 
 // Process-level configuration loaded before communication and Project lifecycle begin.
 struct server_configuration {
-    // server.json schema version. Current V4 schema value is 3.
+    // server.json schema version. Current schema value is 4.
     std::uint32_t version = 0;
 
     // Required process-wide low-level Server settings.

@@ -15,7 +15,7 @@ enum class server_command_kind {
     // Restore one persisted Project while the Server is UNLOADED.
     load,
 
-    // Incrementally construct one Project from its persisted baseline while UNLOADED.
+    // Incrementally construct one Project from persisted BUILD state while UNLOADED.
     build,
 
     // Destroy the currently active Project and return to UNLOADED.

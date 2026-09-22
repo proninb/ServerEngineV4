@@ -2147,14 +2147,14 @@ enum class journal_scan_result : std::uint8_t {
 #if defined(_WIN32)
 
 [[nodiscard]] journal_scan_result scan_usn_journal(
-    const source_save_view& baseline,
+    const source_save_view& persisted,
     std::vector<file_id>& dirty,
     source_save_change_scan_metrics& metrics) noexcept {
 
     dirty.clear();
 
     const auto checkpoint =
-        baseline.change_checkpoint();
+        persisted.change_checkpoint();
 
     if (!checkpoint ||
         checkpoint.backend !=
@@ -2165,7 +2165,7 @@ enum class journal_scan_result : std::uint8_t {
 
     source_save_file_view first;
 
-    if (!baseline.file(
+    if (!persisted.file(
             file_id{1},
             first) ||
         first.path_utf8.empty()) {
@@ -2253,7 +2253,7 @@ enum class journal_scan_result : std::uint8_t {
         // approximately 128 KiB.
         std::vector<std::uint64_t>
             candidates(
-                (baseline.file_count() + 63) /
+                (persisted.file_count() + 63) /
                     64);
 
         auto start =
@@ -2357,7 +2357,7 @@ enum class journal_scan_result : std::uint8_t {
 
                     if ((record.Reason &
                          topology_reasons) != 0 &&
-                        (baseline.
+                        (persisted.
                              directory_watch_flags(
                                  record.
                                      FileReferenceNumber) &
@@ -2370,7 +2370,7 @@ enum class journal_scan_result : std::uint8_t {
                 }
                 else {
                     const auto file =
-                        baseline.
+                        persisted.
                             find_file_reference(
                                 record.
                                     FileReferenceNumber);
@@ -2442,7 +2442,7 @@ enum class journal_scan_result : std::uint8_t {
                     bit;
 
                 if (zero_based >=
-                    baseline.file_count()) {
+                    persisted.file_count()) {
 
                     dirty.clear();
                     return journal_scan_result::
@@ -2455,7 +2455,7 @@ enum class journal_scan_result : std::uint8_t {
 
                 source_save_file_view state;
 
-                if (!baseline.file(
+                if (!persisted.file(
                         file,
                         state) ||
                     !state.current_member ||
@@ -2494,7 +2494,7 @@ enum class journal_scan_result : std::uint8_t {
 #endif
 
 [[nodiscard]] server_status scan_exact_fallback(
-    const source_save_view& baseline,
+    const source_save_view& persisted,
     std::vector<file_id>& dirty,
     source_save_change_scan_metrics& metrics) noexcept {
 
@@ -2503,13 +2503,13 @@ enum class journal_scan_result : std::uint8_t {
 
     try {
         dirty.reserve(
-            baseline.file_count() /
+            persisted.file_count() /
                 32 +
             1);
 
         for (std::size_t index = 0;
              index <
-                baseline.file_count();
+                persisted.file_count();
              ++index) {
 
             const file_id file{
@@ -2518,7 +2518,7 @@ enum class journal_scan_result : std::uint8_t {
 
             source_save_file_view state;
 
-            if (!baseline.file(
+            if (!persisted.file(
                     file,
                     state)) {
 
@@ -2596,7 +2596,7 @@ enum class journal_scan_result : std::uint8_t {
 }
 
 server_status scan_source_save_changes(
-    const source_save_view& baseline,
+    const source_save_view& persisted,
     std::vector<file_id>& dirty,
     source_save_change_scan* scan) noexcept {
 
@@ -2604,7 +2604,7 @@ server_status scan_source_save_changes(
 
     source_save_change_scan local;
 
-    if (!baseline.valid()) {
+    if (!persisted.valid()) {
         if (scan != nullptr) {
             *scan = {};
         }
@@ -2617,12 +2617,12 @@ server_status scan_source_save_changes(
     // V3 contract: capture the checkpoint for the resulting BUILD before dirty
     // detection. Any later filesystem event remains visible to the next BUILD.
     const auto baseline_checkpoint =
-        baseline.change_checkpoint();
+        persisted.change_checkpoint();
 
     if (baseline_checkpoint) {
         source_save_file_view first;
 
-        if (baseline.file(
+        if (persisted.file(
                 file_id{1},
                 first) &&
             !first.path_utf8.empty()) {
@@ -2651,7 +2651,7 @@ server_status scan_source_save_changes(
 
     const auto journal =
         scan_usn_journal(
-            baseline,
+            persisted,
             dirty,
             local.metrics);
 
@@ -2681,12 +2681,12 @@ server_status scan_source_save_changes(
 #endif
 
     // Same rule as V3: a portable full scan can determine what to rebuild, but
-    // it does not advance journal identity continuity for the resulting baseline.
+    // it does not advance journal identity continuity for the resulting persisted.
     local.next_checkpoint = {};
 
     const auto fallback =
         scan_exact_fallback(
-            baseline,
+            persisted,
             dirty,
             local.metrics);
 
@@ -2699,13 +2699,13 @@ server_status scan_source_save_changes(
 }
 
 server_status collect_source_save_affected(
-    const source_save_view& baseline,
+    const source_save_view& persisted,
     std::span<const file_id> dirty,
     std::vector<file_id>& affected) noexcept {
 
     affected.clear();
 
-    if (!baseline.valid()) {
+    if (!persisted.valid()) {
         return server_status::
             project_artifact_invalid;
     }
@@ -2713,7 +2713,7 @@ server_status collect_source_save_affected(
     try {
         std::vector<std::uint8_t>
             visited(
-                baseline.file_count());
+                persisted.file_count());
 
         affected.reserve(
             dirty.size());
@@ -2721,7 +2721,7 @@ server_status collect_source_save_affected(
         for (const auto file :
              dirty) {
 
-            if (!baseline.contains(file)) {
+            if (!persisted.contains(file)) {
                 return server_status::
                     project_artifact_invalid;
             }
@@ -2736,7 +2736,7 @@ server_status collect_source_save_affected(
 
             source_save_file_view state;
 
-            if (!baseline.file(
+            if (!persisted.file(
                     file,
                     state) ||
                 !state.current_member) {
@@ -2756,7 +2756,7 @@ server_status collect_source_save_affected(
 
             source_save_file_view state;
 
-            if (!baseline.file(
+            if (!persisted.file(
                     affected[position],
                     state) ||
                 !state.current_member) {
@@ -2774,7 +2774,7 @@ server_status collect_source_save_affected(
                 const auto dependent =
                     state.dependents[index];
 
-                if (!baseline.contains(dependent)) {
+                if (!persisted.contains(dependent)) {
                     affected.clear();
                     return server_status::
                         project_artifact_invalid;
@@ -2792,7 +2792,7 @@ server_status collect_source_save_affected(
                 source_save_file_view
                     dependent_state;
 
-                if (!baseline.file(
+                if (!persisted.file(
                         dependent,
                         dependent_state) ||
                     !dependent_state.

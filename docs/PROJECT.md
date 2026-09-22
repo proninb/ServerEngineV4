@@ -32,7 +32,7 @@ LOAD
     restore G from the last committed compiled artifact
 
 BUILD
-    reuse the last successful construction baseline
+    reuse persisted construction state
     to avoid repeating unchanged work
     -> G
 
@@ -43,7 +43,7 @@ REBUILD
 ```
 
 There is no `SAVE` lifecycle stage. Durability is part of the successful
-`BUILD`/`REBUILD` coordinated commit.
+`BUILD`/`REBUILD` artifact replacement.
 
 ## Lifecycle
 
@@ -69,15 +69,15 @@ REBUILD  requires UNLOADED
 UNLOAD   requires LOADED
 ```
 
-A resident Project is never the input baseline for BUILD.
+A resident Project is never input state for BUILD.
 
 If source/configuration files have changed, the previously compiled final G no
 longer represents the current Project. BUILD therefore never keeps an old
 resident Project published while constructing a new one.
 
-A failed BUILD discards only its temporary operation state. The last successful
-persisted baseline remains available as an acceleration baseline for a later
-BUILD, but no resident Project is published and the Server remains `UNLOADED`.
+A failed BUILD discards only its temporary operation state. Persisted BUILD
+artifacts remain available for a later BUILD, but no resident Project is
+published and the Server remains `UNLOADED`.
 
 LOAD, BUILD, and REBUILD never substitute for each other.
 
@@ -108,7 +108,7 @@ LOAD
         -> G
 
 BUILD
-    last successful BUILD baseline
+    persisted BUILD state
     + current inputs
         -> reuse unchanged construction work where useful
         -> G
@@ -119,10 +119,10 @@ REBUILD
         -> G
 ```
 
-A/B slots and `baseline.bin` provide crash-safe persistence. They do not create
-Graph generations. BUILD may borrow unchanged persisted bytes or preserve stable
-construction IDs as an implementation optimization; those reuse mechanisms do
-not change the one-G architecture.
+Persisted artifacts do not introduce another Project or Graph lifetime.
+`compiled.bin` is the persisted compiled Project consumed by LOAD.
+`project.manifest`, `source.bin`, and `database.bin` are persisted BUILD
+acceleration/lineage state.
 
 ## Mode-specific construction contexts
 
@@ -135,7 +135,7 @@ load_context
 
 build_context
     Server settings
-    committed baseline views
+    persisted BUILD-state views
     temporary BUILD reuse/change state
     root preprocessing configuration
 
@@ -220,11 +220,11 @@ BUILD lineage/reuse metadata
 other DB/build-acceleration state
 ```
 
-Those belong to the persisted construction baseline and to temporary BUILD or
+Those belong to persisted BUILD acceleration state and temporary BUILD or
 REBUILD operation state.
 
 BUILD receives the Project entry path explicitly. Resident `project` therefore
-does not exist merely to remember which baseline BUILD should open.
+does not exist merely to remember which persisted BUILD state should be opened.
 
 ## LOAD
 
@@ -281,7 +281,7 @@ root project.json
        + optional compatible ABI-layout acceleration
     -> Runtime
     -> SHM
-    -> coordinated persisted-baseline commit
+    -> replace persisted artifacts
     -> resident Project
 ```
 
@@ -344,29 +344,28 @@ compiled-G persistence
 ABI-layout derivation/persistence
 Runtime
 SHM
-coordinated baseline commit
+artifact replacement
 ```
 
 The `identity_ref`/`identity_space` foundation already exists. Parser/Semantic has
 not yet populated the Project semantic identities or G.
 
-The persistence subsystem already provides the final A/B artifact layout and
-the `source.bin` encoder/validator. REBUILD must not invoke the SourceSave
+The persistence subsystem provides direct artifact paths and the `source.bin`
+encoder/validator. REBUILD must not invoke the SourceSave
 encoder until Semantic/Assign processing has emitted every direct dependency
 and `finalize_dependency_topology()` has completed.
 
 Because no G is produced yet, the incomplete REBUILD path must not publish any
-partial construction artifact as the new committed baseline.
+partial construction artifact as newly persisted Project state.
 
 ## BUILD
 
 BUILD starts only from `UNLOADED` and receives the root Project path explicitly.
 
-BUILD uses the last successful persisted construction baseline as acceleration
-state:
+BUILD uses persisted construction artifacts as acceleration state:
 
 ```text
-last successful baseline
+persisted BUILD state
     +-- configuration proof
     +-- SourceSave
     +-- DB
@@ -383,7 +382,7 @@ last successful baseline
              +-- affected frontend / Parser / Semantic work
              +-- construct G
              +-- validate complete artifact set
-             `-- coordinated commit
+             `-- replace persisted artifacts
                      |
                      v
                   LOADED
@@ -448,11 +447,11 @@ recompose from root
     -> construct the current configuration proof in temporary BUILD state
 ```
 
-Configuration recomposition does not itself destroy the old baseline.
+Configuration recomposition does not modify persisted BUILD state.
 
 ### Physical dirty detection
 
-SourceSave owns the persisted physical baseline:
+SourceSave owns persisted physical BUILD state:
 
 ```text
 file_id
@@ -467,12 +466,10 @@ direct dependency topology
 Project files remain the source of exact bytes; retained lexical state belongs
 to `database.bin` when BUILD reuse requires it.
 
-A successful commit fully validates SourceSave before `baseline.bin` becomes
-authoritative. BUILD authenticates the selected `source.bin` against the exact
-artifact proof in `baseline.bin`, memory-maps it read-only, and then performs an
-O(1), allocation-free `source_save_view::bind()`. Records and edges fail closed
-as BUILD naturally visits them; BUILD does not perform a separate O(F + E)
-topology-validation pass merely to open the baseline.
+BUILD memory-maps `source.bin` read-only directly and performs an O(1),
+allocation-free `source_save_view::bind()`. Records and edges fail closed as
+BUILD naturally visits them; BUILD does not perform a separate O(F + E)
+topology-validation pass merely to open persisted SourceSave state.
 
 On Windows/NTFS, `source.bin` persists one volume USN checkpoint plus compact
 open-addressed identity indexes:
@@ -483,8 +480,7 @@ directory file_reference -> topology-watch flags
 ```
 
 Before BUILD dirty detection starts, V4 captures the journal checkpoint that may
-be persisted by the resulting BUILD. The existing committed checkpoint is still
-the start of dirty detection.
+be persisted by the resulting BUILD. The persisted `source.bin` checkpoint is still the start of dirty detection.
 
 BUILD then reads the volume journal once from the committed `next_usn` to the
 current journal position. Matching data-change records mark files for rebuild.
@@ -511,7 +507,7 @@ before any affected dependency relation is replaced.
 
 ### Affected closure
 
-The affected set is computed from the **committed old reverse topology** before
+The affected set is computed from the **persisted old reverse topology** before
 affected dependency relations are recomputed:
 
 ```text
@@ -549,33 +545,33 @@ materialize current physical bytes only when the frontend needs source spelling
 The compact lexical representation is therefore DB/build-cache data across
 BUILD, not resident runtime Project state.
 
-### Failure and commit semantics
+### Persistence semantics
 
-BUILD reads the immutable committed baseline and owns only temporary operation
-state until the complete new artifact set is ready.
+BUILD owns temporary operation state while constructing the new result.
 
-A failed BUILD:
-
-```text
-discard temporary BUILD state
-keep the last successful persisted baseline intact
-publish no resident Project
-remain UNLOADED
-```
-
-The old baseline may accelerate the next BUILD after the user fixes the source
-tree. The old final G is not treated as the current runnable Project.
-
-A successful BUILD:
+The persisted files have separate roles:
 
 ```text
-validate the complete artifact set
-    -> write/validate the inactive persistence slot
-    -> coordinated durable baseline switch
-    -> publish Runtime/SHM resident Project
+compiled.bin
+    compiled Project state required by LOAD
+
+project.manifest
+source.bin
+database.bin
+    BUILD acceleration / lineage state
 ```
 
-There is no explicit SAVE stage.
+LOAD opens only `compiled.bin`.
+
+BUILD opens the persisted construction artifacts it requires. If required BUILD
+state is missing or invalid, incremental BUILD cannot proceed and REBUILD is
+required.
+
+A successful BUILD/REBUILD replaces the persisted artifact files produced by
+that operation. There is no selector file or active/inactive persistence slot,
+and there is no explicit SAVE lifecycle stage.
+
+A failed BUILD publishes no resident Project and leaves the Server `UNLOADED`.
 
 ### Current implementation boundary
 
@@ -593,7 +589,7 @@ The current C++ BUILD entry already matches the lifecycle contract:
 ```text
 UNLOADED
     -> BUILD <project-path>
-    -> persisted baseline
+    -> persisted BUILD artifacts
 ```
 
 File Context/string/identity restore and the remaining BUILD reuse path are not
@@ -738,144 +734,54 @@ It does not include change tokens.
 A whitespace/comment-only change modifies byte identity and therefore the
 configuration hash even if a later semantic stage may prove equivalent meaning.
 
-## Persisted Build Baseline
+## Persisted Project Artifacts
 
-The committed construction/runtime baseline belongs under the root Project
-artifact directory:
+Project persistence lives under:
 
 ```text
 <root-project-dir>/
     .serverengine/
         <root-project.json filename>/
-            committed baseline
+            project.manifest
+            source.bin
+            database.bin
+            compiled.bin
 ```
 
-Logically one successful baseline contains files whose Server-wide names come
-from `server.json.settings.files`:
+The artifacts have different consumers:
 
 ```text
-configuration proof
-    settings.files.manifest
+compiled.bin
+    compiled G
+    optional ABI-layout acceleration
+    required by LOAD
 
-SourceSave
+project.manifest
+    project.json configuration proof
+    BUILD only
+
+source.bin
+    file_id lineage
     physical file identity/state
-    current-lineage membership
-    forward/reverse file topology
+    forward/reverse dependency topology
+    BUILD only
 
-DB
-    BUILD-only reusable construction state
-    string_id / identity_ref lineage
+database.bin
     retained lexical state
-    only additional provenance/acceleration needed to avoid repeated BUILD work
-
-compiled G
-    the one compiled result required by LOAD/Runtime
+    string_id / identity_ref lineage
+    BUILD acceleration
+    BUILD only
 ```
 
-The artifact roles use the Server-wide configured names
-`settings.files.manifest/source_save/database/compiled/baseline`. Their binary
-formats remain versioned implementation contracts.
+There is no selector file or active/inactive persistence slot.
 
-The physical persistence layout is A/B:
+LOAD requires only a valid `compiled.bin`.
 
-```text
-.serverengine/<root-project.json>/
-    baseline.bin
-    slot0/{project.manifest, source.bin, database.bin, compiled.bin}
-    slot1/{project.manifest, source.bin, database.bin, compiled.bin}
-```
+BUILD requires the persisted BUILD state needed for incremental reuse. Missing
+or invalid required BUILD state means REBUILD is required.
 
-Only `baseline.bin` selects the authoritative slot. Slot names are persistence
-mechanics, not Project generations.
-
-`baseline.bin` is a small checksummed descriptor containing:
-
-```text
-active slot
-manifest  { size, SHA-256, optional change token }
-source    { size, SHA-256, optional change token }
-database  { size, SHA-256, optional change token }
-compiled  { size, SHA-256, optional change token }
-```
-
-BUILD memory-maps committed artifacts. If the stored native change token proves
-an artifact unchanged, no artifact-wide hash pass is required. Otherwise SHA-256
-is computed directly over mapped pages and compared with the descriptor proof.
-
-`source.bin` now has a concrete versioned/checksummed image boundary. It is
-encoded only from terminally finalized File Context topology and contains:
-
-```text
-file_id order
-UTF-8 physical path
-file_kind
-current-lineage membership flag
-exact content hash
-optional native change token
-direct dependency range
-direct dependent range
-forward file_id arena
-reverse file_id arena
-```
-
-The image validator reconstructs reverse adjacency from forward adjacency in
-`O(F + E)` and rejects inconsistent topology. Path and forward-edge ranges are
-also required to use one canonical contiguous encoding.
-
-`database.bin` now has a sectioned versioned/checksummed base image:
-
-```text
-strings
-    dense string_id order
-    canonical spelling bytes
-
-lexical records
-    dense file_id order
-    word/directive ranges
-    token counts
-
-lexical words
-    one canonical flat word arena independent of CPU lanes
-
-lexical directives
-    one canonical flat anchor arena independent of CPU lanes
-
-identities
-    slot 1 implicit root
-    slots 2..N in identity_ref order
-    parent identity_ref
-    string_id
-    identity_kind
-```
-
-The identity section preserves WHO lineage without persisting the construction
-hash index. Its validator requires parent-before-child structure and rejects
-duplicate `(parent, string_id, identity_kind)` keys.
-
-Additional DB sections are justified only by BUILD reuse requirements. The DB
-must not become a second semantic representation of the Project. The persisted
-representation deliberately does not retain transient per-lane lexical or
-semantic lookup indexes.
-
-`project.manifest` remains versioned, checksummed, and fail-closed, but its own
-temporary-file replacement is not the final multi-artifact commit model.
-
-Once the full baseline exists, the complete artifact set must be prepared and
-validated in the inactive persistence slot before one coordinated baseline
-switch makes it authoritative.
-
-There is no Graph-generation model:
-
-```text
-no G0 / Gn / Gn+1 architecture
-no candidate G
-no current/next Graph pair
-no runtime Graph history
-```
-
-There is only `G`, the compiled result of LOAD/BUILD/REBUILD. An implementation
-may retain old immutable persistence files temporarily for crash-safe
-replacement, but those files are transaction mechanics, not Graph state.
+Each artifact keeps its own versioned/checksummed format. Replacing an artifact
+is filesystem persistence mechanics, not another Project lifetime.
 
 ## Filesystem Text Boundary
 
@@ -998,7 +904,7 @@ reverse_edges[]             4 bytes / direct edge
 The current implementation owns all of these arrays directly for a fresh
 construction.
 
-BUILD will add baseline-view + mutable-overlay capability; it must not begin by
+BUILD will add persisted-view + mutable-overlay capability; it must not begin by
 copying every committed file record merely to change a small subset.
 
 The physical path is retained exactly for I/O. Platform-equivalence keys remain
@@ -1115,7 +1021,7 @@ The order is:
 1. detect physical dirty files
 2. compute affected closure using OLD committed dependents
 3. recompute only dependency relations whose owners are affected/changed
-4. persist the resulting current topology as part of the coordinated commit
+4. persist the resulting current topology as part of the artifact replacement
 ```
 
 The physical encoding used to support sparse owner replacement is not frozen
@@ -1166,7 +1072,7 @@ validate complete artifact set
 write and validate inactive persistence slot
         |
         v
-coordinated durable baseline switch
+persisted artifact replacement
         |
         v
 publish resident Project
@@ -1177,18 +1083,18 @@ Failure before that boundary:
 ```text
 REBUILD failure
     -> discard temporary REBUILD state
-    -> preserve previous persisted baseline if one exists
+    -> preserve previously persisted BUILD state if it exists
     -> UNLOADED
 
 BUILD failure
     -> discard temporary BUILD state
-    -> preserve last successful persisted baseline
+    -> preserve persisted BUILD state
     -> publish no resident Project
     -> UNLOADED
 ```
 
 The previously persisted compiled artifact may remain as the last successful
-baseline, but it is not treated as the current runnable Project after a failed
+persisted BUILD state, but it is not treated as the current runnable Project after a failed
 BUILD against changed source state.
 
 ## Architectural Invariants
@@ -1198,7 +1104,7 @@ BUILD against changed source state.
 3. LOAD, BUILD, and REBUILD require `UNLOADED`.
 4. UNLOAD requires `LOADED`.
 5. LOAD, BUILD, and REBUILD receive the Project path explicitly.
-6. BUILD consumes the last successful persisted baseline, never the resident Project.
+6. BUILD consumes persisted BUILD state, never the resident Project.
 7. Failure of LOAD, BUILD, or REBUILD leaves `UNLOADED`.
 8. Resident Project contains runtime-required state only.
 9. There is no universal `project_context`.
@@ -1210,7 +1116,7 @@ BUILD against changed source state.
 15. Configuration composition is root-first declaration-order DFS and is never sorted.
 16. Change tokens are proof optimizations, never identity.
 17. Per-file SHA-256 identifies exact bytes.
-18. Temporary construction/persistence state becomes authoritative only at the coordinated commit boundary.
+18. Temporary construction/persistence state becomes authoritative only at the artifact replacement boundary.
 19. Project absolute-path resolution is fail-closed.
 20. `file_id` is the only identity of a file-dependency node.
 21. Forward and reverse file adjacency are first-class persisted BUILD data.

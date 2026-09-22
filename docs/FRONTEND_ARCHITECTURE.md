@@ -295,7 +295,7 @@ REBUILD
     fresh dense table
 
 BUILD
-    committed baseline view
+    persisted-state view
     + append-only local overlay
 ```
 
@@ -316,18 +316,18 @@ spelling bytes
 open-addressed lookup acceleration
 ```
 
-BUILD must preserve baseline numeric IDs without copying/re-interning every
-baseline spelling merely to process a small delta.
+BUILD must preserve persisted numeric IDs without copying/re-interning every
+persisted spelling merely to process a small delta.
 
 Lookup is conceptually:
 
 ```text
 find(text)
     local overlay?
-    committed baseline?
+    persisted state?
 ```
 
-New spelling allocation begins after the committed baseline slot range.
+New spelling allocation begins after the persisted slot range.
 
 The public boundary remains:
 
@@ -340,7 +340,7 @@ contains(id) -> bool
 
 `string_id` creation remains private to `string_table`.
 
-The **current implementation** is the fresh REBUILD form only. Baseline binding
+The **current implementation** is the fresh REBUILD form only. Persisted-state binding
 and append overlay are not implemented yet.
 
 ## Preprocessor
@@ -371,7 +371,7 @@ Current implementation intentionally contains no:
 ```text
 mutex
 atomics
-baseline state
+persisted state
 persistence state
 semantic lookup
 file lookup
@@ -837,7 +837,7 @@ reacquire their lexical span on the next decode.
 
 REBUILD constructs physical lexical state from the current source closure.
 
-BUILD instead begins from the committed SourceSave/DB baseline.
+BUILD instead begins from the persisted SourceSave/DB state.
 
 The physical dirty set is detected before semantic processing. The old committed
 reverse file topology then produces the affected closure.
@@ -964,7 +964,7 @@ The physical sparse-update encoding is not frozen yet; the logical topology is
 still one File Context/SourceSave topology.
 
 After successful coordinated commit, the resulting topology is stored in the
-new committed baseline.
+new persisted state.
 
 ## Architectural Gates
 
@@ -1050,7 +1050,7 @@ string_table
     immutable spelling bytes
     open-addressed index
     no mutex/atomics
-    BUILD baseline binding not implemented yet
+    BUILD persisted-state binding not implemented yet
 
 preprocessor
     borrowed const string_table&
@@ -1087,7 +1087,7 @@ Implemented physical BUILD analysis foundation:
 
 ```text
 source_save_view
-    zero-copy source.bin baseline view
+    zero-copy persisted source.bin view
 
 scan_source_save_changes()
     capture next checkpoint before dirty detection
@@ -1154,6 +1154,6 @@ implicit, while slots `2..N` store only parent, `string_id`, and kind. The
 construction open-addressed lookup index is deliberately not persisted.
 
 The next semantic construction work is Parser/Semantic writing `G` directly.
-There is no intermediate semantic database or Builder boundary. BUILD baseline
+There is no intermediate semantic database or Builder boundary. BUILD persisted state
 binding/reuse remains separate later work.
 

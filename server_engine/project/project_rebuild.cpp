@@ -228,14 +228,14 @@ server_status rebuild_project(
     }
 
     // The manifest becomes authoritative only with the complete successful
-    // REBUILD artifact set and coordinated baseline switch.
+    // REBUILD artifact persistence is not implemented yet.
 
     diagnostics.emit(
         diagnostic(
             diagnostics::project_rebuild_incomplete,
             operation)
             .detail(
-                "Project configuration manifest, source lexical closure, executed quoted-include discovery, and Assign byte materialization are complete; Parser/Semantic construction of G, Assign grammar/resolution into G, terminal dependency-topology finalization, compiled-G persistence, Runtime/SHM construction, and coordinated baseline commit are not implemented yet")
+                "Project configuration manifest, source lexical closure, executed quoted-include discovery, and Assign byte materialization are complete; Parser/Semantic construction of G, Assign grammar/resolution into G, terminal dependency-topology finalization, compiled-G persistence, Runtime/SHM construction, and persisted artifact replacement is not implemented yet")
             .build());
 
     return server_status::unsupported;

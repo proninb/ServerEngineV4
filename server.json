@@ -1,6 +1,6 @@
 {
   // Server configuration schema version.
-  "version": 3,
+  "version": 4,
 
   // Process-wide low-level Server settings.
   "settings": {
@@ -15,8 +15,7 @@
       "manifest": "project.manifest",
       "source_save": "source.bin",
       "database": "database.bin",
-      "compiled": "compiled.bin",
-      "baseline": "baseline.bin"
+      "compiled": "compiled.bin"
     }
   },
 

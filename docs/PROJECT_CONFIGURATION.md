@@ -485,7 +485,7 @@ topology is preserved. Absolute locators are intentionally location-bound.
 
 BUILD starts from `UNLOADED` and receives the root Project path.
 
-It opens the configuration proof committed with the last successful baseline.
+It opens the persisted configuration proof used by BUILD.
 
 For every entry:
 
@@ -515,9 +515,8 @@ recompose from root
 Full recomposition is required because one changed `project.json` may change the
 set or order of child Projects and explicit inputs.
 
-Recomposition exists only in temporary BUILD state. It does not make that state
-authoritative until BUILD successfully commits the complete SourceSave + DB +
-compiled-G baseline.
+Recomposition exists only in temporary BUILD state. It becomes reusable only after the corresponding
+persisted BUILD artifacts are successfully replaced.
 
 ## Manifest Artifact
 
@@ -563,10 +562,9 @@ truncated/extra bytes
 stored aggregate hash != recomputed aggregate hash
 ```
 
-`project.manifest` is one component of the committed BUILD/REBUILD baseline.
-Updating `project.manifest` alone must not publish a new Project baseline.
-Configuration proof, SourceSave, DB, and compiled G participate in one
-coordinated successful BUILD/REBUILD commit.
+`project.manifest` is persisted BUILD acceleration state. LOAD does not require
+it. BUILD requires a valid manifest together with the other BUILD state it uses;
+if required persisted BUILD state is missing or invalid, REBUILD is required.
 
 ## Validation
 

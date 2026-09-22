@@ -50,7 +50,6 @@ enum class schema_field : std::uint8_t {
     source_save,
     database,
     compiled,
-    baseline,
     communication,
     project,
     logging,
@@ -698,7 +697,6 @@ private:
             if (key == "source_save") return schema_field::source_save;
             if (key == "database") return schema_field::database;
             if (key == "compiled") return schema_field::compiled;
-            if (key == "baseline") return schema_field::baseline;
             break;
 
         case schema_context::communication:
@@ -757,10 +755,10 @@ private:
             return;
         }
 
-        if (version != 3) {
+        if (version != 4) {
             fail(
                 schema_failure::unsupported_version,
-                "unsupported server configuration version; expected version 3");
+                "unsupported server configuration version; expected version 4");
             return;
         }
 
@@ -861,11 +859,6 @@ private:
         case schema_field::compiled:
             field_name = "compiled";
             output = &configuration.settings.files.compiled;
-            break;
-
-        case schema_field::baseline:
-            field_name = "baseline";
-            output = &configuration.settings.files.baseline;
             break;
 
         default:
@@ -1188,32 +1181,29 @@ private:
         if (!seen(frame, schema_field::manifest) ||
             !seen(frame, schema_field::source_save) ||
             !seen(frame, schema_field::database) ||
-            !seen(frame, schema_field::compiled) ||
-            !seen(frame, schema_field::baseline)) {
+            !seen(frame, schema_field::compiled)) {
 
             fail(
                 schema_failure::missing_required_field,
-                "settings.files requires manifest, source_save, database, compiled, and baseline");
+                "settings.files requires manifest, source_save, database, and compiled");
             return false;
         }
 
-        const std::array<const std::filesystem::path*, 5> files{
+        const std::array<const std::filesystem::path*, 4> files{
             &configuration.settings.files.manifest,
             &configuration.settings.files.source_save,
             &configuration.settings.files.database,
             &configuration.settings.files.compiled,
-            &configuration.settings.files.baseline,
         };
 
-        constexpr std::array<std::string_view, 5> names{
+        constexpr std::array<std::string_view, 4> names{
             "manifest",
             "source_save",
             "database",
             "compiled",
-            "baseline",
         };
 
-        std::array<filesystem_path_key, 5> keys;
+        std::array<filesystem_path_key, 4> keys;
 
         for (std::size_t index = 0;
              index < files.size();
