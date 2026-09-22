@@ -1,6 +1,7 @@
 #include "project_rebuild.hpp"
 
 #include "project_lifecycle_context.hpp"
+#include "project_configuration_manifest_store.hpp"
 #include "assign/assign_input.hpp"
 #include "frontend/source_discovery.hpp"
 #include "parser/parser.hpp"
@@ -322,6 +323,108 @@ server_status rebuild_project(
         return server_status::io_error;
     }
 
+    project_configuration_manifest_layout
+        manifest_layout;
+
+    const auto manifest_prepared =
+        prepare_project_configuration_manifest_layout(
+            context.manifest,
+            manifest_layout);
+
+    if (manifest_prepared !=
+        project_configuration_manifest_store_result::
+            success) {
+
+        diagnostics.emit(
+            diagnostic(
+                manifest_prepared ==
+                        project_configuration_manifest_store_result::
+                            io_failed
+                    ? diagnostics::
+                        project_manifest_io_failed
+                    : diagnostics::
+                        project_manifest_invalid,
+                operation)
+                .file(layout.manifest)
+                .detail(
+                    "Cannot prepare the exact project.manifest layout")
+                .build());
+
+        return manifest_prepared ==
+                project_configuration_manifest_store_result::
+                    io_failed
+            ? server_status::io_error
+            : server_status::
+                project_artifact_invalid;
+    }
+
+    writable_file_mapping manifest_mapping;
+
+    if (manifest_mapping.create(
+            layout.manifest,
+            manifest_layout.size()) !=
+        writable_file_mapping_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_manifest_io_failed,
+                operation)
+                .file(layout.manifest)
+                .detail(
+                    "Cannot create and memory-map project.manifest for direct REBUILD encoding")
+                .build());
+
+        return server_status::io_error;
+    }
+
+    const auto manifest_encoded =
+        encode_project_configuration_manifest(
+            context.manifest,
+            manifest_layout,
+            manifest_mapping.bytes());
+
+    if (manifest_encoded !=
+        project_configuration_manifest_store_result::
+            success) {
+
+        diagnostics.emit(
+            diagnostic(
+                manifest_encoded ==
+                        project_configuration_manifest_store_result::
+                            io_failed
+                    ? diagnostics::
+                        project_manifest_io_failed
+                    : diagnostics::
+                        project_manifest_invalid,
+                operation)
+                .file(layout.manifest)
+                .detail(
+                    "Direct project.manifest encoding failed")
+                .build());
+
+        return manifest_encoded ==
+                project_configuration_manifest_store_result::
+                    io_failed
+            ? server_status::io_error
+            : server_status::
+                project_artifact_invalid;
+    }
+
+    if (manifest_mapping.flush() !=
+        writable_file_mapping_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_manifest_io_failed,
+                operation)
+                .file(layout.manifest)
+                .detail(
+                    "Cannot flush direct project.manifest mapping")
+                .build());
+
+        return server_status::io_error;
+    }
+
     writable_file_mapping compiled_mapping;
 
     if (compiled_mapping.create(
@@ -412,7 +515,7 @@ server_status rebuild_project(
             diagnostics::project_rebuild_incomplete,
             operation)
             .detail(
-                "Direct writable-mmap compiled.bin construction from final G is complete for the supported semantic slice; remaining Phase-1 BUILD/LOAD/REBUILD completion and direct persistence of BUILD-lineage artifacts are not implemented yet")
+                "Direct final-path project.manifest persistence and writable-mmap compiled.bin construction from final G are complete for the supported semantic slice; remaining Phase-1 source.bin/database.bin persistence and BUILD/LOAD/REBUILD completion are not implemented yet")
             .build());
 
     return server_status::unsupported;

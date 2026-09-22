@@ -1,27 +1,17 @@
 #include "project_configuration_manifest_store.hpp"
 
 #include "../filesystem_path.hpp"
+#include "../read_only_file_mapping.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <fstream>
 #include <limits>
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <vector>
-
-#if defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <Windows.h>
-#endif
+#include <utility>
 
 namespace cw::server {
 namespace {
@@ -46,49 +36,99 @@ constexpr std::size_t header_size = 48;
 constexpr std::size_t fixed_entry_size = 72;
 constexpr std::size_t checksum_size = 32;
 
-void append_u32(
-    std::vector<std::byte>& output,
-    std::uint32_t value) {
+[[nodiscard]] bool add_size(
+    std::size_t& value,
+    std::size_t additional) noexcept {
+
+    if (additional >
+        (std::numeric_limits<std::size_t>::max)() -
+            value) {
+
+        return false;
+    }
+
+    value += additional;
+    return true;
+}
+
+[[nodiscard]] bool write_u32(
+    std::span<std::byte> output,
+    std::size_t& offset,
+    std::uint32_t value) noexcept {
+
+    if (offset > output.size() ||
+        output.size() - offset < 4) {
+
+        return false;
+    }
 
     for (std::size_t index = 0;
          index < 4;
          ++index) {
 
-        output.push_back(
+        output[offset + index] =
             static_cast<std::byte>(
                 (value >> (index * 8)) &
-                0xffU));
+                0xffU);
     }
+
+    offset += 4;
+    return true;
 }
 
-void append_u64(
-    std::vector<std::byte>& output,
-    std::uint64_t value) {
+[[nodiscard]] bool write_u64(
+    std::span<std::byte> output,
+    std::size_t& offset,
+    std::uint64_t value) noexcept {
+
+    if (offset > output.size() ||
+        output.size() - offset < 8) {
+
+        return false;
+    }
 
     for (std::size_t index = 0;
          index < 8;
          ++index) {
 
-        output.push_back(
+        output[offset + index] =
             static_cast<std::byte>(
                 (value >> (index * 8)) &
-                0xffU));
+                0xffU);
     }
+
+    offset += 8;
+    return true;
 }
 
-void append_bytes(
-    std::vector<std::byte>& output,
+[[nodiscard]] bool write_bytes(
+    std::span<std::byte> output,
+    std::size_t& offset,
     const std::byte* data,
-    std::size_t size) {
+    std::size_t size) noexcept {
 
-    output.insert(
-        output.end(),
-        data,
-        data + size);
+    if (offset > output.size() ||
+        size > output.size() - offset ||
+        (size != 0 && data == nullptr)) {
+
+        return false;
+    }
+
+    if (size != 0) {
+        std::copy_n(
+            data,
+            size,
+            output.begin() +
+                static_cast<std::ptrdiff_t>(
+                    offset));
+    }
+
+    offset += size;
+    return true;
 }
 
 [[nodiscard]] bool read_u32(
-    const std::vector<std::byte>& input,
+    std::span<const std::byte> input,
     std::size_t& offset,
     std::uint32_t& value) noexcept {
 
@@ -116,7 +156,7 @@ void append_bytes(
 }
 
 [[nodiscard]] bool read_u64(
-    const std::vector<std::byte>& input,
+    std::span<const std::byte> input,
     std::size_t& offset,
     std::uint64_t& value) noexcept {
 
@@ -144,265 +184,394 @@ void append_bytes(
 }
 
 [[nodiscard]] file_content_hash checksum(
-    const std::vector<std::byte>& image,
-    std::size_t size) noexcept {
+    std::span<const std::byte> image) noexcept {
 
     return hash_file_content(
         std::string_view{
             reinterpret_cast<const char*>(
                 image.data()),
-            size});
+            image.size()});
 }
 
-[[nodiscard]] bool encode(
-    const project_configuration_manifest& value,
-    std::vector<std::byte>& output) {
+[[nodiscard]] bool validate_file(
+    const project_configuration_file_proof& file,
+    std::uint32_t index,
+    std::string& path) noexcept {
 
-    if (value.files.empty() ||
-        value.files.size() >
-            (std::numeric_limits<std::uint32_t>::max)()) {
+    path.clear();
+
+    if (filesystem_path_to_utf8(
+            file.path,
+            path) !=
+            filesystem_path_result::success ||
+        path.empty() ||
+        path.size() >
+            static_cast<std::size_t>(
+                (std::numeric_limits<std::uint32_t>::max)())) {
 
         return false;
     }
 
-    if (!(calculate_project_configuration_hash(
-              value.files) ==
-          value.configuration_hash)) {
-
-        return false;
-    }
-
-    output.clear();
-
-    append_bytes(
-        output,
-        magic.data(),
-        magic.size());
-
-    append_u32(
-        output,
-        format_version);
-
-    append_u32(
-        output,
-        static_cast<std::uint32_t>(
-            value.files.size()));
-
-    append_bytes(
-        output,
-        value.configuration_hash.bytes.data(),
-        value.configuration_hash.bytes.size());
-
-    for (std::uint32_t index = 0;
-         index < value.files.size();
-         ++index) {
-
-        const auto& file =
-            value.files[index];
-
-        std::string path;
-
-        if (filesystem_path_to_utf8(file.path, path) !=
-            filesystem_path_result::success) {
+    if (index == 0) {
+        if (file.declaring_file !=
+                invalid_configuration_file ||
+            file.path_type !=
+                project_configuration_path_type::relative ||
+            file.path.is_absolute() ||
+            file.path.has_root_name() ||
+            file.path.has_root_directory() ||
+            file.path !=
+                file.path.filename()) {
 
             return false;
         }
-
-        if (path.empty() ||
-            path.size() >
-                (std::numeric_limits<std::uint32_t>::max)()) {
-
+    } else {
+        if (file.declaring_file >= index) {
             return false;
         }
 
-        if (index == 0) {
-            if (file.declaring_file !=
-                    invalid_configuration_file ||
-                file.path_type !=
-                    project_configuration_path_type::relative ||
-                file.path.is_absolute() ||
+        if (file.path_type ==
+                project_configuration_path_type::relative) {
+
+            if (file.path.is_absolute() ||
                 file.path.has_root_name() ||
-                file.path.has_root_directory() ||
-                file.path !=
-                    file.path.filename()) {
+                file.path.has_root_directory()) {
 
+                return false;
+            }
+        } else if (
+            file.path_type ==
+                project_configuration_path_type::absolute) {
+
+            if (!file.path.is_absolute()) {
                 return false;
             }
         } else {
-            if (file.declaring_file >= index) {
-                return false;
-            }
-
-            if (file.path_type ==
-                    project_configuration_path_type::relative) {
-
-                if (file.path.is_absolute() ||
-                    file.path.has_root_name() ||
-                    file.path.has_root_directory()) {
-
-                    return false;
-                }
-            } else if (
-                file.path_type ==
-                    project_configuration_path_type::absolute) {
-
-                if (!file.path.is_absolute()) {
-                    return false;
-                }
-            } else {
-                return false;
-            }
+            return false;
         }
-
-        append_u32(
-            output,
-            file.declaring_file);
-
-        append_u32(
-            output,
-            static_cast<std::uint32_t>(
-                file.path_type));
-
-        append_u32(
-            output,
-            static_cast<std::uint32_t>(
-                path.size()));
-
-        std::uint32_t flags = 0;
-
-        if (file.change_token_available) {
-            if (!file.change_token) {
-                return false;
-            }
-
-            flags |= change_token_flag;
-        }
-
-        append_u32(
-            output,
-            flags);
-
-        append_bytes(
-            output,
-            file.content_hash.bytes.data(),
-            file.content_hash.bytes.size());
-
-        append_u64(
-            output,
-            file.change_token_available
-                ? file.change_token.volume_serial
-                : 0);
-
-        append_u64(
-            output,
-            file.change_token_available
-                ? file.change_token.file_reference
-                : 0);
-
-        append_u64(
-            output,
-            file.change_token_available
-                ? static_cast<std::uint64_t>(
-                    file.change_token.file_usn)
-                : 0);
-
-        append_bytes(
-            output,
-            reinterpret_cast<const std::byte*>(
-                path.data()),
-            path.size());
     }
 
-    const auto digest =
-        checksum(
-            output,
-            output.size());
+    if (file.change_token_available &&
+        !file.change_token) {
 
-    append_bytes(
-        output,
-        digest.bytes.data(),
-        digest.bytes.size());
+        return false;
+    }
 
     return true;
 }
 
-[[nodiscard]] bool decode(
-    const std::vector<std::byte>& input,
-    project_configuration_manifest& output) {
+}
+
+project_configuration_manifest_store_result
+prepare_project_configuration_manifest_layout(
+    const project_configuration_manifest& value,
+    project_configuration_manifest_layout& output) noexcept {
 
     output = {};
 
-    if (input.size() <
+    if (value.files.empty() ||
+        value.files.size() >
+            static_cast<std::size_t>(
+                (std::numeric_limits<std::uint32_t>::max)())) {
+
+        return project_configuration_manifest_store_result::
+            invalid;
+    }
+
+    try {
+        if (!(calculate_project_configuration_hash(
+                  value.files) ==
+              value.configuration_hash)) {
+
+            return project_configuration_manifest_store_result::
+                invalid;
+        }
+
+        std::size_t size =
+            header_size +
+            checksum_size;
+
+        std::string path;
+
+        for (std::size_t position = 0;
+             position < value.files.size();
+             ++position) {
+
+            const auto index =
+                static_cast<std::uint32_t>(
+                    position);
+
+            if (!validate_file(
+                    value.files[position],
+                    index,
+                    path) ||
+                !add_size(
+                    size,
+                    fixed_entry_size) ||
+                !add_size(
+                    size,
+                    path.size())) {
+
+                return project_configuration_manifest_store_result::
+                    invalid;
+            }
+        }
+
+        output.size_value = size;
+        output.file_count =
+            static_cast<std::uint32_t>(
+                value.files.size());
+        output.configuration_hash =
+            value.configuration_hash;
+
+        return project_configuration_manifest_store_result::
+            success;
+    }
+    catch (...) {
+        output = {};
+
+        return project_configuration_manifest_store_result::
+            io_failed;
+    }
+}
+
+project_configuration_manifest_store_result
+encode_project_configuration_manifest(
+    const project_configuration_manifest& value,
+    const project_configuration_manifest_layout& layout,
+    std::span<std::byte> output) noexcept {
+
+    if (layout.size_value == 0 ||
+        output.size() !=
+            layout.size_value ||
+        value.files.size() !=
+            layout.file_count ||
+        !(value.configuration_hash ==
+          layout.configuration_hash)) {
+
+        return project_configuration_manifest_store_result::
+            invalid;
+    }
+
+    try {
+        std::size_t offset = 0;
+
+        if (!write_bytes(
+                output,
+                offset,
+                magic.data(),
+                magic.size()) ||
+            !write_u32(
+                output,
+                offset,
+                format_version) ||
+            !write_u32(
+                output,
+                offset,
+                layout.file_count) ||
+            !write_bytes(
+                output,
+                offset,
+                value.configuration_hash.bytes.data(),
+                value.configuration_hash.bytes.size())) {
+
+            return project_configuration_manifest_store_result::
+                invalid;
+        }
+
+        std::string path;
+
+        for (std::uint32_t index = 0;
+             index < layout.file_count;
+             ++index) {
+
+            const auto& file =
+                value.files[index];
+
+            if (!validate_file(
+                    file,
+                    index,
+                    path)) {
+
+                return project_configuration_manifest_store_result::
+                    invalid;
+            }
+
+            std::uint32_t flags = 0;
+
+            if (file.change_token_available) {
+                flags |= change_token_flag;
+            }
+
+            if (!write_u32(
+                    output,
+                    offset,
+                    file.declaring_file) ||
+                !write_u32(
+                    output,
+                    offset,
+                    static_cast<std::uint32_t>(
+                        file.path_type)) ||
+                !write_u32(
+                    output,
+                    offset,
+                    static_cast<std::uint32_t>(
+                        path.size())) ||
+                !write_u32(
+                    output,
+                    offset,
+                    flags) ||
+                !write_bytes(
+                    output,
+                    offset,
+                    file.content_hash.bytes.data(),
+                    file.content_hash.bytes.size()) ||
+                !write_u64(
+                    output,
+                    offset,
+                    file.change_token_available
+                        ? file.change_token.volume_serial
+                        : 0) ||
+                !write_u64(
+                    output,
+                    offset,
+                    file.change_token_available
+                        ? file.change_token.file_reference
+                        : 0) ||
+                !write_u64(
+                    output,
+                    offset,
+                    file.change_token_available
+                        ? static_cast<std::uint64_t>(
+                            file.change_token.file_usn)
+                        : 0) ||
+                !write_bytes(
+                    output,
+                    offset,
+                    reinterpret_cast<const std::byte*>(
+                        path.data()),
+                    path.size())) {
+
+                return project_configuration_manifest_store_result::
+                    invalid;
+            }
+        }
+
+        const auto payload_size =
+            output.size() -
+            checksum_size;
+
+        if (offset != payload_size) {
+            return project_configuration_manifest_store_result::
+                invalid;
+        }
+
+        const auto digest =
+            checksum(
+                std::span<const std::byte>{
+                    output.data(),
+                    payload_size});
+
+        if (!write_bytes(
+                output,
+                offset,
+                digest.bytes.data(),
+                digest.bytes.size()) ||
+            offset != output.size()) {
+
+            return project_configuration_manifest_store_result::
+                invalid;
+        }
+
+        return project_configuration_manifest_store_result::
+            success;
+    }
+    catch (...) {
+        return project_configuration_manifest_store_result::
+            io_failed;
+    }
+}
+
+project_configuration_manifest_store_result
+decode_project_configuration_manifest(
+    std::span<const std::byte> image,
+    project_configuration_manifest& output) noexcept {
+
+    output = {};
+
+    if (image.size() <
         header_size +
         fixed_entry_size +
         checksum_size) {
 
-        return false;
+        return project_configuration_manifest_store_result::
+            invalid;
     }
 
     if (!std::equal(
             magic.begin(),
             magic.end(),
-            input.begin())) {
+            image.begin())) {
 
-        return false;
+        return project_configuration_manifest_store_result::
+            invalid;
     }
 
     const auto payload_size =
-        input.size() - checksum_size;
+        image.size() -
+        checksum_size;
 
     const auto expected =
         checksum(
-            input,
-            payload_size);
+            image.first(
+                payload_size));
 
     if (!std::equal(
             expected.bytes.begin(),
             expected.bytes.end(),
-            input.begin() +
+            image.begin() +
                 static_cast<std::ptrdiff_t>(
                     payload_size))) {
 
-        return false;
+        return project_configuration_manifest_store_result::
+            invalid;
     }
-
-    std::size_t offset = 8;
-
-    std::uint32_t version = 0;
-    std::uint32_t count = 0;
-
-    if (!read_u32(
-            input,
-            offset,
-            version) ||
-        version != format_version ||
-        !read_u32(
-            input,
-            offset,
-            count) ||
-        count == 0) {
-
-        return false;
-    }
-
-    if (offset > payload_size ||
-        payload_size - offset <
-            output.configuration_hash.bytes.size()) {
-
-        return false;
-    }
-
-    std::copy_n(
-        input.begin() +
-            static_cast<std::ptrdiff_t>(
-                offset),
-        output.configuration_hash.bytes.size(),
-        output.configuration_hash.bytes.begin());
-
-    offset +=
-        output.configuration_hash.bytes.size();
 
     try {
+        std::size_t offset =
+            magic.size();
+
+        std::uint32_t version = 0;
+        std::uint32_t count = 0;
+
+        if (!read_u32(
+                image,
+                offset,
+                version) ||
+            version != format_version ||
+            !read_u32(
+                image,
+                offset,
+                count) ||
+            count == 0 ||
+            offset > payload_size ||
+            payload_size - offset <
+                output.configuration_hash.bytes.size()) {
+
+            return project_configuration_manifest_store_result::
+                invalid;
+        }
+
+        std::copy_n(
+            image.begin() +
+                static_cast<std::ptrdiff_t>(
+                    offset),
+            output.configuration_hash.bytes.size(),
+            output.configuration_hash.bytes.begin());
+
+        offset +=
+            output.configuration_hash.bytes.size();
+
         output.files.reserve(count);
 
         for (std::uint32_t index = 0;
@@ -415,28 +584,30 @@ void append_bytes(
             std::uint32_t flags = 0;
 
             if (!read_u32(
-                    input,
+                    image,
                     offset,
                     declaring_file) ||
                 !read_u32(
-                    input,
+                    image,
                     offset,
                     path_type_raw) ||
                 path_type_raw >
                     static_cast<std::uint32_t>(
                         project_configuration_path_type::absolute) ||
                 !read_u32(
-                    input,
+                    image,
                     offset,
                     path_size) ||
                 path_size == 0 ||
                 !read_u32(
-                    input,
+                    image,
                     offset,
                     flags) ||
                 (flags & ~known_flags) != 0) {
 
-                return false;
+                output = {};
+                return project_configuration_manifest_store_result::
+                    invalid;
             }
 
             if (index == 0) {
@@ -446,10 +617,16 @@ void append_bytes(
                         static_cast<std::uint32_t>(
                             project_configuration_path_type::relative)) {
 
-                    return false;
+                    output = {};
+                    return project_configuration_manifest_store_result::
+                        invalid;
                 }
-            } else if (declaring_file >= index) {
-                return false;
+            } else if (
+                declaring_file >= index) {
+
+                output = {};
+                return project_configuration_manifest_store_result::
+                    invalid;
             }
 
             if (offset > payload_size ||
@@ -457,7 +634,9 @@ void append_bytes(
                 payload_size - offset - 56 <
                     path_size) {
 
-                return false;
+                output = {};
+                return project_configuration_manifest_store_result::
+                    invalid;
             }
 
             project_configuration_file_proof file;
@@ -468,7 +647,7 @@ void append_bytes(
                     path_type_raw);
 
             std::copy_n(
-                input.begin() +
+                image.begin() +
                     static_cast<std::ptrdiff_t>(
                         offset),
                 file.content_hash.bytes.size(),
@@ -482,19 +661,21 @@ void append_bytes(
             std::uint64_t usn = 0;
 
             if (!read_u64(
-                    input,
+                    image,
                     offset,
                     volume) ||
                 !read_u64(
-                    input,
+                    image,
                     offset,
                     reference) ||
                 !read_u64(
-                    input,
+                    image,
                     offset,
                     usn)) {
 
-                return false;
+                output = {};
+                return project_configuration_manifest_store_result::
+                    invalid;
             }
 
             file.change_token_available =
@@ -509,31 +690,43 @@ void append_bytes(
                 };
 
                 if (!file.change_token) {
-                    return false;
+                    output = {};
+                    return project_configuration_manifest_store_result::
+                        invalid;
                 }
             } else if (
                 volume != 0 ||
                 reference != 0 ||
                 usn != 0) {
 
-                return false;
+                output = {};
+                return project_configuration_manifest_store_result::
+                    invalid;
             }
 
-            const std::string path{
+            const std::string_view path{
                 reinterpret_cast<const char*>(
-                    input.data() + offset),
+                    image.data() +
+                    offset),
                 path_size};
 
-            if (filesystem_path_from_utf8(path, file.path) !=
-                filesystem_path_result::success) {
+            if (filesystem_path_from_utf8(
+                    path,
+                    file.path) !=
+                    filesystem_path_result::success) {
 
-                return false;
+                output = {};
+                return project_configuration_manifest_store_result::
+                    invalid;
             }
 
-            offset += path_size;
+            offset +=
+                path_size;
 
             if (file.path.empty()) {
-                return false;
+                output = {};
+                return project_configuration_manifest_store_result::
+                    invalid;
             }
 
             if (index == 0) {
@@ -543,7 +736,9 @@ void append_bytes(
                     file.path !=
                         file.path.filename()) {
 
-                    return false;
+                    output = {};
+                    return project_configuration_manifest_store_result::
+                        invalid;
                 }
             } else if (
                 file.path_type ==
@@ -553,191 +748,41 @@ void append_bytes(
                     file.path.has_root_name() ||
                     file.path.has_root_directory()) {
 
-                    return false;
+                    output = {};
+                    return project_configuration_manifest_store_result::
+                        invalid;
                 }
-            } else if (!file.path.is_absolute()) {
-                return false;
+            } else if (
+                !file.path.is_absolute()) {
+
+                output = {};
+                return project_configuration_manifest_store_result::
+                    invalid;
             }
 
             output.files.push_back(
                 std::move(file));
         }
-    }
-    catch (...) {
-        output = {};
-        return false;
-    }
 
-    if (offset != payload_size) {
-        output = {};
-        return false;
-    }
+        if (offset != payload_size ||
+            !(calculate_project_configuration_hash(
+                  output.files) ==
+              output.configuration_hash)) {
 
-    if (!(calculate_project_configuration_hash(
-              output.files) ==
-          output.configuration_hash)) {
-
-        output = {};
-        return false;
-    }
-
-    return true;
-}
-
-[[nodiscard]]
-project_configuration_manifest_store_result
-read_image(
-    const std::filesystem::path& path,
-    std::vector<std::byte>& output) noexcept {
-
-    output.clear();
-
-    try {
-        std::error_code error;
-
-        if (!std::filesystem::exists(
-                path,
-                error)) {
-
-            return error
-                ? project_configuration_manifest_store_result::
-                    io_failed
-                : project_configuration_manifest_store_result::
-                    not_found;
-        }
-
-        const auto size =
-            std::filesystem::file_size(
-                path,
-                error);
-
-        if (error ||
-            size >
-                static_cast<std::uintmax_t>(
-                    (std::numeric_limits<std::size_t>::max)())) {
-
+            output = {};
             return project_configuration_manifest_store_result::
-                io_failed;
-        }
-
-        output.resize(
-            static_cast<std::size_t>(
-                size));
-
-        std::ifstream stream(
-            path,
-            std::ios::binary);
-
-        if (!stream) {
-            return project_configuration_manifest_store_result::
-                io_failed;
-        }
-
-        if (!output.empty()) {
-            stream.read(
-                reinterpret_cast<char*>(
-                    output.data()),
-                static_cast<std::streamsize>(
-                    output.size()));
-
-            if (stream.gcount() !=
-                static_cast<std::streamsize>(
-                    output.size())) {
-
-                return project_configuration_manifest_store_result::
-                    io_failed;
-            }
+                invalid;
         }
 
         return project_configuration_manifest_store_result::
             success;
     }
     catch (...) {
+        output = {};
+
         return project_configuration_manifest_store_result::
             io_failed;
     }
-}
-
-[[nodiscard]] bool write_image(
-    const std::filesystem::path& path,
-    const std::vector<std::byte>& value) noexcept {
-
-    try {
-        std::error_code error;
-
-        std::filesystem::create_directories(
-            path.parent_path(),
-            error);
-
-        if (error) {
-            return false;
-        }
-
-        auto temporary = path;
-        temporary += ".tmp";
-
-        {
-            std::ofstream stream(
-                temporary,
-                std::ios::binary |
-                    std::ios::trunc);
-
-            if (!stream) {
-                return false;
-            }
-
-            stream.write(
-                reinterpret_cast<const char*>(
-                    value.data()),
-                static_cast<std::streamsize>(
-                    value.size()));
-
-            stream.flush();
-
-            if (!stream) {
-                std::filesystem::remove(
-                    temporary,
-                    error);
-
-                return false;
-            }
-        }
-
-#if defined(_WIN32)
-        if (MoveFileExW(
-                temporary.c_str(),
-                path.c_str(),
-                MOVEFILE_REPLACE_EXISTING |
-                    MOVEFILE_WRITE_THROUGH) == 0) {
-
-            std::filesystem::remove(
-                temporary,
-                error);
-
-            return false;
-        }
-#else
-        std::filesystem::rename(
-            temporary,
-            path,
-            error);
-
-        if (error) {
-            std::filesystem::remove(
-                temporary,
-                error);
-
-            return false;
-        }
-#endif
-
-        return true;
-    }
-    catch (...) {
-        return false;
-    }
-}
-
 }
 
 project_configuration_manifest_store::
@@ -748,122 +793,44 @@ project_configuration_manifest_store(
 }
 
 project_configuration_manifest_store_result
-encode_project_configuration_manifest(
-    const project_configuration_manifest& value,
-    std::vector<std::byte>& output) noexcept {
-
-    output.clear();
-
-    try {
-        return encode(
-            value,
-            output)
-            ? project_configuration_manifest_store_result::
-                success
-            : project_configuration_manifest_store_result::
-                invalid;
-    }
-    catch (...) {
-        output.clear();
-
-        return project_configuration_manifest_store_result::
-            io_failed;
-    }
-}
-
-project_configuration_manifest_store_result
-decode_project_configuration_manifest(
-    std::span<const std::byte> image,
-    project_configuration_manifest& output) noexcept {
-
-    output = {};
-
-    try {
-        std::vector<std::byte> copy{
-            image.begin(),
-            image.end()};
-
-        if (!decode(
-                copy,
-                output)) {
-
-            output = {};
-
-            return project_configuration_manifest_store_result::
-                invalid;
-        }
-
-        return project_configuration_manifest_store_result::
-            success;
-    }
-    catch (...) {
-        output = {};
-
-        return project_configuration_manifest_store_result::
-            io_failed;
-    }
-}
-
-project_configuration_manifest_store_result
 project_configuration_manifest_store::load(
     project_configuration_manifest& output) const noexcept {
 
-    std::vector<std::byte> image;
+    output = {};
 
-    const auto read =
-        read_image(
-            manifest_path,
-            image);
+    read_only_file_mapping mapping;
 
-    if (read !=
-        project_configuration_manifest_store_result::
-            success) {
+    const auto opened =
+        mapping.open(
+            manifest_path);
 
-        output = {};
-        return read;
+    if (opened ==
+        read_only_file_mapping_result::
+            not_found) {
+
+        return project_configuration_manifest_store_result::
+            not_found;
     }
 
-    if (!decode(
-            image,
-            output)) {
-
-        output = {};
+    if (opened ==
+        read_only_file_mapping_result::
+            empty) {
 
         return project_configuration_manifest_store_result::
             invalid;
     }
 
-    return project_configuration_manifest_store_result::
-        success;
-}
+    if (opened !=
+        read_only_file_mapping_result::
+            success) {
 
-project_configuration_manifest_store_result
-project_configuration_manifest_store::save(
-    const project_configuration_manifest& value) const noexcept {
-
-    std::vector<std::byte> image;
-
-    try {
-        if (!encode(
-                value,
-                image)) {
-
-            return project_configuration_manifest_store_result::
-                invalid;
-        }
-    }
-    catch (...) {
         return project_configuration_manifest_store_result::
             io_failed;
     }
 
-    return write_image(
-        manifest_path,
-        image)
-        ? project_configuration_manifest_store_result::
-            success
-        : project_configuration_manifest_store_result::
-            io_failed;
+    return decode_project_configuration_manifest(
+        mapping.bytes(),
+        output);
 }
 
 }

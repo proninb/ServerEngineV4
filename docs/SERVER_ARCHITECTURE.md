@@ -555,12 +555,13 @@ selector files, or rollback generations. Any REBUILD failure closes
 operation-local mappings before removing all four artifacts again. Cleanup I/O
 failure is reported explicitly and leaves the Server `UNLOADED`.
 
-After topology finalization, the current REBUILD implementation computes the
-exact compiled layout, creates `compiled.bin` at its final size, writable-mmaps
-that file, and encodes G directly into the mapped pages. There is no full-size
-`std::vector<std::byte>` copy in the production REBUILD compiled path.
-`compiled_project_view::bind()` plus cold `verify_contents()` validates the same
-mapped bytes.
+After topology finalization, the current REBUILD implementation persists
+`project.manifest` directly to its final path using exact-size writable mmap,
+then computes the exact compiled layout, creates `compiled.bin` at its final
+size, writable-mmaps that file, and encodes G directly into the mapped pages.
+Neither production path creates a full-size serialized `std::vector<std::byte>`
+or `.tmp` artifact. `compiled_project_view::bind()` plus cold
+`verify_contents()` validates the compiled mapped bytes.
 
 LOAD maps and structurally binds an existing `compiled.bin` read-only without
 rebuilding Graph/string/identity containers. `verify_contents()` remains a

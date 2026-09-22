@@ -519,20 +519,23 @@ current inputs
     -> Parser/Semantic
     -> G
     -> finalized dependency topology
+    -> exact project.manifest layout
+    -> final project.manifest writable mmap
+    -> direct manifest encoding + flush
     -> exact compiled.bin layout
     -> final compiled.bin writable mmap
     -> direct G encoding into mapped pages
     -> structural + cold semantic validation
 ```
 
-The production REBUILD compiled path does not allocate a full-size
-`std::vector<std::byte>` image. Parser/Semantic already populates
-`identity_space` and G directly.
+The production REBUILD project.manifest and compiled.bin paths do not allocate
+full-size serialized `std::vector<std::byte>` images and do not create `.tmp`
+artifacts. Parser/Semantic already populates `identity_space` and G directly.
 
 The current implementation still stops before:
 
 ```text
-direct final-path persistence of project.manifest/source.bin/database.bin
+direct final-path persistence of source.bin/database.bin
 remaining C++ declaration semantics beyond the supported direct Parser slice
 BUILD persisted-state reconstruction and sparse affected rebuild to G
 LOAD/BUILD/REBUILD Phase-1 completion
