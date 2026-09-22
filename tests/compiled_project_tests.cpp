@@ -1,12 +1,16 @@
 #include "project/persistence/compiled_project.hpp"
 #include "project/persistence/crc64_ecma.hpp"
+#include "read_only_file_mapping.hpp"
+#include "writable_file_mapping.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
 #include <span>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace cw::server {
@@ -746,6 +750,175 @@ void test_structural_corruption(
     }
 }
 
+compiled_project_image_result build_test_compiled_image(
+    const compiled_fixture& fixture,
+    project_artifact_image& output) {
+
+    output = {};
+
+    compiled_project_layout layout;
+
+    const auto prepared =
+        prepare_compiled_project_layout(
+            fixture.strings,
+            fixture.identities,
+            fixture.G,
+            fixture.assigns,
+            layout);
+
+    if (prepared !=
+        compiled_project_image_result::success) {
+
+        return prepared;
+    }
+
+    try {
+        output.bytes.assign(
+            layout.size(),
+            std::byte{0});
+    }
+    catch (...) {
+        return compiled_project_image_result::
+            failed;
+    }
+
+    const auto encoded =
+        encode_compiled_project_image(
+            fixture.strings,
+            fixture.identities,
+            fixture.G,
+            fixture.assigns,
+            layout,
+            output.bytes);
+
+    if (encoded !=
+        compiled_project_image_result::success) {
+
+        output = {};
+        return encoded;
+    }
+
+    finalize_project_artifact_image(
+        output);
+
+    return compiled_project_image_result::
+        success;
+}
+
+void test_direct_mmap_encoding(
+    test_state& tests,
+    const compiled_fixture& fixture) {
+
+    compiled_project_layout layout;
+
+    if (!tests.expect(
+            prepare_compiled_project_layout(
+                fixture.strings,
+                fixture.identities,
+                fixture.G,
+                fixture.assigns,
+                layout) ==
+                compiled_project_image_result::success &&
+            layout.size() != 0,
+            "prepare direct compiled layout")) {
+
+        return;
+    }
+
+    const auto path =
+        std::filesystem::temp_directory_path() /
+        "server_engine_v4_direct_compiled_test.bin";
+
+    std::error_code error;
+    (void)std::filesystem::remove(
+        path,
+        error);
+
+    writable_file_mapping writable;
+
+    if (!tests.expect(
+            writable.create(
+                path,
+                layout.size()) ==
+                writable_file_mapping_result::success,
+            "create writable compiled mmap")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            encode_compiled_project_image(
+                fixture.strings,
+                fixture.identities,
+                fixture.G,
+                fixture.assigns,
+                layout,
+                writable.bytes()) ==
+                compiled_project_image_result::success,
+            "encode directly into compiled mmap")) {
+
+        writable.reset();
+        error.clear();
+        (void)std::filesystem::remove(
+            path,
+            error);
+        return;
+    }
+
+    compiled_project_view mapped_view;
+
+    tests.expect(
+        mapped_view.bind(
+            writable.bytes()) ==
+            compiled_project_image_result::success &&
+        mapped_view.verify_contents() ==
+            compiled_project_image_result::success,
+        "validate writable compiled mmap");
+
+    tests.expect(
+        writable.flush() ==
+            writable_file_mapping_result::success,
+        "flush writable compiled mmap");
+
+    writable.reset();
+
+    read_only_file_mapping persisted;
+
+    if (tests.expect(
+            persisted.open(
+                path) ==
+                read_only_file_mapping_result::success,
+            "reopen direct compiled mmap read-only")) {
+
+        compiled_project_view persisted_view;
+
+        tests.expect(
+            persisted_view.bind(
+                persisted.bytes()) ==
+                compiled_project_image_result::success &&
+            persisted_view.verify_contents() ==
+                compiled_project_image_result::success,
+            "validate persisted direct compiled mmap");
+
+        tests.expect(
+            persisted_view.find_type(
+                fixture.type_identity) ==
+                fixture.type,
+            "direct compiled mmap preserves Graph lookup");
+    }
+
+    persisted.reset();
+
+    error.clear();
+    (void)std::filesystem::remove(
+        path,
+        error);
+
+    tests.expect(
+        !error,
+        "remove direct compiled mmap test file");
+}
+
 void test_hot_cold_boundary(
     test_state& tests,
     const project_artifact_image& image) {
@@ -844,20 +1017,14 @@ int main() {
         project_artifact_image second;
 
         if (!tests.expect(
-                build_compiled_project_image(
-                    fixture.strings,
-                    fixture.identities,
-                    fixture.G,
-                    fixture.assigns,
+                build_test_compiled_image(
+                    fixture,
                     first) ==
                     compiled_project_image_result::success,
                 "encode first compiled image") ||
             !tests.expect(
-                build_compiled_project_image(
-                    fixture.strings,
-                    fixture.identities,
-                    fixture.G,
-                    fixture.assigns,
+                build_test_compiled_image(
+                    fixture,
                     second) ==
                     compiled_project_image_result::success,
                 "encode second compiled image")) {
@@ -874,6 +1041,10 @@ int main() {
             tests,
             fixture,
             first);
+
+        test_direct_mmap_encoding(
+            tests,
+            fixture);
 
         test_structural_corruption(
             tests,

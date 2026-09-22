@@ -35,6 +35,11 @@ enum class project_artifact_layout_result : std::uint8_t {
     failed,
 };
 
+enum class project_artifact_io_result : std::uint8_t {
+    success,
+    failed,
+};
+
 [[nodiscard]] project_artifact_layout_result make_project_artifact_layout(
     const std::filesystem::path& root_project_path,
     const server_files_configuration& files,
@@ -42,5 +47,13 @@ enum class project_artifact_layout_result : std::uint8_t {
 
 void finalize_project_artifact_image(
     project_artifact_image& image) noexcept;
+
+[[nodiscard]] project_artifact_io_result
+ensure_project_artifact_directory(
+    const project_artifact_layout& layout) noexcept;
+
+[[nodiscard]] project_artifact_io_result
+remove_project_artifacts(
+    const project_artifact_layout& layout) noexcept;
 
 }

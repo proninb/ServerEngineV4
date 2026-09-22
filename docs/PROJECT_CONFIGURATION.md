@@ -231,18 +231,19 @@ project file_id -> assign file_id
 These are file-level construction dependencies. They do not replace semantic
 relations produced later by Type, Source, or Assign frontends.
 
-`assign` is intentionally lightweight:
+`assign` is intentionally lightweight raw user data:
 
 ```text
 assign file
-    -> parse user connection descriptions
-    -> resolve referenced variables/endpoints
-    -> diagnose missing/invalid references
-    -> write the resolved connection into G
+    -> parse ordered source/target text
+    -> append to assign_table
+    -> persist beside G
 ```
 
-The eventual assignment relation in Graph is distinct from the file dependency
-relation used for BUILD invalidation.
+Assign performs no `string_id`/`identity_ref` resolution, no endpoint existence
+validation, no G mutation, no Runtime binding, and no additional dependency-edge
+emission. The `project -> assign` relation created by composition is its only
+File Context dependency.
 
 The topology model does not allocate a second identity for graph nodes or edges:
 
@@ -251,11 +252,11 @@ node identity = file_id
 edge identity is implicit in (source file_id, target file_id)
 ```
 
-Project composition stages only the explicit Project-declared edges in the
-shared File Context dependency arena. Header, Source, and Assign frontends append
-their own resolved direct dependencies in later construction stages. The compact
-forward/reverse topology is finalized only after all dependency discovery reaches
-closure.
+Project composition stages the explicit Project-declared edges in the shared
+File Context dependency arena. Header and Source preprocessing append resolved
+direct include dependencies during frontend execution. Assign appends no extra
+dependency edge. The compact forward/reverse topology is finalized only after
+all dependency discovery reaches closure.
 
 ## Path Resolution
 

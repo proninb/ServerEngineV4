@@ -504,6 +504,27 @@ does not consume `server_context.project`.
 If BUILD fails, the old persisted BUILD state remains available for later
 incremental reuse, but no resident Project remains active.
 
+## Development phase boundary
+
+Current implementation work is deliberately ordered as:
+
+```text
+PHASE 1
+LOAD / BUILD / REBUILD
+    -> G
+
+PHASE 2
+G
+    -> Runtime
+    -> SHM
+    -> resident Project
+```
+
+Phase 1 includes the persistence required for the three ways of obtaining G.
+REBUILD uses direct final artifact paths and deletes the full artifact set on
+failure. BUILD has a different failure contract and therefore does not inherit
+REBUILD persistence mechanics automatically.
+
 ## Current Project construction boundary
 
 The implemented REBUILD path currently reaches:
@@ -527,23 +548,34 @@ recursive project.json composition
 Assign is Studio-facing user data only. It performs no semantic variable
 resolution, G mutation, Runtime binding, or file dependency emission.
 
-REBUILD now constructs the mmap-native compiled Project image in memory after
-topology finalization. It does not replace `compiled.bin` while Runtime/SHM is
-still incomplete because an unsuccessful lifecycle operation must not publish
-new committed artifacts.
+REBUILD starts a fresh persisted lineage by removing
+`project.manifest`, `source.bin`, `database.bin`, and `compiled.bin`. It uses
+the final artifact names directly; there are no `.tmp` files, A/B slots,
+selector files, or rollback generations. Any REBUILD failure removes all four
+artifacts again.
 
-LOAD maps and structurally binds an existing `compiled.bin` without rebuilding
-Graph/string/identity containers. `verify_contents()` remains a separate cold
-integrity/semantic audit and is not part of the normal LOAD hot path. Resident
-mapping ownership and Runtime/SHM construction remain the next boundary.
+After topology finalization, the current REBUILD implementation computes the
+exact compiled layout, creates `compiled.bin` at its final size, writable-mmaps
+that file, and encodes G directly into the mapped pages. There is no full-size
+`std::vector<std::byte>` copy in the production REBUILD compiled path.
+`compiled_project_view::bind()` plus cold `verify_contents()` validates the same
+mapped bytes.
 
-The implemented BUILD code currently reaches only:
+LOAD maps and structurally binds an existing `compiled.bin` read-only without
+rebuilding Graph/string/identity containers. `verify_contents()` remains a
+separate cold audit and is not part of the normal LOAD hot path. Phase 1 still
+must complete BUILD/LOAD/REBUILD -> G before Runtime/SHM work begins.
+
+The implemented BUILD code currently reaches:
 
 ```text
 project.manifest load
     -> configuration-input verification
     -> recomposition when configuration bytes changed
     -> aggregate hash comparison
+    -> source.bin read-only mmap/bind
+    -> exact physical dirty detection
+    -> OLD reverse dependency affected closure
 ```
 
 The C++ BUILD entry now matches the lifecycle contract:
@@ -556,9 +588,9 @@ UNLOADED
 ```
 
 BUILD does not consume resident Project state. Remaining BUILD work includes
-SourceSave/File Context change detection, affected reverse closure, DB reuse,
-affected frontend/Parser/Semantic work, construction of G, and coordinated
-persistence.
+persisted File Context/DB reuse, sparse affected frontend/Parser/Semantic work,
+and construction of G. BUILD persistence mechanics are intentionally not frozen
+yet because a failed BUILD must preserve the previously persisted BUILD state.
 
 ## Filesystem and Project path boundaries
 

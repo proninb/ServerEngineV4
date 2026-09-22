@@ -42,8 +42,10 @@ REBUILD
     -> G
 ```
 
-There is no `SAVE` lifecycle stage. Durability is part of the successful
-`BUILD`/`REBUILD` artifact replacement.
+There is no `SAVE` lifecycle stage. Persistence is part of BUILD/REBUILD
+themselves. REBUILD writes its final artifact paths directly and removes the
+complete four-file set on failure. BUILD has a different failure contract:
+a failed BUILD preserves the previously persisted BUILD state.
 
 ## Lifecycle
 
@@ -450,7 +452,10 @@ LOAD failure leaves `UNLOADED`.
 
 REBUILD starts only from `UNLOADED` and starts a fresh construction lineage.
 
+Development is intentionally split into two boundaries:
+
 ```text
+PHASE 1
 root project.json
     -> recursive Project configuration composition
     -> root preprocessor configuration
@@ -462,15 +467,18 @@ root project.json
     -> parse Assign inputs -> assign_table
     -> Parser / Semantic -> G
     -> complete dependency topology
-    -> encode BUILD acceleration state
-    -> derive ABI layout from G + Server ABI
-    -> persist compiled G
-       + optional compatible ABI-layout acceleration
+    -> persist REBUILD artifacts
+
+PHASE 2
+G
     -> Runtime
     -> SHM
-    -> replace persisted artifacts
     -> resident Project
 ```
+
+Phase 1 must be complete for LOAD, BUILD, and REBUILD before Runtime/SHM work
+continues. ABI-derived Runtime layout belongs to Phase 2 and is not part of the
+current construction/persistence boundary.
 
 REBUILD ignores the previous incremental construction state.
 
@@ -522,29 +530,37 @@ project -> duplicate reference is an error
 
 File IDs are assigned root-first in declaration-order DFS. There is no sort.
 
-The current implementation stops before:
+The current implementation already reaches:
 
 ```text
-remaining C++ declaration semantics beyond the first direct Parser slice
-final SourceSave image construction
-completed DB persistence
-successful-operation compiled.bin replacement
-ABI-layout derivation/persistence
-Runtime
-SHM
-artifact replacement
+current inputs
+    -> File Context / lexical / preprocessing
+    -> Parser/Semantic
+    -> G
+    -> finalized dependency topology
+    -> exact compiled.bin layout
+    -> final compiled.bin writable mmap
+    -> direct G encoding into mapped pages
+    -> structural + cold semantic validation
 ```
 
-The `identity_ref`/`identity_space` foundation already exists. Parser/Semantic has
-not yet populated the Project semantic identities or G.
+The production REBUILD compiled path does not allocate a full-size
+`std::vector<std::byte>` image. Parser/Semantic already populates
+`identity_space` and G directly.
 
-The persistence subsystem provides direct artifact paths and the `source.bin`
-encoder/validator. Assign does not emit file dependencies. REBUILD finalizes the
-File Context topology after Parser/Semantic include discovery; SourceSave
-encoding may consume that finalized topology.
+The current implementation still stops before:
 
-Because no G is produced yet, the incomplete REBUILD path must not publish any
-partial construction artifact as newly persisted Project state.
+```text
+direct final-path persistence of project.manifest/source.bin/database.bin
+remaining C++ declaration semantics beyond the supported direct Parser slice
+BUILD persisted-state reconstruction and sparse affected rebuild to G
+LOAD/BUILD/REBUILD Phase-1 completion
+Runtime
+SHM
+```
+
+Because REBUILD still returns `unsupported`, the REBUILD cleanup contract removes
+all four artifact files on return. No incomplete REBUILD artifact set is retained.
 
 ## BUILD
 
@@ -568,12 +584,7 @@ persisted BUILD state
              +-- old reverse dependency closure
              +-- reuse unchanged persisted construction state
              +-- affected frontend / Parser / Semantic work
-             +-- construct G
-             +-- validate complete artifact set
-             `-- replace persisted artifacts
-                     |
-                     v
-                  LOADED
+             `-- construct G
 ```
 
 The previously persisted compiled G is not a `Gn` object and BUILD does not
@@ -809,24 +820,41 @@ BUILD opens the persisted construction artifacts it requires. If required BUILD
 state is missing or invalid, incremental BUILD cannot proceed and REBUILD is
 required.
 
-A successful BUILD/REBUILD replaces the persisted artifact files produced by
-that operation. There is no selector file or active/inactive persistence slot,
-and there is no explicit SAVE lifecycle stage.
+BUILD and REBUILD intentionally have different persisted-failure contracts.
 
-A failed BUILD publishes no resident Project and leaves the Server `UNLOADED`.
+BUILD continues an existing lineage. A failed BUILD publishes no resident
+Project, leaves the Server `UNLOADED`, and preserves the previously persisted
+BUILD state for a later BUILD attempt.
+
+REBUILD starts a fresh lineage. Before construction it removes:
+
+```text
+project.manifest
+source.bin
+database.bin
+compiled.bin
+```
+
+REBUILD writes final artifact names directly; there is no `.tmp`, selector,
+active/inactive slot, A/B generation, rollback artifact, or SAVE stage. Any
+REBUILD failure removes all four files again. Only a successful REBUILD may
+leave the new persisted artifact set present.
 
 ### Current implementation boundary
 
-The current code already implements the configuration-manifest preflight:
+The current BUILD implementation reaches:
 
 ```text
 load project.manifest
-verify every configuration input
-recompose when one input changed
-compare aggregate configuration hash
+    -> verify configuration inputs
+    -> recompose when configuration bytes changed
+    -> compare aggregate configuration hash
+    -> read-only mmap/bind source.bin
+    -> exact physical dirty detection
+    -> OLD reverse dependency affected closure
 ```
 
-The current C++ BUILD entry already matches the lifecycle contract:
+The current C++ BUILD entry matches the lifecycle contract:
 
 ```text
 UNLOADED
@@ -834,8 +862,11 @@ UNLOADED
     -> persisted BUILD artifacts
 ```
 
-File Context/string/identity restore and the remaining BUILD reuse path are not
-implemented yet.
+Sparse File Context mutation, database/string/identity reuse, affected
+frontend/Parser/Semantic reconstruction, and final G construction are not
+implemented yet. The physical mechanism used by a successful BUILD to persist
+its new state is intentionally not frozen yet; it must satisfy the separate
+BUILD failure contract that preserves the previously persisted BUILD state.
 
 ## LOAD Implementation Boundary
 
@@ -1281,7 +1312,7 @@ The order is:
 1. detect physical dirty files
 2. compute affected closure using OLD committed dependents
 3. recompute only dependency relations whose owners are affected/changed
-4. persist the resulting current topology as part of the artifact replacement
+4. persist the resulting current topology as part of the successful BUILD state
 ```
 
 The physical encoding used to support sparse owner replacement is not frozen
@@ -1301,61 +1332,39 @@ project -> source
 project -> assign
 ```
 
-Header, Source, and Assign syntax add only their own resolved direct relations.
-
-Assign dependency emission occurs only after Semantic identity exists.
+Header and Source preprocessing append their own resolved direct include
+relations. Assign is raw user data and emits no dependency edge beyond the
+`project -> assign` relation created by composition.
 
 Dependency topology belongs to SourceSave construction state and is never
 resident runtime Project state.
 
-## Publication Contract
+## Persistence Failure Contract
 
-BUILD and REBUILD own only temporary, non-authoritative operation state until
-the complete artifact set is ready.
+REBUILD and BUILD deliberately have different persistence semantics.
 
-Nothing becomes authoritative merely because an intermediate file was written
-or an in-memory subsystem completed.
-
-Successful publication is one coordinated lifecycle boundary:
+REBUILD is the fresh-lineage boundary:
 
 ```text
-temporary configuration proof
-temporary SourceSave state
-temporary DB state
-constructed G
-prepared Runtime/SHM state
-        |
-        v
-validate complete artifact set
-        |
-        v
-write and validate inactive persistence slot
-        |
-        v
-persisted artifact replacement
-        |
-        v
-publish resident Project
+REBUILD start
+    -> delete project.manifest
+    -> delete source.bin
+    -> delete database.bin
+    -> delete compiled.bin
+    -> construct fresh lineage + G
+    -> write final artifact paths directly
 ```
 
-Failure before that boundary:
+There is no inactive slot, `.tmp` artifact, A/B generation, selector, rollback
+artifact, or coordinated persistence generation. Any REBUILD failure removes all
+four files again and leaves the Server `UNLOADED`.
 
-```text
-REBUILD failure
-    -> discard temporary REBUILD state
-    -> preserve previously persisted BUILD state if it exists
-    -> UNLOADED
+BUILD continues an existing lineage. A failed BUILD discards only its temporary
+operation state, preserves the previously persisted BUILD state, publishes no
+resident Project, and leaves the Server `UNLOADED`.
 
-BUILD failure
-    -> discard temporary BUILD state
-    -> preserve persisted BUILD state
-    -> publish no resident Project
-    -> UNLOADED
-```
-
-The previously persisted compiled artifact may remain as the last successful
-persisted BUILD state, but it is not treated as the current runnable Project after a failed
-BUILD against changed source state.
+Runtime/SHM publication is Phase 2 and is separate from this Phase-1 persistence
+contract.
 
 ## Architectural Invariants
 
@@ -1376,7 +1385,7 @@ BUILD against changed source state.
 15. Configuration composition is root-first declaration-order DFS and is never sorted.
 16. Change tokens are proof optimizations, never identity.
 17. Per-file SHA-256 identifies exact bytes.
-18. Temporary construction/persistence state becomes authoritative only at the artifact replacement boundary.
+18. REBUILD writes final artifact paths directly; any REBUILD failure removes the complete four-file artifact set.
 19. Project absolute-path resolution is fail-closed.
 20. `file_id` is the only identity of a file-dependency node.
 21. Forward and reverse file adjacency are first-class persisted BUILD data.

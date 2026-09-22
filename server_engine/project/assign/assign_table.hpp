@@ -58,6 +58,10 @@ public:
         return entries.empty();
     }
 
+    [[nodiscard]] std::size_t byte_size() const noexcept {
+        return bytes.size();
+    }
+
 private:
     [[nodiscard]] std::string_view text(
         std::uint32_t offset,

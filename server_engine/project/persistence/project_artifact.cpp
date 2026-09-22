@@ -51,4 +51,85 @@ void finalize_project_artifact_image(
                 image.bytes.size()});
 }
 
+project_artifact_io_result
+ensure_project_artifact_directory(
+    const project_artifact_layout& layout) noexcept {
+
+    if (layout.root.empty()) {
+        return project_artifact_io_result::
+            failed;
+    }
+
+    try {
+        std::error_code error;
+
+        std::filesystem::create_directories(
+            layout.root,
+            error);
+
+        if (error) {
+            return project_artifact_io_result::
+                failed;
+        }
+
+        const auto directory =
+            std::filesystem::is_directory(
+                layout.root,
+                error);
+
+        return !error &&
+            directory
+            ? project_artifact_io_result::
+                success
+            : project_artifact_io_result::
+                failed;
+    }
+    catch (...) {
+        return project_artifact_io_result::
+            failed;
+    }
+}
+
+project_artifact_io_result
+remove_project_artifacts(
+    const project_artifact_layout& layout) noexcept {
+
+    bool failed = false;
+
+    const std::filesystem::path* paths[]{
+        &layout.manifest,
+        &layout.source_save,
+        &layout.database,
+        &layout.compiled,
+    };
+
+    for (const auto* path : paths) {
+        if (path == nullptr ||
+            path->empty()) {
+
+            failed = true;
+            continue;
+        }
+
+        try {
+            std::error_code error;
+
+            (void)std::filesystem::remove(
+                *path,
+                error);
+
+            if (error) {
+                failed = true;
+            }
+        }
+        catch (...) {
+            failed = true;
+        }
+    }
+
+    return failed
+        ? project_artifact_io_result::failed
+        : project_artifact_io_result::success;
+}
+
 }

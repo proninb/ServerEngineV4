@@ -45,6 +45,10 @@ public:
         return records.size();
     }
 
+    [[nodiscard]] std::size_t byte_size() const noexcept {
+        return bytes.size();
+    }
+
 private:
     struct string_record final {
         std::uint32_t offset = 0;

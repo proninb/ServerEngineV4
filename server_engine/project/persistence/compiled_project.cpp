@@ -61,14 +61,6 @@ constexpr std::uint32_t link_record_size = 16;
 constexpr std::uint32_t graph_identity_record_size = 4;
 constexpr std::uint32_t assign_record_size = 16;
 
-struct layout_section final {
-    compiled_project_section kind{};
-    std::uint32_t record_size = 0;
-    std::uint64_t count = 0;
-    std::uint64_t offset = 0;
-    std::uint64_t crc64 = 0;
-};
-
 [[nodiscard]] constexpr std::size_t section_index(
     compiled_project_section kind) noexcept {
 
@@ -2870,12 +2862,12 @@ compiled_project_view::verify_contents() const noexcept {
 }
 
 compiled_project_image_result
-build_compiled_project_image(
+prepare_compiled_project_layout(
     const string_table& strings,
     const identity_space& identities,
     const graph& G,
     const assign_table& assigns,
-    project_artifact_image& output) noexcept {
+    compiled_project_layout& output) noexcept {
 
     output = {};
 
@@ -2944,63 +2936,21 @@ build_compiled_project_image(
             invalid_state;
     }
 
-    std::uint64_t string_bytes_count = 0;
+    const auto string_bytes_count =
+        static_cast<std::uint64_t>(
+            strings.byte_size());
 
-    for (std::uint64_t slot = 1;
-         slot <= string_count;
-         ++slot) {
+    const auto assign_bytes_count =
+        static_cast<std::uint64_t>(
+            assigns.byte_size());
 
-        const auto value =
-            strings.spelling(
-                static_cast<std::uint32_t>(
-                    slot));
+    if (string_bytes_count >
+            (std::numeric_limits<std::uint32_t>::max)() ||
+        assign_bytes_count >
+            (std::numeric_limits<std::uint32_t>::max)()) {
 
-        if (value.empty() ||
-            value.size() >
-                (std::numeric_limits<std::uint32_t>::max)() ||
-            !add_u64(
-                string_bytes_count,
-                value.size(),
-                string_bytes_count) ||
-            string_bytes_count >
-                (std::numeric_limits<std::uint32_t>::max)()) {
-
-            return compiled_project_image_result::
-                invalid_state;
-        }
-    }
-
-    std::uint64_t assign_bytes_count = 0;
-
-    for (const auto& record :
-         assigns.records()) {
-
-        const auto source =
-            assigns.source(record);
-
-        const auto target =
-            assigns.target(record);
-
-        if (source.empty() ||
-            target.empty() ||
-            source.size() >
-                (std::numeric_limits<std::uint32_t>::max)() ||
-            target.size() >
-                (std::numeric_limits<std::uint32_t>::max)() ||
-            !add_u64(
-                assign_bytes_count,
-                source.size(),
-                assign_bytes_count) ||
-            !add_u64(
-                assign_bytes_count,
-                target.size(),
-                assign_bytes_count) ||
-            assign_bytes_count >
-                (std::numeric_limits<std::uint32_t>::max)()) {
-
-            return compiled_project_image_result::
-                invalid_state;
-        }
+        return compiled_project_image_result::
+            invalid_state;
     }
 
     const auto string_index_count =
@@ -3021,7 +2971,7 @@ build_compiled_project_image(
     }
 
     std::array<
-        layout_section,
+        compiled_project_layout::section_record,
         compiled_project_directory_count>
         layout{{
             {
@@ -3157,19 +3107,199 @@ build_compiled_project_image(
             failed;
     }
 
-    try {
-        output.bytes.assign(
-            static_cast<std::size_t>(
-                cursor),
-            std::byte{0});
-    }
-    catch (...) {
+
+    output.sections =
+        layout;
+
+    output.size_value =
+        static_cast<std::size_t>(
+            cursor);
+
+    return compiled_project_image_result::
+        success;
+}
+
+compiled_project_image_result
+encode_compiled_project_image(
+    const string_table& strings,
+    const identity_space& identities,
+    const graph& G,
+    const assign_table& assigns,
+    const compiled_project_layout& prepared_layout,
+    std::span<std::byte> output) noexcept {
+
+    if (output.size() !=
+        prepared_layout.size()) {
+
         return compiled_project_image_result::
-            failed;
+            invalid_state;
+    }
+
+    const auto& layout =
+        prepared_layout.sections;
+
+    std::fill(
+        output.begin(),
+        output.begin() +
+            static_cast<std::ptrdiff_t>(
+                first_section_offset),
+        std::byte{0});
+
+    std::uint64_t previous_end =
+        first_section_offset;
+
+    for (const auto& value : layout) {
+        if (value.offset >
+            previous_end) {
+
+            std::fill(
+                output.begin() +
+                    static_cast<std::ptrdiff_t>(
+                        previous_end),
+                output.begin() +
+                    static_cast<std::ptrdiff_t>(
+                        value.offset),
+                std::byte{0});
+        }
+
+        previous_end =
+            value.offset +
+            value.count *
+                value.record_size;
+    }
+
+    const auto clear_section =
+        [&](compiled_project_section kind) noexcept {
+            const auto& value =
+                layout[
+                    section_index(
+                        kind)];
+
+            const auto begin =
+                static_cast<std::size_t>(
+                    value.offset);
+
+            const auto size =
+                static_cast<std::size_t>(
+                    value.count *
+                    value.record_size);
+
+            std::fill(
+                output.begin() +
+                    static_cast<std::ptrdiff_t>(
+                        begin),
+                output.begin() +
+                    static_cast<std::ptrdiff_t>(
+                        begin + size),
+                std::byte{0});
+        };
+
+    clear_section(
+        compiled_project_section::
+            string_index);
+
+    clear_section(
+        compiled_project_section::
+            identity_index);
+
+    clear_section(
+        compiled_project_section::
+            graph_identity_index);
+
+    const auto count =
+        [&](compiled_project_section kind) noexcept {
+            return layout[
+                section_index(
+                    kind)].count;
+        };
+
+    const auto string_count =
+        count(
+            compiled_project_section::
+                string_core);
+
+    const auto identity_count =
+        count(
+            compiled_project_section::
+                identity_core);
+
+    const auto type_count =
+        count(
+            compiled_project_section::
+                types);
+
+    const auto member_count =
+        count(
+            compiled_project_section::
+                members);
+
+    const auto derived_count =
+        count(
+            compiled_project_section::
+                derived_types);
+
+    const auto object_count =
+        count(
+            compiled_project_section::
+                objects);
+
+    const auto link_count =
+        count(
+            compiled_project_section::
+                links);
+
+    const auto assign_count =
+        count(
+            compiled_project_section::
+                assign_records);
+
+    const auto string_bytes_count =
+        count(
+            compiled_project_section::
+                string_bytes);
+
+    const auto assign_bytes_count =
+        count(
+            compiled_project_section::
+                assign_bytes);
+
+    const auto string_index_count =
+        count(
+            compiled_project_section::
+                string_index);
+
+    const auto identity_index_count =
+        count(
+            compiled_project_section::
+                identity_index);
+
+    if (string_count !=
+            strings.size() ||
+        string_bytes_count !=
+            strings.byte_size() ||
+        identity_count !=
+            identities.size() ||
+        type_count !=
+            G.type_count() ||
+        member_count !=
+            G.member_count() ||
+        derived_count !=
+            G.derived_type_count() ||
+        object_count !=
+            G.object_count() ||
+        link_count !=
+            G.link_count() ||
+        assign_count !=
+            assigns.size() ||
+        assign_bytes_count !=
+            assigns.byte_size()) {
+
+        return compiled_project_image_result::
+            invalid_state;
     }
 
     auto* base =
-        output.bytes.data();
+        output.data();
 
     const auto section_data =
         [&](compiled_project_section kind)
@@ -3282,8 +3412,7 @@ build_compiled_project_image(
         if (byte_offset !=
             string_bytes_count) {
 
-            output = {};
-            return compiled_project_image_result::
+                return compiled_project_image_result::
                 invalid_state;
         }
     }
@@ -3303,6 +3432,14 @@ build_compiled_project_image(
         write_u32(
             core,
             identities.root().value());
+
+        write_u32(
+            core + 4,
+            0);
+
+        write_u32(
+            core + 8,
+            0);
 
         const auto mask =
             identity_index_count - 1;
@@ -3326,8 +3463,7 @@ build_compiled_project_image(
                 !strings.contains(
                     value->name)) {
 
-                output = {};
-                return compiled_project_image_result::
+                        return compiled_project_image_result::
                     invalid_state;
             }
 
@@ -3435,8 +3571,7 @@ build_compiled_project_image(
                 identity.kind() !=
                     identity_kind::type) {
 
-                output = {};
-                return compiled_project_image_result::
+                        return compiled_project_image_result::
                     invalid_state;
             }
 
@@ -3480,8 +3615,7 @@ build_compiled_project_image(
                     graph_identity_record_size;
 
             if (read_u32(location) != 0) {
-                output = {};
-                return compiled_project_image_result::
+                        return compiled_project_image_result::
                     invalid_state;
             }
 
@@ -3532,8 +3666,7 @@ build_compiled_project_image(
                 !valid_construction(
                     initial)) {
 
-                output = {};
-                return compiled_project_image_result::
+                        return compiled_project_image_result::
                     invalid_state;
             }
 
@@ -3606,8 +3739,7 @@ build_compiled_project_image(
                  value.child.payload() >
                     index)) {
 
-                output = {};
-                return compiled_project_image_result::
+                        return compiled_project_image_result::
                     invalid_state;
             }
 
@@ -3668,8 +3800,7 @@ build_compiled_project_image(
                 identity.kind() !=
                     identity_kind::object) {
 
-                output = {};
-                return compiled_project_image_result::
+                        return compiled_project_image_result::
                     invalid_state;
             }
 
@@ -3699,8 +3830,7 @@ build_compiled_project_image(
                     graph_identity_record_size;
 
             if (read_u32(location) != 0) {
-                output = {};
-                return compiled_project_image_result::
+                        return compiled_project_image_result::
                     invalid_state;
             }
 
@@ -3825,14 +3955,24 @@ build_compiled_project_image(
         if (byte_offset !=
             assign_bytes_count) {
 
-            output = {};
-            return compiled_project_image_result::
+                return compiled_project_image_result::
                 invalid_state;
         }
     }
 
-    // Per-section CRC and canonical directory.
-    for (auto& value : layout) {
+    // Per-section CRC belongs to this encoding, not to the layout.
+    std::array<
+        std::uint64_t,
+        compiled_project_directory_count>
+        section_crc{};
+
+    for (std::size_t index = 0;
+         index < layout.size();
+         ++index) {
+
+        const auto& value =
+            layout[index];
+
         std::uint64_t byte_count = 0;
 
         if (!multiply_u64(
@@ -3842,12 +3982,11 @@ build_compiled_project_image(
             byte_count >
                 (std::numeric_limits<std::size_t>::max)()) {
 
-            output = {};
             return compiled_project_image_result::
                 failed;
         }
 
-        value.crc64 =
+        section_crc[index] =
             persistence_crc64(
                 std::span<const std::byte>{
                     base +
@@ -3892,7 +4031,7 @@ build_compiled_project_image(
 
     write_u64(
         base + 40,
-        output.bytes.size());
+        output.size());
 
     write_u64(
         base + header_string_count_offset,
@@ -3950,7 +4089,7 @@ build_compiled_project_image(
 
         write_u64(
             entry + 24,
-            value.crc64);
+            section_crc[index]);
     }
 
     write_u64(
@@ -3986,20 +4125,14 @@ build_compiled_project_image(
 
     const auto bound =
         validation.bind(
-            output.bytes);
+            output);
 
     if (bound !=
         compiled_project_image_result::
             success) {
 
-        output = {};
         return bound;
     }
-
-    // Freshly emitted canonical bytes need structural bind here. Full CRC and
-    // semantic verify is the persisted-input cold audit, as in V3.
-    finalize_project_artifact_image(
-        output);
 
     return compiled_project_image_result::
         success;

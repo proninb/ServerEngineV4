@@ -5,8 +5,10 @@
 #include "frontend/source_discovery.hpp"
 #include "parser/parser.hpp"
 #include "persistence/compiled_project.hpp"
+#include "persistence/project_artifact.hpp"
 
 #include "../diagnostics/diagnostic_builder.hpp"
+#include "../writable_file_mapping.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 
 #include <string>
@@ -14,6 +16,35 @@
 
 namespace cw::server {
 namespace {
+
+class rebuild_artifact_cleanup final {
+public:
+    explicit rebuild_artifact_cleanup(
+        const project_artifact_layout& layout) noexcept
+        : layout(layout) {
+    }
+
+    ~rebuild_artifact_cleanup() {
+        if (active) {
+            (void)remove_project_artifacts(
+                layout);
+        }
+    }
+
+    rebuild_artifact_cleanup(
+        const rebuild_artifact_cleanup&) = delete;
+
+    rebuild_artifact_cleanup& operator=(
+        const rebuild_artifact_cleanup&) = delete;
+
+    void release() noexcept {
+        active = false;
+    }
+
+private:
+    const project_artifact_layout& layout;
+    bool active = true;
+};
 
 [[nodiscard]] server_status emit_source_failure(
     file_context& files,
@@ -79,7 +110,46 @@ server_status rebuild_project(
     diagnostic_collection& diagnostics,
     std::unique_ptr<project>& output) {
 
-    (void)output;
+    output.reset();
+
+    project_artifact_layout layout;
+
+    if (make_project_artifact_layout(
+            project_path,
+            settings.files,
+            layout) !=
+        project_artifact_layout_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_rebuild_incomplete,
+                operation)
+                .file(project_path)
+                .detail(
+                    "Cannot construct Project artifact layout")
+                .build());
+
+        return server_status::io_error;
+    }
+
+    rebuild_artifact_cleanup cleanup{
+        layout};
+
+    if (remove_project_artifacts(
+            layout) !=
+        project_artifact_io_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_rebuild_incomplete,
+                operation)
+                .file(layout.root)
+                .detail(
+                    "REBUILD could not remove the previous persisted artifact set")
+                .build());
+
+        return server_status::io_error;
+    }
 
     rebuild_context context{
         settings};
@@ -245,18 +315,81 @@ server_status rebuild_project(
         return topology_finalized;
     }
 
-    project_artifact_image compiled_image;
+    compiled_project_layout compiled_layout;
 
-    const auto compiled =
-        build_compiled_project_image(
+    const auto prepared =
+        prepare_compiled_project_layout(
             context.strings,
             context.identities,
             context.G,
             context.assigns,
-            compiled_image);
+            compiled_layout);
+
+    if (prepared !=
+        compiled_project_image_result::success) {
+
+        return prepared ==
+                compiled_project_image_result::failed
+            ? server_status::io_error
+            : server_status::
+                project_artifact_invalid;
+    }
+
+    if (ensure_project_artifact_directory(
+            layout) !=
+        project_artifact_io_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_compiled_io_failed,
+                operation)
+                .file(layout.compiled)
+                .detail(
+                    "Cannot create the Project artifact directory")
+                .build());
+
+        return server_status::io_error;
+    }
+
+    writable_file_mapping compiled_mapping;
+
+    if (compiled_mapping.create(
+            layout.compiled,
+            compiled_layout.size()) !=
+        writable_file_mapping_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_compiled_io_failed,
+                operation)
+                .file(layout.compiled)
+                .detail(
+                    "Cannot create and memory-map compiled.bin for direct REBUILD encoding")
+                .build());
+
+        return server_status::io_error;
+    }
+
+    const auto compiled =
+        encode_compiled_project_image(
+            context.strings,
+            context.identities,
+            context.G,
+            context.assigns,
+            compiled_layout,
+            compiled_mapping.bytes());
 
     if (compiled !=
         compiled_project_image_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_compiled_invalid,
+                operation)
+                .file(layout.compiled)
+                .detail(
+                    "Direct compiled.bin encoding failed")
+                .build());
 
         return compiled ==
                 compiled_project_image_result::failed
@@ -265,19 +398,50 @@ server_status rebuild_project(
                 project_artifact_invalid;
     }
 
-    // REBUILD still fails at Runtime/SHM. Do not replace a committed
-    // compiled.bin from an unsuccessful lifecycle operation.
-    (void)compiled_image;
+    compiled_project_view compiled_view;
 
-    // The manifest becomes authoritative only with the complete successful
-    // REBUILD artifact persistence is not implemented yet.
+    if (compiled_view.bind(
+            compiled_mapping.bytes()) !=
+            compiled_project_image_result::success ||
+        compiled_view.verify_contents() !=
+            compiled_project_image_result::success) {
 
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_compiled_invalid,
+                operation)
+                .file(layout.compiled)
+                .detail(
+                    "Direct compiled.bin image failed structural or cold semantic validation")
+                .build());
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    if (compiled_mapping.flush() !=
+        writable_file_mapping_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_compiled_io_failed,
+                operation)
+                .file(layout.compiled)
+                .detail(
+                    "Cannot flush direct compiled.bin mapping")
+                .build());
+
+        return server_status::io_error;
+    }
+
+    // REBUILD is not yet a successful lifecycle operation. cleanup therefore
+    // removes project.manifest/source.bin/database.bin/compiled.bin on return.
     diagnostics.emit(
         diagnostic(
             diagnostics::project_rebuild_incomplete,
             operation)
             .detail(
-                "Project configuration manifest, physical source lexical preparation, Assign user-table construction, single-pass preprocessing/include discovery with direct Parser/Semantic G construction, terminal dependency-topology finalization, and mmap-native compiled Project image construction are complete; remaining C++ declaration semantics, Runtime/SHM construction, and successful-operation artifact replacement are not implemented yet")
+                "Direct writable-mmap compiled.bin construction from final G is complete for the supported semantic slice; remaining Phase-1 BUILD/LOAD/REBUILD completion and direct persistence of BUILD-lineage artifacts are not implemented yet")
             .build());
 
     return server_status::unsupported;

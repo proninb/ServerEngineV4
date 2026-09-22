@@ -68,6 +68,47 @@ enum class compiled_project_image_result : std::uint8_t {
     failed,
 };
 
+// Fixed-size preparation state for direct compiled.bin encoding. It contains
+// only section counts/offsets; no Project payload bytes are copied into it.
+class compiled_project_layout final {
+public:
+    [[nodiscard]] std::size_t size() const noexcept {
+        return size_value;
+    }
+
+private:
+    struct section_record final {
+        compiled_project_section kind{};
+        std::uint32_t record_size = 0;
+        std::uint64_t count = 0;
+        std::uint64_t offset = 0;
+    };
+
+    std::array<
+        section_record,
+        compiled_project_directory_count>
+        sections{};
+
+    std::size_t size_value = 0;
+
+    friend compiled_project_image_result
+    prepare_compiled_project_layout(
+        const string_table&,
+        const identity_space&,
+        const graph&,
+        const assign_table&,
+        compiled_project_layout&) noexcept;
+
+    friend compiled_project_image_result
+    encode_compiled_project_image(
+        const string_table&,
+        const identity_space&,
+        const graph&,
+        const assign_table&,
+        const compiled_project_layout&,
+        std::span<std::byte>) noexcept;
+};
+
 // Read-only query view over one mapped/immutable compiled.bin image.
 class compiled_project_view final {
 public:
@@ -233,13 +274,24 @@ private:
     std::size_t assign_count_value = 0;
 };
 
-// Deterministic field-wise encoder. It preserves all numeric semantic/Graph
-// slots and builds persisted query indexes so LOAD needs no reconstruction.
-[[nodiscard]] compiled_project_image_result build_compiled_project_image(
+// Precomputes the exact final compiled.bin size and fixed section offsets
+// without allocating or copying Project payload bytes.
+[[nodiscard]] compiled_project_image_result prepare_compiled_project_layout(
     const string_table& strings,
     const identity_space& identities,
     const graph& G,
     const assign_table& assigns,
-    project_artifact_image& output) noexcept;
+    compiled_project_layout& output) noexcept;
+
+// Encodes directly into caller-owned bytes, including writable mmap pages.
+// layout must come from prepare_compiled_project_layout() for the same unchanged
+// construction state. Encoding never performs a second layout pass.
+[[nodiscard]] compiled_project_image_result encode_compiled_project_image(
+    const string_table& strings,
+    const identity_space& identities,
+    const graph& G,
+    const assign_table& assigns,
+    const compiled_project_layout& layout,
+    std::span<std::byte> output) noexcept;
 
 }

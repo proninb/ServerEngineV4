@@ -14,6 +14,7 @@ add_executable(ServerEngineV4
     server_engine/server.cpp
     server_engine/filesystem_path.cpp
     server_engine/read_only_file_mapping.cpp
+    server_engine/writable_file_mapping.cpp
     server_engine/diagnostics/diagnostic_collection.cpp
     server_engine/diagnostics/diagnostic_formatter.cpp
     server_engine/diagnostics/diagnostic_source_cache.cpp
@@ -89,6 +90,8 @@ include(CTest)
 if(BUILD_TESTING)
     add_executable(ServerEngineV4Tests
         tests/compiled_project_tests.cpp
+        server_engine/read_only_file_mapping.cpp
+        server_engine/writable_file_mapping.cpp
         server_engine/project/string/string_table.cpp
         server_engine/project/semantic/identity.cpp
         server_engine/project/graph/graph.cpp

@@ -79,6 +79,7 @@
     <ClCompile Include="server_engine\server.cpp" />
     <ClCompile Include="server_engine\filesystem_path.cpp" />
     <ClCompile Include="server_engine\read_only_file_mapping.cpp" />
+    <ClCompile Include="server_engine\writable_file_mapping.cpp" />
     <ClCompile Include="server_engine\diagnostics\diagnostic_collection.cpp" />
     <ClCompile Include="server_engine\diagnostics\diagnostic_formatter.cpp" />
     <ClCompile Include="server_engine\diagnostics\diagnostic_source_cache.cpp" />
@@ -124,6 +125,7 @@
     <ClInclude Include="server_engine\server.hpp" />
     <ClInclude Include="server_engine\filesystem_path.hpp" />
     <ClInclude Include="server_engine\read_only_file_mapping.hpp" />
+    <ClInclude Include="server_engine\writable_file_mapping.hpp" />
     <ClInclude Include="server_engine\server_context.hpp" />
     <ClInclude Include="server_engine\server_status.hpp" />
     <ClInclude Include="server_engine\string_id.hpp" />
