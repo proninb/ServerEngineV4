@@ -10,6 +10,7 @@
 #include "preprocessor_configuration.hpp"
 #include "file/file_context.hpp"
 #include "frontend/lexical_generation.hpp"
+#include "graph/graph.hpp"
 #include "semantic/identity.hpp"
 #include "string/string_table.hpp"
 #include "../configuration/server_configuration.hpp"
@@ -57,6 +58,7 @@ public:
     lexical_generation lexical;
     string_table strings;
     identity_space identities;
+    graph G;
 
     preprocessor_configuration preprocessor;
 };

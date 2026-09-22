@@ -124,6 +124,59 @@ Persisted artifacts do not introduce another Project or Graph lifetime.
 `project.manifest`, `source.bin`, and `database.bin` are persisted BUILD
 acceleration/lineage state.
 
+## G storage boundary
+
+`G` is the final compiled semantic Project representation.
+
+```text
+identity_ref
+    semantic WHO
+
+type_handle / object_handle / link_handle
+    location inside one G
+
+type_ref
+    compact Graph-local type expression
+```
+
+`type_ref` is four bytes:
+
+```text
+[kind:2][payload:30]
+
+intrinsic -> intrinsic_type
+named     -> type_handle slot
+derived   -> canonical derived-type slot
+```
+
+Intrinsic and named references require no lookup table. Derived expressions are
+canonicalized by G.
+
+G owns compact arrays for:
+
+```text
+types
+type identities
+members
+objects
+object identities
+links
+derived type expressions
+```
+
+The `identity_ref -> Graph location` map is dense by `identity_ref.slot()` and
+stores one four-byte locator per semantic identity slot. This gives deterministic
+O(1) type/object lookup without a hash table or sort.
+
+Record definitions own contiguous member ranges. `member_index` is local to one
+record type and is never a global identity.
+
+There is no facts layer, Semantic DB, Builder, candidate Graph, prepared Graph,
+or Graph-generation object between Parser/Semantic and G.
+
+REBUILD operation state owns one temporary `G`; Parser/Semantic writes directly
+into it.
+
 ## Mode-specific construction contexts
 
 There is no universal Project construction context and no shared

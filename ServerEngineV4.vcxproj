@@ -92,6 +92,7 @@
     <ClCompile Include="server_engine\project\abi\abi_layout.cpp" />
     <ClCompile Include="server_engine\project\string\string_table.cpp" />
     <ClCompile Include="server_engine\project\semantic\identity.cpp" />
+    <ClCompile Include="server_engine\project\graph\graph.cpp" />
     <ClCompile Include="server_engine\project\preprocessor\preprocessor.cpp" />
     <ClCompile Include="server_engine\project\frontend\frontend_input.cpp" />
     <ClCompile Include="server_engine\project\frontend\directive_decoder.cpp" />
@@ -160,6 +161,12 @@
     <ClInclude Include="server_engine\project\persistence\database.hpp" />
     <ClInclude Include="server_engine\project\string\string_table.hpp" />
     <ClInclude Include="server_engine\project\semantic\identity.hpp" />
+    <ClInclude Include="server_engine\project\graph\graph.hpp" />
+    <ClInclude Include="server_engine\project\graph\type_handle.hpp" />
+    <ClInclude Include="server_engine\project\graph\object_handle.hpp" />
+    <ClInclude Include="server_engine\project\graph\link_handle.hpp" />
+    <ClInclude Include="server_engine\project\graph\member_index.hpp" />
+    <ClInclude Include="server_engine\project\graph\type_ref.hpp" />
     <ClInclude Include="server_engine\project\preprocessor\preprocessor.hpp" />
     <ClInclude Include="server_engine\project\frontend\frontend_input.hpp" />
     <ClInclude Include="server_engine\project\frontend\directive_decoder.hpp" />
