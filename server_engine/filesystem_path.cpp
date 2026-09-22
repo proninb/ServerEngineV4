@@ -1,5 +1,6 @@
 #include "filesystem_path.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <limits>
 #include <utility>
@@ -152,6 +153,160 @@ filesystem_path_result filesystem_path_from_utf8(
     }
 }
 
+filesystem_path_result filesystem_path_utf8_size(
+    filesystem_native_path_view value,
+    std::size_t& output) noexcept {
+
+    output = 0;
+
+#if defined(_WIN32)
+    if (value.size() >
+        static_cast<std::size_t>(
+            (std::numeric_limits<int>::max)())) {
+
+        return filesystem_path_result::failed;
+    }
+
+    if (value.empty()) {
+        return filesystem_path_result::success;
+    }
+
+    const auto input_size =
+        static_cast<int>(
+            value.size());
+
+    const auto required =
+        WideCharToMultiByte(
+            CP_UTF8,
+            WC_ERR_INVALID_CHARS,
+            value.data(),
+            input_size,
+            nullptr,
+            0,
+            nullptr,
+            nullptr);
+
+    if (required <= 0) {
+        return GetLastError() ==
+                ERROR_NO_UNICODE_TRANSLATION
+            ? filesystem_path_result::
+                invalid_utf8
+            : filesystem_path_result::
+                failed;
+    }
+
+    output =
+        static_cast<std::size_t>(
+            required);
+#else
+    const std::string_view bytes{
+        value.data(),
+        value.size()};
+
+    if (!valid_utf8(bytes)) {
+        return filesystem_path_result::
+            invalid_utf8;
+    }
+
+    output = bytes.size();
+#endif
+
+    return filesystem_path_result::success;
+}
+
+filesystem_path_result filesystem_path_to_utf8(
+    filesystem_native_path_view value,
+    std::span<char> output,
+    std::size_t& written) noexcept {
+
+    written = 0;
+
+#if defined(_WIN32)
+    if (value.size() >
+        static_cast<std::size_t>(
+            (std::numeric_limits<int>::max)())) {
+
+        return filesystem_path_result::failed;
+    }
+
+    if (value.empty()) {
+        return filesystem_path_result::success;
+    }
+
+    if (output.empty()) {
+        return filesystem_path_result::failed;
+    }
+
+    const auto input_size =
+        static_cast<int>(
+            value.size());
+
+    const auto capacity =
+        static_cast<int>(
+            (std::min)(
+                output.size(),
+                static_cast<std::size_t>(
+                    (std::numeric_limits<int>::max)())));
+
+    const auto converted =
+        WideCharToMultiByte(
+            CP_UTF8,
+            WC_ERR_INVALID_CHARS,
+            value.data(),
+            input_size,
+            output.data(),
+            capacity,
+            nullptr,
+            nullptr);
+
+    if (converted <= 0) {
+        return GetLastError() ==
+                ERROR_NO_UNICODE_TRANSLATION
+            ? filesystem_path_result::
+                invalid_utf8
+            : filesystem_path_result::
+                failed;
+    }
+
+    written =
+        static_cast<std::size_t>(
+            converted);
+
+    for (std::size_t index = 0;
+         index < written;
+         ++index) {
+
+        if (output[index] == '\\') {
+            output[index] = '/';
+        }
+    }
+#else
+    const std::string_view bytes{
+        value.data(),
+        value.size()};
+
+    if (!valid_utf8(bytes)) {
+        return filesystem_path_result::
+            invalid_utf8;
+    }
+
+    if (output.size() <
+        bytes.size()) {
+
+        return filesystem_path_result::failed;
+    }
+
+    std::copy(
+        bytes.begin(),
+        bytes.end(),
+        output.begin());
+
+    written = bytes.size();
+#endif
+
+    return filesystem_path_result::success;
+}
+
 filesystem_path_result filesystem_path_to_utf8(
     const std::filesystem::path& value,
     std::string& output) noexcept {
@@ -159,67 +314,56 @@ filesystem_path_result filesystem_path_to_utf8(
     output.clear();
 
     try {
-#if defined(_WIN32)
-        const auto wide = value.generic_wstring();
+        const auto& native =
+            value.native();
 
-        if (wide.size() >
-            static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
-            return filesystem_path_result::failed;
+        const filesystem_native_path_view view{
+            native.data(),
+            native.size()};
+
+        std::size_t required = 0;
+
+        const auto measured =
+            filesystem_path_utf8_size(
+                view,
+                required);
+
+        if (measured !=
+            filesystem_path_result::success) {
+
+            return measured;
         }
 
-        if (wide.empty()) {
-            return filesystem_path_result::success;
-        }
+        output.resize(
+            required);
 
-        const auto input_size = static_cast<int>(wide.size());
+        std::size_t written = 0;
 
-        const int utf8_size = WideCharToMultiByte(
-            CP_UTF8,
-            WC_ERR_INVALID_CHARS,
-            wide.data(),
-            input_size,
-            nullptr,
-            0,
-            nullptr,
-            nullptr);
+        const auto encoded =
+            filesystem_path_to_utf8(
+                view,
+                std::span<char>{
+                    output.data(),
+                    output.size()},
+                written);
 
-        if (utf8_size <= 0) {
-            return GetLastError() == ERROR_NO_UNICODE_TRANSLATION
-                ? filesystem_path_result::invalid_utf8
-                : filesystem_path_result::failed;
-        }
-
-        output.resize(static_cast<std::size_t>(utf8_size));
-
-        if (WideCharToMultiByte(
-                CP_UTF8,
-                WC_ERR_INVALID_CHARS,
-                wide.data(),
-                input_size,
-                output.data(),
-                utf8_size,
-                nullptr,
-                nullptr) != utf8_size) {
+        if (encoded !=
+                filesystem_path_result::success ||
+            written != required) {
 
             output.clear();
 
-            return GetLastError() == ERROR_NO_UNICODE_TRANSLATION
-                ? filesystem_path_result::invalid_utf8
-                : filesystem_path_result::failed;
+            return encoded ==
+                    filesystem_path_result::success
+                ? filesystem_path_result::failed
+                : encoded;
         }
-#else
-        output = value.generic_string();
-
-        if (!valid_utf8(output)) {
-            output.clear();
-            return filesystem_path_result::invalid_utf8;
-        }
-#endif
 
         return filesystem_path_result::success;
     }
     catch (...) {
         output.clear();
+
         return filesystem_path_result::failed;
     }
 }

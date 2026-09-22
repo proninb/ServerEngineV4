@@ -556,12 +556,16 @@ operation-local mappings before removing all four artifacts again. Cleanup I/O
 failure is reported explicitly and leaves the Server `UNLOADED`.
 
 After topology finalization, the current REBUILD implementation persists
-`project.manifest` directly to its final path using exact-size writable mmap,
-then computes the exact compiled layout, creates `compiled.bin` at its final
-size, writable-mmaps that file, and encodes G directly into the mapped pages.
-Neither production path creates a full-size serialized `std::vector<std::byte>`
-or `.tmp` artifact. `compiled_project_view::bind()` plus cold
-`verify_contents()` validates the compiled mapped bytes.
+`project.manifest`, `source.bin`, and `compiled.bin` directly to their final
+paths using exact-size writable mappings. source.bin is encoded directly from
+the finalized File Context: path sizing is allocation-free, native paths are
+converted straight into the mapped UTF-8 path section, and dependency arenas
+are streamed directly without a serialized intermediate image. The optional
+USN identity indexes are prepared once and retained only as persistence-specific
+tracking state. None of these production paths creates a full-size serialized
+`std::vector<std::byte>` or `.tmp` artifact. source.bin receives structural and
+cold semantic validation before flush; `compiled_project_view::bind()` plus
+cold `verify_contents()` validates the compiled mapped bytes.
 
 LOAD maps and structurally binds an existing `compiled.bin` read-only without
 rebuilding Graph/string/identity containers. `verify_contents()` remains a

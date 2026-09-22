@@ -7,7 +7,6 @@
  */
 #pragma once
 
-#include "project_artifact.hpp"
 #include "../file/file_context.hpp"
 
 #include <cstddef>
@@ -27,6 +26,92 @@ enum class source_save_result : std::uint8_t {
 
 struct source_save_build_options final {
     file_change_checkpoint change_checkpoint{};
+};
+
+// Frozen direct-encoding plan for one finalized, unchanged File Context.
+// It owns only persistence-specific tracking accelerators; paths, records, and
+// dependency arenas remain in File Context and are never duplicated here.
+class source_save_layout final {
+public:
+    source_save_layout() = default;
+
+    source_save_layout(
+        const source_save_layout&) = delete;
+
+    source_save_layout& operator=(
+        const source_save_layout&) = delete;
+
+    source_save_layout(
+        source_save_layout&&) noexcept = default;
+
+    source_save_layout& operator=(
+        source_save_layout&&) noexcept = default;
+
+    [[nodiscard]] std::size_t size() const noexcept {
+        return size_value;
+    }
+
+private:
+    void reset() noexcept {
+        size_value = 0;
+        records_offset = 0;
+        paths_offset = 0;
+        forward_offset = 0;
+        reverse_offset = 0;
+        file_index_offset = 0;
+        directory_index_offset = 0;
+        checksum_offset = 0;
+
+        file_count = 0;
+        path_bytes = 0;
+        forward_count = 0;
+        reverse_count = 0;
+        file_index_count = 0;
+        directory_index_count = 0;
+
+        checkpoint = {};
+        file_index_references.clear();
+        file_index_files.clear();
+        directory_index_references.clear();
+        directory_index_flags.clear();
+    }
+
+    std::size_t size_value = 0;
+    std::size_t records_offset = 0;
+    std::size_t paths_offset = 0;
+    std::size_t forward_offset = 0;
+    std::size_t reverse_offset = 0;
+    std::size_t file_index_offset = 0;
+    std::size_t directory_index_offset = 0;
+    std::size_t checksum_offset = 0;
+
+    std::uint32_t file_count = 0;
+    std::uint32_t path_bytes = 0;
+    std::uint32_t forward_count = 0;
+    std::uint32_t reverse_count = 0;
+    std::uint32_t file_index_count = 0;
+    std::uint32_t directory_index_count = 0;
+
+    file_change_checkpoint checkpoint;
+
+    // SoA avoids native padding: transient memory is the same 12 bytes/slot as
+    // the persisted identity-index payload instead of a padded native struct.
+    std::vector<std::uint64_t> file_index_references;
+    std::vector<file_id> file_index_files;
+    std::vector<std::uint64_t> directory_index_references;
+    std::vector<std::uint32_t> directory_index_flags;
+
+    friend source_save_result
+    prepare_source_save_layout(
+        const file_context&,
+        const source_save_build_options&,
+        source_save_layout&) noexcept;
+
+    friend source_save_result
+    encode_source_save_image(
+        const file_context&,
+        const source_save_layout&,
+        std::span<std::byte>) noexcept;
 };
 
 class source_save_edge_view final {
@@ -141,14 +226,22 @@ struct source_save_change_scan final {
     file_change_checkpoint next_checkpoint;
 };
 
-[[nodiscard]] source_save_result build_source_save_image(
+[[nodiscard]] source_save_result prepare_source_save_layout(
     const file_context& files,
     const source_save_build_options& options,
-    project_artifact_image& output) noexcept;
+    source_save_layout& output) noexcept;
 
-[[nodiscard]] source_save_result build_source_save_image(
+[[nodiscard]] source_save_result prepare_source_save_layout(
     const file_context& files,
-    project_artifact_image& output) noexcept;
+    source_save_layout& output) noexcept;
+
+// Direct encoder. Precondition: File Context is unchanged since layout
+// preparation and its dependency topology remains finalized. No filesystem
+// discovery or whole-image allocation occurs here.
+[[nodiscard]] source_save_result encode_source_save_image(
+    const file_context& files,
+    const source_save_layout& layout,
+    std::span<std::byte> output) noexcept;
 
 [[nodiscard]] source_save_result validate_source_save_image(
     std::span<const std::byte> image) noexcept;

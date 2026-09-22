@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -19,6 +20,10 @@ enum class filesystem_path_result : std::uint8_t {
     invalid_utf8,
     failed,
 };
+
+using filesystem_native_path_view =
+    std::basic_string_view<
+        std::filesystem::path::value_type>;
 
 // Platform filesystem-equivalence identity used only for transient lookup and
 // duplicate detection. It is never persisted as physical or semantic identity.
@@ -42,6 +47,18 @@ struct filesystem_path_key_hash final {
 [[nodiscard]] filesystem_path_result filesystem_path_from_utf8(
     std::string_view value,
     std::filesystem::path& output) noexcept;
+
+// Allocation-free persistence codec for an already-native path. Windows path
+// separators are canonicalized to '/' to preserve the existing persisted UTF-8
+// representation.
+[[nodiscard]] filesystem_path_result filesystem_path_utf8_size(
+    filesystem_native_path_view value,
+    std::size_t& output) noexcept;
+
+[[nodiscard]] filesystem_path_result filesystem_path_to_utf8(
+    filesystem_native_path_view value,
+    std::span<char> output,
+    std::size_t& written) noexcept;
 
 [[nodiscard]] filesystem_path_result filesystem_path_to_utf8(
     const std::filesystem::path& value,

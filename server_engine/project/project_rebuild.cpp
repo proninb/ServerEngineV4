@@ -7,6 +7,7 @@
 #include "parser/parser.hpp"
 #include "persistence/compiled_project.hpp"
 #include "persistence/project_artifact.hpp"
+#include "persistence/source_save.hpp"
 
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../writable_file_mapping.hpp"
@@ -287,6 +288,42 @@ server_status rebuild_project(
         return topology_finalized;
     }
 
+    source_save_layout source_layout;
+
+    const source_save_build_options
+        source_options{
+            context.change_checkpoint};
+
+    const auto source_prepared =
+        prepare_source_save_layout(
+            context.files,
+            source_options,
+            source_layout);
+
+    if (source_prepared !=
+        source_save_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                source_prepared ==
+                        source_save_result::failed
+                    ? diagnostics::
+                        project_source_save_io_failed
+                    : diagnostics::
+                        project_source_save_invalid,
+                operation)
+                .file(layout.source_save)
+                .detail(
+                    "Cannot prepare the exact source.bin direct-encoding layout")
+                .build());
+
+        return source_prepared ==
+                source_save_result::failed
+            ? server_status::io_error
+            : server_status::
+                project_artifact_invalid;
+    }
+
     compiled_project_layout compiled_layout;
 
     const auto prepared =
@@ -425,6 +462,98 @@ server_status rebuild_project(
         return server_status::io_error;
     }
 
+    writable_file_mapping source_mapping;
+
+    if (source_mapping.create(
+            layout.source_save,
+            source_layout.size()) !=
+        writable_file_mapping_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_source_save_io_failed,
+                operation)
+                .file(layout.source_save)
+                .detail(
+                    "Cannot create and memory-map source.bin for direct REBUILD encoding")
+                .build());
+
+        return server_status::io_error;
+    }
+
+    const auto source_encoded =
+        encode_source_save_image(
+            context.files,
+            source_layout,
+            source_mapping.bytes());
+
+    if (source_encoded !=
+        source_save_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                source_encoded ==
+                        source_save_result::failed
+                    ? diagnostics::
+                        project_source_save_io_failed
+                    : diagnostics::
+                        project_source_save_invalid,
+                operation)
+                .file(layout.source_save)
+                .detail(
+                    "Direct source.bin encoding failed")
+                .build());
+
+        return source_encoded ==
+                source_save_result::failed
+            ? server_status::io_error
+            : server_status::
+                project_artifact_invalid;
+    }
+
+    const auto source_validated =
+        validate_source_save_image(
+            source_mapping.bytes());
+
+    if (source_validated !=
+        source_save_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                source_validated ==
+                        source_save_result::failed
+                    ? diagnostics::
+                        project_source_save_io_failed
+                    : diagnostics::
+                        project_source_save_invalid,
+                operation)
+                .file(layout.source_save)
+                .detail(
+                    "Direct source.bin image failed structural or cold semantic validation")
+                .build());
+
+        return source_validated ==
+                source_save_result::failed
+            ? server_status::io_error
+            : server_status::
+                project_artifact_invalid;
+    }
+
+    if (source_mapping.flush() !=
+        writable_file_mapping_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_source_save_io_failed,
+                operation)
+                .file(layout.source_save)
+                .detail(
+                    "Cannot flush direct source.bin mapping")
+                .build());
+
+        return server_status::io_error;
+    }
+
     writable_file_mapping compiled_mapping;
 
     if (compiled_mapping.create(
@@ -515,7 +644,7 @@ server_status rebuild_project(
             diagnostics::project_rebuild_incomplete,
             operation)
             .detail(
-                "Direct final-path project.manifest persistence and writable-mmap compiled.bin construction from final G are complete for the supported semantic slice; remaining Phase-1 source.bin/database.bin persistence and BUILD/LOAD/REBUILD completion are not implemented yet")
+                "Direct final-path project.manifest/source.bin persistence and writable-mmap compiled.bin construction from final G are complete for the supported semantic slice; remaining Phase-1 database.bin persistence and BUILD/LOAD/REBUILD completion are not implemented yet")
             .build());
 
     return server_status::unsupported;

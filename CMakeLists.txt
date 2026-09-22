@@ -116,6 +116,32 @@ if(BUILD_TESTING)
         COMMAND ServerEngineV4Tests
     )
 
+    add_executable(ServerEngineV4SourceSaveTests
+        tests/source_save_tests.cpp
+        server_engine/filesystem_path.cpp
+        server_engine/read_only_file_mapping.cpp
+        server_engine/writable_file_mapping.cpp
+        server_engine/project/project_path.cpp
+        server_engine/project/file/file_identity.cpp
+        server_engine/project/file/file_context.cpp
+        server_engine/project/persistence/source_save.cpp
+    )
+
+    target_include_directories(ServerEngineV4SourceSaveTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(ServerEngineV4SourceSaveTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4SourceSaveTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(
+        NAME source_save
+        COMMAND ServerEngineV4SourceSaveTests
+    )
+
     add_executable(ServerEngineV4FrontendTests
         tests/frontend_regression_tests.cpp
         server_engine/filesystem_path.cpp

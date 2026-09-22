@@ -12,7 +12,6 @@
 #include <limits>
 #include <string>
 #include <string_view>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -66,59 +65,84 @@ struct directory_index_slot final {
     std::uint32_t flags = 0;
 };
 
-struct tracking_capture final {
-    file_change_checkpoint checkpoint;
-    std::vector<file_index_slot> files;
-    std::vector<directory_index_slot> directories;
+[[nodiscard]] bool write_u32(
+    std::span<std::byte> output,
+    std::size_t& offset,
+    std::uint32_t value) noexcept {
 
-    void reset() noexcept {
-        checkpoint = {};
-        files.clear();
-        directories.clear();
+    if (offset > output.size() ||
+        output.size() - offset < 4) {
+
+        return false;
     }
-};
-
-void append_u32(
-    std::vector<std::byte>& output,
-    std::uint32_t value) {
 
     for (std::size_t index = 0;
          index < 4;
          ++index) {
 
-        output.push_back(
+        output[offset + index] =
             static_cast<std::byte>(
                 (value >> (index * 8)) &
-                0xffU));
+                0xffU);
     }
+
+    offset += 4;
+
+    return true;
 }
 
-void append_u64(
-    std::vector<std::byte>& output,
-    std::uint64_t value) {
+[[nodiscard]] bool write_u64(
+    std::span<std::byte> output,
+    std::size_t& offset,
+    std::uint64_t value) noexcept {
+
+    if (offset > output.size() ||
+        output.size() - offset < 8) {
+
+        return false;
+    }
 
     for (std::size_t index = 0;
          index < 8;
          ++index) {
 
-        output.push_back(
+        output[offset + index] =
             static_cast<std::byte>(
                 (value >> (index * 8)) &
-                0xffU));
+                0xffU);
     }
+
+    offset += 8;
+
+    return true;
 }
 
-void append_bytes(
-    std::vector<std::byte>& output,
+[[nodiscard]] bool write_bytes(
+    std::span<std::byte> output,
+    std::size_t& offset,
     const std::byte* data,
-    std::size_t size) {
+    std::size_t size) noexcept {
+
+    if (offset > output.size() ||
+        size > output.size() - offset ||
+        (size != 0 &&
+         data == nullptr)) {
+
+        return false;
+    }
 
     if (size != 0) {
-        output.insert(
-            output.end(),
+        std::copy_n(
             data,
-            data + size);
+            size,
+            output.begin() +
+                static_cast<std::ptrdiff_t>(
+                    offset));
     }
+
+    offset += size;
+
+    return true;
 }
 
 [[nodiscard]] bool read_u32(
@@ -271,19 +295,22 @@ void append_bytes(
 }
 
 [[nodiscard]] bool insert_file_identity(
-    std::vector<file_index_slot>& slots,
+    std::vector<std::uint64_t>& references,
+    std::vector<file_id>& files,
     std::uint64_t reference,
     file_id file) noexcept {
 
     if (reference == 0 ||
-        slots.empty() ||
+        references.empty() ||
+        references.size() !=
+            files.size() ||
         !file) {
 
         return false;
     }
 
     const auto mask =
-        slots.size() - 1;
+        references.size() - 1;
 
     auto position =
         static_cast<std::size_t>(
@@ -291,20 +318,21 @@ void append_bytes(
         mask;
 
     for (std::size_t probe = 0;
-         probe < slots.size();
+         probe < references.size();
          ++probe) {
 
-        auto& slot =
-            slots[position];
+        auto& slot_reference =
+            references[position];
 
-        if (slot.file_reference == 0) {
-            slot.file_reference = reference;
-            slot.file = file;
+        if (slot_reference == 0) {
+            slot_reference = reference;
+            files[position] = file;
+
             return true;
         }
 
-        if (slot.file_reference == reference) {
-            return slot.file == file;
+        if (slot_reference == reference) {
+            return files[position] == file;
         }
 
         position =
@@ -316,12 +344,15 @@ void append_bytes(
 }
 
 [[nodiscard]] bool insert_directory_identity(
-    std::vector<directory_index_slot>& slots,
+    std::vector<std::uint64_t>& references,
+    std::vector<std::uint32_t>& flags_by_slot,
     std::uint64_t reference,
     std::uint32_t flags) noexcept {
 
     if (reference == 0 ||
-        slots.empty() ||
+        references.empty() ||
+        references.size() !=
+            flags_by_slot.size() ||
         flags == 0 ||
         (flags &
             ~directory_watch_known) != 0) {
@@ -330,7 +361,7 @@ void append_bytes(
     }
 
     const auto mask =
-        slots.size() - 1;
+        references.size() - 1;
 
     auto position =
         static_cast<std::size_t>(
@@ -338,20 +369,24 @@ void append_bytes(
         mask;
 
     for (std::size_t probe = 0;
-         probe < slots.size();
+         probe < references.size();
          ++probe) {
 
-        auto& slot =
-            slots[position];
+        auto& slot_reference =
+            references[position];
 
-        if (slot.file_reference == 0) {
-            slot.file_reference = reference;
-            slot.flags = flags;
+        if (slot_reference == 0) {
+            slot_reference = reference;
+            flags_by_slot[position] =
+                flags;
+
             return true;
         }
 
-        if (slot.file_reference == reference) {
-            slot.flags |= flags;
+        if (slot_reference == reference) {
+            flags_by_slot[position] |=
+                flags;
+
             return true;
         }
 
@@ -364,6 +399,201 @@ void append_bytes(
 }
 
 #if defined(_WIN32)
+
+// Compact construction-only directory dedupe. Keys follow the same platform
+// filesystem-equivalence contract as File Context; original paths are retained
+// only for the later native directory-identity query.
+class unique_directory_set final {
+public:
+    struct entry final {
+        filesystem_path_key key;
+        std::uint32_t flags = 0;
+    };
+
+    [[nodiscard]] bool insert(
+        std::filesystem::path path,
+        std::uint32_t flags,
+        bool& inserted) noexcept {
+
+        inserted = false;
+
+        if (path.empty() ||
+            flags == 0 ||
+            (flags &
+                ~directory_watch_known) != 0) {
+
+            return false;
+        }
+
+        try {
+            filesystem_path_key key;
+
+            if (make_filesystem_path_key(
+                    path,
+                    key) !=
+                filesystem_path_result::success ||
+                key.value.empty()) {
+
+                return false;
+            }
+
+            if (slots.empty() ||
+                (entries.size() + 1) * 2 >=
+                    slots.size()) {
+
+                const auto requested =
+                    slots.empty()
+                    ? std::size_t{16}
+                    : slots.size() * 2;
+
+                if (requested <
+                        slots.size() ||
+                    !grow(requested)) {
+
+                    return false;
+                }
+            }
+
+            const auto hash =
+                filesystem_path_key_hash{}(
+                    key);
+
+            const auto mask =
+                slots.size() - 1;
+
+            auto position =
+                hash &
+                mask;
+
+            for (std::size_t probe = 0;
+                 probe < slots.size();
+                 ++probe) {
+
+                const auto stored =
+                    slots[position];
+
+                if (stored == 0) {
+                    if (entries.size() >=
+                        static_cast<std::size_t>(
+                            (std::numeric_limits<
+                                std::uint32_t>::max)())) {
+
+                        return false;
+                    }
+
+                    entries.push_back({
+                        std::move(key),
+                        flags,
+                    });
+
+                    slots[position] =
+                        static_cast<std::uint32_t>(
+                            entries.size());
+
+                    inserted = true;
+
+                    return true;
+                }
+
+                const auto index =
+                    static_cast<std::size_t>(
+                        stored - 1);
+
+                if (index >=
+                    entries.size()) {
+
+                    return false;
+                }
+
+                auto& existing =
+                    entries[index];
+
+                if (existing.key ==
+                    key) {
+
+                    existing.flags |=
+                        flags;
+
+                    return true;
+                }
+
+                position =
+                    (position + 1) &
+                    mask;
+            }
+
+            return false;
+        }
+        catch (...) {
+            return false;
+        }
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept {
+        return entries.size();
+    }
+
+    [[nodiscard]] const std::vector<entry>&
+    values() const noexcept {
+        return entries;
+    }
+
+private:
+    [[nodiscard]] bool grow(
+        std::size_t capacity) noexcept {
+
+        if (capacity < 16 ||
+            (capacity &
+                (capacity - 1)) != 0) {
+
+            return false;
+        }
+
+        try {
+            std::vector<std::uint32_t>
+                replacement(
+                    capacity,
+                    0);
+
+            const auto mask =
+                capacity - 1;
+
+            for (std::size_t index = 0;
+                 index < entries.size();
+                 ++index) {
+
+                const auto hash =
+                    filesystem_path_key_hash{}(
+                        entries[index].key);
+
+                auto position =
+                    hash &
+                    mask;
+
+                while (replacement[position] != 0) {
+                    position =
+                        (position + 1) &
+                        mask;
+                }
+
+                replacement[position] =
+                    static_cast<std::uint32_t>(
+                        index + 1);
+            }
+
+            slots.swap(
+                replacement);
+
+            return true;
+        }
+        catch (...) {
+            return false;
+        }
+    }
+
+    std::vector<entry> entries;
+    std::vector<std::uint32_t> slots;
+};
 
 class windows_handle final {
 public:
@@ -445,28 +675,6 @@ private:
 
     return volume != 0 &&
         reference != 0;
-}
-
-[[nodiscard]] std::wstring directory_key(
-    const std::filesystem::path& path) {
-
-    auto value =
-        path.lexically_normal().
-            native();
-
-    for (auto& character :
-         value) {
-
-        if (character >= L'A' &&
-            character <= L'Z') {
-
-            character =
-                static_cast<wchar_t>(
-                    character - L'A' + L'a');
-        }
-    }
-
-    return value;
 }
 
 [[nodiscard]] bool volume_paths(
@@ -554,13 +762,26 @@ private:
 [[nodiscard]] bool build_tracking_capture(
     const file_context& files,
     file_change_checkpoint checkpoint,
-    tracking_capture& output) noexcept {
+    file_change_checkpoint& output_checkpoint,
+    std::vector<std::uint64_t>& file_references,
+    std::vector<file_id>& file_ids,
+    std::vector<std::uint64_t>& directory_references,
+    std::vector<std::uint32_t>& directory_flags) noexcept {
 
-    output.reset();
+    const auto reset = [&]() noexcept {
+        output_checkpoint = {};
+        file_references.clear();
+        file_ids.clear();
+        directory_references.clear();
+        directory_flags.clear();
+    };
+
+    reset();
 
 #if !defined(_WIN32)
     (void)files;
     (void)checkpoint;
+
     return true;
 #else
     if (!checkpoint ||
@@ -582,14 +803,15 @@ private:
             return false;
         }
 
-        output.files.assign(
+        file_references.assign(
             file_capacity,
-            file_index_slot{});
+            0);
 
-        std::unordered_set<std::wstring>
-            known_directories;
+        file_ids.assign(
+            file_capacity,
+            file_id{});
 
-        std::vector<std::filesystem::path>
+        unique_directory_set
             directories;
 
         for (std::size_t index = 0;
@@ -611,12 +833,14 @@ private:
                 physical->change_token.volume_serial !=
                     checkpoint.volume_serial ||
                 !insert_file_identity(
-                    output.files,
+                    file_references,
+                    file_ids,
                     physical->change_token.
                         file_reference,
                     file)) {
 
-                output.reset();
+                reset();
+
                 return true;
             }
 
@@ -635,18 +859,20 @@ private:
                 parent.root_path();
 
             while (!parent.empty()) {
-                const auto key =
-                    directory_key(
-                        parent);
+                bool inserted = false;
 
-                const auto inserted =
-                    known_directories.
-                        insert(key).
-                        second;
+                if (!directories.insert(
+                        parent,
+                        directory_watch_topology,
+                        inserted)) {
 
-                if (inserted) {
-                    directories.push_back(
-                        parent);
+                    output_checkpoint = {};
+                    file_references.clear();
+                    file_ids.clear();
+                    directory_references.clear();
+                    directory_flags.clear();
+
+                    return false;
                 }
 
                 if (!inserted ||
@@ -671,51 +897,59 @@ private:
             next_capacity(
                 directories.size());
 
-        if (!directories.empty() &&
+        if (directories.size() != 0 &&
             directory_capacity == 0) {
 
             return false;
         }
 
         if (directory_capacity != 0) {
-            output.directories.assign(
+            directory_references.assign(
                 directory_capacity,
-                directory_index_slot{});
+                0);
+
+            directory_flags.assign(
+                directory_capacity,
+                0);
         }
 
         for (const auto& directory :
-             directories) {
+             directories.values()) {
 
             std::uint64_t volume = 0;
             std::uint64_t reference = 0;
 
             if (!query_directory_identity(
-                    directory,
+                    directory.key.value,
                     volume,
                     reference) ||
                 volume !=
                     checkpoint.volume_serial ||
                 !insert_directory_identity(
-                    output.directories,
+                    directory_references,
+                    directory_flags,
                     reference,
-                    directory_watch_topology)) {
+                    directory.flags)) {
 
-                output.reset();
+                reset();
+
                 return true;
             }
         }
 
-        output.checkpoint =
+        output_checkpoint =
             checkpoint;
 
         return true;
     }
     catch (...) {
-        output.reset();
+        reset();
+
         return false;
     }
 #endif
 }
+
 
 [[nodiscard]] bool valid_power_of_two_or_zero(
     std::uint32_t value) noexcept {
@@ -1380,12 +1614,12 @@ std::uint32_t source_save_view::directory_watch_flags(
     return 0;
 }
 
-source_save_result build_source_save_image(
+source_save_result prepare_source_save_layout(
     const file_context& files,
     const source_save_build_options& options,
-    project_artifact_image& output) noexcept {
+    source_save_layout& output) noexcept {
 
-    output = {};
+    output.reset();
 
     if (!files.dependency_topology_finalized() ||
         files.size() == 0 ||
@@ -1397,422 +1631,720 @@ source_save_result build_source_save_image(
             invalid_state;
     }
 
-    try {
-        tracking_capture tracking;
-
-        if (!build_tracking_capture(
-                files,
-                options.change_checkpoint,
-                tracking)) {
-
-            return source_save_result::failed;
-        }
-
-        const auto file_count =
-            static_cast<std::uint32_t>(
-                files.size());
-
-        std::vector<std::string> paths;
-        paths.reserve(
+    const auto file_count =
+        static_cast<std::uint32_t>(
             files.size());
 
-        std::uint32_t path_bytes = 0;
-        std::uint32_t forward_count = 0;
-        std::uint32_t reverse_count = 0;
+    std::uint32_t path_bytes = 0;
+    std::uint32_t forward_count = 0;
+    std::uint32_t reverse_count = 0;
 
-        for (std::uint32_t value = 1;
-             value <= file_count;
-             ++value) {
+    for (std::uint32_t value = 1;
+         value <= file_count;
+         ++value) {
 
-            const file_id file{value};
+        const file_id file{value};
 
-            const auto* physical =
-                files.physical(
-                    file);
+        const auto* physical =
+            files.physical(
+                file);
 
-            if (physical == nullptr ||
-                !physical->present()) {
+        if (physical == nullptr ||
+            !physical->present()) {
 
-                return source_save_result::
-                    invalid_state;
-            }
-
-            const auto path_view =
-                files.path(
-                    file);
-
-            const std::filesystem::path path{
-                path_view.begin(),
-                path_view.end()};
-
-            std::string utf8;
-
-            if (filesystem_path_to_utf8(
-                    path,
-                    utf8) !=
-                    filesystem_path_result::
-                        success ||
-                utf8.empty() ||
-                utf8.size() >
-                    static_cast<std::size_t>(
-                        (std::numeric_limits<
-                            std::uint32_t>::max)()) -
-                        path_bytes) {
-
-                return source_save_result::
-                    invalid_state;
-            }
-
-            path_bytes +=
-                static_cast<std::uint32_t>(
-                    utf8.size());
-
-            paths.push_back(
-                std::move(
-                    utf8));
-
-            const auto dependencies =
-                files.dependencies(
-                    file);
-
-            const auto dependents =
-                files.dependents(
-                    file);
-
-            if (dependencies.size() >
-                    static_cast<std::size_t>(
-                        (std::numeric_limits<
-                            std::uint32_t>::max)()) -
-                        forward_count ||
-                dependents.size() >
-                    static_cast<std::size_t>(
-                        (std::numeric_limits<
-                            std::uint32_t>::max)()) -
-                        reverse_count) {
-
-                return source_save_result::
-                    invalid_state;
-            }
-
-            forward_count +=
-                static_cast<std::uint32_t>(
-                    dependencies.size());
-
-            reverse_count +=
-                static_cast<std::uint32_t>(
-                    dependents.size());
-        }
-
-        if (forward_count !=
-            reverse_count) {
+            output.reset();
 
             return source_save_result::
                 invalid_state;
         }
 
-        const auto file_index_count =
+        std::size_t path_size = 0;
+
+        if (filesystem_path_utf8_size(
+                files.path(file),
+                path_size) !=
+                    filesystem_path_result::
+                        success ||
+            path_size == 0 ||
+            path_size >
+                static_cast<std::size_t>(
+                    (std::numeric_limits<
+                        std::uint32_t>::max)()) -
+                    path_bytes) {
+
+            output.reset();
+
+            return source_save_result::
+                invalid_state;
+        }
+
+        path_bytes +=
             static_cast<std::uint32_t>(
-                tracking.files.size());
+                path_size);
 
-        const auto directory_index_count =
+        const auto dependencies =
+            files.dependencies(
+                file);
+
+        const auto dependents =
+            files.dependents(
+                file);
+
+        if (dependencies.size() >
+                static_cast<std::size_t>(
+                    (std::numeric_limits<
+                        std::uint32_t>::max)()) -
+                    forward_count ||
+            dependents.size() >
+                static_cast<std::size_t>(
+                    (std::numeric_limits<
+                        std::uint32_t>::max)()) -
+                    reverse_count) {
+
+            output.reset();
+
+            return source_save_result::
+                invalid_state;
+        }
+
+        forward_count +=
             static_cast<std::uint32_t>(
-                tracking.directories.size());
+                dependencies.size());
 
-        std::size_t records_size = 0;
-        std::size_t forward_size = 0;
-        std::size_t reverse_size = 0;
-        std::size_t file_index_size = 0;
-        std::size_t directory_index_size = 0;
-
-        if (!multiply_size(
-                file_count,
-                record_size,
-                records_size) ||
-            !multiply_size(
-                forward_count,
-                sizeof(std::uint32_t),
-                forward_size) ||
-            !multiply_size(
-                reverse_count,
-                sizeof(std::uint32_t),
-                reverse_size) ||
-            !multiply_size(
-                file_index_count,
-                file_index_record_size,
-                file_index_size) ||
-            !multiply_size(
-                directory_index_count,
-                directory_index_record_size,
-                directory_index_size)) {
-
-            return source_save_result::failed;
-        }
-
-        std::size_t total_size =
-            header_size;
-
-        if (!add_size(
-                total_size,
-                records_size) ||
-            !add_size(
-                total_size,
-                path_bytes) ||
-            !add_size(
-                total_size,
-                forward_size) ||
-            !add_size(
-                total_size,
-                reverse_size) ||
-            !add_size(
-                total_size,
-                file_index_size) ||
-            !add_size(
-                total_size,
-                directory_index_size) ||
-            !add_size(
-                total_size,
-                checksum_size)) {
-
-            return source_save_result::failed;
-        }
-
-        output.bytes.reserve(
-            total_size);
-
-        append_bytes(
-            output.bytes,
-            magic.data(),
-            magic.size());
-
-        append_u32(output.bytes, format_version);
-        append_u32(output.bytes, file_count);
-        append_u32(output.bytes, path_bytes);
-        append_u32(output.bytes, forward_count);
-        append_u32(output.bytes, reverse_count);
-
-        append_u32(
-            output.bytes,
+        reverse_count +=
             static_cast<std::uint32_t>(
-                tracking.checkpoint.backend));
-
-        append_u32(output.bytes, file_index_count);
-        append_u32(output.bytes, directory_index_count);
-        append_u32(output.bytes, 0);
-
-        append_u64(
-            output.bytes,
-            tracking.checkpoint.volume_serial);
-
-        append_u64(
-            output.bytes,
-            tracking.checkpoint.journal_id);
-
-        append_u64(
-            output.bytes,
-            static_cast<std::uint64_t>(
-                tracking.checkpoint.next_usn));
-
-        append_u32(output.bytes, 0);
-        append_u32(output.bytes, 0);
-        append_u32(output.bytes, 0);
-
-        std::uint32_t path_offset = 0;
-        std::uint32_t dependency_offset = 0;
-        std::uint32_t dependent_offset = 0;
-
-        for (std::uint32_t value = 1;
-             value <= file_count;
-             ++value) {
-
-            const file_id file{value};
-
-            const auto* physical =
-                files.physical(file);
-
-            if (physical == nullptr ||
-                !physical->present()) {
-
-                output = {};
-                return source_save_result::
-                    invalid_state;
-            }
-
-            const auto& path =
-                paths[value - 1];
-
-            const auto dependencies =
-                files.dependencies(file);
-
-            const auto dependents =
-                files.dependents(file);
-
-            append_u32(output.bytes, path_offset);
-
-            append_u32(
-                output.bytes,
-                static_cast<std::uint32_t>(
-                    path.size()));
-
-            append_u32(
-                output.bytes,
-                static_cast<std::uint32_t>(
-                    files.kind(file)));
-
-            std::uint32_t flags =
-                current_member_flag |
-                physical_present_flag;
-
-            const auto file_reference =
-                physical->has_change_token() &&
-                    physical->change_token
-                ? physical->change_token.
-                    file_reference
-                : 0;
-
-            if (file_reference != 0) {
-                flags |= file_reference_flag;
-            }
-
-            append_u32(output.bytes, flags);
-
-            append_bytes(
-                output.bytes,
-                physical->content_hash.
-                    bytes.data(),
-                physical->content_hash.
-                    bytes.size());
-
-            append_u64(
-                output.bytes,
-                file_reference);
-
-            append_u32(
-                output.bytes,
-                dependency_offset);
-
-            append_u32(
-                output.bytes,
-                static_cast<std::uint32_t>(
-                    dependencies.size()));
-
-            append_u32(
-                output.bytes,
-                dependent_offset);
-
-            append_u32(
-                output.bytes,
-                static_cast<std::uint32_t>(
-                    dependents.size()));
-
-            path_offset +=
-                static_cast<std::uint32_t>(
-                    path.size());
-
-            dependency_offset +=
-                static_cast<std::uint32_t>(
-                    dependencies.size());
-
-            dependent_offset +=
-                static_cast<std::uint32_t>(
-                    dependents.size());
-        }
-
-        for (const auto& path : paths) {
-            append_bytes(
-                output.bytes,
-                reinterpret_cast<const std::byte*>(
-                    path.data()),
-                path.size());
-        }
-
-        for (std::uint32_t value = 1;
-             value <= file_count;
-             ++value) {
-
-            for (const auto target :
-                 files.dependencies(
-                     file_id{value})) {
-
-                append_u32(
-                    output.bytes,
-                    target.value());
-            }
-        }
-
-        for (std::uint32_t value = 1;
-             value <= file_count;
-             ++value) {
-
-            for (const auto source :
-                 files.dependents(
-                     file_id{value})) {
-
-                append_u32(
-                    output.bytes,
-                    source.value());
-            }
-        }
-
-        for (const auto& slot :
-             tracking.files) {
-
-            append_u64(
-                output.bytes,
-                slot.file_reference);
-
-            append_u32(
-                output.bytes,
-                slot.file.value());
-        }
-
-        for (const auto& slot :
-             tracking.directories) {
-
-            append_u64(
-                output.bytes,
-                slot.file_reference);
-
-            append_u32(
-                output.bytes,
-                slot.flags);
-        }
-
-        const auto digest =
-            checksum(
-                std::span<const std::byte>{
-                    output.bytes});
-
-        append_bytes(
-            output.bytes,
-            digest.bytes.data(),
-            digest.bytes.size());
-
-        if (output.bytes.size() !=
-            total_size) {
-
-            output = {};
-            return source_save_result::failed;
-        }
-
-        finalize_project_artifact_image(output);
-
-        return source_save_result::success;
+                dependents.size());
     }
-    catch (...) {
-        output = {};
+
+    if (forward_count !=
+        reverse_count) {
+
+        output.reset();
+
+        return source_save_result::
+            invalid_state;
+    }
+
+    if (!build_tracking_capture(
+            files,
+            options.change_checkpoint,
+            output.checkpoint,
+            output.file_index_references,
+            output.file_index_files,
+            output.directory_index_references,
+            output.directory_index_flags)) {
+
+        output.reset();
+
         return source_save_result::failed;
     }
+
+    if (output.file_index_references.size() !=
+            output.file_index_files.size() ||
+        output.directory_index_references.size() !=
+            output.directory_index_flags.size() ||
+        output.file_index_references.size() >
+            static_cast<std::size_t>(
+                (std::numeric_limits<
+                    std::uint32_t>::max)()) ||
+        output.directory_index_references.size() >
+            static_cast<std::size_t>(
+                (std::numeric_limits<
+                    std::uint32_t>::max)())) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    const auto file_index_count =
+        static_cast<std::uint32_t>(
+            output.file_index_references.size());
+
+    const auto directory_index_count =
+        static_cast<std::uint32_t>(
+            output.directory_index_references.size());
+
+    std::size_t records_size = 0;
+    std::size_t forward_size = 0;
+    std::size_t reverse_size = 0;
+    std::size_t file_index_size = 0;
+    std::size_t directory_index_size = 0;
+
+    if (!multiply_size(
+            file_count,
+            record_size,
+            records_size) ||
+        !multiply_size(
+            forward_count,
+            sizeof(std::uint32_t),
+            forward_size) ||
+        !multiply_size(
+            reverse_count,
+            sizeof(std::uint32_t),
+            reverse_size) ||
+        !multiply_size(
+            file_index_count,
+            file_index_record_size,
+            file_index_size) ||
+        !multiply_size(
+            directory_index_count,
+            directory_index_record_size,
+            directory_index_size)) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    std::size_t cursor =
+        header_size;
+
+    output.records_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            records_size)) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    output.paths_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            path_bytes)) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    output.forward_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            forward_size)) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    output.reverse_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            reverse_size)) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    output.file_index_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            file_index_size)) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    output.directory_index_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            directory_index_size)) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    output.checksum_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            checksum_size)) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    output.size_value = cursor;
+    output.file_count = file_count;
+    output.path_bytes = path_bytes;
+    output.forward_count = forward_count;
+    output.reverse_count = reverse_count;
+    output.file_index_count =
+        file_index_count;
+    output.directory_index_count =
+        directory_index_count;
+
+    return source_save_result::success;
 }
 
-source_save_result build_source_save_image(
+source_save_result prepare_source_save_layout(
     const file_context& files,
-    project_artifact_image& output) noexcept {
+    source_save_layout& output) noexcept {
 
-    return build_source_save_image(
+    return prepare_source_save_layout(
         files,
         source_save_build_options{},
         output);
 }
+
+source_save_result encode_source_save_image(
+    const file_context& files,
+    const source_save_layout& layout,
+    std::span<std::byte> output) noexcept {
+
+    if (layout.size_value == 0 ||
+        output.size() !=
+            layout.size_value ||
+        !files.dependency_topology_finalized() ||
+        files.size() !=
+            layout.file_count ||
+        layout.records_offset !=
+            header_size ||
+        layout.checksum_offset >
+            output.size() ||
+        output.size() -
+            layout.checksum_offset !=
+                checksum_size ||
+        layout.file_index_references.size() !=
+            layout.file_index_count ||
+        layout.file_index_files.size() !=
+            layout.file_index_count ||
+        layout.directory_index_references.size() !=
+            layout.directory_index_count ||
+        layout.directory_index_flags.size() !=
+            layout.directory_index_count) {
+
+        return source_save_result::
+            invalid_state;
+    }
+
+    std::size_t header_cursor = 0;
+
+    if (!write_bytes(
+            output,
+            header_cursor,
+            magic.data(),
+            magic.size()) ||
+        !write_u32(
+            output,
+            header_cursor,
+            format_version) ||
+        !write_u32(
+            output,
+            header_cursor,
+            layout.file_count) ||
+        !write_u32(
+            output,
+            header_cursor,
+            layout.path_bytes) ||
+        !write_u32(
+            output,
+            header_cursor,
+            layout.forward_count) ||
+        !write_u32(
+            output,
+            header_cursor,
+            layout.reverse_count) ||
+        !write_u32(
+            output,
+            header_cursor,
+            static_cast<std::uint32_t>(
+                layout.checkpoint.backend)) ||
+        !write_u32(
+            output,
+            header_cursor,
+            layout.file_index_count) ||
+        !write_u32(
+            output,
+            header_cursor,
+            layout.directory_index_count) ||
+        !write_u32(
+            output,
+            header_cursor,
+            0) ||
+        !write_u64(
+            output,
+            header_cursor,
+            layout.checkpoint.volume_serial) ||
+        !write_u64(
+            output,
+            header_cursor,
+            layout.checkpoint.journal_id) ||
+        !write_u64(
+            output,
+            header_cursor,
+            static_cast<std::uint64_t>(
+                layout.checkpoint.next_usn)) ||
+        !write_u32(
+            output,
+            header_cursor,
+            0) ||
+        !write_u32(
+            output,
+            header_cursor,
+            0) ||
+        !write_u32(
+            output,
+            header_cursor,
+            0) ||
+        header_cursor !=
+            header_size) {
+
+        return source_save_result::failed;
+    }
+
+    std::size_t record_cursor =
+        layout.records_offset;
+
+    std::size_t path_cursor = 0;
+
+    std::uint32_t dependency_offset = 0;
+    std::uint32_t dependent_offset = 0;
+
+    for (std::uint32_t value = 1;
+         value <= layout.file_count;
+         ++value) {
+
+        const file_id file{value};
+
+        const auto* physical =
+            files.physical(
+                file);
+
+        if (physical == nullptr ||
+            !physical->present()) {
+
+            return source_save_result::
+                invalid_state;
+        }
+
+        const auto dependencies =
+            files.dependencies(
+                file);
+
+        const auto dependents =
+            files.dependents(
+                file);
+
+        if (dependencies.size() >
+                static_cast<std::size_t>(
+                    (std::numeric_limits<
+                        std::uint32_t>::max)()) -
+                    dependency_offset ||
+            dependents.size() >
+                static_cast<std::size_t>(
+                    (std::numeric_limits<
+                        std::uint32_t>::max)()) -
+                    dependent_offset ||
+            path_cursor >
+                layout.path_bytes) {
+
+            return source_save_result::
+                invalid_state;
+        }
+
+        const auto remaining_path_bytes =
+            static_cast<std::size_t>(
+                layout.path_bytes) -
+            path_cursor;
+
+        std::size_t path_size = 0;
+
+        auto* path_target =
+            reinterpret_cast<char*>(
+                output.data() +
+                layout.paths_offset +
+                path_cursor);
+
+        if (filesystem_path_to_utf8(
+                files.path(file),
+                std::span<char>{
+                    path_target,
+                    remaining_path_bytes},
+                path_size) !=
+                    filesystem_path_result::
+                        success ||
+            path_size == 0 ||
+            path_size >
+                remaining_path_bytes ||
+            path_size >
+                static_cast<std::size_t>(
+                    (std::numeric_limits<
+                        std::uint32_t>::max)())) {
+
+            return source_save_result::
+                invalid_state;
+        }
+
+        std::uint32_t flags =
+            current_member_flag |
+            physical_present_flag;
+
+        const auto file_reference =
+            physical->has_change_token() &&
+                physical->change_token
+            ? physical->change_token.
+                file_reference
+            : 0;
+
+        if (file_reference != 0) {
+            flags |=
+                file_reference_flag;
+        }
+
+        if (!write_u32(
+                output,
+                record_cursor,
+                static_cast<std::uint32_t>(
+                    path_cursor)) ||
+            !write_u32(
+                output,
+                record_cursor,
+                static_cast<std::uint32_t>(
+                    path_size)) ||
+            !write_u32(
+                output,
+                record_cursor,
+                static_cast<std::uint32_t>(
+                    files.kind(file))) ||
+            !write_u32(
+                output,
+                record_cursor,
+                flags) ||
+            !write_bytes(
+                output,
+                record_cursor,
+                physical->content_hash.
+                    bytes.data(),
+                physical->content_hash.
+                    bytes.size()) ||
+            !write_u64(
+                output,
+                record_cursor,
+                file_reference) ||
+            !write_u32(
+                output,
+                record_cursor,
+                dependency_offset) ||
+            !write_u32(
+                output,
+                record_cursor,
+                static_cast<std::uint32_t>(
+                    dependencies.size())) ||
+            !write_u32(
+                output,
+                record_cursor,
+                dependent_offset) ||
+            !write_u32(
+                output,
+                record_cursor,
+                static_cast<std::uint32_t>(
+                    dependents.size()))) {
+
+            return source_save_result::failed;
+        }
+
+        path_cursor +=
+            path_size;
+
+        dependency_offset +=
+            static_cast<std::uint32_t>(
+                dependencies.size());
+
+        dependent_offset +=
+            static_cast<std::uint32_t>(
+                dependents.size());
+    }
+
+    if (record_cursor !=
+            layout.paths_offset ||
+        path_cursor !=
+            layout.path_bytes ||
+        dependency_offset !=
+            layout.forward_count ||
+        dependent_offset !=
+            layout.reverse_count) {
+
+        return source_save_result::
+            invalid_state;
+    }
+
+    std::size_t forward_cursor =
+        layout.forward_offset;
+
+    std::uint32_t forward_written = 0;
+
+    for (std::uint32_t value = 1;
+         value <= layout.file_count;
+         ++value) {
+
+        for (const auto target :
+             files.dependencies(
+                 file_id{value})) {
+
+            if (!target ||
+                target.value() >
+                    layout.file_count ||
+                !write_u32(
+                    output,
+                    forward_cursor,
+                    target.value())) {
+
+                return source_save_result::
+                    invalid_state;
+            }
+
+            ++forward_written;
+        }
+    }
+
+    if (forward_cursor !=
+            layout.reverse_offset ||
+        forward_written !=
+            layout.forward_count) {
+
+        return source_save_result::
+            invalid_state;
+    }
+
+    std::size_t reverse_cursor =
+        layout.reverse_offset;
+
+    std::uint32_t reverse_written = 0;
+
+    for (std::uint32_t value = 1;
+         value <= layout.file_count;
+         ++value) {
+
+        for (const auto source :
+             files.dependents(
+                 file_id{value})) {
+
+            if (!source ||
+                source.value() >
+                    layout.file_count ||
+                !write_u32(
+                    output,
+                    reverse_cursor,
+                    source.value())) {
+
+                return source_save_result::
+                    invalid_state;
+            }
+
+            ++reverse_written;
+        }
+    }
+
+    if (reverse_cursor !=
+            layout.file_index_offset ||
+        reverse_written !=
+            layout.reverse_count) {
+
+        return source_save_result::
+            invalid_state;
+    }
+
+    std::size_t file_index_cursor =
+        layout.file_index_offset;
+
+    for (std::size_t index = 0;
+         index <
+            layout.file_index_references.size();
+         ++index) {
+
+        if (!write_u64(
+                output,
+                file_index_cursor,
+                layout.file_index_references[
+                    index]) ||
+            !write_u32(
+                output,
+                file_index_cursor,
+                layout.file_index_files[
+                    index].value())) {
+
+            return source_save_result::failed;
+        }
+    }
+
+    if (file_index_cursor !=
+        layout.directory_index_offset) {
+
+        return source_save_result::failed;
+    }
+
+    std::size_t directory_index_cursor =
+        layout.directory_index_offset;
+
+    for (std::size_t index = 0;
+         index <
+            layout.directory_index_references.size();
+         ++index) {
+
+        if (!write_u64(
+                output,
+                directory_index_cursor,
+                layout.directory_index_references[
+                    index]) ||
+            !write_u32(
+                output,
+                directory_index_cursor,
+                layout.directory_index_flags[
+                    index])) {
+
+            return source_save_result::failed;
+        }
+    }
+
+    if (directory_index_cursor !=
+        layout.checksum_offset) {
+
+        return source_save_result::failed;
+    }
+
+    const auto digest =
+        checksum(
+            output.first(
+                layout.checksum_offset));
+
+    std::size_t checksum_cursor =
+        layout.checksum_offset;
+
+    if (!write_bytes(
+            output,
+            checksum_cursor,
+            digest.bytes.data(),
+            digest.bytes.size()) ||
+        checksum_cursor !=
+            output.size()) {
+
+        return source_save_result::failed;
+    }
+
+    return source_save_result::success;
+}
+
 
 source_save_result validate_source_save_image(
     std::span<const std::byte> image) noexcept {
@@ -1851,21 +2383,19 @@ source_save_result validate_source_save_image(
             static_cast<std::uint32_t>(
                 view.file_count());
 
+        // One cursor per target verifies that reverse topology is the exact
+        // transpose of forward topology without an O(E) expected-edge copy.
         std::vector<std::uint32_t>
-            reverse_counts(file_count);
+            reverse_cursor(file_count);
 
-        std::vector<std::uint32_t>
-            marker(file_count);
+        for (std::uint32_t target = 1;
+             target <= file_count;
+             ++target) {
 
-        for (std::uint32_t value = 1;
-             value <= file_count;
-             ++value) {
-
-            const file_id file{value};
             source_save_file_view state;
 
             if (!view.file(
-                    file,
+                    file_id{target},
                     state) ||
                 !state.current_member ||
                 !state.physical.present()) {
@@ -1888,89 +2418,28 @@ source_save_result validate_source_save_image(
                     invalid_image;
             }
 
+            std::uint32_t previous_source = 0;
+
             for (std::size_t index = 0;
                  index <
-                    state.dependencies.size();
+                    state.dependents.size();
                  ++index) {
 
-                const auto target =
-                    state.dependencies[index];
+                const auto source =
+                    state.dependents[index];
 
-                if (!view.contains(target)) {
-                    return source_save_result::
-                        invalid_image;
-                }
-
-                source_save_file_view
-                    target_state;
-
-                if (!view.file(
-                        target,
-                        target_state) ||
-                    !target_state.
-                        current_member) {
+                if (!view.contains(source) ||
+                    source.value() <=
+                        previous_source) {
 
                     return source_save_result::
                         invalid_image;
                 }
 
-                auto& seen =
-                    marker[
-                        target.value() - 1];
-
-                if (seen == value) {
-                    return source_save_result::
-                        invalid_image;
-                }
-
-                seen = value;
-
-                auto& count =
-                    reverse_counts[
-                        target.value() - 1];
-
-                if (count ==
-                    (std::numeric_limits<
-                        std::uint32_t>::max)()) {
-
-                    return source_save_result::
-                        invalid_image;
-                }
-
-                ++count;
+                previous_source =
+                    source.value();
             }
         }
-
-        std::vector<std::uint32_t>
-            reverse_offsets(file_count);
-
-        std::uint32_t total = 0;
-
-        for (std::uint32_t index = 0;
-             index < file_count;
-             ++index) {
-
-            reverse_offsets[index] =
-                total;
-
-            if (reverse_counts[index] >
-                (std::numeric_limits<
-                    std::uint32_t>::max)() -
-                    total) {
-
-                return source_save_result::
-                    invalid_image;
-            }
-
-            total +=
-                reverse_counts[index];
-        }
-
-        std::vector<std::uint32_t>
-            cursor = reverse_offsets;
-
-        std::vector<std::uint32_t>
-            expected_reverse(total);
 
         for (std::uint32_t source = 1;
              source <= file_count;
@@ -1994,10 +2463,37 @@ source_save_result validate_source_save_image(
                 const auto target =
                     state.dependencies[index];
 
-                expected_reverse[
-                    cursor[
-                        target.value() - 1]++] =
-                    source;
+                if (!view.contains(target)) {
+                    return source_save_result::
+                        invalid_image;
+                }
+
+                source_save_file_view
+                    target_state;
+
+                if (!view.file(
+                        target,
+                        target_state)) {
+
+                    return source_save_result::
+                        invalid_image;
+                }
+
+                auto& cursor =
+                    reverse_cursor[
+                        target.value() - 1];
+
+                if (cursor >=
+                        target_state.dependents.size() ||
+                    target_state.dependents[
+                        cursor] !=
+                        file_id{source}) {
+
+                    return source_save_result::
+                        invalid_image;
+                }
+
+                ++cursor;
             }
         }
 
@@ -2010,40 +2506,21 @@ source_save_result validate_source_save_image(
             if (!view.file(
                     file_id{target},
                     state) ||
-                state.dependents.size() !=
-                    reverse_counts[
-                        target - 1]) {
+                reverse_cursor[
+                    target - 1] !=
+                    state.dependents.size()) {
 
                 return source_save_result::
                     invalid_image;
             }
-
-            const auto begin =
-                reverse_offsets[
-                    target - 1];
-
-            for (std::size_t index = 0;
-                 index <
-                    state.dependents.size();
-                 ++index) {
-
-                const auto persisted =
-                    state.dependents[index];
-
-                if (!persisted ||
-                    persisted.value() !=
-                        expected_reverse[
-                            begin + index]) {
-
-                    return source_save_result::
-                        invalid_image;
-                }
-            }
         }
 
         if (view.change_checkpoint()) {
-            std::vector<std::uint8_t>
-                indexed(file_count);
+            // Reuse the topology cursor arena as dense file-index coverage.
+            std::fill(
+                reverse_cursor.begin(),
+                reverse_cursor.end(),
+                0);
 
             for (std::uint32_t slot = 0;
                  slot <
@@ -2080,7 +2557,7 @@ source_save_result validate_source_save_image(
                         state) ||
                     state.file_reference !=
                         value.file_reference ||
-                    indexed[
+                    reverse_cursor[
                         value.file.value() - 1] !=
                         0) {
 
@@ -2088,13 +2565,13 @@ source_save_result validate_source_save_image(
                         invalid_image;
                 }
 
-                indexed[
+                reverse_cursor[
                     value.file.value() - 1] =
                     1;
             }
 
             for (const auto value :
-                 indexed) {
+                 reverse_cursor) {
 
                 if (value == 0) {
                     return source_save_result::
@@ -2135,6 +2612,7 @@ source_save_result validate_source_save_image(
         return source_save_result::failed;
     }
 }
+
 
 namespace {
 
