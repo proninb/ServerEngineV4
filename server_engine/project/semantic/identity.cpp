@@ -1,5 +1,7 @@
 #include "identity.hpp"
 
+#include "../persistence/compiled_project.hpp"
+
 #include <limits>
 #include <utility>
 
@@ -14,7 +16,6 @@ namespace {
     }
 
     constexpr std::size_t minimum_capacity = 8;
-
     const auto maximum =
         (std::numeric_limits<std::size_t>::max)();
 
@@ -55,6 +56,35 @@ namespace {
 identity_space::identity_space(
     const string_table& strings) noexcept
     : strings(strings) {
+}
+
+server_status identity_space::bind_baseline(
+    const compiled_project_view& baseline_value) noexcept {
+
+    if (!baseline_value.valid() ||
+        baseline != nullptr ||
+        strings.baseline !=
+            &baseline_value ||
+        !records.empty() ||
+        !kinds.empty() ||
+        !index.empty() ||
+        baseline_value.identity_count() == 0 ||
+        baseline_value.identity_count() >
+            identity_ref::maximum_slot ||
+        baseline_value.identity_root() !=
+            root()) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    baseline =
+        &baseline_value;
+
+    baseline_identity_count =
+        baseline_value.identity_count();
+
+    return server_status::success;
 }
 
 std::uint64_t identity_space::hash_key(
@@ -99,46 +129,117 @@ bool identity_space::contains(
             identity_kind::root;
     }
 
+    if (baseline != nullptr &&
+        identity.slot() <=
+            baseline_identity_count) {
+
+        return baseline->identity_valid(
+            identity);
+    }
+
+    if (identity.slot() <=
+        baseline_identity_count) {
+
+        return false;
+    }
+
     const auto index_value =
         static_cast<std::size_t>(
-            identity.slot() - 2);
+            identity.slot()) -
+        baseline_identity_count -
+        1;
 
-    return identity.slot() >= 2 &&
-        index_value < records.size() &&
+    return index_value < records.size() &&
         index_value < kinds.size() &&
         kinds[index_value] ==
             identity.kind();
 }
 
-const identity_record* identity_space::record(
-    identity_ref identity) const noexcept {
+bool identity_space::record(
+    identity_ref identity,
+    identity_record& output) const noexcept {
+
+    output = {};
 
     if (!contains(identity)) {
-        return nullptr;
+        return false;
     }
 
     if (identity.slot() == 1) {
-        return &root_record;
+        output =
+            root_record;
+        return true;
     }
 
-    return &records[
-        identity.slot() - 2];
+    if (baseline != nullptr &&
+        identity.slot() <=
+            baseline_identity_count) {
+
+        const auto parent =
+            baseline->identity_parent(
+                identity);
+
+        const auto name =
+            baseline->identity_name(
+                identity);
+
+        if (!parent ||
+            !name) {
+            return false;
+        }
+
+        output = {
+            parent,
+            name,
+        };
+        return true;
+    }
+
+    const auto index_value =
+        static_cast<std::size_t>(
+            identity.slot()) -
+        baseline_identity_count -
+        1;
+
+    if (index_value >= records.size()) {
+        return false;
+    }
+
+    output =
+        records[index_value];
+    return true;
 }
 
 identity_ref identity_space::at_slot(
     std::uint32_t slot) const noexcept {
 
+    if (slot == 0) {
+        return {};
+    }
+
     if (slot == 1) {
         return root();
     }
 
-    if (slot < 2) {
+    if (baseline != nullptr &&
+        slot <=
+            baseline_identity_count) {
+
+        return baseline->
+            identity_at_slot(slot);
+    }
+
+    if (slot <=
+        baseline_identity_count) {
+
         return {};
     }
 
     const auto index_value =
         static_cast<std::size_t>(
-            slot - 2);
+            slot) -
+        baseline_identity_count -
+        1;
 
     if (index_value >= records.size() ||
         index_value >= kinds.size()) {
@@ -159,16 +260,18 @@ bool identity_space::same_key(
 
     if (!contains(identity) ||
         identity.kind() != kind ||
-        identity.slot() == 1) {
+        identity.slot() <=
+            baseline_identity_count) {
 
         return false;
     }
 
-    const auto& value =
-        records[
-            identity.slot() - 2];
+    identity_record value;
 
-    return value.parent == parent &&
+    return record(
+            identity,
+            value) &&
+        value.parent == parent &&
         value.name == name;
 }
 
@@ -239,12 +342,27 @@ identity_ref identity_space::find(
             name,
             kind);
 
-    return find_key(
-        parent,
-        name,
-        kind,
-        hash,
-        fingerprint(hash));
+    const auto value_fingerprint =
+        fingerprint(hash);
+
+    if (const auto local =
+            find_key(
+                parent,
+                name,
+                kind,
+                hash,
+                value_fingerprint);
+        local) {
+
+        return local;
+    }
+
+    return baseline != nullptr
+        ? baseline->find_identity(
+            parent,
+            name,
+            kind)
+        : identity_ref{};
 }
 
 void identity_space::insert_index(
@@ -311,7 +429,9 @@ server_status identity_space::ensure_index_capacity(
 
             const auto slot =
                 static_cast<std::uint32_t>(
-                    index_value + 2);
+                    baseline_identity_count +
+                    index_value +
+                    1);
 
             const auto identity =
                 at_slot(slot);
@@ -378,8 +498,21 @@ server_status identity_space::resolve(
 
         output =
             existing;
-
         return server_status::success;
+    }
+
+    if (baseline != nullptr) {
+        if (const auto existing =
+                baseline->find_identity(
+                    parent,
+                    name,
+                    kind);
+            existing) {
+
+            output =
+                existing;
+            return server_status::success;
+        }
     }
 
     const auto prepared =
@@ -389,16 +522,16 @@ server_status identity_space::resolve(
         return prepared;
     }
 
-    if (records.size() >=
+    if (size() >=
         static_cast<std::size_t>(
-            identity_ref::maximum_slot - 1)) {
+            identity_ref::maximum_slot)) {
 
         return server_status::io_error;
     }
 
     const auto slot =
         static_cast<std::uint32_t>(
-            records.size() + 2);
+            size() + 1);
 
     const auto identity =
         identity_ref::make(
@@ -428,7 +561,6 @@ server_status identity_space::resolve(
         catch (...) {
             records.resize(
                 old_record_count);
-
             throw;
         }
 
@@ -440,7 +572,6 @@ server_status identity_space::resolve(
 
         output =
             identity;
-
         return server_status::success;
     }
     catch (...) {
@@ -451,10 +582,8 @@ server_status identity_space::resolve(
             old_kind_count);
 
         output = {};
-
         return server_status::io_error;
     }
 }
 
 }
-

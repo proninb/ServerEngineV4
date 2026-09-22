@@ -342,9 +342,11 @@ contains(id) -> bool
 
 `string_id` creation remains private to `string_table`.
 
-The **current implementation** is the fresh REBUILD form only. BUILD
-persisted-state binding and append overlay are not implemented yet; their
-baseline source is compiled.bin, not database.bin.
+The current implementation supports both modes. BUILD binds the immutable
+`compiled_project_view` as its baseline, probes a local open-addressed overlay
+first, falls through to the mmap baseline index, and allocates new `string_id`
+values strictly after the persisted range. Persisted spelling bytes are never
+copied into the local table.
 
 ## Preprocessor
 
@@ -1091,15 +1093,15 @@ Implemented:
 ```text
 string_id
     4-byte canonical textual identity
-    current fresh-construction implementation
+    preserved across one BUILD lineage
 
 string_table
     single-owner interning
-    dense IDs
-    immutable spelling bytes
-    open-addressed index
+    fresh REBUILD storage or compiled.bin baseline + local overlay
+    baseline spelling bytes remain mmap-backed
+    new IDs append after persisted slots
+    open-addressed local index + mmap baseline index
     no mutex/atomics
-    BUILD persisted-state binding not implemented yet
 
 preprocessor
     borrowed const string_table&
@@ -1159,16 +1161,17 @@ Architecture still not integrated/implemented:
 
 ```text
 BUILD File Context sparse mutation over source_save_view
-BUILD string_table / identity_ref lineage reuse
+BUILD per-file lexical replacement/reuse over database_view
 BUILD affected dependency replacement
-REBUILD terminal dependency finalization at the final producer boundary
-compiled-G persistence
-LOAD compiled-G restore
+BUILD affected Parser/Semantic reconstruction into G
+BUILD successful-state persistence commit boundary
+Runtime/SHM construction
 ```
 
 ## Current Semantic Identity Foundation
 
-The fresh-REBUILD `identity_space` is implemented.
+`identity_space` supports fresh REBUILD storage and BUILD baseline+append
+overlay storage.
 
 ```text
 identity_ref
@@ -1192,15 +1195,17 @@ identity_space
 ```
 
 `identity_space` borrows the construction `string_table` only to validate that
-incoming `string_id` values belong to the same construction. It owns no
-declaration/definition state and no persistence policy.
+incoming `string_id` values belong to the same construction. In BUILD mode its
+persisted identity records stay in `compiled_project_view`; only new identities
+enter the local dense record/kind arrays and local open-addressed index. It owns
+no declaration/definition state and no persistence policy.
 
 Root is intrinsic slot `1` stored in-place rather than allocated in the dense
 vectors. Construction therefore cannot silently lose the root on allocation
 failure; dense record/kind storage begins at slot `2`.
 
 `compiled.bin` persists identity lineage canonically together with the
-String Table and G. BUILD will bind those mapped semantic sections as the
+String Table and G. BUILD now binds those mapped semantic sections as the
 baseline for append-only string/identity overlays. `database.bin` deliberately
 contains no semantic identity copy; it retains only per-file lexical state.
 

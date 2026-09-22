@@ -12,13 +12,16 @@
 #include "file/file_context.hpp"
 #include "frontend/lexical_generation.hpp"
 #include "graph/graph.hpp"
+#include "persistence/compiled_project.hpp"
+#include "persistence/database.hpp"
+#include "persistence/source_save.hpp"
 #include "semantic/identity.hpp"
 #include "string/string_table.hpp"
 #include "../configuration/server_configuration.hpp"
+#include "../read_only_file_mapping.hpp"
 
 namespace cw::server {
 
-// Temporary LOAD state; borrows process-wide Server settings.
 class load_context final {
 public:
     explicit load_context(
@@ -29,21 +32,32 @@ public:
     const server_settings_configuration& settings;
 };
 
-// Temporary BUILD state over persisted construction state.
 class build_context final {
 public:
     explicit build_context(
         const server_settings_configuration& settings) noexcept
-        : settings(settings) {
+        : settings(settings),
+          identities(strings) {
     }
 
     const server_settings_configuration& settings;
     project_configuration_manifest manifest;
 
+    read_only_file_mapping manifest_mapping;
+    read_only_file_mapping source_mapping;
+    read_only_file_mapping database_mapping;
+    read_only_file_mapping compiled_mapping;
+
+    source_save_view source;
+    database_view database;
+    compiled_project_view compiled;
+
+    string_table strings;
+    identity_space identities;
+
     preprocessor_configuration preprocessor;
 };
 
-// Temporary REBUILD state for constructing a fresh Project lineage.
 class rebuild_context final {
 public:
     explicit rebuild_context(

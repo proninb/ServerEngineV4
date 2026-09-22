@@ -847,6 +847,9 @@ load project.manifest
     -> read-only mmap/bind source.bin
     -> exact physical dirty detection
     -> OLD reverse dependency affected closure
+    -> read-only mmap/bind compiled.bin
+    -> bind append-only string_id / identity_ref overlays
+    -> mmap/bind database.bin only when affected files require lexical reuse
 ```
 
 The current C++ BUILD entry matches the lifecycle contract:
@@ -857,9 +860,9 @@ UNLOADED
     -> persisted BUILD artifacts
 ```
 
-Sparse File Context mutation, database lexical reuse, compiled.bin-backed
-string/identity overlays, affected frontend/Parser/Semantic reconstruction, and
-final G construction are not implemented yet. The physical mechanism used by a successful BUILD to persist
+Sparse File Context mutation, per-file lexical replacement/reuse, affected
+frontend/Parser/Semantic reconstruction, and final G construction are not
+implemented yet. The physical mechanism used by a successful BUILD to persist
 its new state is intentionally not frozen yet; it must satisfy the separate
 BUILD failure contract that preserves the previously persisted BUILD state.
 

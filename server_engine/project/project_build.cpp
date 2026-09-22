@@ -3,10 +3,8 @@
 #include "project_lifecycle_context.hpp"
 #include "project_configuration_manifest_store.hpp"
 #include "persistence/project_artifact.hpp"
-#include "persistence/source_save.hpp"
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
-#include "../read_only_file_mapping.hpp"
 
 #include <string>
 #include <string_view>
@@ -96,6 +94,70 @@ namespace {
     return server_status::project_artifact_invalid;
 }
 
+[[nodiscard]] server_status report_database_open(
+    read_only_file_mapping_result result,
+    const std::filesystem::path& path,
+    operation_id operation,
+    diagnostic_collection& diagnostics) {
+
+    if (result == read_only_file_mapping_result::failed) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_database_io_failed,
+                operation)
+                .file(path)
+                .detail("Cannot memory-map database.bin")
+                .build());
+
+        return server_status::io_error;
+    }
+
+    diagnostics.emit(
+        diagnostic(
+            diagnostics::project_database_invalid,
+            operation)
+            .file(path)
+            .detail(
+                result == read_only_file_mapping_result::not_found
+                    ? "BUILD requires database.bin when affected files need retained lexical state; REBUILD is required when it is missing"
+                    : "Persisted database.bin is empty")
+            .build());
+
+    return server_status::project_artifact_invalid;
+}
+
+[[nodiscard]] server_status report_compiled_open(
+    read_only_file_mapping_result result,
+    const std::filesystem::path& path,
+    operation_id operation,
+    diagnostic_collection& diagnostics) {
+
+    if (result == read_only_file_mapping_result::failed) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_compiled_io_failed,
+                operation)
+                .file(path)
+                .detail("Cannot memory-map compiled.bin for BUILD baseline")
+                .build());
+
+        return server_status::io_error;
+    }
+
+    diagnostics.emit(
+        diagnostic(
+            diagnostics::project_compiled_invalid,
+            operation)
+            .file(path)
+            .detail(
+                result == read_only_file_mapping_result::not_found
+                    ? "BUILD requires compiled.bin as string/identity/G baseline; REBUILD is required when it is missing"
+                    : "Persisted compiled.bin is empty")
+            .build());
+
+    return server_status::project_artifact_invalid;
+}
+
 }
 
 server_status build_project(
@@ -128,16 +190,12 @@ server_status build_project(
         return server_status::io_error;
     }
 
-    read_only_file_mapping
-        manifest_mapping;
-
     const auto manifest_opened =
-        manifest_mapping.open(
+        context.manifest_mapping.open(
             layout.manifest);
 
     if (manifest_opened !=
-        read_only_file_mapping_result::
-            success) {
+        read_only_file_mapping_result::success) {
 
         return report_manifest_open(
             manifest_opened,
@@ -148,22 +206,18 @@ server_status build_project(
 
     const auto manifest_decoded =
         decode_project_configuration_manifest(
-            manifest_mapping.bytes(),
+            context.manifest_mapping.bytes(),
             context.manifest);
 
     if (manifest_decoded !=
-        project_configuration_manifest_store_result::
-            success) {
+        project_configuration_manifest_store_result::success) {
 
         diagnostics.emit(
             diagnostic(
                 manifest_decoded ==
-                        project_configuration_manifest_store_result::
-                            io_failed
-                    ? diagnostics::
-                        project_manifest_io_failed
-                    : diagnostics::
-                        project_manifest_invalid,
+                        project_configuration_manifest_store_result::io_failed
+                    ? diagnostics::project_manifest_io_failed
+                    : diagnostics::project_manifest_invalid,
                 operation)
                 .file(layout.manifest)
                 .detail(
@@ -171,17 +225,13 @@ server_status build_project(
                 .build());
 
         return manifest_decoded ==
-                project_configuration_manifest_store_result::
-                    io_failed
+                project_configuration_manifest_store_result::io_failed
             ? server_status::io_error
-            : server_status::
-                project_artifact_invalid;
+            : server_status::project_artifact_invalid;
     }
 
-    project_configuration_manifest_verification
-        verification =
-            project_configuration_manifest_verification::
-                changed;
+    project_configuration_manifest_verification verification =
+        project_configuration_manifest_verification::changed;
 
     const auto verified =
         verify_project_configuration_manifest(
@@ -196,12 +246,10 @@ server_status build_project(
     }
 
     if (verification !=
-        project_configuration_manifest_verification::
-            unchanged) {
+        project_configuration_manifest_verification::unchanged) {
 
         const auto committed_hash =
-            context.manifest.
-                configuration_hash;
+            context.manifest.configuration_hash;
 
         const auto composed =
             compose_project_configuration_manifest(
@@ -215,9 +263,8 @@ server_status build_project(
             return composed;
         }
 
-        if (!(context.manifest.
-                configuration_hash ==
-            committed_hash)) {
+        if (!(context.manifest.configuration_hash ==
+              committed_hash)) {
 
             return report_build_incomplete(
                 operation,
@@ -226,16 +273,12 @@ server_status build_project(
         }
     }
 
-    read_only_file_mapping
-        source_mapping;
-
     const auto source_opened =
-        source_mapping.open(
+        context.source_mapping.open(
             layout.source_save);
 
     if (source_opened !=
-        read_only_file_mapping_result::
-            success) {
+        read_only_file_mapping_result::success) {
 
         return report_source_open(
             source_opened,
@@ -244,10 +287,8 @@ server_status build_project(
             diagnostics);
     }
 
-    source_save_view source;
-
-    if (source.bind(
-            source_mapping.bytes()) !=
+    if (context.source.bind(
+            context.source_mapping.bytes()) !=
         source_save_result::success) {
 
         diagnostics.emit(
@@ -259,8 +300,7 @@ server_status build_project(
                     "Committed source.bin failed structural binding")
                 .build());
 
-        return server_status::
-            project_artifact_invalid;
+        return server_status::project_artifact_invalid;
     }
 
     std::vector<file_id> dirty;
@@ -268,19 +308,16 @@ server_status build_project(
 
     const auto scanned =
         scan_source_save_changes(
-            source,
+            context.source,
             dirty,
             &scan);
 
     if (!succeeded(scanned)) {
         diagnostics.emit(
             diagnostic(
-                scanned ==
-                        server_status::io_error
-                    ? diagnostics::
-                        project_source_save_io_failed
-                    : diagnostics::
-                        project_source_save_invalid,
+                scanned == server_status::io_error
+                    ? diagnostics::project_source_save_io_failed
+                    : diagnostics::project_source_save_invalid,
                 operation)
                 .file(layout.source_save)
                 .detail(
@@ -294,7 +331,7 @@ server_status build_project(
 
     const auto collected =
         collect_source_save_affected(
-            source,
+            context.source,
             dirty,
             affected);
 
@@ -311,11 +348,98 @@ server_status build_project(
         return collected;
     }
 
+    const auto compiled_opened =
+        context.compiled_mapping.open(
+            layout.compiled);
+
+    if (compiled_opened !=
+        read_only_file_mapping_result::success) {
+
+        return report_compiled_open(
+            compiled_opened,
+            layout.compiled,
+            operation,
+            diagnostics);
+    }
+
+    if (context.compiled.bind(
+            context.compiled_mapping.bytes()) !=
+        compiled_project_image_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_compiled_invalid,
+                operation)
+                .file(layout.compiled)
+                .detail(
+                    "Committed compiled.bin failed structural BUILD-baseline binding")
+                .build());
+
+        return server_status::project_artifact_invalid;
+    }
+
+    if (!succeeded(
+            context.strings.bind_baseline(
+                context.compiled)) ||
+        !succeeded(
+            context.identities.bind_baseline(
+                context.compiled))) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_compiled_invalid,
+                operation)
+                .file(layout.compiled)
+                .detail(
+                    "Committed compiled.bin could not initialize append-only BUILD string/identity overlays")
+                .build());
+
+        return server_status::project_artifact_invalid;
+    }
+
+    bool database_bound = false;
+
+    if (!affected.empty()) {
+        const auto database_opened =
+            context.database_mapping.open(
+                layout.database);
+
+        if (database_opened !=
+            read_only_file_mapping_result::success) {
+
+            return report_database_open(
+                database_opened,
+                layout.database,
+                operation,
+                diagnostics);
+        }
+
+        if (context.database.bind(
+                context.database_mapping.bytes()) !=
+                database_image_result::success ||
+            context.database.file_count() !=
+                context.source.file_count()) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_database_invalid,
+                    operation)
+                    .file(layout.database)
+                    .detail(
+                        "Committed database.bin failed structural binding or does not match SourceSave file_id cardinality")
+                    .build());
+
+            return server_status::project_artifact_invalid;
+        }
+
+        database_bound = true;
+    }
+
     std::string detail;
 
     try {
         detail =
-            "Persisted SourceSave analysis complete: backend=" +
+            "Persisted BUILD baseline ready: backend=" +
             std::to_string(
                 static_cast<std::uint32_t>(
                     scan.metrics.backend)) +
@@ -343,7 +467,16 @@ server_status build_project(
             ", affected=" +
             std::to_string(
                 affected.size()) +
-            "; sparse File Context mutation and affected frontend reconstruction are not implemented yet";
+            ", database_mapped=" +
+            std::to_string(
+                database_bound ? 1 : 0) +
+            ", baseline_strings=" +
+            std::to_string(
+                context.compiled.string_count()) +
+            ", baseline_identities=" +
+            std::to_string(
+                context.compiled.identity_count()) +
+            "; sparse File Context mutation, lexical replacement/reuse, affected frontend/Parser/Semantic reconstruction, and final G construction are not implemented yet";
     }
     catch (...) {
         return server_status::io_error;

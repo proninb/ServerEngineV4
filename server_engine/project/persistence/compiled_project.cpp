@@ -1167,6 +1167,15 @@ type_ref compiled_project_view::type_ref_from_raw(
     return type_ref{value};
 }
 
+std::size_t
+compiled_project_view::string_byte_size() const noexcept {
+
+    return static_cast<std::size_t>(
+        section(
+            compiled_project_section::
+                string_bytes).count);
+}
+
 std::string_view compiled_project_view::string(
     string_id id) const noexcept {
 
@@ -1291,6 +1300,31 @@ identity_ref
 compiled_project_view::identity_root() const noexcept {
 
     return identity_from_raw(1);
+}
+
+identity_ref
+compiled_project_view::identity_at_slot(
+    std::uint32_t slot) const noexcept {
+
+    if (slot == 0 ||
+        slot > identity_count_value) {
+
+        return {};
+    }
+
+    const auto& core =
+        section(
+            compiled_project_section::
+                identity_core);
+
+    const auto* record =
+        core.data +
+        static_cast<std::size_t>(
+            slot - 1) *
+            identity_core_size;
+
+    return identity_from_raw(
+        read_u32(record));
 }
 
 bool compiled_project_view::identity_valid(
@@ -2606,6 +2640,10 @@ compiled_project_view::verify_contents() const noexcept {
             break;
 
         case identity_kind::type: {
+            if (location == 0) {
+                break;
+            }
+
             if (graph_location_kind(
                     location) != 1) {
 
@@ -2629,6 +2667,10 @@ compiled_project_view::verify_contents() const noexcept {
         }
 
         case identity_kind::object: {
+            if (location == 0) {
+                break;
+            }
+
             if (graph_location_kind(
                     location) != 2) {
 
@@ -3451,17 +3493,18 @@ encode_compiled_project_image(
             const auto identity =
                 identities.at_slot(slot);
 
-            const auto* value =
-                identities.record(identity);
+            identity_record value;
 
             if (!identity ||
-                value == nullptr ||
+                !identities.record(
+                    identity,
+                    value) ||
                 !identities.contains(
-                    value->parent) ||
-                value->parent.slot() >=
+                    value.parent) ||
+                value.parent.slot() >=
                     slot ||
                 !strings.contains(
-                    value->name)) {
+                    value.name)) {
 
                         return compiled_project_image_result::
                     invalid_state;
@@ -3479,16 +3522,16 @@ encode_compiled_project_image(
 
             write_u32(
                 record + 4,
-                value->parent.value());
+                value.parent.value());
 
             write_u32(
                 record + 8,
-                value->name.value());
+                value.name.value());
 
             const auto hash =
                 identity_hash(
-                    value->parent.value(),
-                    value->name.value(),
+                    value.parent.value(),
+                    value.name.value(),
                     static_cast<std::uint32_t>(
                         identity.kind()));
 

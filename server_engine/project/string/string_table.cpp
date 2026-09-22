@@ -1,5 +1,7 @@
 #include "string_table.hpp"
 
+#include "../persistence/compiled_project.hpp"
+
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -15,7 +17,6 @@ namespace {
     }
 
     constexpr std::size_t minimum_capacity = 8;
-
     const auto maximum =
         (std::numeric_limits<std::size_t>::max)();
 
@@ -42,6 +43,44 @@ namespace {
 
 }
 
+server_status string_table::bind_baseline(
+    const compiled_project_view& baseline_value) noexcept {
+
+    if (!baseline_value.valid() ||
+        baseline != nullptr ||
+        !records.empty() ||
+        !bytes.empty() ||
+        !index.empty()) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    const auto maximum_u32 =
+        static_cast<std::size_t>(
+            (std::numeric_limits<std::uint32_t>::max)());
+
+    if (baseline_value.string_count() >
+            maximum_u32 ||
+        baseline_value.string_byte_size() >
+            maximum_u32) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    baseline =
+        &baseline_value;
+
+    baseline_string_count =
+        baseline_value.string_count();
+
+    baseline_byte_count =
+        baseline_value.string_byte_size();
+
+    return server_status::success;
+}
+
 std::uint32_t string_table::hash_text(
     std::string_view value) noexcept {
 
@@ -64,19 +103,64 @@ std::uint32_t string_table::hash_text(
 bool string_table::contains(
     string_id id) const noexcept {
 
-    return id &&
-        id.value() <= records.size();
+    if (!id) {
+        return false;
+    }
+
+    if (baseline != nullptr &&
+        id.value() <=
+            baseline_string_count) {
+
+        return !baseline->string(id).empty();
+    }
+
+    if (id.value() <=
+        baseline_string_count) {
+
+        return false;
+    }
+
+    const auto local =
+        static_cast<std::size_t>(
+            id.value()) -
+        baseline_string_count -
+        1;
+
+    return local < records.size();
 }
 
 std::string_view string_table::get(
     string_id id) const noexcept {
 
-    if (!contains(id)) {
+    if (!id) {
+        return {};
+    }
+
+    if (baseline != nullptr &&
+        id.value() <=
+            baseline_string_count) {
+
+        return baseline->string(id);
+    }
+
+    if (id.value() <=
+        baseline_string_count) {
+
+        return {};
+    }
+
+    const auto local =
+        static_cast<std::size_t>(
+            id.value()) -
+        baseline_string_count -
+        1;
+
+    if (local >= records.size()) {
         return {};
     }
 
     const auto& record =
-        records[id.value() - 1];
+        records[local];
 
     if (record.offset > bytes.size() ||
         record.length >
@@ -95,70 +179,60 @@ std::string_view string_table::spelling(
     std::uint32_t slot) const noexcept {
 
     if (slot == 0 ||
-        slot > records.size()) {
+        slot > size()) {
 
         return {};
     }
 
-    const auto& record =
-        records[slot - 1];
-
-    if (record.offset > bytes.size() ||
-        record.length == 0 ||
-        record.length >
-            bytes.size() - record.offset) {
-
-        return {};
-    }
-
-    return {
-        bytes.data() + record.offset,
-        record.length,
-    };
+    return get(
+        string_id{slot});
 }
 
 string_id string_table::find(
     std::string_view value) const noexcept {
 
-    if (value.empty() ||
-        index.empty()) {
-
+    if (value.empty()) {
         return {};
     }
 
-    const auto hash =
-        hash_text(value);
+    if (!index.empty()) {
+        const auto hash =
+            hash_text(value);
 
-    const auto mask =
-        index.size() - 1;
+        const auto mask =
+            index.size() - 1;
 
-    auto position =
-        static_cast<std::size_t>(hash) &
-        mask;
-
-    for (std::size_t probe = 0;
-         probe < index.size();
-         ++probe) {
-
-        const auto& slot =
-            index[position];
-
-        if (!slot.id) {
-            return {};
-        }
-
-        if (slot.hash == hash &&
-            get(slot.id) == value) {
-
-            return slot.id;
-        }
-
-        position =
-            (position + 1) &
+        auto position =
+            static_cast<std::size_t>(
+                hash) &
             mask;
+
+        for (std::size_t probe = 0;
+             probe < index.size();
+             ++probe) {
+
+            const auto& slot =
+                index[position];
+
+            if (!slot.id) {
+                break;
+            }
+
+            if (slot.hash == hash &&
+                get(slot.id) == value) {
+
+                return slot.id;
+            }
+
+            position =
+                (position + 1) &
+                mask;
+        }
     }
 
-    return {};
+    return baseline != nullptr
+        ? baseline->find_string(value)
+        : string_id{};
 }
 
 void string_table::insert_index(
@@ -223,7 +297,9 @@ server_status string_table::ensure_index_capacity(
                 candidate,
                 string_id{
                     static_cast<std::uint32_t>(
-                        current + 1)},
+                        baseline_string_count +
+                        current +
+                        1)},
                 records[current].hash);
         }
 
@@ -266,11 +342,21 @@ server_status string_table::intern(
         static_cast<std::size_t>(
             (std::numeric_limits<std::uint32_t>::max)());
 
-    if (records.size() >= maximum_u32 ||
+    if (baseline_string_count >
+            maximum_u32 ||
+        records.size() >=
+            maximum_u32 -
+                baseline_string_count ||
         value.size() > maximum_u32 ||
-        bytes.size() > maximum_u32 ||
+        baseline_byte_count >
+            maximum_u32 ||
+        bytes.size() >
+            maximum_u32 -
+                baseline_byte_count ||
         value.size() >
-            maximum_u32 - bytes.size()) {
+            maximum_u32 -
+                baseline_byte_count -
+                bytes.size()) {
 
         return server_status::io_error;
     }
@@ -337,6 +423,7 @@ server_status string_table::intern(
 
         output = string_id{
             static_cast<std::uint32_t>(
+                baseline_string_count +
                 records.size())};
 
         insert_index(

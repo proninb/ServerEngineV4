@@ -1,9 +1,9 @@
 /*
  * Project semantic identity foundation.
  *
- * identity_space owns deterministic Project-local WHO identity for REBUILD.
- * It canonicalizes (parent, string_id, identity_kind) without carrying
- * declaration state, source locations, ABI data, Graph handles, or persistence.
+ * identity_space owns deterministic Project-local WHO identity. REBUILD starts
+ * with intrinsic root + local dense storage. BUILD may bind immutable
+ * compiled.bin identity lineage and append only new local WHO values.
  */
 #pragma once
 
@@ -92,8 +92,6 @@ struct identity_record final {
 
 static_assert(sizeof(identity_record) == 8);
 
-// Fresh-REBUILD semantic identity space. Lookup acceleration is construction
-// state only; numeric identity_ref assignment follows deterministic caller order.
 class identity_space final {
 public:
     explicit identity_space(
@@ -101,6 +99,9 @@ public:
 
     identity_space(const identity_space&) = delete;
     identity_space& operator=(const identity_space&) = delete;
+
+    [[nodiscard]] server_status bind_baseline(
+        const compiled_project_view& baseline) noexcept;
 
     [[nodiscard]] identity_ref root() const noexcept {
         return identity_ref::make(
@@ -122,14 +123,16 @@ public:
     [[nodiscard]] bool contains(
         identity_ref identity) const noexcept;
 
-    [[nodiscard]] const identity_record* record(
-        identity_ref identity) const noexcept;
+    [[nodiscard]] bool record(
+        identity_ref identity,
+        identity_record& output) const noexcept;
 
     [[nodiscard]] identity_ref at_slot(
         std::uint32_t slot) const noexcept;
 
     [[nodiscard]] std::size_t size() const noexcept {
-        return records.size() + 1;
+        return baseline_identity_count +
+            records.size();
     }
 
 private:
@@ -171,9 +174,9 @@ private:
         std::uint32_t fingerprint) const noexcept;
 
     const string_table& strings;
+    const compiled_project_view* baseline = nullptr;
+    std::size_t baseline_identity_count = 1;
 
-    // Root is intrinsic slot 1 and therefore cannot fail allocation during
-    // identity_space construction. Dense vectors store slots 2..N only.
     identity_record root_record{};
 
     std::vector<identity_record> records;
@@ -182,4 +185,3 @@ private:
 };
 
 }
-

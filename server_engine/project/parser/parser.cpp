@@ -285,16 +285,16 @@ private:
                 break;
             }
 
-            const auto* record =
-                identities.record(
-                    current_scope);
+            identity_record record;
 
-            if (record == nullptr) {
+            if (!identities.record(
+                    current_scope,
+                    record)) {
                 break;
             }
 
             current_scope =
-                record->parent;
+                record.parent;
         }
 
         return {};
@@ -323,16 +323,16 @@ private:
                 break;
             }
 
-            const auto* record =
-                identities.record(
-                    current_scope);
+            identity_record record;
 
-            if (record == nullptr) {
+            if (!identities.record(
+                    current_scope,
+                    record)) {
                 break;
             }
 
             current_scope =
-                record->parent;
+                record.parent;
         }
 
         return {};

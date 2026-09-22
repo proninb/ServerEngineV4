@@ -1,9 +1,9 @@
 /*
  * Project-construction canonical string table.
  *
- * string_table owns one dense string_id space and immutable spelling bytes for
- * the current construction. It is single-owner and intentionally has no mutex,
- * persisted-state overlay, persistence policy, or semantic responsibility.
+ * string_table has two storage modes: fresh dense state for REBUILD, or an
+ * immutable compiled.bin baseline plus append-only local state for BUILD.
+ * Persisted spellings stay mmap-backed and are never copied into the overlay.
  */
 #pragma once
 
@@ -17,12 +17,18 @@
 
 namespace cw::server {
 
+class compiled_project_view;
+class identity_space;
+
 class string_table final {
 public:
     string_table() = default;
 
     string_table(const string_table&) = delete;
     string_table& operator=(const string_table&) = delete;
+
+    [[nodiscard]] server_status bind_baseline(
+        const compiled_project_view& baseline) noexcept;
 
     [[nodiscard]] server_status intern(
         std::string_view value,
@@ -34,7 +40,6 @@ public:
     [[nodiscard]] std::string_view get(
         string_id id) const noexcept;
 
-    // Dense persistence-order spelling view. slot is the numeric string_id.
     [[nodiscard]] std::string_view spelling(
         std::uint32_t slot) const noexcept;
 
@@ -42,11 +47,13 @@ public:
         string_id id) const noexcept;
 
     [[nodiscard]] std::size_t size() const noexcept {
-        return records.size();
+        return baseline_string_count +
+            records.size();
     }
 
     [[nodiscard]] std::size_t byte_size() const noexcept {
-        return bytes.size();
+        return baseline_byte_count +
+            bytes.size();
     }
 
 private:
@@ -75,9 +82,15 @@ private:
         string_id id,
         std::uint32_t hash) const noexcept;
 
+    const compiled_project_view* baseline = nullptr;
+    std::size_t baseline_string_count = 0;
+    std::size_t baseline_byte_count = 0;
+
     std::vector<string_record> records;
     std::vector<char> bytes;
     std::vector<string_slot> index;
+
+    friend class identity_space;
 };
 
 }

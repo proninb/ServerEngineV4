@@ -997,6 +997,216 @@ void test_semantic_corruption(
         "cold audit detects graph identity corruption");
 }
 
+
+void test_build_lineage_overlays(
+    test_state& tests,
+    const compiled_fixture& fixture,
+    const compiled_test_image& image) {
+
+    compiled_project_view baseline;
+
+    if (!tests.expect(
+            baseline.bind(
+                image.bytes) ==
+                compiled_project_image_result::success,
+            "bind BUILD semantic baseline")) {
+        return;
+    }
+
+    string_table strings;
+    identity_space identities{
+        strings};
+
+    if (!tests.expect(
+            succeeded(
+                strings.bind_baseline(
+                    baseline)),
+            "bind string BUILD baseline") ||
+        !tests.expect(
+            succeeded(
+                identities.bind_baseline(
+                    baseline)),
+            "bind identity BUILD baseline")) {
+        return;
+    }
+
+    tests.expect(
+        strings.size() ==
+            baseline.string_count() &&
+        strings.byte_size() ==
+            baseline.string_byte_size(),
+        "BUILD string overlay starts without baseline copy");
+
+    tests.expect(
+        identities.size() ==
+            baseline.identity_count(),
+        "BUILD identity overlay starts without baseline copy");
+
+    tests.expect(
+        strings.find("Widget") ==
+            fixture.type_name &&
+        strings.get(
+            fixture.type_name) ==
+            "Widget",
+        "BUILD string lookup preserves baseline string_id");
+
+    tests.expect(
+        identities.find(
+            fixture.namespace_identity,
+            fixture.type_name,
+            identity_kind::type) ==
+            fixture.type_identity,
+        "BUILD identity lookup preserves baseline identity_ref");
+
+    identity_record persisted_type;
+
+    tests.expect(
+        identities.record(
+            fixture.type_identity,
+            persisted_type) &&
+        persisted_type.parent ==
+            fixture.namespace_identity &&
+        persisted_type.name ==
+            fixture.type_name,
+        "BUILD identity record reads mmap baseline");
+
+    string_id repeated_type;
+
+    tests.expect(
+        succeeded(
+            strings.intern(
+                "Widget",
+                repeated_type)) &&
+        repeated_type ==
+            fixture.type_name,
+        "BUILD reintern keeps persisted string_id");
+
+    string_id appended_name;
+
+    if (!tests.expect(
+            succeeded(
+                strings.intern(
+                    "post_build",
+                    appended_name)) &&
+            appended_name.value() ==
+                baseline.string_count() + 1,
+            "BUILD appends string_id after baseline")) {
+        return;
+    }
+
+    identity_ref repeated_type_identity;
+
+    tests.expect(
+        succeeded(
+            identities.resolve(
+                fixture.namespace_identity,
+                fixture.type_name,
+                identity_kind::type,
+                repeated_type_identity)) &&
+        repeated_type_identity ==
+            fixture.type_identity,
+        "BUILD resolve keeps persisted identity_ref");
+
+    identity_ref appended_identity;
+
+    if (!tests.expect(
+            succeeded(
+                identities.resolve(
+                    fixture.namespace_identity,
+                    appended_name,
+                    identity_kind::object,
+                    appended_identity)) &&
+            appended_identity.slot() ==
+                baseline.identity_count() + 1,
+            "BUILD appends identity_ref after baseline")) {
+        return;
+    }
+
+    tests.expect(
+        identities.at_slot(
+            fixture.type_identity.slot()) ==
+            fixture.type_identity &&
+        identities.at_slot(
+            appended_identity.slot()) ==
+            appended_identity,
+        "BUILD identity slot view spans baseline and overlay");
+
+    compiled_project_layout merged_layout;
+
+    if (!tests.expect(
+            prepare_compiled_project_layout(
+                strings,
+                identities,
+                fixture.G,
+                fixture.assigns,
+                merged_layout) ==
+                compiled_project_image_result::success,
+            "prepare merged baseline+overlay compiled image")) {
+        return;
+    }
+
+    std::vector<std::byte> merged;
+
+    try {
+        merged.assign(
+            merged_layout.size(),
+            std::byte{0});
+    }
+    catch (...) {
+        tests.expect(
+            false,
+            "allocate merged overlay test image");
+        return;
+    }
+
+    if (!tests.expect(
+            encode_compiled_project_image(
+                strings,
+                identities,
+                fixture.G,
+                fixture.assigns,
+                merged_layout,
+                merged) ==
+                compiled_project_image_result::success,
+            "encode merged baseline+overlay compiled image")) {
+        return;
+    }
+
+    compiled_project_view merged_view;
+
+    if (!tests.expect(
+            merged_view.bind(
+                merged) ==
+                compiled_project_image_result::success &&
+            merged_view.verify_contents() ==
+                compiled_project_image_result::success,
+            "validate merged baseline+overlay compiled image")) {
+        return;
+    }
+
+    tests.expect(
+        merged_view.find_string(
+            "Widget") ==
+            fixture.type_name &&
+        merged_view.find_string(
+            "post_build") ==
+            appended_name,
+        "merged compiled image preserves and appends string IDs");
+
+    tests.expect(
+        merged_view.find_identity(
+            fixture.namespace_identity,
+            fixture.type_name,
+            identity_kind::type) ==
+            fixture.type_identity &&
+        merged_view.find_identity(
+            fixture.namespace_identity,
+            appended_name,
+            identity_kind::object) ==
+            appended_identity,
+        "merged compiled image preserves and appends identity refs");
+}
+
 }
 }
 
@@ -1038,6 +1248,11 @@ int main() {
             "deterministic compiled image");
 
         test_round_trip(
+            tests,
+            fixture,
+            first);
+
+        test_build_lineage_overlays(
             tests,
             fixture,
             first);

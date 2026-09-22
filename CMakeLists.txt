@@ -178,6 +178,8 @@ if(BUILD_TESTING)
         server_engine/project/string/string_table.cpp
         server_engine/project/semantic/identity.cpp
         server_engine/project/graph/graph.cpp
+        server_engine/project/assign/assign_table.cpp
+        server_engine/project/persistence/compiled_project.cpp
         server_engine/project/parser/parser.cpp
         server_engine/project/preprocessor/preprocessor.cpp
         server_engine/project/frontend/frontend_input.cpp

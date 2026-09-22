@@ -132,6 +132,8 @@ public:
         return string_count_value;
     }
 
+    [[nodiscard]] std::size_t string_byte_size() const noexcept;
+
     [[nodiscard]] std::size_t identity_count() const noexcept {
         return identity_count_value;
     }
@@ -159,6 +161,9 @@ public:
         std::string_view value) const noexcept;
 
     [[nodiscard]] identity_ref identity_root() const noexcept;
+
+    [[nodiscard]] identity_ref identity_at_slot(
+        std::uint32_t slot) const noexcept;
 
     [[nodiscard]] bool identity_valid(
         identity_ref identity) const noexcept;
