@@ -248,6 +248,14 @@ inline constexpr diagnostic_descriptor project_preprocessing_error{
 
 
 
+inline constexpr diagnostic_descriptor project_semantic_error{
+    diagnostic_id{2025},
+    diagnostic_domain::parser,
+    diagnostic_severity::error,
+    "project.semantic_error",
+    "Project source semantic construction failed",
+};
+
 inline constexpr diagnostic_descriptor project_source_save_invalid{
     diagnostic_id{2023},
     diagnostic_domain::project,

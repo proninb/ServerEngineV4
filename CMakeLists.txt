@@ -31,8 +31,10 @@ add_executable(ServerEngineV4
     server_engine/project/string/string_table.cpp
     server_engine/project/semantic/identity.cpp
     server_engine/project/graph/graph.cpp
+    server_engine/project/parser/parser.cpp
     server_engine/project/preprocessor/preprocessor.cpp
     server_engine/project/frontend/frontend_input.cpp
+    server_engine/project/frontend/semantic_input.cpp
     server_engine/project/frontend/directive_decoder.cpp
     server_engine/project/frontend/directive_executor.cpp
     server_engine/project/frontend/source_discovery.cpp

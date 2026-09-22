@@ -1,21 +1,14 @@
 #include "source_discovery.hpp"
 
-#include "directive_decoder.hpp"
 #include "../construction/execution_lanes.hpp"
-#include "frontend_input.hpp"
 #include "lexer.hpp"
-#include "../preprocessor/preprocessor.hpp"
-#include "../../filesystem_path.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
 #include <limits>
 #include <memory>
 #include <new>
-#include <string_view>
 
 namespace cw::server {
 namespace {
@@ -58,28 +51,19 @@ struct lexical_lane_state final {
     lexical_stream stream;
     server_status status =
         server_status::success;
-    source_discovery_failure failure;
+    source_preparation_failure failure;
 };
 
-struct directive_frame final {
-    file_id file{};
-    std::uint32_t next_directive = 0;
-};
-
-class source_closure_builder final {
+// Owns only the bounded parallel physical preparation of the initial
+// Project-declared Header/Source set.
+class source_preparation final {
 public:
-    source_closure_builder(
+    source_preparation(
         file_context& files,
         lexical_generation& lexical,
-        const preprocessor_configuration& configuration,
-        string_table& strings,
-        source_discovery_failure* failure) noexcept
+        source_preparation_failure* failure) noexcept
         : files(files),
           lexical(lexical),
-          configuration(configuration),
-          strings(strings),
-          state(strings),
-          executor(strings, state),
           failure(failure) {
     }
 
@@ -89,7 +73,7 @@ public:
             *failure = {};
         }
 
-        root_count =
+        const auto root_count =
             files.size();
 
         std::size_t lexical_file_count = 0;
@@ -156,43 +140,11 @@ public:
             return started;
         }
 
-        const auto initial_lex =
-            lex_range(
-                0,
-                root_count,
-                lexical_file_count,
-                lexical_weight);
-
-        if (!succeeded(initial_lex)) {
-            return initial_lex;
-        }
-
-        // Identity-producing directive execution is deliberately single-owner
-        // and ordered by the initial dense file_id table. CPU count affects only
-        // physical lex throughput, never file_id/string_id assignment order.
-        for (std::size_t index = 0;
-             index < root_count;
-             ++index) {
-
-            const file_id root{
-                static_cast<std::uint32_t>(
-                    index + 1)};
-
-            if (!lexical_kind(
-                    files.kind(root))) {
-
-                continue;
-            }
-
-            const auto executed =
-                execute_root(root);
-
-            if (!succeeded(executed)) {
-                return executed;
-            }
-        }
-
-        return server_status::success;
+        return lex_range(
+            0,
+            root_count,
+            lexical_file_count,
+            lexical_weight);
     }
 
 private:
@@ -200,34 +152,18 @@ private:
         void* context,
         std::size_t lane) noexcept {
 
-        static_cast<source_closure_builder*>(
+        static_cast<source_preparation*>(
             context)
             ->run_lexical_lane(
                 lane);
-    }
-
-    void set_failure(
-        source_discovery_failure_kind kind,
-        file_id file,
-        source_range source) noexcept {
-
-        if (failure == nullptr) {
-            return;
-        }
-
-        failure->kind =
-            kind;
-        failure->file =
-            file;
-        failure->source =
-            source;
     }
 
     [[nodiscard]] server_status materialize_file(
         file_id file) noexcept {
 
         if (!files.contains(file)) {
-            return server_status::project_configuration_invalid;
+            return server_status::
+                project_configuration_invalid;
         }
 
         if (files.content_available(file)) {
@@ -287,7 +223,8 @@ private:
         if (begin > end ||
             end > files.size()) {
 
-            return server_status::project_configuration_invalid;
+            return server_status::
+                project_configuration_invalid;
         }
 
         for (auto index = begin;
@@ -305,7 +242,8 @@ private:
             }
 
             const auto materialized =
-                materialize_file(file);
+                materialize_file(
+                    file);
 
             if (!succeeded(materialized)) {
                 return materialized;
@@ -353,7 +291,8 @@ private:
                 static_cast<std::uint64_t>(
                     lexical_file_count)) {
 
-            return server_status::project_configuration_invalid;
+            return server_status::
+                project_configuration_invalid;
         }
 
         std::size_t lane = 0;
@@ -445,7 +384,8 @@ private:
         if (lane + 1 !=
             active_lanes) {
 
-            return server_status::project_configuration_invalid;
+            return server_status::
+                project_configuration_invalid;
         }
 
         pools[lane] = {
@@ -460,7 +400,7 @@ private:
         file_id file,
         std::uint32_t arena,
         lexical_stream& stream,
-        source_discovery_failure* local_failure) noexcept {
+        source_preparation_failure* local_failure) noexcept {
 
         if (lexical.contains(file)) {
             return server_status::success;
@@ -468,13 +408,11 @@ private:
 
         if (!files.contains(file) ||
             !lexical_kind(
-                files.kind(file))) {
+                files.kind(file)) ||
+            !files.content_available(file)) {
 
-            return server_status::project_configuration_invalid;
-        }
-
-        if (!files.content_available(file)) {
-            return server_status::project_artifact_invalid;
+            return server_status::
+                project_configuration_invalid;
         }
 
         lexical_error error;
@@ -489,7 +427,8 @@ private:
         if (!succeeded(tokenized)) {
             if (local_failure != nullptr) {
                 local_failure->kind =
-                    source_discovery_failure_kind::lexical;
+                    source_preparation_failure_kind::
+                        lexical;
 
                 local_failure->file =
                     file;
@@ -610,411 +549,10 @@ private:
         return server_status::success;
     }
 
-    [[nodiscard]] server_status lex_discovered(
-        file_id file) noexcept {
-
-        const auto materialized =
-            materialize_file(
-                file);
-
-        if (!succeeded(materialized)) {
-            return materialized;
-        }
-
-        const auto extended =
-            lexical.extend(
-                files.size());
-
-        if (!succeeded(extended)) {
-            return extended;
-        }
-
-        const auto index =
-            static_cast<std::size_t>(
-                file.value() - 1);
-
-        const auto size =
-            files.content(file)
-                .size();
-
-        const auto weight =
-            static_cast<std::uint64_t>(
-                size == 0
-                    ? 1
-                    : size);
-
-        return lex_range(
-            index,
-            index + 1,
-            1,
-            weight);
-    }
-
-    [[nodiscard]] server_status resolve_include(
-        const include_request& request,
-        std::string_view source,
-        file_id& output) noexcept {
-
-        output = {};
-
-        if (request.form ==
-            include_form::angled) {
-
-            set_failure(
-                source_discovery_failure_kind::
-                    unsupported_include_form,
-                request.source,
-                request.locator);
-
-            return server_status::unsupported;
-        }
-
-        if (request.form !=
-                include_form::quoted ||
-            request.locator.length < 2) {
-
-            set_failure(
-                source_discovery_failure_kind::
-                    invalid_include,
-                request.source,
-                request.locator);
-
-            return server_status::project_configuration_invalid;
-        }
-
-        const auto offset =
-            static_cast<std::size_t>(
-                request.locator.offset);
-
-        const auto length =
-            static_cast<std::size_t>(
-                request.locator.length);
-
-        if (offset > source.size() ||
-            length >
-                source.size() - offset) {
-
-            set_failure(
-                source_discovery_failure_kind::
-                    invalid_include,
-                request.source,
-                request.locator);
-
-            return server_status::project_configuration_invalid;
-        }
-
-        const auto spelling =
-            source.substr(
-                offset,
-                length);
-
-        if (spelling.size() < 2 ||
-            spelling.front() != '"' ||
-            spelling.back() != '"') {
-
-            set_failure(
-                source_discovery_failure_kind::
-                    invalid_include,
-                request.source,
-                request.locator);
-
-            return server_status::project_configuration_invalid;
-        }
-
-        const auto locator_text =
-            spelling.substr(
-                1,
-                spelling.size() - 2);
-
-        if (locator_text.empty()) {
-            set_failure(
-                source_discovery_failure_kind::
-                    invalid_include,
-                request.source,
-                request.locator);
-
-            return server_status::project_configuration_invalid;
-        }
-
-        std::filesystem::path locator;
-
-        if (filesystem_path_from_utf8(
-                locator_text,
-                locator) !=
-            filesystem_path_result::success) {
-
-            set_failure(
-                source_discovery_failure_kind::
-                    invalid_include,
-                request.source,
-                request.locator);
-
-            return server_status::project_configuration_invalid;
-        }
-
-        try {
-            const auto path_view =
-                files.path(
-                    request.source);
-
-            const std::filesystem::path source_path{
-                path_view.begin(),
-                path_view.end()};
-
-            const auto candidate =
-                source_path.parent_path() /
-                locator;
-
-            const auto resolved =
-                files.resolve(
-                    candidate,
-                    file_kind::header,
-                    output);
-
-            if (!succeeded(resolved)) {
-                set_failure(
-                    source_discovery_failure_kind::
-                        include_resolution,
-                    request.source,
-                    request.locator);
-
-                return resolved;
-            }
-        }
-        catch (...) {
-            set_failure(
-                source_discovery_failure_kind::
-                    include_resolution,
-                request.source,
-                request.locator);
-
-            return server_status::io_error;
-        }
-
-        const auto staged =
-            files.add_dependency(
-                request.source,
-                output);
-
-        if (!succeeded(staged)) {
-            set_failure(
-                source_discovery_failure_kind::
-                    include_resolution,
-                request.source,
-                request.locator);
-
-            return staged;
-        }
-
-        return server_status::success;
-    }
-
-    [[nodiscard]] server_status execute_root(
-        file_id root) noexcept {
-
-        state.reset();
-        executor.reset();
-
-        const auto initialized =
-            initialize_preprocessor(
-                configuration,
-                strings,
-                state);
-
-        if (!succeeded(initialized)) {
-            return initialized;
-        }
-
-        frontend_input decoder_input{
-            lexical};
-
-        std::array<
-            directive_frame,
-            frontend_include_depth_limit>
-            stack{};
-
-        std::size_t depth = 1;
-
-        stack[0] = {
-            root,
-            0,
-        };
-
-        while (depth != 0) {
-            auto& frame =
-                stack[
-                    depth - 1];
-
-            const auto anchors =
-                lexical.directives(
-                    frame.file);
-
-            if (static_cast<std::size_t>(
-                    frame.next_directive) >=
-                anchors.size()) {
-
-                directive_execution_error error;
-
-                const auto finished =
-                    executor.finish_file(
-                        frame.file,
-                        &error);
-
-                if (!succeeded(finished)) {
-                    if (failure != nullptr) {
-                        failure->kind =
-                            source_discovery_failure_kind::directive;
-                        failure->file =
-                            error.file;
-                        failure->source =
-                            error.source;
-                        failure->directive =
-                            error.kind;
-                    }
-
-                    return finished;
-                }
-
-                --depth;
-                continue;
-            }
-
-            const auto anchor =
-                anchors[
-                    frame.next_directive++];
-
-            const auto started =
-                decoder_input.start_at(
-                    frame.file,
-                    anchor.word_offset,
-                    anchor.source_base);
-
-            if (!succeeded(started)) {
-                return started;
-            }
-
-            preprocessing_directive directive;
-
-            const auto decoded =
-                directive_decoder::decode(
-                    decoder_input,
-                    directive);
-
-            if (!succeeded(decoded)) {
-                if (failure != nullptr) {
-                    failure->kind =
-                        source_discovery_failure_kind::directive;
-                    failure->file =
-                        frame.file;
-                    failure->source = {};
-                    failure->directive =
-                        directive_execution_error_kind::
-                            malformed_operand;
-                }
-
-                return decoded;
-            }
-
-            const auto source =
-                files.content(
-                    directive.range.file);
-
-            directive_execution_result result;
-            directive_execution_error error;
-
-            const auto executed =
-                executor.execute(
-                    directive,
-                    source,
-                    result,
-                    &error);
-
-            if (!succeeded(executed)) {
-                if (failure != nullptr) {
-                    failure->kind =
-                        source_discovery_failure_kind::directive;
-                    failure->file =
-                        error.file;
-                    failure->source =
-                        error.source;
-                    failure->directive =
-                        error.kind;
-                }
-
-                return executed;
-            }
-
-            if (result.kind !=
-                directive_execution_kind::include) {
-
-                continue;
-            }
-
-            if (depth ==
-                stack.size()) {
-
-                set_failure(
-                    source_discovery_failure_kind::
-                        include_depth_exceeded,
-                    result.include.source,
-                    result.include.locator);
-
-                return server_status::project_configuration_invalid;
-            }
-
-            file_id target;
-
-            const auto resolved =
-                resolve_include(
-                    result.include,
-                    source,
-                    target);
-
-            if (!succeeded(resolved)) {
-                return resolved;
-            }
-
-            if (!lexical.contains(target)) {
-                const auto lexed =
-                    lex_discovered(
-                        target);
-
-                if (!succeeded(lexed)) {
-                    if (failure != nullptr &&
-                        failure->kind ==
-                            source_discovery_failure_kind::none) {
-
-                        set_failure(
-                            source_discovery_failure_kind::
-                                include_resolution,
-                            result.include.source,
-                            result.include.locator);
-                    }
-
-                    return lexed;
-                }
-            }
-
-            stack[depth++] = {
-                target,
-                0,
-            };
-        }
-
-        return server_status::success;
-    }
-
     file_context& files;
     lexical_generation& lexical;
-    const preprocessor_configuration& configuration;
-    string_table& strings;
+    source_preparation_failure* failure = nullptr;
 
-    preprocessor state;
-    directive_executor executor;
-
-    source_discovery_failure* failure = nullptr;
-
-    std::size_t root_count = 0;
     std::size_t lane_capacity = 0;
 
     std::unique_ptr<file_pool[]> pools;
@@ -1025,21 +563,17 @@ private:
 
 }
 
-server_status discover_source_closure(
+server_status prepare_source_lexical_state(
     file_context& files,
     lexical_generation& lexical,
-    const preprocessor_configuration& configuration,
-    string_table& strings,
-    source_discovery_failure* failure) noexcept {
+    source_preparation_failure* failure) noexcept {
 
-    source_closure_builder builder{
+    source_preparation preparation{
         files,
         lexical,
-        configuration,
-        strings,
         failure};
 
-    return builder.run();
+    return preparation.run();
 }
 
 }

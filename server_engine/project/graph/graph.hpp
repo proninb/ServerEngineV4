@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include "construction_value.hpp"
 #include "link_handle.hpp"
 #include "member_index.hpp"
 #include "object_handle.hpp"
@@ -77,11 +78,19 @@ struct member_record final {
 static_assert(sizeof(member_record) == 12);
 static_assert(std::is_trivially_copyable_v<member_record>);
 
+inline constexpr std::uint32_t graph_object_non_default_initializer =
+    0x00000001u;
+
 struct object_entry final {
     type_ref type{};
+    std::uint32_t flags = 0;
+
+    [[nodiscard]] constexpr bool non_default_initializer() const noexcept {
+        return (flags & graph_object_non_default_initializer) != 0;
+    }
 };
 
-static_assert(sizeof(object_entry) == 4);
+static_assert(sizeof(object_entry) == 8);
 static_assert(std::is_trivially_copyable_v<object_entry>);
 
 struct object_endpoint final {
@@ -103,7 +112,8 @@ struct link_record final {
 static_assert(sizeof(link_record) == 16);
 static_assert(std::is_trivially_copyable_v<link_record>);
 
-// Owns one complete semantic G. There is no generation/update/candidate state.
+// Owns one complete semantic G. Member construction remains in a parallel cold
+// array; Project object initialization capability is carried by object flags.
 class graph final {
 public:
     graph() = default;
@@ -122,12 +132,14 @@ public:
     [[nodiscard]] server_status define_record(
         type_handle type,
         graph_record_kind kind,
-        std::span<const member_record> definition) noexcept;
+        std::span<const member_record> definition,
+        std::span<const construction_value> construction = {}) noexcept;
 
     [[nodiscard]] server_status add_object(
         identity_ref identity,
         type_ref type,
-        object_handle& output) noexcept;
+        object_handle& output,
+        std::uint32_t flags = 0) noexcept;
 
     [[nodiscard]] server_status add_link(
         object_endpoint source,
@@ -190,6 +202,11 @@ public:
         type_handle type,
         member_index member) const noexcept;
 
+    [[nodiscard]] const construction_value* construction(
+        type_handle type,
+        member_index member) const noexcept;
+
+
     [[nodiscard]] bool intrinsic(
         type_ref type,
         intrinsic_type& output) const noexcept;
@@ -237,6 +254,11 @@ public:
         return member_records;
     }
 
+    [[nodiscard]] std::span<const construction_value>
+    member_construction_entries() const noexcept {
+        return member_construction;
+    }
+
     [[nodiscard]] std::span<const object_entry>
     object_entries() const noexcept {
         return objects;
@@ -246,6 +268,7 @@ public:
     object_identity_entries() const noexcept {
         return object_identities;
     }
+
 
     [[nodiscard]] std::span<const link_record>
     link_entries() const noexcept {
@@ -316,6 +339,7 @@ private:
     std::vector<type_entry> types;
     std::vector<identity_ref> type_identities;
     std::vector<member_record> member_records;
+    std::vector<construction_value> member_construction;
 
     std::vector<object_entry> objects;
     std::vector<identity_ref> object_identities;

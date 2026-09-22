@@ -400,7 +400,8 @@ server_status graph::declare_record(
 server_status graph::define_record(
     type_handle type,
     graph_record_kind kind,
-    std::span<const member_record> definition) noexcept {
+    std::span<const member_record> definition,
+    std::span<const construction_value> construction_values) noexcept {
 
     auto* entry =
         contains(type)
@@ -408,16 +409,78 @@ server_status graph::define_record(
         : nullptr;
 
     if (entry == nullptr ||
-        entry->kind !=
-            graph_type_kind::record ||
-        entry->defined() ||
+        entry->kind != graph_type_kind::record ||
         !valid_record_kind(kind) ||
         !compatible_record_kind(
             entry->record_kind,
-            kind)) {
+            kind) ||
+        (!construction_values.empty() &&
+         construction_values.size() != definition.size())) {
 
-        return server_status::
-            project_configuration_invalid;
+        return server_status::project_configuration_invalid;
+    }
+
+    for (std::size_t index = 0;
+         index < definition.size();
+         ++index) {
+
+        if (!definition[index].name ||
+            !contains(definition[index].type)) {
+
+            return server_status::project_configuration_invalid;
+        }
+
+        const auto construction =
+            construction_values.empty()
+            ? construction_value{}
+            : construction_values[index];
+
+        if (!valid_construction(construction)) {
+            return server_status::project_configuration_invalid;
+        }
+    }
+
+    if (entry->defined()) {
+        if (entry->record_kind != kind) {
+            return server_status::project_configuration_invalid;
+        }
+
+        const auto existing =
+            members(type);
+
+        if (existing.size() != definition.size()) {
+            return server_status::project_configuration_invalid;
+        }
+
+        for (std::size_t index = 0;
+             index < existing.size();
+             ++index) {
+
+            if (existing[index].name != definition[index].name ||
+                existing[index].type != definition[index].type ||
+                existing[index].access != definition[index].access) {
+
+                return server_status::project_configuration_invalid;
+            }
+
+            const auto expected =
+                construction_values.empty()
+                ? construction_value{}
+                : construction_values[index];
+
+            const auto position =
+                static_cast<std::size_t>(
+                    entry->members.begin) +
+                index;
+
+            if (position >= member_construction.size() ||
+                member_construction[position] != expected) {
+
+                return server_status::project_configuration_invalid;
+            }
+        }
+
+        return server_status::success;
     }
 
     const auto maximum =
@@ -432,15 +495,6 @@ server_status graph::define_record(
         return server_status::io_error;
     }
 
-    for (const auto& member : definition) {
-        if (!member.name ||
-            !contains(member.type)) {
-
-            return server_status::
-                project_configuration_invalid;
-        }
-    }
-
     const auto old_count =
         member_records.size();
 
@@ -449,24 +503,31 @@ server_status graph::define_record(
             member_records.end(),
             definition.begin(),
             definition.end());
+
+        if (construction_values.empty()) {
+            member_construction.resize(
+                member_records.size());
+        }
+        else {
+            member_construction.insert(
+                member_construction.end(),
+                construction_values.begin(),
+                construction_values.end());
+        }
     }
     catch (...) {
-        member_records.resize(
-            old_count);
-
+        member_records.resize(old_count);
+        member_construction.resize(old_count);
         return server_status::io_error;
     }
 
     entry->members = {
-        static_cast<std::uint32_t>(
-            old_count),
-        static_cast<std::uint32_t>(
-            definition.size()),
+        static_cast<std::uint32_t>(old_count),
+        static_cast<std::uint32_t>(definition.size()),
     };
 
     entry->record_kind = kind;
-    entry->flags |=
-        graph_type_defined;
+    entry->flags |= graph_type_defined;
 
     return server_status::success;
 }
@@ -474,22 +535,35 @@ server_status graph::define_record(
 server_status graph::add_object(
     identity_ref identity,
     type_ref type,
-    object_handle& output) noexcept {
+    object_handle& output,
+    std::uint32_t flags) noexcept {
 
     output = {};
 
     if (!identity ||
-        identity.kind() !=
-            identity_kind::object ||
-        !contains(type)) {
+        identity.kind() != identity_kind::object ||
+        !contains(type) ||
+        (flags & ~graph_object_non_default_initializer) != 0) {
 
-        return server_status::
-            project_configuration_invalid;
+        return server_status::project_configuration_invalid;
     }
 
-    if (find_object(identity)) {
-        return server_status::
-            project_configuration_invalid;
+    if (const auto existing =
+            find_object(identity);
+        existing) {
+
+        const auto* entry =
+            find(existing);
+
+        if (entry == nullptr ||
+            entry->type != type ||
+            entry->flags != flags) {
+
+            return server_status::project_configuration_invalid;
+        }
+
+        output = existing;
+        return server_status::success;
     }
 
     if (objects.size() >=
@@ -508,9 +582,7 @@ server_status graph::add_object(
         return prepared;
     }
 
-    if (identity_locations[
-            identity.slot()] != 0) {
-
+    if (identity_locations[identity.slot()] != 0) {
         if (identity_locations.size() >
             old_location_count) {
 
@@ -518,8 +590,7 @@ server_status graph::add_object(
                 old_location_count);
         }
 
-        return server_status::
-            project_configuration_invalid;
+        return server_status::project_configuration_invalid;
     }
 
     const auto old_object_count =
@@ -531,6 +602,7 @@ server_status graph::add_object(
     try {
         objects.push_back({
             type,
+            flags,
         });
 
         object_identities.push_back(
@@ -540,11 +612,10 @@ server_status graph::add_object(
             static_cast<std::uint32_t>(
                 objects.size())};
 
-        identity_locations[
-            identity.slot()] =
-                encode_location(
-                    location_kind::object,
-                    output.value());
+        identity_locations[identity.slot()] =
+            encode_location(
+                location_kind::object,
+                output.value());
 
         return server_status::success;
     }
@@ -948,6 +1019,32 @@ const member_record* graph::member(
         : nullptr;
 }
 
+const construction_value* graph::construction(
+    type_handle type,
+    member_index member_value) const noexcept {
+
+    const auto* entry =
+        find(type);
+
+    if (entry == nullptr ||
+        !entry->defined() ||
+        !member_value ||
+        member_value.value() >= entry->members.count) {
+
+        return nullptr;
+    }
+
+    const auto position =
+        static_cast<std::size_t>(
+            entry->members.begin) +
+        member_value.value();
+
+    return position < member_construction.size()
+        ? &member_construction[position]
+        : nullptr;
+}
+
+
 bool graph::intrinsic(
     type_ref type,
     intrinsic_type& output) const noexcept {
@@ -1045,8 +1142,29 @@ server_status graph::add_link(
     if (!endpoint_valid(source) ||
         !endpoint_valid(target)) {
 
-        return server_status::
-            project_configuration_invalid;
+        return server_status::project_configuration_invalid;
+    }
+
+    for (std::size_t index = 0;
+         index < links.size();
+         ++index) {
+
+        const auto& existing =
+            links[index];
+
+        if (existing.target != target) {
+            continue;
+        }
+
+        if (existing.source != source) {
+            return server_status::project_configuration_invalid;
+        }
+
+        output = link_handle{
+            static_cast<std::uint32_t>(
+                index + 1)};
+
+        return server_status::success;
     }
 
     if (links.size() >=
@@ -1062,10 +1180,9 @@ server_status graph::add_link(
             target,
         });
 
-        output =
-            link_handle{
-                static_cast<std::uint32_t>(
-                    links.size())};
+        output = link_handle{
+            static_cast<std::uint32_t>(
+                links.size())};
 
         return server_status::success;
     }

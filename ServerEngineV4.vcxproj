@@ -93,8 +93,10 @@
     <ClCompile Include="server_engine\project\string\string_table.cpp" />
     <ClCompile Include="server_engine\project\semantic\identity.cpp" />
     <ClCompile Include="server_engine\project\graph\graph.cpp" />
+    <ClCompile Include="server_engine\project\parser\parser.cpp" />
     <ClCompile Include="server_engine\project\preprocessor\preprocessor.cpp" />
     <ClCompile Include="server_engine\project\frontend\frontend_input.cpp" />
+    <ClCompile Include="server_engine\project\frontend\semantic_input.cpp" />
     <ClCompile Include="server_engine\project\frontend\directive_decoder.cpp" />
     <ClCompile Include="server_engine\project\frontend\directive_executor.cpp" />
     <ClCompile Include="server_engine\project\frontend\source_discovery.cpp" />
@@ -162,6 +164,8 @@
     <ClInclude Include="server_engine\project\string\string_table.hpp" />
     <ClInclude Include="server_engine\project\semantic\identity.hpp" />
     <ClInclude Include="server_engine\project\graph\graph.hpp" />
+    <ClInclude Include="server_engine\project\graph\construction_value.hpp" />
+    <ClInclude Include="server_engine\project\parser\parser.hpp" />
     <ClInclude Include="server_engine\project\graph\type_handle.hpp" />
     <ClInclude Include="server_engine\project\graph\object_handle.hpp" />
     <ClInclude Include="server_engine\project\graph\link_handle.hpp" />
@@ -169,6 +173,7 @@
     <ClInclude Include="server_engine\project\graph\type_ref.hpp" />
     <ClInclude Include="server_engine\project\preprocessor\preprocessor.hpp" />
     <ClInclude Include="server_engine\project\frontend\frontend_input.hpp" />
+    <ClInclude Include="server_engine\project\frontend\semantic_input.hpp" />
     <ClInclude Include="server_engine\project\frontend\directive_decoder.hpp" />
     <ClInclude Include="server_engine\project\frontend\directive_executor.hpp" />
     <ClInclude Include="server_engine\project\frontend\source_discovery.hpp" />

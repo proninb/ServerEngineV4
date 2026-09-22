@@ -691,12 +691,11 @@ Project-declared dependency edges. Child `project.json` files are materialized
 during composition because their bytes are required to continue recursive
 composition.
 
-The current implementation separates physical lexical preparation and a
-directive-only executed-include closure. This is an implementation boundary,
-not the final Parser architecture: Parser integration must not introduce a
-second independent preprocessing execution over the same semantic root.
+Physical lexical preparation is separate from semantic execution. There is
+exactly one preprocessing/include execution per semantic root, and it is
+performed by the Parser/Semantic frontend itself.
 
-### Stage 1: physical lexical state and current executed-include closure
+### Stage 1: initial physical lexical state
 
 For every Project-declared Header/Source, the complete physical file is
 materialized before physical lexing begins. Immutable files are partitioned into
@@ -723,9 +722,14 @@ physical bytes
 A syntactic direct include is therefore always represented lexically, including
 one inside an inactive conditional branch.
 
-The current directive-only closure runs afterward over that lexical state. Every
-frontend root gets fresh mutable preprocessing state initialized from the one root
-`preprocessor_configuration`; an included file continues the same mutable state.
+Stage 1 does not execute preprocessing directives and does not discover
+includes. It only prepares the Project-declared Header/Source physical lexical
+state.
+
+The single preprocessing execution happens in Stage 3 together with
+Parser/Semantic. Every semantic root gets fresh mutable preprocessing state
+initialized from the root `preprocessor_configuration`; an included Header
+continues that same mutable state and semantic scope.
 
 ```text
 #ifdef X
@@ -733,49 +737,39 @@ frontend root gets fresh mutable preprocessing state initialized from the one ro
 #endif
 ```
 
-`#include "a.hpp"` is always lexed/decoded. It is resolved and executed only when
-the active conditional state reaches that directive.
-
-Executed directives are traversed by one construction owner in ascending
-initial `file_id` root order. An active include is resolved immediately in that
-owner order. If the target Header has not been lexed yet, its immutable bytes are
-materialized and the persistent lexical lanes execute the causally available
-physical work before the owner enters the child:
+The include token exists in physical lexical state regardless of branch
+activity. Only when Stage 3 reaches it in an active branch does the semantic
+frontend:
 
 ```text
-deterministic owner
-    -> active include_request
+deterministic Parser owner
     -> resolve/register Header file_id
     -> stage source -> target edge
-    -> materialize immutable target bytes
-    -> persistent lexical lanes
-    -> complete-file lex to EOF
-    -> sparse directive anchors
-    -> enter child directive execution
+    -> materialize Header bytes if first seen
+    -> lex complete physical Header if first seen
+    -> enter Header under the same preprocessing state and semantic scope
     -> child EOF
     -> resume parent
 ```
 
-The owner never advances another root while an earlier root can still discover a
-new include. Therefore dense `file_id` assignment and directive-driven
-`string_id` interning are independent of hardware concurrency. A single root's
-include chain remains sequential because a child may change that root's mutable
-preprocessing state before the parent continues.
+No earlier directive-only execution exists. One semantic root is therefore
+preprocessed exactly once.
 
 The same physical `file_id` is lexed once in the construction operation.
-Different frontend roots may execute its directives under different mutable
+Different semantic roots may execute its directives under different mutable
 preprocessor states without re-lexing its bytes.
 
-Only executed includes extend the physical dependency topology. Inactive
-includes do not resolve paths, do not allocate `file_id`, and do not add edges.
+Only active includes extend the physical dependency topology. Inactive includes
+do not resolve paths, do not allocate `file_id`, and do not add edges.
 
-After every Project-declared frontend root reaches directive closure, all
-Header/Source dependency relations remain staged in File Context. Source closure
-does not finalize topology. Assign bytes may be materialized next, but semantic
-variable identity must exist before Assign reference resolution. The construction
-coordinator calls `finalize_dependency_topology()` exactly once only after
-Semantic-backed Assign resolution and every other dependency producer reaches
-closure.
+Header and Source are composition/routing roles, not bans on declaration kinds.
+Either may contribute declarations/objects when supported by Parser/Semantic;
+linkage/storage-duration semantics such as namespace-scope `static` remain a
+separate semantic contract.
+
+Topology remains staged until Semantic-backed Assign resolution and every other
+dependency producer reaches closure. The construction coordinator then calls
+`finalize_dependency_topology()` exactly once.
 
 The current include-search policy in this slice supports quoted includes relative
 to the including physical file. Angled includes remain fail-closed until include
@@ -796,6 +790,23 @@ Parser/Semantic consumes retained lexical state without lexing source bytes
 again and writes the compiled semantic result directly into `G`. There is no
 intermediate facts layer, Semantic DB, SourceContribution layer, or Builder
 stage.
+
+The first direct Parser slice implements namespace scopes, record
+declarations/definitions, record members, namespace objects, intrinsic/named
+types, and const/volatile/pointer/reference modifiers. Unsupported declarations
+fail closed.
+
+`semantic_input` replays preprocessing over retained lexical words. It yields
+only active C++ tokens, expands the supported object-like identifier macros, and
+enters already-discovered quoted Headers synchronously. It stores no semantic
+token arena.
+
+Parser/Semantic also writes normalized construction values directly into G.
+Scalar member/object defaults and local reference-member bindings become
+source-independent `construction_value` records; source spans do not survive
+this boundary. Namespace-scope `static`/`inline` do not alter `identity_ref`.
+Static Project links are resolved immediately to `object_endpoint` pairs and
+stored directly in G.
 
 Parser integration must preserve one effective preprocessing execution per
 semantic root: ordinary active tokens flow to Parser/Semantic, while active

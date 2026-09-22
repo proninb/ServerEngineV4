@@ -3,71 +3,16 @@
 #include "project_lifecycle_context.hpp"
 #include "assign/assign_input.hpp"
 #include "frontend/source_discovery.hpp"
+#include "parser/parser.hpp"
 
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 
 #include <string>
+#include <string_view>
 
 namespace cw::server {
 namespace {
-
-[[nodiscard]] std::string_view preprocessing_detail(
-    const source_discovery_failure& failure) noexcept {
-
-    if (failure.kind ==
-        source_discovery_failure_kind::
-            unsupported_include_form) {
-
-        return "Angled #include requires configured include roots, which are not part of the current Project contract";
-    }
-
-    if (failure.kind ==
-        source_discovery_failure_kind::
-            invalid_include) {
-
-        return "Direct #include header name is invalid";
-    }
-
-    if (failure.kind ==
-        source_discovery_failure_kind::
-            include_resolution) {
-
-        return "Executed #include could not be resolved or materialized";
-    }
-
-    if (failure.kind ==
-        source_discovery_failure_kind::
-            include_depth_exceeded) {
-
-        return "Executed #include nesting exceeds the supported depth";
-    }
-
-    switch (failure.directive) {
-    case directive_execution_error_kind::malformed_operand:
-        return "Preprocessing directive operand is malformed";
-    case directive_execution_error_kind::invalid_macro_definition:
-        return "Macro redefinition conflicts with the active definition";
-    case directive_execution_error_kind::unsupported_directive:
-        return "Preprocessing directive is not supported by the current language contract";
-    case directive_execution_error_kind::invalid_include:
-        return "Include directive does not contain a supported direct header name";
-    case directive_execution_error_kind::unmatched_else:
-        return "Unmatched #else in this physical file";
-    case directive_execution_error_kind::duplicate_else:
-        return "Conditional group contains more than one #else";
-    case directive_execution_error_kind::unmatched_endif:
-        return "Unmatched #endif in this physical file";
-    case directive_execution_error_kind::conditional_depth_exceeded:
-        return "Conditional nesting exceeds the supported depth";
-    case directive_execution_error_kind::unterminated_conditional:
-        return "Conditional group is not closed before physical file end";
-    case directive_execution_error_kind::none:
-        break;
-    }
-
-    return "Project source preprocessing failed";
-}
 
 [[nodiscard]] server_status emit_source_failure(
     file_context& files,
@@ -158,19 +103,20 @@ server_status rebuild_project(
         return composed;
     }
 
-    source_discovery_failure failure;
+    const auto frontend_root_count =
+        context.files.size();
 
-    const auto discovered =
-        discover_source_closure(
+    source_preparation_failure failure;
+
+    const auto prepared_sources =
+        prepare_source_lexical_state(
             context.files,
             context.lexical,
-            context.preprocessor,
-            context.strings,
             &failure);
 
-    if (!succeeded(discovered)) {
+    if (!succeeded(prepared_sources)) {
         if (failure.kind ==
-                source_discovery_failure_kind::lexical &&
+                source_preparation_failure_kind::lexical &&
             failure.file) {
 
             const source_range range{
@@ -190,31 +136,11 @@ server_status rebuild_project(
                     diagnostics);
 
             return succeeded(emitted)
-                ? discovered
+                ? prepared_sources
                 : emitted;
         }
 
-        if (failure.kind !=
-                source_discovery_failure_kind::none &&
-            failure.file) {
-
-            const auto emitted =
-                emit_source_failure(
-                    context.files,
-                    failure.file,
-                    failure.source,
-                    diagnostics::project_preprocessing_error,
-                    preprocessing_detail(
-                        failure),
-                    operation,
-                    diagnostics);
-
-            return succeeded(emitted)
-                ? discovered
-                : emitted;
-        }
-
-        return discovered;
+        return prepared_sources;
     }
 
     const auto assignments_materialized =
@@ -227,6 +153,53 @@ server_status rebuild_project(
         return assignments_materialized;
     }
 
+    parser_failure semantic_failure;
+
+    const auto parsed =
+        parse_semantic_project(
+            context.files,
+            context.lexical,
+            frontend_root_count,
+            context.preprocessor,
+            context.strings,
+            context.identities,
+            context.G,
+            &semantic_failure);
+
+    if (!succeeded(parsed)) {
+        if (semantic_failure.file) {
+            const auto emitted =
+                emit_source_failure(
+                    context.files,
+                    semantic_failure.file,
+                    semantic_failure.source,
+                    semantic_failure.kind ==
+                            parser_failure_kind::
+                                lexical
+                        ? diagnostics::
+                            project_lexical_error
+                        : semantic_failure.kind ==
+                                parser_failure_kind::
+                                    preprocessing
+                            ? diagnostics::
+                                project_preprocessing_error
+                            : diagnostics::
+                                project_semantic_error,
+                    semantic_failure.detail.empty()
+                        ? std::string_view{
+                            "Parser/Semantic construction failed"}
+                        : semantic_failure.detail,
+                    operation,
+                    diagnostics);
+
+            return succeeded(emitted)
+                ? parsed
+                : emitted;
+        }
+
+        return parsed;
+    }
+
     // The manifest becomes authoritative only with the complete successful
     // REBUILD artifact persistence is not implemented yet.
 
@@ -235,7 +208,7 @@ server_status rebuild_project(
             diagnostics::project_rebuild_incomplete,
             operation)
             .detail(
-                "Project configuration manifest, source lexical closure, executed quoted-include discovery, and Assign byte materialization are complete; Parser/Semantic construction of G, Assign grammar/resolution into G, terminal dependency-topology finalization, compiled-G persistence, Runtime/SHM construction, and persisted artifact replacement is not implemented yet")
+                "Project configuration manifest, initial physical source lexical preparation, Assign byte materialization, and single-pass preprocessing/include discovery with direct Parser/Semantic construction of record/object G state are complete; remaining C++ declaration semantics, Assign grammar/resolution into G, terminal dependency-topology finalization, compiled-G persistence, Runtime/SHM construction, and persisted artifact replacement are not implemented yet")
             .build());
 
     return server_status::unsupported;

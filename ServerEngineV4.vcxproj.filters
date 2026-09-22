@@ -37,6 +37,9 @@
     <Filter Include="server_engine\project\graph">
       <UniqueIdentifier>{A8888888-8888-8888-8888-888888888888}</UniqueIdentifier>
     </Filter>
+    <Filter Include="server_engine\project\parser">
+      <UniqueIdentifier>{A9999999-9999-9999-9999-999999999999}</UniqueIdentifier>
+    </Filter>
     <Filter Include="server_engine\project\preprocessor">
       <UniqueIdentifier>{B2222222-2222-2222-2222-222222222222}</UniqueIdentifier>
     </Filter>
@@ -117,10 +120,16 @@
     <ClCompile Include="server_engine\project\graph\graph.cpp">
       <Filter>server_engine\project\graph</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\project\parser\parser.cpp">
+      <Filter>server_engine\project\parser</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\project\preprocessor\preprocessor.cpp">
       <Filter>server_engine\project\preprocessor</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\project\frontend\frontend_input.cpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\frontend\semantic_input.cpp">
       <Filter>server_engine\project\frontend</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\project\frontend\directive_decoder.cpp">
@@ -326,6 +335,12 @@
     <ClInclude Include="server_engine\project\graph\graph.hpp">
       <Filter>server_engine\project\graph</Filter>
     </ClInclude>
+    <ClInclude Include="server_engine\project\graph\construction_value.hpp">
+      <Filter>server_engine\project\graph</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\parser\parser.hpp">
+      <Filter>server_engine\project\parser</Filter>
+    </ClInclude>
     <ClInclude Include="server_engine\project\graph\type_handle.hpp">
       <Filter>server_engine\project\graph</Filter>
     </ClInclude>
@@ -345,6 +360,9 @@
       <Filter>server_engine\project\preprocessor</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\frontend\frontend_input.hpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\frontend\semantic_input.hpp">
       <Filter>server_engine\project\frontend</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\frontend\directive_decoder.hpp">

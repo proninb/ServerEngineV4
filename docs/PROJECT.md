@@ -177,6 +177,59 @@ or Graph-generation object between Parser/Semantic and G.
 REBUILD operation state owns one temporary `G`; Parser/Semantic writes directly
 into it.
 
+### Construction semantics in G
+
+Construction is semantic data, not source identity.
+
+```text
+identity_ref
+    WHO
+
+type_ref
+    WHAT TYPE
+
+construction_value
+    HOW DEFAULT/INITIAL VALUE IS CONSTRUCTED
+
+link_record
+    HOW PROJECT OBJECT FIELDS ARE CONNECTED
+```
+
+`construction_value` is a pointer-free 16-byte normalized value. The first
+construction slice supports zero/default, signed/unsigned decimal constants,
+real constants, booleans/null, and local record-member reference bindings.
+
+To keep hot Graph records compact, construction data is stored in parallel cold
+arrays:
+
+```text
+member_record[12 B]    member_construction[16 B]
+object_entry[4 B]      object_construction[16 B]
+```
+
+Namespace-scope `static` and `inline` are declaration semantics and do not alter
+the canonical object identity key `(parent, name, identity_kind::object)`.
+
+The direct Parser slice accepts:
+
+```cpp
+struct Device {
+    int OUT = 5;
+    int& IN = OUT;
+};
+
+Device A;
+Device B{};
+
+B.IN = A.OUT;
+```
+
+A repeated identical link is idempotent. A second different source for the same
+target endpoint is a semantic conflict.
+
+Constructor bodies/initializer lists, nonempty record aggregate initializers,
+arrays, and Runtime materialization remain later capabilities.
+
 ## Mode-specific construction contexts
 
 There is no universal Project construction context and no shared
@@ -367,10 +420,12 @@ root project.json
     -> Header/Source exact-byte materialization
     -> complete-file lexical generation
     -> sparse preprocessing directive anchors
-    -> deterministic executed quoted-include closure
+    -> Assign exact-byte materialization
+    -> single Parser/Semantic preprocessing execution
+         active quoted-include discovery
          append-only discovered Header file_id values
          direct File Context dependency staging
-    -> Assign exact-byte materialization
+         -> G
 ```
 
 Cardinality is semantic, not generic identity policy:
@@ -388,7 +443,7 @@ File IDs are assigned root-first in declaration-order DFS. There is no sort.
 The current implementation stops before:
 
 ```text
-Parser/Semantic use of identity_space to construct G
+remaining C++ declaration semantics beyond the first direct Parser slice
 Assign grammar and semantic variable resolution into G
 terminal REBUILD dependency-topology finalization
 final SourceSave image construction
