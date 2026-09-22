@@ -6,6 +6,7 @@
 #include "frontend/source_discovery.hpp"
 #include "parser/parser.hpp"
 #include "persistence/compiled_project.hpp"
+#include "persistence/database.hpp"
 #include "persistence/project_artifact.hpp"
 #include "persistence/source_save.hpp"
 
@@ -324,6 +325,38 @@ server_status rebuild_project(
                 project_artifact_invalid;
     }
 
+    database_layout database_layout_value;
+
+    const auto database_prepared =
+        prepare_database_layout(
+            context.files,
+            context.lexical,
+            database_layout_value);
+
+    if (database_prepared !=
+        database_image_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                database_prepared ==
+                        database_image_result::failed
+                    ? diagnostics::
+                        project_database_io_failed
+                    : diagnostics::
+                        project_database_invalid,
+                operation)
+                .file(layout.database)
+                .detail(
+                    "Cannot prepare the exact database.bin direct-encoding layout")
+                .build());
+
+        return database_prepared ==
+                database_image_result::failed
+            ? server_status::io_error
+            : server_status::
+                project_artifact_invalid;
+    }
+
     compiled_project_layout compiled_layout;
 
     const auto prepared =
@@ -554,6 +587,101 @@ server_status rebuild_project(
         return server_status::io_error;
     }
 
+    writable_file_mapping database_mapping;
+
+    if (database_mapping.create(
+            layout.database,
+            database_layout_value.size()) !=
+        writable_file_mapping_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_database_io_failed,
+                operation)
+                .file(layout.database)
+                .detail(
+                    "Cannot create and memory-map database.bin for direct REBUILD encoding")
+                .build());
+
+        return server_status::io_error;
+    }
+
+    const auto database_encoded =
+        encode_database_image(
+            context.files,
+            context.lexical,
+            database_layout_value,
+            database_mapping.bytes());
+
+    if (database_encoded !=
+        database_image_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                database_encoded ==
+                        database_image_result::failed
+                    ? diagnostics::
+                        project_database_io_failed
+                    : diagnostics::
+                        project_database_invalid,
+                operation)
+                .file(layout.database)
+                .detail(
+                    "Direct database.bin encoding failed")
+                .build());
+
+        return database_encoded ==
+                database_image_result::failed
+            ? server_status::io_error
+            : server_status::
+                project_artifact_invalid;
+    }
+
+    const auto database_validated =
+        verify_database_image(
+            database_mapping.bytes(),
+            context.files,
+            context.lexical);
+
+    if (database_validated !=
+        database_image_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                database_validated ==
+                        database_image_result::failed
+                    ? diagnostics::
+                        project_database_io_failed
+                    : diagnostics::
+                        project_database_invalid,
+                operation)
+                .file(layout.database)
+                .detail(
+                    "Direct database.bin image failed structural or cold semantic validation")
+                .build());
+
+        return database_validated ==
+                database_image_result::failed
+            ? server_status::io_error
+            : server_status::
+                project_artifact_invalid;
+    }
+
+    if (database_mapping.flush() !=
+        writable_file_mapping_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_database_io_failed,
+                operation)
+                .file(layout.database)
+                .detail(
+                    "Cannot flush direct database.bin mapping")
+                .build());
+
+        return server_status::io_error;
+    }
+
     writable_file_mapping compiled_mapping;
 
     if (compiled_mapping.create(
@@ -644,7 +772,7 @@ server_status rebuild_project(
             diagnostics::project_rebuild_incomplete,
             operation)
             .detail(
-                "Direct final-path project.manifest/source.bin persistence and writable-mmap compiled.bin construction from final G are complete for the supported semantic slice; remaining Phase-1 database.bin persistence and BUILD/LOAD/REBUILD completion are not implemented yet")
+                "Direct final-path project.manifest/source.bin/database.bin persistence and writable-mmap compiled.bin construction from final G are complete for the supported semantic slice; remaining Phase-1 BUILD/LOAD/REBUILD completion is not implemented yet")
             .build());
 
     return server_status::unsupported;

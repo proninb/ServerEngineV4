@@ -142,6 +142,35 @@ if(BUILD_TESTING)
         COMMAND ServerEngineV4SourceSaveTests
     )
 
+    add_executable(ServerEngineV4DatabaseTests
+        tests/database_tests.cpp
+        server_engine/filesystem_path.cpp
+        server_engine/read_only_file_mapping.cpp
+        server_engine/writable_file_mapping.cpp
+        server_engine/project/project_path.cpp
+        server_engine/project/frontend/lexical_stream.cpp
+        server_engine/project/frontend/lexer.cpp
+        server_engine/project/frontend/lexical_generation.cpp
+        server_engine/project/file/file_identity.cpp
+        server_engine/project/file/file_context.cpp
+        server_engine/project/persistence/database.cpp
+    )
+
+    target_include_directories(ServerEngineV4DatabaseTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(ServerEngineV4DatabaseTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4DatabaseTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(
+        NAME database
+        COMMAND ServerEngineV4DatabaseTests
+    )
+
     add_executable(ServerEngineV4FrontendTests
         tests/frontend_regression_tests.cpp
         server_engine/filesystem_path.cpp

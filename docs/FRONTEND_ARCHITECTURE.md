@@ -229,15 +229,17 @@ string_id
 identity_ref
     WHO
 
-G
+G / compiled.bin
     COMPILED SEMANTIC RESULT
+    STRING / IDENTITY LINEAGE OWNER
 
 database.bin
-    BUILD LINEAGE / REUSE STATE
+    RETAINED PER-FILE LEXICAL BUILD STATE
 ```
 
-`database.bin` may preserve an `identity_ref` after that identity no longer
-appears in G. This is BUILD continuity, not a second semantic state.
+An identity may remain in the BUILD lineage after it no longer appears in the
+live Graph arrays. That continuity is preserved in compiled.bin's semantic
+string/identity sections; database.bin does not carry a second identity copy.
 
 ## Construction Ownership
 
@@ -340,8 +342,9 @@ contains(id) -> bool
 
 `string_id` creation remains private to `string_table`.
 
-The **current implementation** is the fresh REBUILD form only. Persisted-state binding
-and append overlay are not implemented yet.
+The **current implementation** is the fresh REBUILD form only. BUILD
+persisted-state binding and append overlay are not implemented yet; their
+baseline source is compiled.bin, not database.bin.
 
 ## Preprocessor
 
@@ -1196,9 +1199,10 @@ Root is intrinsic slot `1` stored in-place rather than allocated in the dense
 vectors. Construction therefore cannot silently lose the root on allocation
 failure; dense record/kind storage begins at slot `2`.
 
-`database.bin` persists the identity lineage canonically: root slot `1` is
-implicit, while slots `2..N` store only parent, `string_id`, and kind. The
-construction open-addressed lookup index is deliberately not persisted.
+`compiled.bin` persists identity lineage canonically together with the
+String Table and G. BUILD will bind those mapped semantic sections as the
+baseline for append-only string/identity overlays. `database.bin` deliberately
+contains no semantic identity copy; it retains only per-file lexical state.
 
 Parser/Semantic now writes `G` directly for the implemented namespace,
 record/member, Project-object, construction, managed-constructor, and static-link

@@ -1,7 +1,5 @@
 #include "project_artifact.hpp"
 
-#include <string_view>
-
 namespace cw::server {
 
 project_artifact_layout_result make_project_artifact_layout(
@@ -38,17 +36,6 @@ project_artifact_layout_result make_project_artifact_layout(
         output = {};
         return project_artifact_layout_result::failed;
     }
-}
-
-void finalize_project_artifact_image(
-    project_artifact_image& image) noexcept {
-
-    image.hash =
-        hash_file_content(
-            std::string_view{
-                reinterpret_cast<const char*>(
-                    image.bytes.data()),
-                image.bytes.size()});
 }
 
 project_artifact_io_result

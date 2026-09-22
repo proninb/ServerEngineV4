@@ -206,6 +206,8 @@ Project construction diagnostics use stable IDs:
 2026 project.assign_invalid
 2027 project.compiled_invalid
 2028 project.compiled_io_failed
+2029 project.database_invalid
+2030 project.database_io_failed
 ```
 
 The retired root-only `project.identity` artifact no longer exists. Diagnostic

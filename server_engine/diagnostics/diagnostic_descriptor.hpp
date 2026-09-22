@@ -302,6 +302,22 @@ inline constexpr diagnostic_descriptor project_source_save_io_failed{
     "Committed Project SourceSave I/O failed",
 };
 
+inline constexpr diagnostic_descriptor project_database_invalid{
+    diagnostic_id{2029},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.database_invalid",
+    "Committed Project database is invalid",
+};
+
+inline constexpr diagnostic_descriptor project_database_io_failed{
+    diagnostic_id{2030},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.database_io_failed",
+    "Committed Project database I/O failed",
+};
+
 } // namespace diagnostics
 
 }

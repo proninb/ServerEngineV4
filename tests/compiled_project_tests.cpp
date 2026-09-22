@@ -26,6 +26,10 @@ constexpr std::size_t directory_bytes =
 constexpr std::size_t header_directory_crc_offset = 240;
 constexpr std::size_t header_crc_offset = 248;
 
+struct compiled_test_image final {
+    std::vector<std::byte> bytes;
+};
+
 struct test_state final {
     int failures = 0;
 
@@ -470,7 +474,7 @@ void rewrite_section_crc(
 void test_round_trip(
     test_state& tests,
     const compiled_fixture& fixture,
-    const project_artifact_image& image) {
+    const compiled_test_image& image) {
 
     compiled_project_view view;
 
@@ -698,7 +702,7 @@ void test_round_trip(
 
 void test_structural_corruption(
     test_state& tests,
-    const project_artifact_image& image) {
+    const compiled_test_image& image) {
 
     {
         auto corrupted =
@@ -752,7 +756,7 @@ void test_structural_corruption(
 
 compiled_project_image_result build_test_compiled_image(
     const compiled_fixture& fixture,
-    project_artifact_image& output) {
+    compiled_test_image& output) {
 
     output = {};
 
@@ -797,9 +801,6 @@ compiled_project_image_result build_test_compiled_image(
         output = {};
         return encoded;
     }
-
-    finalize_project_artifact_image(
-        output);
 
     return compiled_project_image_result::
         success;
@@ -921,7 +922,7 @@ void test_direct_mmap_encoding(
 
 void test_hot_cold_boundary(
     test_state& tests,
-    const project_artifact_image& image) {
+    const compiled_test_image& image) {
 
     auto corrupted =
         image.bytes;
@@ -956,7 +957,7 @@ void test_hot_cold_boundary(
 void test_semantic_corruption(
     test_state& tests,
     const compiled_fixture& fixture,
-    const project_artifact_image& image) {
+    const compiled_test_image& image) {
 
     auto corrupted =
         image.bytes;
@@ -1013,8 +1014,8 @@ int main() {
             return 1;
         }
 
-        project_artifact_image first;
-        project_artifact_image second;
+        compiled_test_image first;
+        compiled_test_image second;
 
         if (!tests.expect(
                 build_test_compiled_image(
@@ -1033,8 +1034,7 @@ int main() {
         }
 
         tests.expect(
-            first.bytes == second.bytes &&
-                first.hash == second.hash,
+            first.bytes == second.bytes,
             "deterministic compiled image");
 
         test_round_trip(

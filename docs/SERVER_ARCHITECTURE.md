@@ -432,8 +432,10 @@ index. Matching data events are rebuilt directly. A dense bitset emits ascending
 If journal continuity/support is unavailable, BUILD performs the portable exact
 SHA-256 file scan. The dirty set is expanded through persisted reverse topology.
 
-`database.bin` is BUILD acceleration/lineage state. It is not a Semantic DB and
-is not an intermediate representation of the Project.
+`database.bin` is BUILD-only retained lexical state keyed by `file_id`. It is
+not a Semantic DB and does not persist String Table or Identity Space state.
+`compiled.bin` is the sole persisted owner of `string_id` / `identity_ref`
+lineage as well as G.
 
 ABI-derived Runtime layout is deferred to Phase 2. Its representation and any
 future persistence/reuse policy are not part of the current Phase-1 artifact
@@ -556,16 +558,17 @@ operation-local mappings before removing all four artifacts again. Cleanup I/O
 failure is reported explicitly and leaves the Server `UNLOADED`.
 
 After topology finalization, the current REBUILD implementation persists
-`project.manifest`, `source.bin`, and `compiled.bin` directly to their final
-paths using exact-size writable mappings. source.bin is encoded directly from
-the finalized File Context: path sizing is allocation-free, native paths are
-converted straight into the mapped UTF-8 path section, and dependency arenas
-are streamed directly without a serialized intermediate image. The optional
-USN identity indexes are prepared once and retained only as persistence-specific
-tracking state. None of these production paths creates a full-size serialized
-`std::vector<std::byte>` or `.tmp` artifact. source.bin receives structural and
-cold semantic validation before flush; `compiled_project_view::bind()` plus
-cold `verify_contents()` validates the compiled mapped bytes.
+`project.manifest`, `source.bin`, `database.bin`, and `compiled.bin` directly to
+their final paths using exact-size writable mappings. source.bin is encoded
+directly from finalized File Context state. database.bin streams only retained
+Lexical Generation records, words, and directive anchors into mapped sections;
+String Table and Identity Space lineage are persisted once in compiled.bin.
+The optional SourceSave USN identity indexes are prepared once and retained only
+as persistence-specific tracking state. None of these production paths creates
+a full-size serialized `std::vector<std::byte>` or `.tmp` artifact. source.bin
+and database.bin receive cold verification before flush;
+`compiled_project_view::bind()` plus cold `verify_contents()` validates the
+compiled mapped bytes.
 
 LOAD maps and structurally binds an existing `compiled.bin` read-only without
 rebuilding Graph/string/identity containers. `verify_contents()` remains a

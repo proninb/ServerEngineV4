@@ -525,23 +525,28 @@ current inputs
     -> exact source.bin layout
     -> final source.bin writable mmap
     -> direct File Context encoding + cold validation + flush
+    -> exact database.bin layout
+    -> final database.bin writable mmap
+    -> direct Lexical Generation encoding + cold construction audit + flush
     -> exact compiled.bin layout
     -> final compiled.bin writable mmap
     -> direct G encoding into mapped pages
     -> structural + cold semantic validation
 ```
 
-The production REBUILD project.manifest, source.bin, and compiled.bin paths do
-not allocate full-size serialized `std::vector<std::byte>` images and do not
-create `.tmp` artifacts. source.bin also does not materialize a `vector<string>`
-of persisted paths: native File Context paths are size-measured and converted
-directly into their final mapped UTF-8 path section. Parser/Semantic already
-populates `identity_space` and G directly.
+The production REBUILD project.manifest, source.bin, database.bin, and
+compiled.bin paths do not allocate full-size serialized
+`std::vector<std::byte>` images and do not create `.tmp` artifacts. source.bin
+does not materialize a `vector<string>` of persisted paths. database.bin writes
+only retained Lexical Generation records, words, and directive anchors directly
+into final mapped sections. `compiled.bin` is the sole persisted owner of
+string/identity lineage, so database.bin does not duplicate String Table or
+Identity Space state. Parser/Semantic already populates `identity_space` and G
+directly.
 
 The current implementation still stops before:
 
 ```text
-direct final-path persistence of database.bin
 remaining C++ declaration semantics beyond the supported direct Parser slice
 BUILD persisted-state reconstruction and sparse affected rebuild to G
 LOAD/BUILD/REBUILD Phase-1 completion
@@ -852,9 +857,9 @@ UNLOADED
     -> persisted BUILD artifacts
 ```
 
-Sparse File Context mutation, database/string/identity reuse, affected
-frontend/Parser/Semantic reconstruction, and final G construction are not
-implemented yet. The physical mechanism used by a successful BUILD to persist
+Sparse File Context mutation, database lexical reuse, compiled.bin-backed
+string/identity overlays, affected frontend/Parser/Semantic reconstruction, and
+final G construction are not implemented yet. The physical mechanism used by a successful BUILD to persist
 its new state is intentionally not frozen yet; it must satisfy the separate
 BUILD failure contract that preserves the previously persisted BUILD state.
 
@@ -1047,8 +1052,7 @@ source.bin
     BUILD only
 
 database.bin
-    retained lexical state
-    string_id / identity_ref lineage
+    retained per-file lexical state
     BUILD acceleration
     BUILD only
 ```
