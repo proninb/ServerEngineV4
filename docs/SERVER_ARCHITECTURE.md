@@ -743,8 +743,10 @@ files materialize sparse native-path/physical/content state, while newly
 discovered files append local records after the committed `file_id` range.
 No O(F) File Context reconstruction is performed at BUILD startup.
 
-Sparse replacement of affected dependency adjacency remains a separate next
-slice; BUILD does not fall back to dense topology reconstruction.
+Affected dependency adjacency is now replaced sparsely. BUILD marks each source
+whose outgoing set is reconstructed, compares only that source's old mmap edges
+with its new staged edges, and keeps reverse changes as sparse add/remove deltas.
+Unchanged adjacency remains mmap-backed; no dense topology reconstruction occurs.
 
 Physical acquisition retains the existing fast proof contract:
 
@@ -764,8 +766,10 @@ current construction.
 REBUILD may build complete topology in `O(F + E)` with the current no-sort
 finalizer.
 
-BUILD must update topology sparsely while preserving the same logical
-`file_id -> file_id` adjacency model.
+BUILD updates topology in `O(A + E_old(A) + E_new(A))` for `A` replaced
+sources while preserving the same logical `file_id -> file_id` adjacency model.
+This bound deliberately includes reading old outgoing edges: exact removals
+cannot be known without examining the previous adjacency of a replaced source.
 
 There is no generation-specific dependency-node identity and no Graph-generation
 model. BUILD may reuse persisted storage internally, but the architectural

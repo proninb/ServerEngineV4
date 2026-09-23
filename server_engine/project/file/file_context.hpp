@@ -169,28 +169,25 @@ struct construction_content_hash final {
         const construction_content_hash&) noexcept = default;
 };
 
-// Lightweight adjacency view used by both fresh native arenas and persisted
-// source.bin topology. Encoded BUILD edges are decoded without alignment or
-// native-endian assumptions and are never copied merely to expose adjacency.
+// Lightweight adjacency view used by fresh arenas, persisted source.bin edges,
+// and sparse BUILD reverse deltas. The overlay form filters removed baseline
+// edges and appends only true additions without materializing full adjacency.
 class file_dependency_view final {
 public:
     class iterator final {
     public:
-        [[nodiscard]] file_id operator*() const noexcept {
-            return (*owner)[index];
-        }
+        [[nodiscard]] file_id operator*() const noexcept;
 
-        iterator& operator++() noexcept {
-            ++index;
-            return *this;
-        }
+        iterator& operator++() noexcept;
 
         friend bool operator==(
             const iterator& left,
             const iterator& right) noexcept {
 
             return left.owner == right.owner &&
-                left.index == right.index;
+                left.base_index == right.base_index &&
+                left.addition_index == right.addition_index &&
+                left.additions == right.additions;
         }
 
         friend bool operator!=(
@@ -203,13 +200,12 @@ public:
     private:
         iterator(
             const file_dependency_view* value,
-            std::size_t position) noexcept
-            : owner(value),
-              index(position) {
-        }
+            bool end) noexcept;
 
         const file_dependency_view* owner = nullptr;
-        std::size_t index = 0;
+        std::size_t base_index = 0;
+        std::size_t addition_index = 0;
+        bool additions = false;
 
         friend class file_dependency_view;
     };
@@ -234,19 +230,49 @@ public:
         std::size_t index) const noexcept;
 
     [[nodiscard]] iterator begin() const noexcept {
-        return iterator{this, 0};
+        return iterator{this, false};
     }
 
     [[nodiscard]] iterator end() const noexcept {
-        return iterator{this, count};
+        return iterator{this, true};
     }
 
 private:
+    using filter_function = bool (*)(
+        const void* context,
+        file_id owner,
+        file_id value) noexcept;
+
+    [[nodiscard]] static file_dependency_view from_overlay(
+        const file_dependency_view& base,
+        std::span<const file_id> added,
+        std::size_t final_count,
+        const void* context,
+        file_id owner,
+        filter_function filter) noexcept;
+
+    [[nodiscard]] file_id base_value(
+        std::size_t index) const noexcept;
+
+    [[nodiscard]] bool filtered(
+        file_id value) const noexcept;
+
+    void seek(
+        iterator& value) const noexcept;
+
     std::span<const file_id> native;
     std::span<const std::byte> encoded;
+    std::span<const file_id> added;
+    std::size_t base_count = 0;
     std::size_t count = 0;
+    const void* filter_context = nullptr;
+    file_id filter_owner{};
+    filter_function filter = nullptr;
+
+    friend class file_context;
 };
 
+class source_save_view;
 class source_save_view;
 
 // Mutable physical-file state for one construction operation. REBUILD owns fresh
@@ -293,9 +319,13 @@ public:
         std::span<const file_id> ordered_files,
         construction_content_hash& output) const noexcept;
 
-    // Fresh REBUILD stages direct relations here. BUILD topology replacement is
-    // a separate sparse-overlay slice; committed adjacency remains readable from
-    // source.bin immediately after bind_baseline().
+    // Marks one BUILD source whose complete outgoing adjacency will be replaced.
+    // Zero newly staged edges is a valid replacement that removes all old edges.
+    [[nodiscard]] server_status begin_dependency_replacement(
+        file_id source) noexcept;
+
+    // REBUILD stages the fresh DAG directly. BUILD accepts edges only for an
+    // explicitly replaced existing source or an appended new source.
     [[nodiscard]] server_status add_dependency(
         file_id source,
         file_id target) noexcept;
@@ -420,6 +450,57 @@ private:
         file_id file,
         std::size_t& output) const noexcept;
 
+    struct topology_source_record final {
+        file_id source{};
+        file_edge_range dependencies;
+    };
+
+    struct topology_source_slot final {
+        file_id source{};
+        std::uint32_t record = 0;
+    };
+
+    struct topology_target_record final {
+        file_id target{};
+        file_edge_range additions;
+        std::uint32_t removals = 0;
+    };
+
+    struct topology_target_slot final {
+        file_id target{};
+        std::uint32_t record = 0;
+    };
+
+    static_assert(sizeof(topology_source_slot) == 8);
+    static_assert(sizeof(topology_target_slot) == 8);
+
+    [[nodiscard]] bool find_topology_source(
+        file_id source,
+        std::size_t& output) const noexcept;
+
+    [[nodiscard]] server_status ensure_topology_source_capacity(
+        std::size_t additional) noexcept;
+
+    void insert_topology_source(
+        std::vector<topology_source_slot>& index,
+        file_id source,
+        std::uint32_t record) const noexcept;
+
+    [[nodiscard]] bool find_topology_target(
+        file_id target,
+        std::size_t& output) const noexcept;
+
+    [[nodiscard]] bool reverse_dependency_removed(
+        file_id target,
+        file_id source) const noexcept;
+
+    [[nodiscard]] static bool reverse_dependency_filter(
+        const void* context,
+        file_id target,
+        file_id source) noexcept;
+
+    [[nodiscard]] server_status finalize_baseline_dependency_topology() noexcept;
+
     const source_save_view* baseline = nullptr;
     std::size_t baseline_file_count = 0;
 
@@ -437,6 +518,17 @@ private:
 
     std::vector<file_dependency_edge> dependency_edges;
     bool topology_finalized = false;
+
+    // BUILD-only sparse replacement state. Forward replacements are complete
+    // per marked source; reverse state stores only true add/remove deltas.
+    std::vector<topology_source_record> topology_sources;
+    std::vector<topology_source_slot> topology_source_index;
+    std::vector<file_id> topology_forward_edges;
+
+    std::vector<topology_target_record> topology_targets;
+    std::vector<topology_target_slot> topology_target_index;
+    std::vector<file_id> topology_reverse_additions;
+    std::vector<std::uint64_t> topology_reverse_removals;
 
     mutable std::vector<baseline_overlay_record> baseline_overlays;
     mutable std::vector<baseline_overlay_slot> baseline_overlay_index;

@@ -1296,9 +1296,17 @@ file lazily acquires only a sparse native-path/physical/content overlay. Newly
 discovered files append after the committed `file_id` range. No dense committed
 file/path/physical array is reconstructed.
 
-Sparse replacement of dependency adjacency is the next File Context slice;
-until then BUILD topology mutation is explicitly unsupported rather than silently
-materializing or replacing the committed DAG.
+BUILD replaces dependency adjacency sparsely. An affected existing source is
+explicitly marked as a complete forward-adjacency replacement; newly discovered
+sources are replacement-owned automatically. Finalization reads only the old
+outgoing edges of replaced sources, deduplicates their new edges, and computes
+reverse add/remove deltas. Unaffected forward and reverse adjacency remains
+mmap-backed.
+
+The work is proportional to replaced sources plus their old and new outgoing
+edges, not to the full File Context: `O(A + E_old(A) + E_new(A))`. Reverse
+dependents are exposed as baseline-plus-delta views, so changing one edge into a
+popular Header does not copy that Header's complete dependent list.
 
 The physical path is retained exactly for I/O. Platform-equivalence keys remain
 transient lookup values.

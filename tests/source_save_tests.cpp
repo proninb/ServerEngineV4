@@ -520,6 +520,44 @@ void test_direct_source_save(
                 file_kind::header,
         "BUILD File Context appends new file_id after committed lineage");
 
+    tests.expect(
+        succeeded(
+            build_files.begin_dependency_replacement(
+                first)) &&
+        succeeded(
+            build_files.add_dependency(
+                first,
+                appended)) &&
+        succeeded(
+            build_files.add_dependency(
+                first,
+                appended)) &&
+        succeeded(
+            build_files.finalize_dependency_topology()),
+        "finalize sparse BUILD dependency replacement");
+
+    const auto replaced_dependencies =
+        build_files.dependencies(
+            first);
+
+    const auto old_target_dependents =
+        build_files.dependents(
+            second);
+
+    const auto new_target_dependents =
+        build_files.dependents(
+            appended);
+
+    tests.expect(
+        replaced_dependencies.size() == 1 &&
+            replaced_dependencies[0] ==
+                appended &&
+        old_target_dependents.empty() &&
+        new_target_dependents.size() == 1 &&
+            new_target_dependents[0] ==
+                first,
+        "BUILD topology replaces forward adjacency and applies sparse reverse delta");
+
     found_path = {};
 
     tests.expect(

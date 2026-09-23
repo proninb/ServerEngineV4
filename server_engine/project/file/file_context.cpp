@@ -31,6 +31,30 @@ namespace {
     return capacity;
 }
 
+[[nodiscard]] std::uint64_t topology_edge_key(
+    file_id owner,
+    file_id value) noexcept {
+
+    return
+        (static_cast<std::uint64_t>(
+            owner.value()) << 32) |
+        static_cast<std::uint64_t>(
+            value.value());
+}
+
+[[nodiscard]] std::size_t topology_hash(
+    std::uint64_t value) noexcept {
+
+    value ^= value >> 33;
+    value *= 0xff51afd7ed558ccdULL;
+    value ^= value >> 33;
+    value *= 0xc4ceb9fe1a85ec53ULL;
+    value ^= value >> 33;
+
+    return static_cast<std::size_t>(
+        value);
+}
+
 void append_u64(
     std::string& output,
     std::uint64_t value) {
@@ -61,6 +85,7 @@ file_dependency_view file_dependency_view::from_native(
 
     file_dependency_view output;
     output.native = values;
+    output.base_count = values.size();
     output.count = values.size();
     return output;
 }
@@ -76,17 +101,54 @@ file_dependency_view file_dependency_view::from_encoded(
 
     file_dependency_view output;
     output.encoded = values;
-    output.count =
+    output.base_count =
         values.size() /
         sizeof(std::uint32_t);
+    output.count =
+        output.base_count;
 
     return output;
 }
 
-file_id file_dependency_view::operator[](
+file_dependency_view file_dependency_view::from_overlay(
+    const file_dependency_view& base,
+    std::span<const file_id> added_values,
+    std::size_t final_count,
+    const void* context,
+    file_id owner,
+    filter_function filter_value) noexcept {
+
+    if (!base.added.empty() ||
+        base.filter != nullptr ||
+        final_count >
+            base.base_count +
+                added_values.size()) {
+
+        return {};
+    }
+
+    file_dependency_view output;
+    output.native = base.native;
+    output.encoded = base.encoded;
+    output.added = added_values;
+    output.base_count =
+        base.base_count;
+    output.count =
+        final_count;
+    output.filter_context =
+        context;
+    output.filter_owner =
+        owner;
+    output.filter =
+        filter_value;
+
+    return output;
+}
+
+file_id file_dependency_view::base_value(
     std::size_t index) const noexcept {
 
-    if (index >= count) {
+    if (index >= base_count) {
         return {};
     }
 
@@ -121,6 +183,126 @@ file_id file_dependency_view::operator[](
     return file_id{value};
 }
 
+bool file_dependency_view::filtered(
+    file_id value) const noexcept {
+
+    return filter != nullptr &&
+        filter(
+            filter_context,
+            filter_owner,
+            value);
+}
+
+void file_dependency_view::seek(
+    iterator& value) const noexcept {
+
+    while (value.base_index <
+            base_count) {
+
+        const auto current =
+            base_value(
+                value.base_index);
+
+        if (!current ||
+            filtered(current)) {
+
+            ++value.base_index;
+            continue;
+        }
+
+        value.additions = false;
+        return;
+    }
+
+    value.additions = true;
+    value.addition_index = 0;
+}
+
+file_dependency_view::iterator::iterator(
+    const file_dependency_view* value,
+    bool end) noexcept
+    : owner(value) {
+
+    if (owner == nullptr) {
+        additions = true;
+        return;
+    }
+
+    if (end) {
+        base_index =
+            owner->base_count;
+        addition_index =
+            owner->added.size();
+        additions = true;
+        return;
+    }
+
+    owner->seek(*this);
+}
+
+file_id file_dependency_view::iterator::operator*() const noexcept {
+
+    if (owner == nullptr) {
+        return {};
+    }
+
+    return additions
+        ? addition_index <
+                owner->added.size()
+            ? owner->added[
+                addition_index]
+            : file_id{}
+        : owner->base_value(
+            base_index);
+}
+
+file_dependency_view::iterator&
+file_dependency_view::iterator::operator++() noexcept {
+
+    if (owner == nullptr) {
+        return *this;
+    }
+
+    if (additions) {
+        if (addition_index <
+            owner->added.size()) {
+
+            ++addition_index;
+        }
+
+        return *this;
+    }
+
+    ++base_index;
+    owner->seek(*this);
+    return *this;
+}
+
+file_id file_dependency_view::operator[](
+    std::size_t index) const noexcept {
+
+    if (index >= count) {
+        return {};
+    }
+
+    auto current =
+        begin();
+
+    const auto last =
+        end();
+
+    for (std::size_t position = 0;
+         current != last;
+         ++current, ++position) {
+
+        if (position == index) {
+            return *current;
+        }
+    }
+
+    return {};
+}
+
 server_status file_context::bind_baseline(
     const source_save_view& source) noexcept {
 
@@ -138,6 +320,13 @@ server_status file_context::bind_baseline(
         !reverse_edges.empty() ||
         !dependency_edges.empty() ||
         topology_finalized ||
+        !topology_sources.empty() ||
+        !topology_source_index.empty() ||
+        !topology_forward_edges.empty() ||
+        !topology_targets.empty() ||
+        !topology_target_index.empty() ||
+        !topology_reverse_additions.empty() ||
+        !topology_reverse_removals.empty() ||
         !baseline_overlays.empty() ||
         !baseline_overlay_index.empty() ||
         !baseline_path_chars.empty()) {
@@ -441,6 +630,1007 @@ server_status file_context::ensure_baseline_overlay(
         baseline_path_chars.resize(
             old_path_size);
 
+        return server_status::io_error;
+    }
+}
+
+bool file_context::find_topology_source(
+    file_id source,
+    std::size_t& output) const noexcept {
+
+    output = 0;
+
+    if (!source ||
+        topology_source_index.empty()) {
+
+        return false;
+    }
+
+    const auto mask =
+        topology_source_index.size() - 1;
+
+    auto position =
+        topology_hash(
+            source.value()) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe <
+            topology_source_index.size();
+         ++probe) {
+
+        const auto& slot =
+            topology_source_index[
+                position];
+
+        if (!slot.source) {
+            return false;
+        }
+
+        if (slot.source == source) {
+            if (slot.record == 0 ||
+                slot.record >
+                    topology_sources.size()) {
+
+                return false;
+            }
+
+            output =
+                static_cast<std::size_t>(
+                    slot.record - 1);
+
+            return topology_sources[
+                    output].source ==
+                source;
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return false;
+}
+
+void file_context::insert_topology_source(
+    std::vector<topology_source_slot>& index,
+    file_id source,
+    std::uint32_t record) const noexcept {
+
+    const auto mask =
+        index.size() - 1;
+
+    auto position =
+        topology_hash(
+            source.value()) &
+        mask;
+
+    while (index[position].source) {
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    index[position] = {
+        source,
+        record,
+    };
+}
+
+server_status file_context::ensure_topology_source_capacity(
+    std::size_t additional) noexcept {
+
+    if (additional >
+        (std::numeric_limits<std::size_t>::max)() -
+            topology_sources.size()) {
+
+        return server_status::io_error;
+    }
+
+    const auto required =
+        topology_sources.size() +
+        additional;
+
+    if (!topology_source_index.empty() &&
+        required <=
+            topology_source_index.size() / 2) {
+
+        return server_status::success;
+    }
+
+    const auto capacity =
+        next_index_capacity(
+            required);
+
+    if (capacity == 0) {
+        return server_status::io_error;
+    }
+
+    try {
+        std::vector<topology_source_slot>
+            candidate(capacity);
+
+        for (std::size_t index = 0;
+             index <
+                topology_sources.size();
+             ++index) {
+
+            insert_topology_source(
+                candidate,
+                topology_sources[index].source,
+                static_cast<std::uint32_t>(
+                    index + 1));
+        }
+
+        topology_source_index =
+            std::move(candidate);
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
+bool file_context::find_topology_target(
+    file_id target,
+    std::size_t& output) const noexcept {
+
+    output = 0;
+
+    if (!target ||
+        topology_target_index.empty()) {
+
+        return false;
+    }
+
+    const auto mask =
+        topology_target_index.size() - 1;
+
+    auto position =
+        topology_hash(
+            target.value()) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe <
+            topology_target_index.size();
+         ++probe) {
+
+        const auto& slot =
+            topology_target_index[
+                position];
+
+        if (!slot.target) {
+            return false;
+        }
+
+        if (slot.target == target) {
+            if (slot.record == 0 ||
+                slot.record >
+                    topology_targets.size()) {
+
+                return false;
+            }
+
+            output =
+                static_cast<std::size_t>(
+                    slot.record - 1);
+
+            return topology_targets[
+                    output].target ==
+                target;
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return false;
+}
+
+bool file_context::reverse_dependency_removed(
+    file_id target,
+    file_id source) const noexcept {
+
+    if (!target ||
+        !source ||
+        topology_reverse_removals.empty()) {
+
+        return false;
+    }
+
+    const auto key =
+        topology_edge_key(
+            target,
+            source);
+
+    const auto mask =
+        topology_reverse_removals.size() - 1;
+
+    auto position =
+        topology_hash(
+            key) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe <
+            topology_reverse_removals.size();
+         ++probe) {
+
+        const auto stored =
+            topology_reverse_removals[
+                position];
+
+        if (stored == 0) {
+            return false;
+        }
+
+        if (stored == key) {
+            return true;
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return false;
+}
+
+bool file_context::reverse_dependency_filter(
+    const void* context,
+    file_id target,
+    file_id source) noexcept {
+
+    return context != nullptr &&
+        static_cast<const file_context*>(
+            context)
+            ->reverse_dependency_removed(
+                target,
+                source);
+}
+
+server_status file_context::begin_dependency_replacement(
+    file_id source) noexcept {
+
+    if (baseline == nullptr ||
+        topology_finalized ||
+        !contains(source)) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    std::size_t existing = 0;
+
+    if (find_topology_source(
+            source,
+            existing)) {
+
+        return server_status::success;
+    }
+
+    if (topology_sources.size() >=
+        static_cast<std::size_t>(
+            (std::numeric_limits<
+                std::uint32_t>::max)())) {
+
+        return server_status::io_error;
+    }
+
+    const auto prepared =
+        ensure_topology_source_capacity(
+            1);
+
+    if (!succeeded(prepared)) {
+        return prepared;
+    }
+
+    try {
+        topology_source_record record;
+        record.source = source;
+
+        topology_sources.push_back(
+            record);
+
+        insert_topology_source(
+            topology_source_index,
+            source,
+            static_cast<std::uint32_t>(
+                topology_sources.size()));
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
+server_status file_context::finalize_baseline_dependency_topology() noexcept {
+
+    if (baseline == nullptr) {
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    if (topology_finalized) {
+        return server_status::success;
+    }
+
+    struct edge_slot final {
+        std::uint64_t key = 0;
+    };
+
+    struct delta_event final {
+        file_id target{};
+        file_id source{};
+        bool addition = false;
+    };
+
+    auto contains_edge =
+        [](
+            const std::vector<edge_slot>& index,
+            std::uint64_t key) noexcept {
+
+            if (index.empty()) {
+                return false;
+            }
+
+            const auto mask =
+                index.size() - 1;
+
+            auto position =
+                topology_hash(
+                    key) &
+                mask;
+
+            for (std::size_t probe = 0;
+                 probe < index.size();
+                 ++probe) {
+
+                const auto stored =
+                    index[position].key;
+
+                if (stored == 0) {
+                    return false;
+                }
+
+                if (stored == key) {
+                    return true;
+                }
+
+                position =
+                    (position + 1) &
+                    mask;
+            }
+
+            return false;
+        };
+
+    auto insert_edge =
+        [](
+            std::vector<edge_slot>& index,
+            std::uint64_t key) noexcept {
+
+            const auto mask =
+                index.size() - 1;
+
+            auto position =
+                topology_hash(
+                    key) &
+                mask;
+
+            while (index[position].key != 0) {
+                if (index[position].key ==
+                    key) {
+
+                    return false;
+                }
+
+                position =
+                    (position + 1) &
+                    mask;
+            }
+
+            index[position].key =
+                key;
+
+            return true;
+        };
+
+    try {
+        auto candidate_sources =
+            topology_sources;
+
+        for (auto& record :
+             candidate_sources) {
+
+            record.dependencies = {};
+        }
+
+        std::vector<edge_slot> new_index;
+
+        if (!dependency_edges.empty()) {
+            const auto capacity =
+                next_index_capacity(
+                    dependency_edges.size());
+
+            if (capacity == 0) {
+                return server_status::io_error;
+            }
+
+            new_index.resize(
+                capacity);
+        }
+
+        std::vector<file_dependency_edge>
+            unique_edges;
+
+        unique_edges.reserve(
+            dependency_edges.size());
+
+        for (const auto& edge :
+             dependency_edges) {
+
+            if (!contains(edge.source) ||
+                !contains(edge.target)) {
+
+                return server_status::
+                    project_configuration_invalid;
+            }
+
+            std::size_t source_index = 0;
+
+            if (!find_topology_source(
+                    edge.source,
+                    source_index)) {
+
+                return server_status::
+                    project_configuration_invalid;
+            }
+
+            const auto key =
+                topology_edge_key(
+                    edge.source,
+                    edge.target);
+
+            if (!insert_edge(
+                    new_index,
+                    key)) {
+
+                continue;
+            }
+
+            auto& count =
+                candidate_sources[
+                    source_index]
+                    .dependencies.count;
+
+            if (count ==
+                (std::numeric_limits<
+                    std::uint32_t>::max)()) {
+
+                return server_status::io_error;
+            }
+
+            ++count;
+
+            unique_edges.push_back(
+                edge);
+        }
+
+        std::uint32_t forward_count = 0;
+
+        for (auto& record :
+             candidate_sources) {
+
+            record.dependencies.offset =
+                forward_count;
+
+            if (record.dependencies.count >
+                (std::numeric_limits<
+                    std::uint32_t>::max)() -
+                    forward_count) {
+
+                return server_status::io_error;
+            }
+
+            forward_count +=
+                record.dependencies.count;
+        }
+
+        if (static_cast<std::size_t>(
+                forward_count) !=
+            unique_edges.size()) {
+
+            return server_status::io_error;
+        }
+
+        std::vector<file_id>
+            candidate_forward(
+                forward_count);
+
+        std::vector<std::uint32_t>
+            source_cursor(
+                candidate_sources.size());
+
+        for (std::size_t index = 0;
+             index <
+                candidate_sources.size();
+             ++index) {
+
+            source_cursor[index] =
+                candidate_sources[
+                    index]
+                    .dependencies.offset;
+        }
+
+        for (const auto& edge :
+             unique_edges) {
+
+            std::size_t source_index = 0;
+
+            if (!find_topology_source(
+                    edge.source,
+                    source_index)) {
+
+                return server_status::io_error;
+            }
+
+            candidate_forward[
+                source_cursor[
+                    source_index]++] =
+                edge.target;
+        }
+
+        std::size_t old_edge_count = 0;
+
+        for (const auto& record :
+             candidate_sources) {
+
+            if (record.source.value() >
+                baseline_file_count) {
+
+                continue;
+            }
+
+            source_save_file_view state;
+
+            if (!baseline->file(
+                    record.source,
+                    state)) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            if (state.dependencies.size() >
+                (std::numeric_limits<
+                    std::size_t>::max)() -
+                    old_edge_count) {
+
+                return server_status::io_error;
+            }
+
+            old_edge_count +=
+                state.dependencies.size();
+        }
+
+        std::vector<edge_slot> old_index;
+
+        if (old_edge_count != 0) {
+            const auto capacity =
+                next_index_capacity(
+                    old_edge_count);
+
+            if (capacity == 0) {
+                return server_status::io_error;
+            }
+
+            old_index.resize(
+                capacity);
+        }
+
+        std::vector<delta_event>
+            delta_events;
+
+        if (old_edge_count >
+            (std::numeric_limits<
+                std::size_t>::max)() -
+                unique_edges.size()) {
+
+            return server_status::io_error;
+        }
+
+        delta_events.reserve(
+            old_edge_count +
+            unique_edges.size());
+
+        for (const auto& record :
+             candidate_sources) {
+
+            if (record.source.value() >
+                baseline_file_count) {
+
+                continue;
+            }
+
+            source_save_file_view state;
+
+            if (!baseline->file(
+                    record.source,
+                    state)) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            for (const auto target :
+                 state.dependencies) {
+
+                if (!target ||
+                    !contains(target)) {
+
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                const auto key =
+                    topology_edge_key(
+                        record.source,
+                        target);
+
+                if (!insert_edge(
+                        old_index,
+                        key)) {
+
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                if (!contains_edge(
+                        new_index,
+                        key)) {
+
+                    delta_events.push_back({
+                        target,
+                        record.source,
+                        false,
+                    });
+                }
+            }
+        }
+
+        for (const auto& edge :
+             unique_edges) {
+
+            const auto key =
+                topology_edge_key(
+                    edge.source,
+                    edge.target);
+
+            if (!contains_edge(
+                    old_index,
+                    key)) {
+
+                delta_events.push_back({
+                    edge.target,
+                    edge.source,
+                    true,
+                });
+            }
+        }
+
+        std::vector<topology_target_record>
+            candidate_targets;
+
+        std::vector<topology_target_slot>
+            candidate_target_index;
+
+        if (!delta_events.empty()) {
+            const auto capacity =
+                next_index_capacity(
+                    delta_events.size());
+
+            if (capacity == 0) {
+                return server_status::io_error;
+            }
+
+            candidate_target_index.resize(
+                capacity);
+        }
+
+        auto find_candidate_target =
+            [&](
+                file_id target,
+                std::size_t& output) noexcept {
+
+                output = 0;
+
+                if (candidate_target_index.empty()) {
+                    return false;
+                }
+
+                const auto mask =
+                    candidate_target_index.size() - 1;
+
+                auto position =
+                    topology_hash(
+                        target.value()) &
+                    mask;
+
+                for (std::size_t probe = 0;
+                     probe <
+                        candidate_target_index.size();
+                     ++probe) {
+
+                    const auto& slot =
+                        candidate_target_index[
+                            position];
+
+                    if (!slot.target) {
+                        return false;
+                    }
+
+                    if (slot.target == target) {
+                        if (slot.record == 0 ||
+                            slot.record >
+                                candidate_targets.size()) {
+
+                            return false;
+                        }
+
+                        output =
+                            static_cast<std::size_t>(
+                                slot.record - 1);
+
+                        return true;
+                    }
+
+                    position =
+                        (position + 1) &
+                        mask;
+                }
+
+                return false;
+            };
+
+        auto insert_candidate_target =
+            [&](
+                file_id target,
+                std::uint32_t record) noexcept {
+
+                const auto mask =
+                    candidate_target_index.size() - 1;
+
+                auto position =
+                    topology_hash(
+                        target.value()) &
+                    mask;
+
+                while (
+                    candidate_target_index[
+                        position].target) {
+
+                    position =
+                        (position + 1) &
+                        mask;
+                }
+
+                candidate_target_index[
+                    position] = {
+                        target,
+                        record,
+                    };
+            };
+
+        for (const auto& event :
+             delta_events) {
+
+            std::size_t target_index = 0;
+
+            if (!find_candidate_target(
+                    event.target,
+                    target_index)) {
+
+                if (candidate_targets.size() >=
+                    static_cast<std::size_t>(
+                        (std::numeric_limits<
+                            std::uint32_t>::max)())) {
+
+                    return server_status::io_error;
+                }
+
+                topology_target_record record;
+                record.target =
+                    event.target;
+
+                candidate_targets.push_back(
+                    record);
+
+                target_index =
+                    candidate_targets.size() - 1;
+
+                insert_candidate_target(
+                    event.target,
+                    static_cast<std::uint32_t>(
+                        target_index + 1));
+            }
+
+            auto& record =
+                candidate_targets[
+                    target_index];
+
+            if (event.addition) {
+                if (record.additions.count ==
+                    (std::numeric_limits<
+                        std::uint32_t>::max)()) {
+
+                    return server_status::io_error;
+                }
+
+                ++record.additions.count;
+            }
+            else {
+                if (record.removals ==
+                    (std::numeric_limits<
+                        std::uint32_t>::max)()) {
+
+                    return server_status::io_error;
+                }
+
+                ++record.removals;
+            }
+        }
+
+        std::uint32_t addition_count = 0;
+        std::size_t removal_count = 0;
+
+        for (auto& record :
+             candidate_targets) {
+
+            record.additions.offset =
+                addition_count;
+
+            if (record.additions.count >
+                (std::numeric_limits<
+                    std::uint32_t>::max)() -
+                    addition_count) {
+
+                return server_status::io_error;
+            }
+
+            addition_count +=
+                record.additions.count;
+
+            if (record.removals >
+                (std::numeric_limits<
+                    std::size_t>::max)() -
+                    removal_count) {
+
+                return server_status::io_error;
+            }
+
+            removal_count +=
+                record.removals;
+        }
+
+        std::vector<file_id>
+            candidate_additions(
+                addition_count);
+
+        std::vector<std::uint32_t>
+            target_cursor(
+                candidate_targets.size());
+
+        for (std::size_t index = 0;
+             index <
+                candidate_targets.size();
+             ++index) {
+
+            target_cursor[index] =
+                candidate_targets[
+                    index]
+                    .additions.offset;
+        }
+
+        std::vector<std::uint64_t>
+            candidate_removals;
+
+        if (removal_count != 0) {
+            const auto capacity =
+                next_index_capacity(
+                    removal_count);
+
+            if (capacity == 0) {
+                return server_status::io_error;
+            }
+
+            candidate_removals.resize(
+                capacity);
+        }
+
+        for (const auto& event :
+             delta_events) {
+
+            std::size_t target_index = 0;
+
+            if (!find_candidate_target(
+                    event.target,
+                    target_index)) {
+
+                return server_status::io_error;
+            }
+
+            if (event.addition) {
+                candidate_additions[
+                    target_cursor[
+                        target_index]++] =
+                    event.source;
+
+                continue;
+            }
+
+            const auto key =
+                topology_edge_key(
+                    event.target,
+                    event.source);
+
+            const auto mask =
+                candidate_removals.size() - 1;
+
+            auto position =
+                topology_hash(
+                    key) &
+                mask;
+
+            while (candidate_removals[
+                       position] != 0) {
+
+                if (candidate_removals[
+                        position] == key) {
+
+                    return server_status::io_error;
+                }
+
+                position =
+                    (position + 1) &
+                    mask;
+            }
+
+            candidate_removals[
+                position] =
+                key;
+        }
+
+        topology_sources =
+            std::move(candidate_sources);
+
+        topology_forward_edges =
+            std::move(candidate_forward);
+
+        topology_targets =
+            std::move(candidate_targets);
+
+        topology_target_index =
+            std::move(candidate_target_index);
+
+        topology_reverse_additions =
+            std::move(candidate_additions);
+
+        topology_reverse_removals =
+            std::move(candidate_removals);
+
+        topology_finalized = true;
+
+        std::vector<file_dependency_edge>{}.swap(
+            dependency_edges);
+
+        return server_status::success;
+    }
+    catch (...) {
         return server_status::io_error;
     }
 }
@@ -1224,16 +2414,36 @@ server_status file_context::add_dependency(
     file_id source,
     file_id target) noexcept {
 
-    if (baseline != nullptr) {
-        return server_status::unsupported;
-    }
-
     if (topology_finalized ||
         !contains(source) ||
         !contains(target)) {
 
         return server_status::
             project_configuration_invalid;
+    }
+
+    if (baseline != nullptr) {
+        std::size_t replacement = 0;
+
+        if (!find_topology_source(
+                source,
+                replacement)) {
+
+            if (source.value() <=
+                baseline_file_count) {
+
+                return server_status::
+                    project_configuration_invalid;
+            }
+
+            const auto begun =
+                begin_dependency_replacement(
+                    source);
+
+            if (!succeeded(begun)) {
+                return begun;
+            }
+        }
     }
 
     try {
@@ -1252,7 +2462,7 @@ server_status file_context::add_dependency(
 server_status file_context::finalize_dependency_topology() noexcept {
 
     if (baseline != nullptr) {
-        return server_status::unsupported;
+        return finalize_baseline_dependency_topology();
     }
 
     if (topology_finalized) {
@@ -1573,17 +2783,53 @@ file_dependency_view file_context::dependencies(
         return {};
     }
 
-    if (baseline != nullptr &&
-        file.value() <=
+    if (baseline != nullptr) {
+        if (topology_finalized) {
+            std::size_t replacement = 0;
+
+            if (find_topology_source(
+                    file,
+                    replacement)) {
+
+                const auto range =
+                    topology_sources[
+                        replacement]
+                        .dependencies;
+
+                if (range.count == 0) {
+                    return {};
+                }
+
+                if (range.offset >
+                        topology_forward_edges.size() ||
+                    range.count >
+                        topology_forward_edges.size() -
+                            range.offset) {
+
+                    return {};
+                }
+
+                return file_dependency_view::from_native(
+                    std::span<const file_id>{
+                        topology_forward_edges.data() +
+                            range.offset,
+                        range.count});
+            }
+        }
+
+        if (file.value() <=
             baseline_file_count) {
 
-        source_save_file_view state;
+            source_save_file_view state;
 
-        return baseline->file(
-                file,
-                state)
-            ? state.dependencies
-            : file_dependency_view{};
+            return baseline->file(
+                    file,
+                    state)
+                ? state.dependencies
+                : file_dependency_view{};
+        }
+
+        return {};
     }
 
     std::size_t index = 0;
@@ -1626,17 +2872,71 @@ file_dependency_view file_context::dependents(
         return {};
     }
 
-    if (baseline != nullptr &&
-        file.value() <=
+    if (baseline != nullptr) {
+        file_dependency_view base;
+
+        if (file.value() <=
             baseline_file_count) {
 
-        source_save_file_view state;
+            source_save_file_view state;
 
-        return baseline->file(
+            if (!baseline->file(
+                    file,
+                    state)) {
+
+                return {};
+            }
+
+            base =
+                state.dependents;
+        }
+
+        if (!topology_finalized) {
+            return base;
+        }
+
+        std::size_t delta = 0;
+
+        if (!find_topology_target(
                 file,
-                state)
-            ? state.dependents
-            : file_dependency_view{};
+                delta)) {
+
+            return base;
+        }
+
+        const auto& record =
+            topology_targets[
+                delta];
+
+        if (record.removals >
+                base.size() ||
+            record.additions.offset >
+                topology_reverse_additions.size() ||
+            record.additions.count >
+                topology_reverse_additions.size() -
+                    record.additions.offset) {
+
+            return {};
+        }
+
+        const auto final_count =
+            base.size() -
+            record.removals +
+            record.additions.count;
+
+        const std::span<const file_id>
+            additions{
+                topology_reverse_additions.data() +
+                    record.additions.offset,
+                record.additions.count};
+
+        return file_dependency_view::from_overlay(
+            base,
+            additions,
+            final_count,
+            this,
+            file,
+            reverse_dependency_filter);
     }
 
     std::size_t index = 0;

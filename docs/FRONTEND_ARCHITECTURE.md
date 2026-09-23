@@ -951,7 +951,11 @@ reconstruction that would otherwise be required before sparse BUILD can resolve
 quoted includes. BUILD File Context now binds the committed SourceSave directly:
 persisted path/kind/topology reads remain mmap-backed, touched existing files get
 sparse physical/content state, and new physical identities append after the
-committed `file_id` range. Sparse dependency replacement remains the next slice.
+committed `file_id` range.
+
+Affected preprocessing sources replace their complete outgoing adjacency
+sparsely. BUILD compares only those old/new edge sets and records reverse
+add/remove deltas; unrelated DAG nodes and edges remain in the SourceSave mmap.
 
 ## BUILD Frontend Reuse
 
