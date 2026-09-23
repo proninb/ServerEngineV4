@@ -273,7 +273,6 @@ private:
 };
 
 class source_save_view;
-class source_save_view;
 
 // Mutable physical-file state for one construction operation. REBUILD owns fresh
 // dense arrays. BUILD may bind one immutable source.bin lineage and keeps only
