@@ -1,9 +1,9 @@
 /*
  * Persisted SourceSave BUILD state.
  *
- * source.bin stores file_id lineage, physical paths, SHA-256 byte identity,
- * direct forward/reverse topology, and optional Windows USN journal acceleration
- * state. It never stores a second copy of Project source bytes.
+ * source.bin stores file_id lineage, physical paths, an mmap-native path lookup
+ * index, SHA-256 byte identity, direct forward/reverse topology, and optional
+ * Windows USN journal acceleration state. It never stores Project source bytes.
  */
 #pragma once
 
@@ -57,6 +57,7 @@ private:
         size_value = 0;
         records_offset = 0;
         paths_offset = 0;
+        path_index_offset = 0;
         forward_offset = 0;
         reverse_offset = 0;
         file_index_offset = 0;
@@ -67,12 +68,15 @@ private:
 
         file_count = 0;
         path_bytes = 0;
+        path_index_count = 0;
         forward_count = 0;
         reverse_count = 0;
         file_index_count = 0;
         directory_index_count = 0;
 
         checkpoint = {};
+        path_index_fingerprints.clear();
+        path_index_files.clear();
         file_index_references.clear();
         file_index_files.clear();
         directory_index_references.clear();
@@ -82,6 +86,7 @@ private:
     std::size_t size_value = 0;
     std::size_t records_offset = 0;
     std::size_t paths_offset = 0;
+    std::size_t path_index_offset = 0;
     std::size_t forward_offset = 0;
     std::size_t reverse_offset = 0;
     std::size_t file_index_offset = 0;
@@ -92,12 +97,18 @@ private:
 
     std::uint32_t file_count = 0;
     std::uint32_t path_bytes = 0;
+    std::uint32_t path_index_count = 0;
     std::uint32_t forward_count = 0;
     std::uint32_t reverse_count = 0;
     std::uint32_t file_index_count = 0;
     std::uint32_t directory_index_count = 0;
 
     file_change_checkpoint checkpoint;
+
+    // Stable path fingerprints are persisted only as lookup accelerators. Exact
+    // filesystem-key equality is always confirmed before returning a file_id.
+    std::vector<std::uint32_t> path_index_fingerprints;
+    std::vector<file_id> path_index_files;
 
     // SoA avoids native padding: transient memory is the same 12 bytes/slot as
     // the persisted identity-index payload instead of a padded native struct.
@@ -170,6 +181,12 @@ public:
         file_id id,
         source_save_file_view& output) const noexcept;
 
+    // Exact platform-filesystem lookup over the persisted mmap path index. A
+    // successful call with output == {} means the path is not in this lineage.
+    [[nodiscard]] server_status find_path(
+        const std::filesystem::path& path,
+        file_id& output) const noexcept;
+
     [[nodiscard]] file_change_checkpoint
     change_checkpoint() const noexcept {
         return checkpoint;
@@ -203,6 +220,7 @@ public:
     std::span<const std::byte> bytes;
     std::size_t records_offset = 0;
     std::size_t paths_offset = 0;
+    std::size_t path_index_offset = 0;
     std::size_t forward_offset = 0;
     std::size_t reverse_offset = 0;
     std::size_t file_index_offset = 0;
@@ -210,6 +228,7 @@ public:
 
     std::uint32_t file_count_value = 0;
     std::uint32_t path_bytes_value = 0;
+    std::uint32_t path_index_count_value = 0;
     std::uint32_t forward_count_value = 0;
     std::uint32_t reverse_count_value = 0;
     std::uint32_t file_index_count_value = 0;

@@ -929,12 +929,25 @@ Parser records provenance only after successful G operations and calls
 `sources.finalize(files.size(), identities, G)` after active include discovery.
 Finalization validates Graph references and computes BUILD semantic presence from
 the root-owned contributions. `compiled.bin` v3 persists contributions, root
-ranges, the physical secondary index, and file paths/kinds; `source.bin` v3 stores
+ranges, the physical secondary index, and file paths/kinds; `source.bin` v4 stores
 only type/object/link presence counters beside the existing file DAG.
 
 The file dependency DAG remains direct `file_id -> file_id` topology only.
 Semantic provenance does not create DAG edges.
 
+
+## Persisted BUILD Path Lookup
+
+`source.bin` v4 persists the File Context path lookup accelerator as an
+open-addressed `{fingerprint, file_id}` table. The fingerprint is computed from
+the platform filesystem-equivalence key and is never accepted as identity:
+`source_save_view::find_path()` confirms exact key equality before returning the
+existing `file_id`.
+
+This removes the O(F) path-index reconstruction that would otherwise be required
+before sparse BUILD can resolve quoted includes. BUILD may therefore keep the
+committed File Context mmap-backed and allocate mutable path state only for
+changed or newly discovered files.
 
 ## BUILD Frontend Reuse
 
@@ -1273,4 +1286,3 @@ Parser/Semantic now writes `G` directly for the implemented namespace,
 record/member, Project-object, construction, managed-constructor, and static-link
 slice. There is no intermediate semantic database or Builder boundary. BUILD
 persisted-state binding/reuse remains separate later work.
-

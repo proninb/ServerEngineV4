@@ -372,6 +372,26 @@ void test_direct_source_save(
             second_state),
         "read source-save records");
 
+    file_id found_path;
+
+    tests.expect(
+        succeeded(
+            writable_view.find_path(
+                first_path,
+                found_path)) &&
+            found_path == first,
+        "mmap path index resolves existing file_id");
+
+    found_path = {};
+
+    tests.expect(
+        succeeded(
+            writable_view.find_path(
+                root / "missing.hpp",
+                found_path)) &&
+            !found_path,
+        "mmap path index reports missing path without scan");
+
     tests.expect(
         first_state.dependencies.size() == 1 &&
         first_state.dependencies[0] == second &&
@@ -419,6 +439,16 @@ void test_direct_source_save(
             persisted.bytes()) ==
             source_save_result::success,
         "validate persisted source.bin mmap");
+
+    found_path = {};
+
+    tests.expect(
+        succeeded(
+            persisted_view.find_path(
+                second_path,
+                found_path)) &&
+            found_path == second,
+        "persisted path index survives read-only reopen");
 }
 
 }

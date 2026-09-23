@@ -13,6 +13,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -38,10 +39,10 @@ constexpr std::array<std::byte, 8> magic{
     std::byte{'C'},
     std::byte{'0'},
     std::byte{'0'},
-    std::byte{'3'},
+    std::byte{'4'},
 };
 
-constexpr std::uint32_t format_version = 3;
+constexpr std::uint32_t format_version = 4;
 
 constexpr std::uint32_t current_member_flag = 0x00000001u;
 constexpr std::uint32_t physical_present_flag = 0x00000002u;
@@ -58,9 +59,15 @@ constexpr std::uint32_t directory_watch_known =
 
 constexpr std::size_t header_size = 80;
 constexpr std::size_t record_size = 72;
+constexpr std::size_t path_index_record_size = 8;
 constexpr std::size_t file_index_record_size = 12;
 constexpr std::size_t directory_index_record_size = 12;
 constexpr std::size_t checksum_size = 32;
+
+struct path_index_slot final {
+    std::uint32_t fingerprint = 0;
+    file_id file{};
+};
 
 struct file_index_slot final {
     std::uint64_t file_reference = 0;
@@ -299,6 +306,96 @@ struct directory_index_slot final {
     }
 
     return capacity;
+}
+
+[[nodiscard]] std::uint32_t persisted_path_fingerprint(
+    const filesystem_path_key& key) noexcept {
+
+    constexpr std::uint64_t offset =
+        1469598103934665603ULL;
+    constexpr std::uint64_t prime =
+        1099511628211ULL;
+
+    std::uint64_t hash = offset;
+
+    using native_char =
+        std::filesystem::path::value_type;
+    using unsigned_char =
+        std::make_unsigned_t<native_char>;
+
+    for (const auto value :
+         key.value.native()) {
+
+        auto code =
+            static_cast<std::uint64_t>(
+                static_cast<unsigned_char>(
+                    value));
+
+#if defined(_WIN32)
+        if (code ==
+            static_cast<std::uint64_t>(
+                L'\\')) {
+
+            code =
+                static_cast<std::uint64_t>(
+                    L'/');
+        }
+#endif
+
+        hash ^= code;
+        hash *= prime;
+    }
+
+    auto output =
+        static_cast<std::uint32_t>(hash) ^
+        static_cast<std::uint32_t>(hash >> 32);
+
+    return output != 0
+        ? output
+        : 1u;
+}
+
+[[nodiscard]] bool insert_path_identity(
+    std::vector<std::uint32_t>& fingerprints,
+    std::vector<file_id>& files,
+    std::uint32_t fingerprint,
+    file_id file) noexcept {
+
+    if (fingerprint == 0 ||
+        fingerprints.empty() ||
+        fingerprints.size() != files.size() ||
+        !file) {
+
+        return false;
+    }
+
+    const auto mask =
+        fingerprints.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            fingerprint) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe < fingerprints.size();
+         ++probe) {
+
+        auto& slot =
+            fingerprints[position];
+
+        if (slot == 0) {
+            slot = fingerprint;
+            files[position] = file;
+            return true;
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return false;
 }
 
 [[nodiscard]] bool insert_file_identity(
@@ -968,6 +1065,33 @@ private:
             (value - 1)) == 0;
 }
 
+[[nodiscard]] bool decode_path_index_slot(
+    std::span<const std::byte> bytes,
+    std::size_t offset,
+    path_index_slot& output) noexcept {
+
+    output = {};
+
+    std::uint32_t fingerprint = 0;
+    std::uint32_t file = 0;
+
+    if (!read_u32(
+            bytes,
+            offset,
+            fingerprint) ||
+        !read_u32(
+            bytes,
+            offset,
+            file)) {
+
+        return false;
+    }
+
+    output.fingerprint = fingerprint;
+    output.file = file_id{file};
+    return true;
+}
+
 [[nodiscard]] bool decode_file_index_slot(
     std::span<const std::byte> bytes,
     std::size_t offset,
@@ -1055,12 +1179,14 @@ void source_save_view::reset() noexcept {
     bytes = {};
     records_offset = 0;
     paths_offset = 0;
+    path_index_offset = 0;
     forward_offset = 0;
     reverse_offset = 0;
     file_index_offset = 0;
     directory_index_offset = 0;
     file_count_value = 0;
     path_bytes_value = 0;
+    path_index_count_value = 0;
     forward_count_value = 0;
     reverse_count_value = 0;
     file_index_count_value = 0;
@@ -1091,7 +1217,6 @@ source_save_result source_save_view::bind(
 
     std::uint32_t version = 0;
     std::uint32_t backend = 0;
-    std::uint32_t reserved0 = 0;
 
     std::uint64_t volume = 0;
     std::uint64_t journal = 0;
@@ -1108,7 +1233,10 @@ source_save_result source_save_view::bind(
         !valid_power_of_two_or_zero(file_index_count_value) ||
         !read_u32(image, offset, directory_index_count_value) ||
         !valid_power_of_two_or_zero(directory_index_count_value) ||
-        !read_u32(image, offset, reserved0) || reserved0 != 0 || !read_u64(image, offset, volume) ||
+        !read_u32(image, offset, path_index_count_value) ||
+        path_index_count_value == 0 ||
+        !valid_power_of_two_or_zero(path_index_count_value) ||
+        !read_u64(image, offset, volume) ||
         !read_u64(image, offset, journal) || !read_u64(image, offset, next_usn) ||
         !read_u32(image, offset, type_count) || !read_u32(image, offset, object_count) ||
         !read_u32(image, offset, link_count) || offset != header_size) {
@@ -1155,6 +1283,7 @@ source_save_result source_save_view::bind(
     }
 
     std::size_t records_size = 0;
+    std::size_t path_index_size = 0;
     std::size_t forward_size = 0;
     std::size_t reverse_size = 0;
     std::size_t file_index_size = 0;
@@ -1164,6 +1293,10 @@ source_save_result source_save_view::bind(
             file_count_value,
             record_size,
             records_size) ||
+        !multiply_size(
+            path_index_count_value,
+            path_index_record_size,
+            path_index_size) ||
         !multiply_size(
             forward_count_value,
             sizeof(std::uint32_t),
@@ -1196,6 +1329,7 @@ source_save_result source_save_view::bind(
         header_size;
 
     if (!add_size(expected, records_size) || !add_size(expected, path_bytes_value) ||
+        !add_size(expected, path_index_size) ||
         !add_size(expected, forward_size) || !add_size(expected, reverse_size) ||
         !add_size(expected, file_index_size) || !add_size(expected, directory_index_size) ||
         !add_size(expected, presence_size) || !add_size(expected, checksum_size) ||
@@ -1213,9 +1347,13 @@ source_save_result source_save_view::bind(
         records_offset +
         records_size;
 
-    forward_offset =
+    path_index_offset =
         paths_offset +
         path_bytes_value;
+
+    forward_offset =
+        path_index_offset +
+        path_index_size;
 
     reverse_offset =
         forward_offset +
@@ -1435,6 +1573,132 @@ bool source_save_view::file(
     return true;
 }
 
+server_status source_save_view::find_path(
+    const std::filesystem::path& value,
+    file_id& output) const noexcept {
+
+    output = {};
+
+    if (!valid() ||
+        path_index_count_value == 0) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    std::filesystem::path resolved;
+
+    if (resolve_project_path(
+            value,
+            resolved) !=
+        project_path_result::success) {
+
+        return server_status::io_error;
+    }
+
+    filesystem_path_key key;
+
+    if (make_filesystem_path_key(
+            resolved,
+            key) !=
+        filesystem_path_result::success) {
+
+        return server_status::io_error;
+    }
+
+    const auto fingerprint =
+        persisted_path_fingerprint(
+            key);
+
+    const auto mask =
+        static_cast<std::size_t>(
+            path_index_count_value - 1);
+
+    auto position =
+        static_cast<std::size_t>(
+            fingerprint) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe < path_index_count_value;
+         ++probe) {
+
+        path_index_slot slot;
+
+        if (!decode_path_index_slot(
+                bytes,
+                path_index_offset +
+                    position *
+                        path_index_record_size,
+                slot)) {
+
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        if (slot.fingerprint == 0) {
+            return slot.file
+                ? server_status::project_artifact_invalid
+                : server_status::success;
+        }
+
+        if (!slot.file ||
+            !contains(slot.file)) {
+
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        if (slot.fingerprint ==
+            fingerprint) {
+
+            source_save_file_view state;
+
+            if (!file(
+                    slot.file,
+                    state)) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            std::filesystem::path candidate;
+
+            if (filesystem_path_from_utf8(
+                    state.path_utf8,
+                    candidate) !=
+                filesystem_path_result::success) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            filesystem_path_key candidate_key;
+
+            if (make_filesystem_path_key(
+                    candidate,
+                    candidate_key) !=
+                filesystem_path_result::success) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            if (candidate_key == key) {
+                output = slot.file;
+                return server_status::success;
+            }
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return server_status::
+        project_artifact_invalid;
+}
+
 file_id source_save_view::find_file_reference(
     std::uint64_t reference) const noexcept {
 
@@ -1570,6 +1834,32 @@ source_save_result prepare_source_save_layout(const file_context &files,
         static_cast<std::uint32_t>(
             files.size());
 
+    const auto path_index_capacity =
+        next_capacity(
+            files.size());
+
+    if (path_index_capacity == 0 ||
+        path_index_capacity >
+            static_cast<std::size_t>(
+                (std::numeric_limits<
+                    std::uint32_t>::max)())) {
+
+        return source_save_result::failed;
+    }
+
+    try {
+        output.path_index_fingerprints.assign(
+            path_index_capacity,
+            0);
+        output.path_index_files.assign(
+            path_index_capacity,
+            file_id{});
+    }
+    catch (...) {
+        output.reset();
+        return source_save_result::failed;
+    }
+
     std::uint32_t path_bytes = 0;
     std::uint32_t forward_count = 0;
     std::uint32_t reverse_count = 0;
@@ -1591,6 +1881,35 @@ source_save_result prepare_source_save_layout(const file_context &files,
 
             return source_save_result::
                 invalid_state;
+        }
+
+        filesystem_path_key path_key;
+
+        try {
+            const auto path_view =
+                files.path(file);
+
+            if (make_filesystem_path_key(
+                    std::filesystem::path{
+                        path_view.begin(),
+                        path_view.end()},
+                    path_key) !=
+                    filesystem_path_result::success ||
+                !insert_path_identity(
+                    output.path_index_fingerprints,
+                    output.path_index_files,
+                    persisted_path_fingerprint(
+                        path_key),
+                    file)) {
+
+                output.reset();
+                return source_save_result::
+                    invalid_state;
+            }
+        }
+        catch (...) {
+            output.reset();
+            return source_save_result::failed;
         }
 
         std::size_t path_size = 0;
@@ -1674,10 +1993,16 @@ source_save_result prepare_source_save_layout(const file_context &files,
         return source_save_result::failed;
     }
 
-    if (output.file_index_references.size() !=
+    if (output.path_index_fingerprints.size() !=
+            output.path_index_files.size() ||
+        output.file_index_references.size() !=
             output.file_index_files.size() ||
         output.directory_index_references.size() !=
             output.directory_index_flags.size() ||
+        output.path_index_fingerprints.size() >
+            static_cast<std::size_t>(
+                (std::numeric_limits<
+                    std::uint32_t>::max)()) ||
         output.file_index_references.size() >
             static_cast<std::size_t>(
                 (std::numeric_limits<
@@ -1692,6 +2017,10 @@ source_save_result prepare_source_save_layout(const file_context &files,
         return source_save_result::failed;
     }
 
+    const auto path_index_count =
+        static_cast<std::uint32_t>(
+            output.path_index_fingerprints.size());
+
     const auto file_index_count =
         static_cast<std::uint32_t>(
             output.file_index_references.size());
@@ -1701,6 +2030,7 @@ source_save_result prepare_source_save_layout(const file_context &files,
             output.directory_index_references.size());
 
     std::size_t records_size = 0;
+    std::size_t path_index_size = 0;
     std::size_t forward_size = 0;
     std::size_t reverse_size = 0;
     std::size_t file_index_size = 0;
@@ -1710,6 +2040,10 @@ source_save_result prepare_source_save_layout(const file_context &files,
             file_count,
             record_size,
             records_size) ||
+        !multiply_size(
+            path_index_count,
+            path_index_record_size,
+            path_index_size) ||
         !multiply_size(
             forward_count,
             sizeof(std::uint32_t),
@@ -1753,6 +2087,18 @@ source_save_result prepare_source_save_layout(const file_context &files,
     if (!add_size(
             cursor,
             path_bytes)) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    output.path_index_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            path_index_size)) {
 
         output.reset();
 
@@ -1841,6 +2187,7 @@ source_save_result prepare_source_save_layout(const file_context &files,
     output.size_value = cursor;
     output.file_count = file_count;
     output.path_bytes = path_bytes;
+    output.path_index_count = path_index_count;
     output.forward_count = forward_count;
     output.reverse_count = reverse_count;
     output.file_index_count =
@@ -1881,6 +2228,10 @@ source_save_result encode_source_save_image(const file_context &files,
         output.size() -
             layout.checksum_offset !=
                 checksum_size ||
+        layout.path_index_fingerprints.size() !=
+            layout.path_index_count ||
+        layout.path_index_files.size() !=
+            layout.path_index_count ||
         layout.file_index_references.size() !=
             layout.file_index_count ||
         layout.file_index_files.size() !=
@@ -1905,7 +2256,7 @@ source_save_result encode_source_save_image(const file_context &files,
         !write_u32(output, header_cursor, static_cast<std::uint32_t>(layout.checkpoint.backend)) ||
         !write_u32(output, header_cursor, layout.file_index_count) ||
         !write_u32(output, header_cursor, layout.directory_index_count) ||
-        !write_u32(output, header_cursor, 0) ||
+        !write_u32(output, header_cursor, layout.path_index_count) ||
         !write_u64(output, header_cursor, layout.checkpoint.volume_serial) ||
         !write_u64(output, header_cursor, layout.checkpoint.journal_id) ||
         !write_u64(output, header_cursor, static_cast<std::uint64_t>(layout.checkpoint.next_usn)) ||
@@ -2090,6 +2441,35 @@ source_save_result encode_source_save_image(const file_context &files,
 
         return source_save_result::
             invalid_state;
+    }
+
+    std::size_t path_index_cursor =
+        layout.path_index_offset;
+
+    for (std::size_t index = 0;
+         index <
+            layout.path_index_fingerprints.size();
+         ++index) {
+
+        if (!write_u32(
+                output,
+                path_index_cursor,
+                layout.path_index_fingerprints[
+                    index]) ||
+            !write_u32(
+                output,
+                path_index_cursor,
+                layout.path_index_files[
+                    index].value())) {
+
+            return source_save_result::failed;
+        }
+    }
+
+    if (path_index_cursor !=
+        layout.forward_offset) {
+
+        return source_save_result::failed;
     }
 
     std::size_t forward_cursor =
@@ -2309,6 +2689,98 @@ source_save_result validate_source_save_image(
         // transpose of forward topology without an O(E) expected-edge copy.
         std::vector<std::uint32_t>
             reverse_cursor(file_count);
+
+        // source.bin v4 persists the exact path lookup table used by
+        // sparse BUILD. Every file_id must occur exactly once and every stored
+        // fingerprint must match the platform filesystem-equivalence key.
+        for (std::uint32_t slot = 0;
+             slot <
+                view.path_index_count_value;
+             ++slot) {
+
+            path_index_slot value;
+
+            if (!decode_path_index_slot(
+                    image,
+                    view.path_index_offset +
+                        static_cast<std::size_t>(slot) *
+                            path_index_record_size,
+                    value)) {
+
+                return source_save_result::
+                    invalid_image;
+            }
+
+            if (value.fingerprint == 0) {
+                if (value.file) {
+                    return source_save_result::
+                        invalid_image;
+                }
+
+                continue;
+            }
+
+            if (!value.file ||
+                !view.contains(value.file) ||
+                reverse_cursor[
+                    value.file.value() - 1] != 0) {
+
+                return source_save_result::
+                    invalid_image;
+            }
+
+            source_save_file_view state;
+            std::filesystem::path path;
+            filesystem_path_key key;
+
+            if (!view.file(
+                    value.file,
+                    state) ||
+                filesystem_path_from_utf8(
+                    state.path_utf8,
+                    path) !=
+                    filesystem_path_result::success ||
+                make_filesystem_path_key(
+                    path,
+                    key) !=
+                    filesystem_path_result::success ||
+                persisted_path_fingerprint(
+                    key) !=
+                    value.fingerprint) {
+
+                return source_save_result::
+                    invalid_image;
+            }
+
+            file_id found;
+
+            if (!succeeded(
+                    view.find_path(
+                        path,
+                        found)) ||
+                found != value.file) {
+
+                return source_save_result::
+                    invalid_image;
+            }
+
+            reverse_cursor[
+                value.file.value() - 1] = 1;
+        }
+
+        for (const auto value :
+             reverse_cursor) {
+
+            if (value == 0) {
+                return source_save_result::
+                    invalid_image;
+            }
+        }
+
+        std::fill(
+            reverse_cursor.begin(),
+            reverse_cursor.end(),
+            0);
 
         for (std::uint32_t target = 1;
              target <= file_count;

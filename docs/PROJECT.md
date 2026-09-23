@@ -286,7 +286,7 @@ queries.
 
 BUILD-only aggregate semantic-presence state is separate from the file DAG and
 does not belong in G. Its persisted home is `source.bin` beside the dependency
-topology. `source.bin` v3 stores `{declarations, definitions}` counters per Graph
+topology. `source.bin` v4 stores `{declarations, definitions}` counters per Graph
 type and uint32 counters per object/link. Each root-owned contribution increments
 presence; a definition also increments declarations. Repeated inclusion within
 one root/file pair counts once. Removing one owner subtracts only that ownership,
@@ -948,6 +948,7 @@ load project.manifest
     -> recompose when configuration bytes changed
     -> compare aggregate configuration hash
     -> read-only mmap/bind source.bin
+    -> mmap-native normalized-path -> file_id lookup
     -> exact physical dirty detection
     -> OLD reverse dependency affected closure
     -> read-only mmap/bind compiled.bin
@@ -1282,7 +1283,10 @@ reverse_edges[]             4 bytes / direct edge
 ```
 
 The current implementation owns all of these arrays directly for a fresh
-construction.
+construction. `source.bin` v4 additionally persists an 8-byte/slot open-addressed
+path index `{stable fingerprint, file_id}`. BUILD probes it directly from mmap;
+full platform filesystem-key equality is confirmed on a fingerprint match, so
+the fingerprint is an accelerator and never file identity.
 
 BUILD will add persisted-view + mutable-overlay capability; it must not begin by
 copying every committed file record merely to change a small subset.

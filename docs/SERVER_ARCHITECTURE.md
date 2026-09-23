@@ -419,7 +419,9 @@ There is no selector file or active/inactive persistence slot.
 `source.bin` has a versioned/checksummed image contract for finalized File
 Context state plus BUILD-only semantic presence sidecars. BUILD memory-maps it
 read-only directly.
-`source_save_view::bind()` is O(1) and allocation-free.
+`source_save_view::bind()` is O(1) and allocation-free. `source.bin` v4 also
+contains an mmap-native normalized-path lookup index used by sparse BUILD; BUILD
+does not rebuild an O(F) path hash table before include discovery.
 
 BUILD change discovery is journal-first. Before dirty detection, BUILD captures
 the checkpoint for the `source.bin` that may be produced by that BUILD. Dirty
