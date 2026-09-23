@@ -763,6 +763,13 @@ The direct reverse topology is persisted SourceSave data because BUILD uses it
 to compute the affected closure before updating dependency relations for the
 current construction.
 
+`database.bin` is bound separately as the immutable lexical BUILD baseline.
+`lexical_generation` does not reconstruct committed per-file records: unchanged
+files read encoded words/directive anchors directly from mmap through value
+views, while affected committed files and appended `file_id` values occupy sparse
+native overlay storage. The baseline-provider contract keeps frontend storage
+independent from persistence implementation types.
+
 REBUILD may build complete topology in `O(F + E)` with the current no-sort
 finalizer.
 

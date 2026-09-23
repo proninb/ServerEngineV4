@@ -1335,6 +1335,29 @@ Change tokens are proof optimizations only.
 `construction_content_hash` remains a byte-content aggregate only. Path, role,
 topology, semantic identity, and DB state belong to higher layers.
 
+### BUILD lexical baseline
+
+`database.bin` remains the retained lexical BUILD cache. BUILD binds it through a
+borrowed `lexical_baseline_view`; `lexical_generation` itself has no persistence
+dependency.
+
+```text
+unchanged committed file
+    -> words/directives/token_count from database.bin mmap
+
+affected committed file
+    -> begin_replacement(file_id)
+    -> baseline hidden immediately
+    -> lexer publishes sparse native replacement
+
+new file_id
+    -> append-only local lexical record
+```
+
+Binding is O(1) in committed file count and allocates only bounded producer
+arenas. BUILD does not allocate the dense `lexical_record[file_count]` tables
+used by REBUILD; mutable memory grows with replaced/new lexical state.
+
 ### Composition rules
 
 Project composition owns syntax-domain cardinality:

@@ -9,6 +9,29 @@
 namespace cw::server {
 namespace {
 
+[[nodiscard]] std::size_t replacement_index_capacity(
+    std::size_t required) noexcept {
+
+    std::size_t capacity = 16;
+
+    while (capacity / 2 < required) {
+        if (capacity > (std::numeric_limits<std::size_t>::max)() / 2) {
+            return 0;
+        }
+        capacity *= 2;
+    }
+
+    return capacity;
+}
+
+[[nodiscard]] std::size_t replacement_hash(file_id file) noexcept {
+    auto value = static_cast<std::uint64_t>(file.value());
+    value ^= value >> 33;
+    value *= 0xff51afd7ed558ccdULL;
+    value ^= value >> 33;
+    return static_cast<std::size_t>(value);
+}
+
 [[nodiscard]] std::size_t grown_capacity(
     std::size_t current,
     std::size_t required,
@@ -32,6 +55,211 @@ namespace {
     return capacity;
 }
 
+}
+
+lexical_word_view lexical_word_view::from_native(
+    std::span<const std::uint32_t> values) noexcept {
+
+    lexical_word_view output;
+    output.native = values;
+    output.count = values.size();
+    return output;
+}
+
+lexical_word_view lexical_word_view::from_encoded(
+    std::span<const std::byte> values) noexcept {
+
+    if (values.size() % sizeof(std::uint32_t) != 0) {
+        return {};
+    }
+
+    lexical_word_view output;
+    output.encoded = values;
+    output.count = values.size() / sizeof(std::uint32_t);
+    return output;
+}
+
+std::uint32_t lexical_word_view::operator[](std::size_t index) const noexcept {
+    if (index >= count) {
+        return 0;
+    }
+
+    if (!native.empty()) {
+        return native[index];
+    }
+
+    const auto offset = index * sizeof(std::uint32_t);
+    if (offset > encoded.size() ||
+        encoded.size() - offset < sizeof(std::uint32_t)) {
+        return 0;
+    }
+
+    std::uint32_t value = 0;
+    for (std::size_t byte = 0; byte < sizeof(std::uint32_t); ++byte) {
+        value |= static_cast<std::uint32_t>(
+            std::to_integer<std::uint8_t>(encoded[offset + byte])) << (byte * 8);
+    }
+    return value;
+}
+
+lexical_directive_view lexical_directive_view::from_native(
+    std::span<const lexical_directive_anchor> values) noexcept {
+
+    lexical_directive_view output;
+    output.native = values;
+    output.count = values.size();
+    return output;
+}
+
+lexical_directive_view lexical_directive_view::from_encoded(
+    std::span<const std::byte> values) noexcept {
+
+    if (values.size() % sizeof(lexical_directive_anchor) != 0) {
+        return {};
+    }
+
+    lexical_directive_view output;
+    output.encoded = values;
+    output.count = values.size() / sizeof(lexical_directive_anchor);
+    return output;
+}
+
+lexical_directive_anchor lexical_directive_view::operator[](
+    std::size_t index) const noexcept {
+
+    if (index >= count) {
+        return {};
+    }
+
+    if (!native.empty()) {
+        return native[index];
+    }
+
+    const auto offset = index * sizeof(lexical_directive_anchor);
+    if (offset > encoded.size() ||
+        encoded.size() - offset < sizeof(lexical_directive_anchor)) {
+        return {};
+    }
+
+    lexical_directive_anchor output;
+    for (std::size_t field = 0; field < 2; ++field) {
+        std::uint32_t value = 0;
+        for (std::size_t byte = 0; byte < sizeof(std::uint32_t); ++byte) {
+            value |= static_cast<std::uint32_t>(
+                std::to_integer<std::uint8_t>(
+                    encoded[offset + field * sizeof(std::uint32_t) + byte]))
+                << (byte * 8);
+        }
+
+        if (field == 0) {
+            output.word_offset = value;
+        }
+        else {
+            output.source_base = value;
+        }
+    }
+
+    return output;
+}
+
+bool lexical_generation::local_index(file_id file, std::size_t& output) const noexcept {
+    output = 0;
+    if (!file || file.value() <= baseline_file_count) {
+        return false;
+    }
+
+    const auto index = static_cast<std::size_t>(
+        file.value() - baseline_file_count - 1);
+
+    if (index >= record_count) {
+        return false;
+    }
+
+    output = index;
+    return true;
+}
+
+bool lexical_generation::find_replacement(file_id file, std::size_t& output) const noexcept {
+    output = 0;
+    if (!file || replacement_index.empty()) {
+        return false;
+    }
+
+    const auto mask = replacement_index.size() - 1;
+    auto position = replacement_hash(file) & mask;
+
+    for (std::size_t probe = 0; probe < replacement_index.size(); ++probe) {
+        const auto& slot = replacement_index[position];
+
+        if (!slot.file) {
+            return false;
+        }
+
+        if (slot.file == file) {
+            if (slot.record == 0 || slot.record > replacements.size()) {
+                return false;
+            }
+
+            output = static_cast<std::size_t>(slot.record - 1);
+            return replacements[output].file == file;
+        }
+
+        position = (position + 1) & mask;
+    }
+
+    return false;
+}
+
+void lexical_generation::insert_replacement(
+    std::vector<replacement_slot>& index,
+    file_id file,
+    std::uint32_t record) const noexcept {
+
+    const auto mask = index.size() - 1;
+    auto position = replacement_hash(file) & mask;
+
+    while (index[position].file) {
+        position = (position + 1) & mask;
+    }
+
+    index[position] = {file, record};
+}
+
+server_status lexical_generation::ensure_replacement_capacity(
+    std::size_t additional) noexcept {
+
+    if (additional > (std::numeric_limits<std::size_t>::max)() - replacements.size()) {
+        return server_status::io_error;
+    }
+
+    const auto required = replacements.size() + additional;
+
+    if (!replacement_index.empty() &&
+        required <= replacement_index.size() / 2) {
+        return server_status::success;
+    }
+
+    const auto capacity = replacement_index_capacity(required);
+    if (capacity == 0) {
+        return server_status::io_error;
+    }
+
+    try {
+        std::vector<replacement_slot> candidate(capacity);
+
+        for (std::size_t index = 0; index < replacements.size(); ++index) {
+            insert_replacement(
+                candidate,
+                replacements[index].file,
+                static_cast<std::uint32_t>(index + 1));
+        }
+
+        replacement_index = std::move(candidate);
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
 }
 
 server_status lexical_generation::ensure_records(
@@ -190,14 +418,11 @@ server_status lexical_generation::reset(
     std::size_t file_count,
     std::size_t arena_count) noexcept {
 
-    if (file_count >
-            static_cast<std::size_t>(
-                (std::numeric_limits<std::uint32_t>::max)()) ||
+    if (file_count > static_cast<std::size_t>(
+            (std::numeric_limits<std::uint32_t>::max)()) ||
         arena_count == 0 ||
-        arena_count >
-            static_cast<std::size_t>(
-                (std::numeric_limits<std::uint32_t>::max)())) {
-
+        arena_count > static_cast<std::size_t>(
+            (std::numeric_limits<std::uint32_t>::max)())) {
         return server_status::io_error;
     }
 
@@ -205,59 +430,120 @@ server_status lexical_generation::reset(
     std::unique_ptr<lexical_directive_record[]> new_directives;
 
     if (file_count != 0) {
-        new_records.reset(
-            new (std::nothrow)
-                lexical_record[file_count]);
+        new_records.reset(new (std::nothrow) lexical_record[file_count]);
+        new_directives.reset(new (std::nothrow) lexical_directive_record[file_count]);
 
-        new_directives.reset(
-            new (std::nothrow)
-                lexical_directive_record[file_count]);
-
-        if (!new_records ||
-            !new_directives) {
-
+        if (!new_records || !new_directives) {
             return server_status::io_error;
         }
     }
 
     std::unique_ptr<lexical_arena[]> new_arenas{
-        new (std::nothrow)
-            lexical_arena[arena_count]};
+        new (std::nothrow) lexical_arena[arena_count]};
 
     if (!new_arenas) {
         return server_status::io_error;
     }
 
-    records =
-        std::move(new_records);
-
-    directive_records =
-        std::move(new_directives);
-
-    record_count =
-        file_count;
-
-    record_capacity =
-        file_count;
-
-    arena_values =
-        std::move(new_arenas);
-
-    arena_count_value =
-        arena_count;
+    baseline = {};
+    baseline_file_count = 0;
+    records = std::move(new_records);
+    directive_records = std::move(new_directives);
+    record_count = file_count;
+    record_capacity = file_count;
+    arena_values = std::move(new_arenas);
+    arena_count_value = arena_count;
+    std::vector<replacement_record>{}.swap(replacements);
+    std::vector<replacement_slot>{}.swap(replacement_index);
 
     return server_status::success;
+}
+
+server_status lexical_generation::bind_baseline(
+    const lexical_baseline_view& value,
+    std::size_t arena_count) noexcept {
+
+    if (!value.valid() ||
+        arena_count == 0 ||
+        arena_count > static_cast<std::size_t>(
+            (std::numeric_limits<std::uint32_t>::max)()) ||
+        baseline.valid() ||
+        baseline_file_count != 0 ||
+        records ||
+        directive_records ||
+        record_count != 0 ||
+        record_capacity != 0 ||
+        arena_values ||
+        arena_count_value != 0 ||
+        !replacements.empty() ||
+        !replacement_index.empty()) {
+        return server_status::project_artifact_invalid;
+    }
+
+    std::unique_ptr<lexical_arena[]> new_arenas{
+        new (std::nothrow) lexical_arena[arena_count]};
+
+    if (!new_arenas) {
+        return server_status::io_error;
+    }
+
+    baseline = value;
+    baseline_file_count = value.size();
+    arena_values = std::move(new_arenas);
+    arena_count_value = arena_count;
+    return server_status::success;
+}
+
+server_status lexical_generation::begin_replacement(file_id file) noexcept {
+    if (!baseline.valid() ||
+        !file ||
+        file.value() > baseline_file_count) {
+        return server_status::project_configuration_invalid;
+    }
+
+    lexical_file_view persisted;
+    if (!baseline.file(file, persisted)) {
+        return server_status::project_artifact_invalid;
+    }
+
+    std::size_t existing = 0;
+    if (find_replacement(file, existing)) {
+        return server_status::success;
+    }
+
+    if (replacements.size() >= static_cast<std::size_t>(
+            (std::numeric_limits<std::uint32_t>::max)())) {
+        return server_status::io_error;
+    }
+
+    const auto prepared = ensure_replacement_capacity(1);
+    if (!succeeded(prepared)) {
+        return prepared;
+    }
+
+    try {
+        replacement_record record;
+        record.file = file;
+        replacements.push_back(record);
+        insert_replacement(
+            replacement_index,
+            file,
+            static_cast<std::uint32_t>(replacements.size()));
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
 }
 
 server_status lexical_generation::extend(
     std::size_t file_count) noexcept {
 
-    if (file_count < record_count) {
+    if (file_count < size() || file_count < baseline_file_count) {
         return server_status::project_configuration_invalid;
     }
 
-    return ensure_records(
-        file_count);
+    return ensure_records(file_count - baseline_file_count);
 }
 
 server_status lexical_generation::publish(
@@ -267,242 +553,258 @@ server_status lexical_generation::publish(
 
     if (!file ||
         stream.file() != file ||
-        static_cast<std::size_t>(
-            arena_index) >=
-            arena_count_value ||
-        stream.word_count() >
-            static_cast<std::size_t>(
-                (std::numeric_limits<std::uint32_t>::max)()) ||
-        stream.directive_count() >
-            static_cast<std::size_t>(
-                (std::numeric_limits<std::uint32_t>::max)())) {
-
+        static_cast<std::size_t>(arena_index) >= arena_count_value ||
+        stream.word_count() > static_cast<std::size_t>(
+            (std::numeric_limits<std::uint32_t>::max)()) ||
+        stream.directive_count() > static_cast<std::size_t>(
+            (std::numeric_limits<std::uint32_t>::max)())) {
         return server_status::project_configuration_invalid;
     }
 
-    const auto index =
-        static_cast<std::size_t>(
-            file.value() - 1);
+    lexical_record* record = nullptr;
+    lexical_directive_record* directive_record = nullptr;
 
-    if (index >= record_count) {
-        return server_status::project_artifact_invalid;
+    if (baseline.valid() && file.value() <= baseline_file_count) {
+        std::size_t replacement = 0;
+        if (!find_replacement(file, replacement)) {
+            return server_status::project_configuration_invalid;
+        }
+
+        record = &replacements[replacement].lexical;
+        directive_record = &replacements[replacement].directives;
+    }
+    else {
+        std::size_t index = 0;
+        if (!local_index(file, index)) {
+            return server_status::project_artifact_invalid;
+        }
+
+        record = &records[index];
+        directive_record = &directive_records[index];
     }
 
-    if (records[index].available()) {
+    if (record->available()) {
         return server_status::project_configuration_invalid;
     }
 
-    auto& arena =
-        arena_values[arena_index];
-
-    const auto values =
-        stream.words();
-
-    const auto anchors =
-        stream.directives();
-
-    const auto max_u32 =
-        static_cast<std::size_t>(
-            (std::numeric_limits<std::uint32_t>::max)());
+    auto& arena = arena_values[arena_index];
+    const auto values = stream.words();
+    const auto anchors = stream.directives();
+    const auto max_u32 = static_cast<std::size_t>(
+        (std::numeric_limits<std::uint32_t>::max)());
 
     if (arena.word_count > max_u32 ||
-        values.size() >
-            max_u32 - arena.word_count ||
+        values.size() > max_u32 - arena.word_count ||
         arena.directive_count > max_u32 ||
-        anchors.size() >
-            max_u32 - arena.directive_count) {
-
+        anchors.size() > max_u32 - arena.directive_count) {
         return server_status::io_error;
     }
 
-    const auto required_words =
-        arena.word_count +
-        values.size();
+    const auto required_words = arena.word_count + values.size();
+    const auto required_directives = arena.directive_count + anchors.size();
 
-    const auto required_directives =
-        arena.directive_count +
-        anchors.size();
-
-    const auto words_ready =
-        ensure_words(
-            arena,
-            required_words);
-
+    const auto words_ready = ensure_words(arena, required_words);
     if (!succeeded(words_ready)) {
         return words_ready;
     }
 
-    const auto directives_ready =
-        ensure_directives(
-            arena,
-            required_directives);
-
+    const auto directives_ready = ensure_directives(arena, required_directives);
     if (!succeeded(directives_ready)) {
         return directives_ready;
     }
 
-    const auto word_offset =
-        static_cast<std::uint32_t>(
-            arena.word_count);
-
-    const auto directive_offset =
-        static_cast<std::uint32_t>(
-            arena.directive_count);
+    const auto word_offset = static_cast<std::uint32_t>(arena.word_count);
+    const auto directive_offset = static_cast<std::uint32_t>(arena.directive_count);
 
     if (!values.empty()) {
-        std::copy(
-            values.begin(),
-            values.end(),
-            arena.words.get() +
-                arena.word_count);
+        std::copy(values.begin(), values.end(), arena.words.get() + arena.word_count);
     }
 
     if (!anchors.empty()) {
         std::copy(
             anchors.begin(),
             anchors.end(),
-            arena.directives.get() +
-                arena.directive_count);
+            arena.directives.get() + arena.directive_count);
     }
 
-    arena.word_count =
-        required_words;
+    arena.word_count = required_words;
+    arena.directive_count = required_directives;
 
-    arena.directive_count =
-        required_directives;
-
-    records[index] = {
+    *record = {
         arena_index,
         word_offset,
-        static_cast<std::uint32_t>(
-            values.size()),
+        static_cast<std::uint32_t>(values.size()),
         stream.token_count(),
     };
 
-    directive_records[index] = {
+    *directive_record = {
         directive_offset,
-        static_cast<std::uint32_t>(
-            anchors.size()),
+        static_cast<std::uint32_t>(anchors.size()),
     };
 
     return server_status::success;
 }
 
-bool lexical_generation::contains(
-    file_id file) const noexcept {
-
+bool lexical_generation::contains(file_id file) const noexcept {
     if (!file) {
         return false;
     }
 
-    const auto index =
-        static_cast<std::size_t>(
-            file.value() - 1);
+    if (baseline.valid() && file.value() <= baseline_file_count) {
+        std::size_t replacement = 0;
+        if (find_replacement(file, replacement)) {
+            return replacements[replacement].lexical.available();
+        }
 
-    return index < record_count &&
-        records[index].available();
+        lexical_file_view state;
+        return baseline.file(file, state) && state.available;
+    }
+
+    std::size_t index = 0;
+    return local_index(file, index) && records[index].available();
 }
 
-std::span<const std::uint32_t>
-lexical_generation::words(
-    file_id file) const noexcept {
-
-    if (!contains(file)) {
+lexical_word_view lexical_generation::words(file_id file) const noexcept {
+    if (!file) {
         return {};
     }
 
-    const auto& record =
-        records[
-            file.value() - 1];
+    if (baseline.valid() && file.value() <= baseline_file_count) {
+        std::size_t replacement = 0;
+        if (find_replacement(file, replacement)) {
+            const auto& record = replacements[replacement].lexical;
+            if (!record.available() ||
+                record.word_count == 0 ||
+                record.arena >= arena_count_value) {
+                return {};
+            }
 
-    if (record.word_count == 0) {
+            const auto& arena = arena_values[record.arena];
+            if (record.word_offset > arena.word_count ||
+                record.word_count > arena.word_count - record.word_offset) {
+                return {};
+            }
+
+            return lexical_word_view::from_native(
+                std::span<const std::uint32_t>{
+                    arena.words.get() + record.word_offset,
+                    record.word_count});
+        }
+
+        lexical_file_view state;
+        return baseline.file(file, state) && state.available
+            ? state.words
+            : lexical_word_view{};
+    }
+
+    std::size_t index = 0;
+    if (!local_index(file, index)) {
         return {};
     }
 
-    if (record.arena >=
-        arena_count_value) {
-
+    const auto& record = records[index];
+    if (!record.available() ||
+        record.word_count == 0 ||
+        record.arena >= arena_count_value) {
         return {};
     }
 
-    const auto& arena =
-        arena_values[
-            record.arena];
-
-    if (record.word_offset >
-            arena.word_count ||
-        record.word_count >
-            arena.word_count -
-                record.word_offset) {
-
+    const auto& arena = arena_values[record.arena];
+    if (record.word_offset > arena.word_count ||
+        record.word_count > arena.word_count - record.word_offset) {
         return {};
     }
 
-    return {
-        arena.words.get() +
-            record.word_offset,
-        record.word_count,
-    };
+    return lexical_word_view::from_native(
+        std::span<const std::uint32_t>{
+            arena.words.get() + record.word_offset,
+            record.word_count});
 }
 
-std::span<const lexical_directive_anchor>
-lexical_generation::directives(
-    file_id file) const noexcept {
-
-    if (!contains(file)) {
+lexical_directive_view lexical_generation::directives(file_id file) const noexcept {
+    if (!file) {
         return {};
     }
 
-    const auto index =
-        static_cast<std::size_t>(
-            file.value() - 1);
+    if (baseline.valid() && file.value() <= baseline_file_count) {
+        std::size_t replacement = 0;
+        if (find_replacement(file, replacement)) {
+            const auto& value = replacements[replacement];
+            const auto& record = value.lexical;
+            const auto& directive = value.directives;
 
-    const auto& record =
-        records[index];
+            if (!record.available() ||
+                directive.count == 0 ||
+                record.arena >= arena_count_value) {
+                return {};
+            }
 
-    const auto& directive =
-        directive_records[index];
+            const auto& arena = arena_values[record.arena];
+            if (directive.offset > arena.directive_count ||
+                directive.count > arena.directive_count - directive.offset) {
+                return {};
+            }
 
-    if (directive.count == 0) {
+            return lexical_directive_view::from_native(
+                std::span<const lexical_directive_anchor>{
+                    arena.directives.get() + directive.offset,
+                    directive.count});
+        }
+
+        lexical_file_view state;
+        return baseline.file(file, state) && state.available
+            ? state.directives
+            : lexical_directive_view{};
+    }
+
+    std::size_t index = 0;
+    if (!local_index(file, index)) {
         return {};
     }
 
-    if (record.arena >=
-        arena_count_value) {
+    const auto& record = records[index];
+    const auto& directive = directive_records[index];
 
+    if (!record.available() ||
+        directive.count == 0 ||
+        record.arena >= arena_count_value) {
         return {};
     }
 
-    const auto& arena =
-        arena_values[
-            record.arena];
-
-    if (directive.offset >
-            arena.directive_count ||
-        directive.count >
-            arena.directive_count -
-                directive.offset) {
-
+    const auto& arena = arena_values[record.arena];
+    if (directive.offset > arena.directive_count ||
+        directive.count > arena.directive_count - directive.offset) {
         return {};
     }
 
-    return {
-        arena.directives.get() +
-            directive.offset,
-        directive.count,
-    };
+    return lexical_directive_view::from_native(
+        std::span<const lexical_directive_anchor>{
+            arena.directives.get() + directive.offset,
+            directive.count});
 }
 
-std::uint32_t lexical_generation::token_count(
-    file_id file) const noexcept {
-
-    if (!contains(file)) {
+std::uint32_t lexical_generation::token_count(file_id file) const noexcept {
+    if (!file) {
         return 0;
     }
 
-    return records[
-        file.value() - 1]
-        .token_count;
+    if (baseline.valid() && file.value() <= baseline_file_count) {
+        std::size_t replacement = 0;
+        if (find_replacement(file, replacement)) {
+            const auto& record = replacements[replacement].lexical;
+            return record.available() ? record.token_count : 0;
+        }
+
+        lexical_file_view state;
+        return baseline.file(file, state) && state.available
+            ? state.token_count
+            : 0;
+    }
+
+    std::size_t index = 0;
+    return local_index(file, index) && records[index].available()
+        ? records[index].token_count
+        : 0;
 }
 
 }

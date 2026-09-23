@@ -52,6 +52,7 @@ public:
     source_save_view source;
     file_context files;
     database_view database;
+    lexical_generation lexical;
     compiled_project_view compiled;
 
     string_table strings;

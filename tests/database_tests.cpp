@@ -306,6 +306,75 @@ void test_direct_database(
             persisted.bytes()) ==
                 database_image_result::success,
         "bind and validate persisted database mmap");
+
+    lexical_generation build_lexical;
+
+    tests.expect(
+        succeeded(
+            build_lexical.bind_baseline(
+                persisted_view.lexical_baseline(),
+                1)) &&
+        build_lexical.baseline_bound() &&
+        build_lexical.size() == persisted_view.file_count() &&
+        build_lexical.contains(header) &&
+        !build_lexical.contains(project),
+        "BUILD lexical generation binds database mmap without dense records");
+
+    const auto baseline_words = build_lexical.words(header);
+    const auto baseline_directives = build_lexical.directives(header);
+
+    tests.expect(
+        baseline_words.size() == lexical.words(header).size() &&
+        baseline_directives.size() == lexical.directives(header).size() &&
+        build_lexical.token_count(header) == lexical.token_count(header) &&
+        !baseline_words.empty() &&
+        baseline_words[0] == lexical.words(header)[0],
+        "BUILD lexical baseline reads persisted words and directives directly");
+
+    tests.expect(
+        succeeded(build_lexical.begin_replacement(header)) &&
+        !build_lexical.contains(header),
+        "BUILD lexical replacement masks stale baseline before publish");
+
+    constexpr std::string_view replacement_source{
+        "struct B { long value; };\n"};
+
+    lexical_stream replacement_stream;
+    lexical_error replacement_error;
+
+    tests.expect(
+        succeeded(
+            lexer::tokenize(
+                header,
+                replacement_source,
+                replacement_stream,
+                &replacement_error)) &&
+        succeeded(
+            build_lexical.publish(
+                header,
+                0,
+                replacement_stream)) &&
+        build_lexical.contains(header) &&
+        build_lexical.token_count(header) == replacement_stream.token_count(),
+        "BUILD lexical replacement publishes sparse native overlay");
+
+    database_layout replacement_layout;
+
+    tests.expect(
+        prepare_database_layout(
+            files,
+            build_lexical,
+            replacement_layout) ==
+                database_image_result::success &&
+        replacement_layout.size() != 0,
+        "database layout reads merged baseline and sparse lexical overlay");
+
+    tests.expect(
+        succeeded(
+            build_lexical.extend(
+                persisted_view.file_count() + 1)) &&
+        build_lexical.size() == persisted_view.file_count() + 1,
+        "BUILD lexical generation appends one local record without baseline copy");
 }
 
 }

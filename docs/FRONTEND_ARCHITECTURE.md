@@ -990,6 +990,22 @@ BUILD must preserve deterministic identity assignment. Identity-producing
 publication remains owned by deterministic construction order; worker count must
 not change `file_id`, `string_id`, or `identity_ref` values.
 
+`lexical_generation` now has two storage modes:
+
+```text
+REBUILD
+    fresh dense native records + lane arenas
+
+BUILD
+    immutable database.bin lexical baseline
+    + sparse replacement records
+    + append-only records for new file_id values
+```
+
+The frontend reads both through alignment/endian-safe lexical value views.
+`begin_replacement(file_id)` masks the persisted entry before lexing, so failed
+or incomplete replacement work cannot silently fall back to stale tokens.
+
 ## Include Guards
 
 Example:

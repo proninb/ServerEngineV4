@@ -1,6 +1,7 @@
 #include "project_build.hpp"
 
 #include "project_lifecycle_context.hpp"
+#include "construction/execution_lanes.hpp"
 #include "project_configuration_manifest_store.hpp"
 #include "persistence/project_artifact.hpp"
 #include "../diagnostics/diagnostic_builder.hpp"
@@ -453,6 +454,28 @@ server_status build_project(
             return server_status::project_artifact_invalid;
         }
 
+        const auto lexical_bound =
+            context.lexical.bind_baseline(
+                context.database.lexical_baseline(),
+                execution_lane_capacity());
+
+        if (!succeeded(lexical_bound) ||
+            context.lexical.size() != context.database.file_count()) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_database_invalid,
+                    operation)
+                    .file(layout.database)
+                    .detail(
+                        "Committed database.bin could not initialize mmap-backed BUILD lexical baseline")
+                    .build());
+
+            return succeeded(lexical_bound)
+                ? server_status::project_artifact_invalid
+                : lexical_bound;
+        }
+
         database_bound = true;
     }
 
@@ -491,13 +514,18 @@ server_status build_project(
             ", database_mapped=" +
             std::to_string(
                 database_bound ? 1 : 0) +
+            ", lexical_baseline=" +
+            std::to_string(
+                context.lexical.baseline_bound()
+                    ? context.lexical.size()
+                    : 0) +
             ", baseline_strings=" +
             std::to_string(
                 context.compiled.string_count()) +
             ", baseline_identities=" +
             std::to_string(
                 context.compiled.identity_count()) +
-            "; sparse File Context mutation, lexical replacement/reuse, affected frontend/Parser/Semantic reconstruction, and final G construction are not implemented yet";
+            "; sparse physical mutation, affected lexical replacement, Parser/Semantic reconstruction, and final G construction are not implemented yet";
     }
     catch (...) {
         return server_status::io_error;

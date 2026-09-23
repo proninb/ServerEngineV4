@@ -297,50 +297,6 @@ static_assert(sizeof(persisted_lexical_record) == 24);
 
 }
 
-std::uint32_t database_word_view::operator[](
-    std::size_t index) const noexcept {
-
-    if (index >= count) {
-        return 0;
-    }
-
-    std::size_t offset =
-        index * sizeof(std::uint32_t);
-
-    std::uint32_t value = 0;
-
-    return read_u32(bytes, offset, value)
-        ? value
-        : 0;
-}
-
-lexical_directive_anchor
-database_directive_view::operator[](
-    std::size_t index) const noexcept {
-
-    lexical_directive_anchor output;
-
-    if (index >= count) {
-        return output;
-    }
-
-    std::size_t offset =
-        index * sizeof(lexical_directive_anchor);
-
-    if (!read_u32(
-            bytes,
-            offset,
-            output.word_offset) ||
-        !read_u32(
-            bytes,
-            offset,
-            output.source_base)) {
-        return {};
-    }
-
-    return output;
-}
-
 void database_view::reset() noexcept {
     *this = {};
 }
@@ -588,14 +544,13 @@ bool database_view::file(
             record.word_offset) *
             sizeof(std::uint32_t);
 
-    output.words.bytes =
-        bytes.subspan(
-            word_begin,
-            static_cast<std::size_t>(
-                record.word_count) *
-                sizeof(std::uint32_t));
-    output.words.count =
-        record.word_count;
+    output.words =
+        lexical_word_view::from_encoded(
+            bytes.subspan(
+                word_begin,
+                static_cast<std::size_t>(
+                    record.word_count) *
+                    sizeof(std::uint32_t)));
 
     const auto directive_begin =
         lexical_directives_offset +
@@ -603,16 +558,39 @@ bool database_view::file(
             record.directive_offset) *
             sizeof(lexical_directive_anchor);
 
-    output.directives.bytes =
-        bytes.subspan(
-            directive_begin,
-            static_cast<std::size_t>(
-                record.directive_count) *
-                sizeof(lexical_directive_anchor));
-    output.directives.count =
-        record.directive_count;
+    output.directives =
+        lexical_directive_view::from_encoded(
+            bytes.subspan(
+                directive_begin,
+                static_cast<std::size_t>(
+                    record.directive_count) *
+                    sizeof(lexical_directive_anchor)));
 
     return true;
+}
+
+lexical_baseline_view database_view::lexical_baseline() const noexcept {
+    lexical_baseline_view output;
+
+    if (!valid()) {
+        return output;
+    }
+
+    output.context = this;
+    output.file_count_value = file_count_value;
+    output.reader = read_lexical_baseline;
+    return output;
+}
+
+bool database_view::read_lexical_baseline(
+    const void* context,
+    file_id file,
+    lexical_file_view& output) noexcept {
+
+    output = {};
+
+    return context != nullptr &&
+        static_cast<const database_view*>(context)->file(file, output);
 }
 
 database_image_result prepare_database_layout(

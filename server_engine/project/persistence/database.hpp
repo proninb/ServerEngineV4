@@ -63,48 +63,7 @@ private:
         std::span<std::byte>) noexcept;
 };
 
-class database_word_view final {
-public:
-    database_word_view() noexcept = default;
-
-    [[nodiscard]] std::size_t size() const noexcept {
-        return count;
-    }
-
-    [[nodiscard]] std::uint32_t operator[](
-        std::size_t index) const noexcept;
-
-private:
-    friend class database_view;
-
-    std::span<const std::byte> bytes;
-    std::size_t count = 0;
-};
-
-class database_directive_view final {
-public:
-    database_directive_view() noexcept = default;
-
-    [[nodiscard]] std::size_t size() const noexcept {
-        return count;
-    }
-
-    [[nodiscard]] lexical_directive_anchor operator[](
-        std::size_t index) const noexcept;
-
-private:
-    friend class database_view;
-
-    std::span<const std::byte> bytes;
-    std::size_t count = 0;
-};
-
-struct database_lexical_file_view final {
-    bool available = false;
-    std::uint32_t token_count = 0;
-    database_word_view words;
-    database_directive_view directives;
-};
+using database_lexical_file_view = lexical_file_view;
 
 // O(1) read-only mmap view used by BUILD. bind() validates fixed metadata and
 // section geometry only; checksum/content scans stay on cold verification paths.
@@ -132,7 +91,14 @@ public:
         file_id id,
         database_lexical_file_view& output) const noexcept;
 
+    [[nodiscard]] lexical_baseline_view lexical_baseline() const noexcept;
+
 private:
+    [[nodiscard]] static bool read_lexical_baseline(
+        const void* context,
+        file_id file,
+        lexical_file_view& output) noexcept;
+
     friend database_image_result validate_database_image(
         std::span<const std::byte>) noexcept;
 
