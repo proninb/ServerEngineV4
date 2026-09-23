@@ -1,11 +1,10 @@
 /*
  * Final Project source provenance map.
  *
- * source_map stores unique physical/data contributions with uint32 root ownership
- * and file indexes, while preserving
- * the physical file_id that supplied each declaration/object/link token. G stays
- * free of file ownership. A compact reverse file index answers "what data is in
- * this physical file" without duplicating semantic payload.
+ * source_map owns root-contiguous semantic contributions. Every contribution
+ * records the physical file_id that supplied the semantic datum. The physical
+ * file projection is a secondary uint32 index over the same records; G remains
+ * free of file ownership.
  */
 #pragma once
 
@@ -30,6 +29,7 @@ enum class source_data_kind : std::uint8_t {
     link = 3,
 };
 
+// Compact reference to one semantic datum in G used by source provenance.
 class source_data_ref final {
   public:
     constexpr source_data_ref() noexcept = default;
@@ -52,6 +52,7 @@ class source_data_ref final {
     [[nodiscard]] static constexpr source_data_ref type_declaration(identity_ref id) noexcept {
         return type(id, false);
     }
+
     [[nodiscard]] static constexpr source_data_ref type_definition(identity_ref id) noexcept {
         return type(id, true);
     }
@@ -130,11 +131,13 @@ struct source_contribution_record final {
 
 static_assert(sizeof(source_contribution_record) == 8);
 
+// Read-only physical-file projection over canonical root-owned contributions.
 class source_map_file_view final {
   public:
     [[nodiscard]] bool empty() const noexcept {
         return indices.empty();
     }
+
     [[nodiscard]] std::size_t size() const noexcept {
         return indices.size();
     }
@@ -161,59 +164,75 @@ class source_map_file_view final {
 struct source_type_presence final {
     std::uint32_t declarations = 0;
     std::uint32_t definitions = 0;
-    friend bool operator==(const source_type_presence &, const source_type_presence &) = default;
+
+    friend bool operator==(const source_type_presence&, const source_type_presence&) = default;
 };
+
 static_assert(sizeof(source_type_presence) == 8);
 
-// All indices are zero-based contribution IDs. Only the construction indexes
-// below are mutable hash tables; none survive in the persisted representation.
+// Owns root-contiguous provenance and derives the physical-file secondary index
+// plus BUILD semantic-presence counters after Parser/Semantic construction.
 class source_map final {
   public:
     [[nodiscard]] server_status reset(std::size_t file_count = 0) noexcept;
     [[nodiscard]] server_status begin_root(file_id root) noexcept;
     [[nodiscard]] server_status add(file_id file, source_data_ref data) noexcept;
     [[nodiscard]] server_status end_root() noexcept;
-    [[nodiscard]] server_status finalize(std::size_t file_count, const graph &G) noexcept;
+    [[nodiscard]] server_status finalize(
+        std::size_t file_count,
+        const identity_space& identities,
+        const graph& G) noexcept;
+
     [[nodiscard]] bool finalized() const noexcept {
         return finalized_value;
     }
-    [[nodiscard]] source_map_file_view root(file_id id) const noexcept;
-    [[nodiscard]] bool file(file_id id, source_map_file_view &output) const noexcept;
+
+    [[nodiscard]] std::span<const source_contribution_record> root(file_id id) const noexcept;
+    [[nodiscard]] bool file(file_id id, source_map_file_view& output) const noexcept;
+
     [[nodiscard]] std::span<const source_map_range> root_entries() const noexcept {
         return root_ranges;
     }
+
     [[nodiscard]] std::span<const source_map_range> file_entries() const noexcept {
         return file_ranges;
     }
+
     [[nodiscard]] std::span<const source_contribution_record>
     contribution_entries() const noexcept {
         return contributions;
     }
-    [[nodiscard]] std::span<const std::uint32_t> root_index_entries() const noexcept {
-        return root_indices;
-    }
+
     [[nodiscard]] std::span<const std::uint32_t> file_index_entries() const noexcept {
         return file_indices;
     }
+
     [[nodiscard]] std::span<const source_type_presence> type_presence_entries() const noexcept {
         return type_presence;
     }
+
     [[nodiscard]] std::span<const std::uint32_t> object_presence_entries() const noexcept {
         return object_presence;
     }
+
     [[nodiscard]] std::span<const std::uint32_t> link_presence_entries() const noexcept {
         return link_presence;
     }
 
   private:
-    std::vector<source_map_range> root_ranges, file_ranges;
+    std::vector<source_map_range> root_ranges;
+    std::vector<source_map_range> file_ranges;
     std::vector<source_contribution_record> contributions;
-    std::vector<std::uint32_t> root_indices, file_indices;
+    std::vector<std::uint32_t> file_indices;
     std::vector<source_type_presence> type_presence;
-    std::vector<std::uint32_t> object_presence, link_presence;
-    std::unordered_map<std::uint64_t, std::uint32_t> canonical;
+    std::vector<std::uint32_t> object_presence;
+    std::vector<std::uint32_t> link_presence;
+
+    // Root-local only: repeated inclusion does not create duplicate ownership,
+    // and a definition replaces a declaration in the same root/file pair.
     std::unordered_map<std::uint64_t, std::uint32_t> root_seen;
     std::vector<bool> completed_roots;
+
     file_id active_root{};
     std::uint32_t active_root_begin = 0;
     bool finalized_value = false;

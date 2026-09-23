@@ -23,12 +23,12 @@
 
 namespace cw::server {
 
-inline constexpr std::uint32_t compiled_project_format_version = 2;
+inline constexpr std::uint32_t compiled_project_format_version = 3;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;
 
-inline constexpr std::size_t compiled_project_directory_count = 22;
+inline constexpr std::size_t compiled_project_directory_count = 21;
 
 inline constexpr std::size_t
 compiled_project_directory_entry_size = 32;
@@ -60,10 +60,9 @@ enum class compiled_project_section : std::uint32_t {
     assign_bytes = 16,
     source_contributions = 17,
     source_roots = 18,
-    source_root_indices = 19,
-    source_files = 20,
-    source_file_indices = 21,
-    source_paths = 22,
+    source_files = 19,
+    source_file_indices = 20,
+    source_paths = 21,
 };
 
 enum class compiled_project_image_result : std::uint8_t {
@@ -248,7 +247,6 @@ public:
                                    std::string_view &path,
                                    file_kind &kind,
                                    source_map_range &output) const noexcept;
-    [[nodiscard]] bool source_root_index(std::uint32_t index, std::uint32_t &output) const noexcept;
     [[nodiscard]] bool source_file_index(std::uint32_t index, std::uint32_t &output) const noexcept;
     [[nodiscard]] compiled_project_image_result verify_sources() const noexcept;
 

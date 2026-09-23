@@ -517,11 +517,14 @@ void test_parser_provenance(test_state &tests) {
                      files, lexical, 2, configuration, strings, identities, G, sources, &failure)),
                  "parse shared discovered include");
     tests.expect(files.size() == 3 && sources.finalized() && sources.file_entries().size() == 3 &&
-                     sources.contribution_entries().size() == 1 &&
-                     sources.root_index_entries().size() == 2 &&
+                     sources.contribution_entries().size() == 2 &&
+                     sources.file_index_entries().size() == 2 &&
+                     sources.root(file_id{1}).size() == 1 &&
+                     sources.root(file_id{2}).size() == 1 &&
                      sources.contribution_entries()[0].file == file_id{3} &&
+                     sources.contribution_entries()[1].file == file_id{3} &&
                      sources.type_presence_entries()[0] == source_type_presence{2, 2},
-                 "parser finalizes after include discovery and deduplicates physical provenance");
+                 "parser preserves root-owned provenance for a shared physical include");
     const auto rejected = [&](std::string_view initial, std::string_view conflict,
                               std::size_t expected_contributions) {
         const temporary_source child{"conflict_provenance", conflict};

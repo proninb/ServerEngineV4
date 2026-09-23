@@ -502,7 +502,6 @@ void write_u64(
         return 8;
     case compiled_project_section::source_files:
         return 20;
-    case compiled_project_section::source_root_indices:
     case compiled_project_section::source_file_indices:
         return 4;
     }
@@ -1026,8 +1025,6 @@ compiled_project_view::bind(
         candidate[section_index(compiled_project_section::source_roots)].count != source_count ||
         candidate[section_index(compiled_project_section::source_file_indices)].count !=
             contribution_count ||
-        candidate[section_index(compiled_project_section::source_root_indices)].count >
-            UINT32_MAX ||
         candidate[section_index(compiled_project_section::source_paths)].count > UINT32_MAX)
         return compiled_project_image_result::invalid_image;
 
@@ -3135,7 +3132,6 @@ prepare_compiled_project_layout(const string_table &strings,
         },
         {compiled_project_section::source_contributions, 8, sources.contribution_entries().size()},
         {compiled_project_section::source_roots, 8, sources.root_entries().size()},
-        {compiled_project_section::source_root_indices, 4, sources.root_index_entries().size()},
         {compiled_project_section::source_files, 20, files.size()},
         {compiled_project_section::source_file_indices, 4, sources.file_index_entries().size()},
         {compiled_project_section::source_paths, 1, source_path_bytes},
@@ -4034,8 +4030,6 @@ encode_compiled_project_image(const string_table &strings,
         count(compiled_project_section::source_roots) != sources.root_entries().size() ||
         count(compiled_project_section::source_contributions) !=
             sources.contribution_entries().size() ||
-        count(compiled_project_section::source_root_indices) !=
-            sources.root_index_entries().size() ||
         count(compiled_project_section::source_file_indices) != sources.file_index_entries().size())
         return compiled_project_image_result::invalid_state;
     auto *contributions_data = section_data(compiled_project_section::source_contributions);
@@ -4056,7 +4050,6 @@ encode_compiled_project_image(const string_table &strings,
         for (std::size_t i = 0; i < values.size(); ++i)
             write_u32(data + i * 4, values[i]);
     };
-    write_indices(compiled_project_section::source_root_indices, sources.root_index_entries());
     write_indices(compiled_project_section::source_file_indices, sources.file_index_entries());
     auto *file_data = section_data(compiled_project_section::source_files);
     auto *path_data = section_data(compiled_project_section::source_paths);
@@ -4284,7 +4277,7 @@ bool compiled_project_view::source_root(file_id root, source_map_range &output) 
         return false;
     const auto *data = values.data + static_cast<std::size_t>(root.value() - 1) * 8;
     output = {read_u32(data), read_u32(data + 4)};
-    const auto count = section(compiled_project_section::source_root_indices).count;
+    const auto count = section(compiled_project_section::source_contributions).count;
     return output.begin <= count && output.count <= count - output.begin;
 }
 bool compiled_project_view::source_file(file_id file,
@@ -4309,15 +4302,6 @@ bool compiled_project_view::source_file(file_id file,
     const auto count = section(compiled_project_section::source_file_indices).count;
     return output.begin <= count && output.count <= count - output.begin;
 }
-bool compiled_project_view::source_root_index(std::uint32_t index,
-                                              std::uint32_t &output) const noexcept {
-    output = 0;
-    const auto &values = section(compiled_project_section::source_root_indices);
-    if (!valid() || index >= values.count)
-        return false;
-    output = read_u32(values.data + static_cast<std::size_t>(index) * 4);
-    return output < source_contribution_count();
-}
 bool compiled_project_view::source_file_index(std::uint32_t index,
                                               std::uint32_t &output) const noexcept {
     output = 0;
@@ -4328,88 +4312,192 @@ bool compiled_project_view::source_file_index(std::uint32_t index,
     return output < source_contribution_count();
 }
 compiled_project_image_result compiled_project_view::verify_sources() const noexcept {
-    if (!valid())
+
+    if (!valid()) {
         return compiled_project_image_result::invalid_state;
-    constexpr auto invalid = compiled_project_image_result::invalid_image;
+    }
+
+    constexpr auto invalid =
+        compiled_project_image_result::invalid_image;
+
     try {
-        std::unordered_set<std::uint64_t> unique;
-        std::vector<bool> owned(source_contribution_count()), physical(source_contribution_count());
-        std::vector<bool> root_positions(
-            static_cast<std::size_t>(section(compiled_project_section::source_root_indices).count));
-        for (std::uint32_t i = 0; i < source_contribution_count(); ++i) {
-            source_contribution_record c;
-            if (!source_contribution(i, c) ||
-                !unique.insert((std::uint64_t{c.file.value()} << 32) | c.data.raw()).second)
+        const auto contribution_count =
+            source_contribution_count();
+
+        std::vector<bool> owned(contribution_count);
+        std::vector<bool> physical(contribution_count);
+
+        for (std::size_t index = 0;
+             index < contribution_count;
+             ++index) {
+
+            source_contribution_record contribution;
+
+            if (!source_contribution(
+                    static_cast<std::uint32_t>(index),
+                    contribution)) {
+
                 return invalid;
-            if (c.data.kind() == source_data_kind::link) {
+            }
+
+            if (contribution.data.kind() == source_data_kind::link) {
                 link_record entry;
-                if (!link(link_from_raw(c.data.slot()), entry))
+
+                if (!link(
+                        link_from_raw(contribution.data.slot()),
+                        entry)) {
+
                     return invalid;
-            } else {
-                const auto id = identity_at_slot(c.data.slot());
-                if (c.data.kind() == source_data_kind::object) {
-                    if (!id || id.kind() != identity_kind::object || !find_object(id))
-                        return invalid;
-                } else {
-                    type_entry entry;
-                    if (!id || id.kind() != identity_kind::type || !type(find_type(id), entry) ||
-                        (c.data.kind() == source_data_kind::type_definition && !entry.defined()))
-                        return invalid;
                 }
+
+                continue;
+            }
+
+            const auto identity =
+                identity_at_slot(contribution.data.slot());
+
+            if (contribution.data.kind() == source_data_kind::object) {
+                if (!identity ||
+                    identity.kind() != identity_kind::object ||
+                    !find_object(identity)) {
+
+                    return invalid;
+                }
+
+                continue;
+            }
+
+            type_entry entry;
+
+            if (!identity ||
+                identity.kind() != identity_kind::type ||
+                !type(find_type(identity), entry) ||
+                (contribution.data.kind() == source_data_kind::type_definition &&
+                 !entry.defined())) {
+
+                return invalid;
             }
         }
-        std::uint64_t path_cursor = 0, file_cursor = 0;
-        for (std::uint32_t i = 0; i < source_file_count(); ++i) {
-            const file_id file{i + 1};
-            source_map_range root_range, file_range;
+
+        std::uint64_t path_cursor = 0;
+        std::uint64_t file_cursor = 0;
+
+        for (std::size_t index = 0;
+             index < source_file_count();
+             ++index) {
+
+            const file_id file{
+                static_cast<std::uint32_t>(
+                    index + 1)};
+
+            source_map_range root_range;
+            source_map_range file_range;
             std::string_view path;
             file_kind kind;
-            if (!source_root(file, root_range) || !source_file(file, path, kind, file_range))
+
+            if (!source_root(file, root_range) ||
+                !source_file(file, path, kind, file_range)) {
+
                 return invalid;
-            const auto *record =
-                section(compiled_project_section::source_files).data + std::size_t{i} * 20;
-            if (read_u32(record + 4) != path_cursor || file_range.begin != file_cursor)
+            }
+
+            const auto* record =
+                section(compiled_project_section::source_files).data +
+                index * 20;
+
+            if (read_u32(record + 4) != path_cursor ||
+                file_range.begin != file_cursor) {
+
                 return invalid;
+            }
+
             path_cursor += path.size();
             file_cursor += file_range.count;
+
             std::filesystem::path native;
-            if (filesystem_path_from_utf8(path, native) != filesystem_path_result::success)
+
+            if (filesystem_path_from_utf8(path, native) !=
+                filesystem_path_result::success) {
+
                 return invalid;
-            if ((root_range.count || file_range.count) && kind != file_kind::header &&
-                kind != file_kind::source)
-                return invalid;
-            std::unordered_set<std::uint64_t> root_semantics;
-            for (std::uint32_t j = 0; j < root_range.count; ++j) {
-                const auto position = root_range.begin + j;
-                std::uint32_t id;
-                source_contribution_record c;
-                if (root_positions[position] || !source_root_index(position, id) ||
-                    !source_contribution(id, c))
-                    return invalid;
-                root_positions[position] = true;
-                owned[id] = true;
-                const auto data = c.data.kind() == source_data_kind::type_definition ? c.data.slot()
-                                                                                     : c.data.raw();
-                if (!root_semantics.insert((std::uint64_t{c.file.value()} << 32) | data).second)
-                    return invalid;
             }
-            for (std::uint32_t j = 0; j < file_range.count; ++j) {
-                std::uint32_t id;
-                source_contribution_record c;
-                if (!source_file_index(file_range.begin + j, id) || !source_contribution(id, c) ||
-                    c.file != file || physical[id])
+
+            if ((root_range.count || file_range.count) &&
+                kind != file_kind::header &&
+                kind != file_kind::source) {
+
+                return invalid;
+            }
+
+            std::unordered_set<std::uint64_t> root_semantics;
+
+            for (std::uint32_t offset = 0;
+                 offset < root_range.count;
+                 ++offset) {
+
+                const auto contribution_index =
+                    root_range.begin + offset;
+
+                source_contribution_record contribution;
+
+                if (contribution_index >= contribution_count ||
+                    owned[contribution_index] ||
+                    !source_contribution(contribution_index, contribution)) {
+
                     return invalid;
-                physical[id] = true;
+                }
+
+                owned[contribution_index] = true;
+
+                const auto semantic =
+                    contribution.data.kind() == source_data_kind::type_definition
+                        ? contribution.data.slot()
+                        : contribution.data.raw();
+
+                if (!root_semantics.insert(
+                        (std::uint64_t{contribution.file.value()} << 32) |
+                        semantic)
+                         .second) {
+
+                    return invalid;
+                }
+            }
+
+            for (std::uint32_t offset = 0;
+                 offset < file_range.count;
+                 ++offset) {
+
+                std::uint32_t contribution_index = 0;
+                source_contribution_record contribution;
+
+                if (!source_file_index(
+                        file_range.begin + offset,
+                        contribution_index) ||
+                    !source_contribution(
+                        contribution_index,
+                        contribution) ||
+                    contribution.file != file ||
+                    physical[contribution_index]) {
+
+                    return invalid;
+                }
+
+                physical[contribution_index] = true;
             }
         }
-        if (path_cursor != section(compiled_project_section::source_paths).count ||
-            file_cursor != source_contribution_count() ||
+
+        if (path_cursor !=
+                section(compiled_project_section::source_paths).count ||
+            file_cursor != contribution_count ||
             std::find(owned.begin(), owned.end(), false) != owned.end() ||
-            std::find(physical.begin(), physical.end(), false) != physical.end() ||
-            std::find(root_positions.begin(), root_positions.end(), false) != root_positions.end())
+            std::find(physical.begin(), physical.end(), false) != physical.end()) {
+
             return invalid;
+        }
+
         return compiled_project_image_result::success;
-    } catch (...) {
+    }
+    catch (...) {
         return compiled_project_image_result::failed;
     }
 }

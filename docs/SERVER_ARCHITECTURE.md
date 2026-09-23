@@ -492,8 +492,9 @@ state. Runtime/Studio will obtain `physical file -> semantic data` from the
 `source.bin`; aggregate semantic presence will live beside that topology rather
 than inside G or inside individual DAG nodes.
 
-Construction provenance is already produced directly by Parser/Semantic. The
-mmap persistence sections are the next implementation slice.
+Construction provenance is produced directly by Parser/Semantic and persisted
+mmap-native in `compiled.bin`. BUILD-only semantic presence is persisted beside
+the physical topology in `source.bin`.
 
 ## Project lifecycle state machine
 
@@ -530,7 +531,7 @@ G
 
 Source Map
     semantic root -> contributions
-    physical file -> unique semantic data
+    physical file -> contribution indices
 ```
 
 Source Map is not a semantic dependency graph and does not alter the File
@@ -766,8 +767,8 @@ G
     no file_id/source_id in type/object/link records
 
 compiled.bin Source Map
-    physical file_id -> semantic data
-    semantic root -> semantic contributions
+    semantic root -> contiguous contributions
+    physical file_id -> secondary contribution index
 
 source.bin
     physical file state
@@ -794,26 +795,31 @@ Members are not duplicated in Source Map. A type definition maps to G and its
 members are queried from that type. Object type and link endpoints are likewise
 queried from G.
 
-The same physical header may execute under more than one semantic root. Source
-Map therefore canonicalizes the physical contribution once and stores two compact
-many-to-many indexes:
+The same physical header may execute under more than one semantic root. Those
+executions are distinct ownership facts even when they produce the same physical
+datum. Canonical storage is therefore:
 
 ```text
-root_file_id -> contribution_id[]
-file_id      -> contribution_id[]
+root_file_id -> contiguous contribution range
 ```
 
-The first index is sparse-BUILD ownership: replacing one affected semantic root
-removes/replaces only that root's contribution references. The second is the
-Runtime/Studio query: what semantic data physically resides in this file.
-Common-header semantic payload is not copied once per root.
+There is no global `(physical file_id, semantic datum)` canonicalization and no
+root contribution-index array. Runtime/Studio's physical query is the one
+secondary index:
+
+```text
+file_id -> contribution_id[]
+```
+
+Both views refer to the same root-owned contribution records; semantic payload is
+not copied into a second representation.
 
 The File Context DAG remains only direct file dependency topology produced by
 actual preprocessing execution. Source Map ownership is not a second semantic
 dependency DAG.
 
-`source.bin` persists only aggregate semantic presence needed to subtract/add a
-root without scanning all Source Map files:
+`source.bin` persists aggregate semantic presence needed to subtract/add root
+ownership during sparse BUILD:
 
 ```text
 type_handle   -> declaration_count, definition_count
@@ -821,5 +827,5 @@ object_handle -> producer_count
 link_handle   -> producer_count
 ```
 
-These counters are derived from root ownership and are BUILD state. They are not
-Runtime semantic payload and are not embedded in G.
+These counters are derived from root-owned contributions and are BUILD state.
+They are not Runtime semantic payload and are not embedded in G.

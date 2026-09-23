@@ -326,7 +326,7 @@ struct compiled_fixture final {
             !success(tests, fixture.sources.end_root(), "end persisted root"))
             return false;
     }
-    return tests.expect(succeeded(fixture.sources.finalize(fixture.files.size(), fixture.G)),
+    return tests.expect(succeeded(fixture.sources.finalize(fixture.files.size(), fixture.identities, fixture.G)),
                         "finalize empty Source Map fixture");
 }
 
@@ -1244,10 +1244,10 @@ void test_persisted_sources(test_state &tests, const compiled_test_image &image)
     source_map_range root, file_range;
     std::string_view path;
     file_kind kind;
-    tests.expect(view.source_file_count() == 3 && view.source_contribution_count() == 3 &&
+    tests.expect(view.source_file_count() == 3 && view.source_contribution_count() == 6 &&
                      view.source_root(file_id{1}, root) && root.count == 3 &&
                      view.source_file(file_id{2}, path, kind, file_range) &&
-                     file_range.count == 3 && path.ends_with("shared.hpp") &&
+                     file_range.count == 6 && path.ends_with("shared.hpp") &&
                      kind == file_kind::header,
                  "mapped provenance and paths without reconstruction");
     const auto corrupt = [&](compiled_project_section section,
@@ -1262,10 +1262,6 @@ void test_persisted_sources(test_state &tests, const compiled_test_image &image)
                          altered.verify_contents() == compiled_project_image_result::invalid_image,
                      name);
     };
-    corrupt(compiled_project_section::source_root_indices,
-            0,
-            UINT32_MAX,
-            "reject dangling root contribution index");
     corrupt(compiled_project_section::source_file_indices,
             4,
             0,
@@ -1288,7 +1284,7 @@ void test_persisted_sources(test_state &tests, const compiled_test_image &image)
             source_data_ref::from_raw(0xffffffffu).raw(),
             "reject nonexistent graph link");
     auto old = image.bytes;
-    write_u32(old.data() + 8, 1);
+    write_u32(old.data() + 8, 2);
     rewrite_header_crc(old);
     tests.expect(view.bind(old) == compiled_project_image_result::invalid_image,
                  "reject previous compiled format");
@@ -1308,7 +1304,7 @@ void test_source_map_provenance(test_state &tests, const compiled_fixture &fixtu
                           file_id{2}, source_data_ref::type_definition(fixture.type_identity))),
                       "Source Map shared physical contribution") ||
         !tests.expect(succeeded(sources.end_root()), "Source Map end second root") ||
-        !tests.expect(succeeded(sources.finalize(3, fixture.G)), "Source Map finalize")) {
+        !tests.expect(succeeded(sources.finalize(3, fixture.identities, fixture.G)), "Source Map finalize")) {
         return;
     }
 
@@ -1320,11 +1316,12 @@ void test_source_map_provenance(test_state &tests, const compiled_fixture &fixtu
 
     const auto presence = sources.type_presence_entries();
 
-    tests.expect(contributions.size() == 1 && sources.root_index_entries().size() == 2 &&
-                     sources.file_index_entries().size() == 1 && roots.size() == 3 &&
-                     roots[0].count == 1 && roots[2].count == 1 && files.size() == 3 &&
-                     files[1].count == 1,
-                 "Source Map canonical physical payload and dual indexes");
+    tests.expect(contributions.size() == 2 &&
+                     sources.file_index_entries().size() == 2 && roots.size() == 3 &&
+                     roots[0].begin == 0 && roots[0].count == 1 &&
+                     roots[2].begin == 1 && roots[2].count == 1 && files.size() == 3 &&
+                     files[1].count == 2,
+                 "Source Map canonical root-owned payload and physical secondary index");
 
     tests.expect(fixture.type.value() <= presence.size() &&
                      presence[fixture.type.value() - 1].declarations == 2 &&

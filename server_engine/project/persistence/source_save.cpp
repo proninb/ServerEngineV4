@@ -3271,10 +3271,8 @@ source_save_result verify_source_save_presence(const source_save_view &source,
                 !compiled.source_root(file_id{i + 1}, range))
                 return source_save_result::invalid_image;
             for (std::uint32_t j = 0; j < range.count; ++j) {
-                std::uint32_t id;
                 source_contribution_record c;
-                if (!compiled.source_root_index(range.begin + j, id) ||
-                    !compiled.source_contribution(id, c))
+                if (!compiled.source_contribution(range.begin + j, c))
                     return source_save_result::invalid_image;
                 if (c.data.kind() == source_data_kind::link) {
                     if (c.data.slot() > links.size() || !increment(links[c.data.slot() - 1]))

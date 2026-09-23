@@ -78,7 +78,7 @@ void test_root_ownership_and_file_projection(test_state &tests) {
                       "root 2 same physical definition") ||
         !tests.expect(succeeded(map.add(file_id{3}, link)), "root 2 link") ||
         !tests.expect(succeeded(map.end_root()), "end root 2") ||
-        !tests.expect(succeeded(map.finalize(3, G)), "finalize")) {
+        !tests.expect(succeeded(map.finalize(3, identities, G)), "finalize")) {
 
         return;
     }
@@ -102,9 +102,9 @@ void test_root_ownership_and_file_projection(test_state &tests) {
         return;
     }
 
-    tests.expect(file3.size() == 2, "physical file projection removes cross-root duplicate");
+    tests.expect(file3.size() == 3, "physical file projection references every root-owned contribution");
 
-    bool found_definition = false;
+    std::uint32_t definition_count = 0;
     bool found_link = false;
 
     for (std::size_t index = 0; index < file3.size(); ++index) {
@@ -117,12 +117,13 @@ void test_root_ownership_and_file_projection(test_state &tests) {
             continue;
         }
 
-        found_definition = found_definition || value.data == definition;
+        definition_count += value.data == definition ? 1u : 0u;
 
         found_link = found_link || value.data == link;
     }
 
-    tests.expect(found_definition && found_link, "file projection exposes unique semantic data");
+    tests.expect(definition_count == 2 && found_link,
+                 "file projection preserves root ownership over shared physical data");
 
     source_map_file_view file2;
 
@@ -130,8 +131,9 @@ void test_root_ownership_and_file_projection(test_state &tests) {
                  "second physical file projection");
 
     tests.expect(map.root(file_id{3}).empty(), "non-root file has empty root range");
-    tests.expect(map.contribution_entries().size() == 3 && map.root_index_entries().size() == 4,
-                 "common definition payload stored once");
+    tests.expect(map.contribution_entries().size() == 4 &&
+                     map.file_index_entries().size() == 4,
+                 "root-owned contributions are canonical storage");
     tests.expect(map.type_presence_entries()[0] == source_type_presence{2, 2},
                  "presence counts owners, not unique payloads");
     source_map many;
@@ -143,12 +145,11 @@ void test_root_ownership_and_file_projection(test_state &tests) {
                      "repeat include does not add ownership");
         tests.expect(succeeded(many.end_root()), "many roots end");
     }
-    tests.expect(succeeded(many.finalize(301, G)), "final file count includes discovered header");
-    tests.expect(many.contribution_entries().size() == 1 &&
-                     many.root_index_entries().size() == 300 &&
-                     many.file_index_entries().size() == 1 &&
+    tests.expect(succeeded(many.finalize(301, identities, G)), "final file count includes discovered header");
+    tests.expect(many.contribution_entries().size() == 300 &&
+                     many.file_index_entries().size() == 300 &&
                      many.type_presence_entries()[0].definitions == 300,
-                 "300 owners share one payload");
+                 "300 roots own 300 contiguous contributions");
     source_map mixed;
     tests.expect(succeeded(mixed.begin_root(file_id{1})) &&
                      succeeded(mixed.add(file_id{3}, declaration)) && succeeded(mixed.end_root()),
@@ -157,21 +158,21 @@ void test_root_ownership_and_file_projection(test_state &tests) {
                      succeeded(mixed.add(file_id{3}, declaration)) &&
                      succeeded(mixed.add(file_id{3}, definition)) && succeeded(mixed.end_root()),
                  "definition owner upgrades locally");
-    tests.expect(succeeded(mixed.finalize(3, G)) && mixed.contribution_entries().size() == 2 &&
+    tests.expect(succeeded(mixed.finalize(3, identities, G)) && mixed.contribution_entries().size() == 2 &&
                      mixed.root(file_id{1})[0].data == declaration &&
                      mixed.type_presence_entries()[0] == source_type_presence{2, 1},
                  "no cross-root promotion");
     source_map remaining;
     tests.expect(succeeded(remaining.begin_root(file_id{1})) &&
                      succeeded(remaining.add(file_id{3}, declaration)) &&
-                     succeeded(remaining.end_root()) && succeeded(remaining.finalize(3, G)),
+                     succeeded(remaining.end_root()) && succeeded(remaining.finalize(3, identities, G)),
                  "rebuild ownership without removed definition root");
     tests.expect(remaining.type_presence_entries()[0] == source_type_presence{1, 0},
                  "removing definition root preserves other declaration");
     source_map invalid;
     tests.expect(succeeded(invalid.begin_root(file_id{1})) &&
                      succeeded(invalid.add(file_id{3}, data(source_data_kind::link, 12345))) &&
-                     succeeded(invalid.end_root()) && !succeeded(invalid.finalize(3, G)),
+                     succeeded(invalid.end_root()) && !succeeded(invalid.finalize(3, identities, G)),
                  "reject missing Graph datum");
     source_map empty;
     tests.expect(succeeded(empty.begin_root(file_id{1})) && succeeded(empty.end_root()) &&

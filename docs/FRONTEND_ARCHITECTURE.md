@@ -887,91 +887,50 @@ reacquire their lexical span on the next decode.
 
 ## Semantic Root Source Provenance
 
-Parser/Semantic writes G directly and, in parallel, records a compact Source Map.
-This is provenance, not an intermediate semantic representation and not a
-Builder input.
-
-Ownership is by semantic root:
-
-```text
-root file_id
-    -> uint32 contribution-index range
-```
-
-Each contribution additionally records the physical file that supplied the
-semantic declaration token:
-
-```text
-{ physical file_id, semantic datum }
-```
-
-This distinction is required because one physical header can execute from more
-than one semantic root and can therefore produce different semantic identities
-under different scopes/preprocessor states.
-
-For Runtime/Studio queries, Source Map derives the reverse view once:
-
-```text
-physical file_id
-    -> contribution indices
-```
-
-The canonical semantic payload itself is not duplicated. Members are obtained
-through the contributed type definition and G.
-
-Source Map uses construction-only hash indexes for expected `O(C)` processing,
-without sorting. Persistent payload is unique by `(physical file, exact datum)`;
-both root and file projections contain only uint32 contribution IDs. A type
-definition dominates a declaration only within the same root/file pair; it must
-never promote a different root's declaration. Temporary unused entries are removed
-by finalization.
-
-Parser records provenance after successful G operations and calls
-`sources.finalize(files.size(), G)` after active include discovery. Finalization
-validates Graph references and computes presence from root ownership. `compiled.bin`
-v2 persists the unique records, both projections, and file paths/kinds; `source.bin`
-v3 stores only type/object/link presence counters beside the existing file DAG.
-
-The file dependency DAG remains only direct `file_id -> file_id` topology.
-Source provenance does not add semantic dependency edges.
-
-## Semantic Root Source Provenance
-
 Parser/Semantic writes G directly and records source provenance in parallel.
 There is no facts/Semantic-DB/Builder layer between Parser and G.
 
+Canonical ownership is root-contiguous:
+
 ```text
 semantic root file_id
-    -> root-owned contributions
+    -> contiguous contribution range
 
 contribution
     = { physical file_id, semantic datum }
 ```
 
-Per-root duplicate `(physical file_id, semantic datum)` entries collapse during
-construction. For one type in the same root/file pair, a definition dominates a
-declaration.
+The same physical/header datum contributed by two semantic roots therefore
+occupies two contribution records. They are different ownership facts even when
+their `{physical file_id, semantic datum}` payloads are equal.
+
+Within one root/file pair, repeated identical contributions collapse during
+construction. For one type in that same root/file pair, a definition dominates
+a declaration. This root-local suppression uses one construction-only lookup;
+there is no global cross-root contribution canonicalization.
 
 After all roots are parsed, `source_map::finalize()` derives the physical-file
-projection in O(F + C) without sorting. Root ownership remains unchanged, while
-the Runtime/Studio file view collapses cross-root duplicates:
+projection in O(F + C) without sorting:
 
 ```text
-root R1 -> H.hpp -> X definition
-root R2 -> H.hpp -> X definition
-
-canonical root ownership:
-    two contributions
-
-physical-file view:
-    H.hpp -> X definition
+physical file_id
+    -> uint32 contribution indices
 ```
 
-This is intentional: root multiplicity is needed by sparse BUILD, while users
-need the unique answer to "what semantic data is in this physical file?"
+That index references the canonical root-owned array and is the only Source Map
+indirection persisted for provenance queries. Finalization resolves semantic
+slots through `identity_space` + G's dense identity lookup instead of building a
+second semantic lookup table.
 
 Members are reached through the contributed type in G and are not stored again
 in Source Map.
+
+Parser records provenance only after successful G operations and calls
+`sources.finalize(files.size(), identities, G)` after active include discovery.
+Finalization validates Graph references and computes BUILD semantic presence from
+the root-owned contributions. `compiled.bin` v3 persists contributions, root
+ranges, the physical secondary index, and file paths/kinds; `source.bin` v3 stores
+only type/object/link presence counters beside the existing file DAG.
 
 The file dependency DAG remains direct `file_id -> file_id` topology only.
 Semantic provenance does not create DAG edges.
@@ -1265,8 +1224,6 @@ BUILD File Context sparse mutation over source_save_view
 BUILD per-file lexical replacement/reuse over database_view
 BUILD affected dependency replacement
 BUILD affected Parser/Semantic reconstruction into G
-compiled.bin v2 Source Map persistence/view
-source.bin v3 root-owned semantic-presence persistence/view
 BUILD successful-state persistence commit boundary
 Runtime/SHM construction
 ```

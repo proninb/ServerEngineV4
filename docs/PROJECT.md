@@ -114,10 +114,12 @@ physical file_id
     -> contribution indices
 ```
 
-That projection is unique by `(physical file_id, semantic datum)`. Repeated
-contribution of the same datum through multiple roots is retained in root
-ownership for sparse BUILD correctness but appears once in the physical-file
-view. A type definition dominates a declaration of the same type in that file.
+It is a secondary index over the same contribution records, not another
+canonicalization domain. If two semantic roots contribute the same datum from
+the same physical file, two root-owned contribution records exist and the
+physical-file view references both. Within one root/file pair repeated identical
+contributions collapse, and a type definition dominates a declaration of the
+same type.
 
 Members are not duplicated in Source Map. A contributed type definition resolves
 to its members through G.
@@ -233,14 +235,14 @@ The final Project therefore has a separate cold Source Map:
 
 ```text
 semantic root file_id
-    -> contiguous uint32 contribution-index range
+    -> contiguous contribution range
 
-unique source contribution
+contribution
     -> physical file_id
     -> semantic datum
 
 physical file_id
-    -> compact reverse contribution-index range
+    -> compact secondary contribution-index range
 ```
 
 A contribution is only one of:
@@ -254,6 +256,10 @@ link
 
 Members are not duplicated in Source Map. A type definition identifies the
 canonical type; its members are read from G.
+
+Canonical ownership is the root-contiguous contribution array. There is no
+cross-root contribution canonicalization and no root-index indirection. The
+physical-file index contains uint32 positions into that same array.
 
 Within one semantic root and physical file, repeated identical contributions are
 collapsed without sorting. A type definition subsumes a declaration of the same
@@ -272,29 +278,30 @@ File dependency topology
     WHICH files depend on which files
 ```
 
-Source Map construction and persistence are implemented. `compiled.bin` v2 stores
-unique `{physical file_id, source_data_ref}` records, root ranges + uint32 indices,
-file ranges + uint32 indices, and UTF-8 file paths/kinds. LOAD queries these sections
-directly; BUILD-only artifacts are not required for provenance queries.
-
-Exact physical/data pairs are shared across roots. Declaration-to-definition
-promotion is root-local: a root seeing only a declaration keeps its own reference
-to that declaration even when another root contributes the definition. Unowned
-construction entries left by local promotion are compacted during finalization.
+Source Map construction and persistence are implemented. `compiled.bin` v3 stores
+root-contiguous `{physical file_id, source_data_ref}` records, root ranges,
+file ranges + uint32 secondary indices, and UTF-8 file paths/kinds. LOAD queries
+these sections directly; BUILD-only artifacts are not required for provenance
+queries.
 
 BUILD-only aggregate semantic-presence state is separate from the file DAG and
 does not belong in G. Its persisted home is `source.bin` beside the dependency
 topology. `source.bin` v3 stores `{declarations, definitions}` counters per Graph
-type and uint32 counters per object/link. Each root -> contribution ownership
-increments presence; a definition also increments declarations. Repeated inclusion
-within one root counts once per physical datum. Removing one owner subtracts only
-that ownership, preserving data owned by other roots.
+type and uint32 counters per object/link. Each root-owned contribution increments
+presence; a definition also increments declarations. Repeated inclusion within
+one root/file pair counts once. Removing one owner subtracts only that ownership,
+preserving data owned by other roots.
 
-The cold `verify_source_save_presence()` audit recomputes counters from the compiled
-Source Map and checks paths/kinds and Graph cardinalities across the two artifacts.
-Older compiled v1/source v2 images require REBUILD. The current lifecycle still
-returns unsupported and removes incomplete REBUILD artifacts; this format change
-does not claim to complete sparse BUILD or resident Runtime publication.
+`source_map::finalize()` resolves semantic slots through the authoritative
+`identity_space` and G dense lookup; it does not construct another semantic
+slot-to-Graph hash index.
+
+The cold `verify_source_save_presence()` audit recomputes counters from the
+compiled Source Map and checks paths/kinds and Graph cardinalities across the two
+artifacts. Older compiled v1/v2 or source v2 images require REBUILD. The current
+lifecycle still returns unsupported and removes incomplete REBUILD artifacts;
+this format change does not claim to complete sparse BUILD or resident Runtime
+publication.
 
 ### Construction semantics in G
 
@@ -870,7 +877,7 @@ compiled.bin
 LOAD does not reconstruct `string_table`, `identity_space`, or mutable `graph`.
 The mapped bytes are the read-only compiled Project representation.
 
-V4 `compiled.bin` v2 uses a 256-byte header, a fixed 22-entry section directory,
+V4 `compiled.bin` v3 uses a 256-byte header, a fixed 21-entry section directory,
 64-byte aligned sections, canonical little-endian integers, per-section CRC64,
 directory CRC64, and header CRC64.
 
@@ -895,7 +902,6 @@ assign_records
 assign_bytes
 source_contributions
 source_roots
-source_root_indices
 source_files
 source_file_indices
 source_paths
