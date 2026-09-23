@@ -272,7 +272,7 @@ void test_direct_source_save(
             "source-save root ownership");
     }
 
-    if (!tests.expect(succeeded(sources.finalize(files.size(), G)),
+    if (!tests.expect(succeeded(sources.finalize(files.size(), identities, G)),
                       "finalize source-save semantic presence")) {
         return;
     }
