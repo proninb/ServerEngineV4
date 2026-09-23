@@ -58,47 +58,100 @@ namespace {
 }
 
 lexical_word_view lexical_word_view::from_native(
-    std::span<const std::uint32_t> values) noexcept {
+    const lexical_generation* owner,
+    std::uint32_t arena,
+    std::uint32_t offset,
+    std::uint32_t word_count) noexcept {
+
+    if (owner == nullptr ||
+        arena == invalid_lexical_arena) {
+
+        return {};
+    }
 
     lexical_word_view output;
-    output.native = values;
-    output.count = values.size();
+    output.native_owner = owner;
+    output.native_arena = arena;
+    output.native_offset = offset;
+    output.count = word_count;
     return output;
 }
 
 lexical_word_view lexical_word_view::from_encoded(
     std::span<const std::byte> values) noexcept {
 
-    if (values.size() % sizeof(std::uint32_t) != 0) {
+    if (values.size() % sizeof(std::uint32_t) != 0 ||
+        values.size() / sizeof(std::uint32_t) >
+            static_cast<std::size_t>(
+                (std::numeric_limits<std::uint32_t>::max)())) {
+
         return {};
     }
 
     lexical_word_view output;
-    output.encoded = values;
-    output.count = values.size() / sizeof(std::uint32_t);
+    output.encoded = values.data();
+    output.count =
+        static_cast<std::uint32_t>(
+            values.size() /
+            sizeof(std::uint32_t));
+
     return output;
 }
 
-std::uint32_t lexical_word_view::operator[](std::size_t index) const noexcept {
+std::uint32_t lexical_word_view::operator[](
+    std::size_t index) const noexcept {
+
     if (index >= count) {
         return 0;
     }
 
-    if (!native.empty()) {
-        return native[index];
+    if (native_owner != nullptr) {
+        if (native_arena >=
+            native_owner->arena_count_value) {
+
+            return 0;
+        }
+
+        const auto& arena =
+            native_owner->arena_values[
+                native_arena];
+
+        if (native_offset >
+                arena.word_count ||
+            count >
+                arena.word_count -
+                    native_offset) {
+
+            return 0;
+        }
+
+        return arena.words[
+            static_cast<std::size_t>(
+                native_offset) +
+            index];
     }
 
-    const auto offset = index * sizeof(std::uint32_t);
-    if (offset > encoded.size() ||
-        encoded.size() - offset < sizeof(std::uint32_t)) {
+    if (encoded == nullptr) {
         return 0;
     }
 
+    const auto offset =
+        index *
+        sizeof(std::uint32_t);
+
     std::uint32_t value = 0;
-    for (std::size_t byte = 0; byte < sizeof(std::uint32_t); ++byte) {
-        value |= static_cast<std::uint32_t>(
-            std::to_integer<std::uint8_t>(encoded[offset + byte])) << (byte * 8);
+
+    for (std::size_t byte = 0;
+         byte < sizeof(std::uint32_t);
+         ++byte) {
+
+        value |=
+            static_cast<std::uint32_t>(
+                std::to_integer<std::uint8_t>(
+                    encoded[offset + byte]))
+            << (byte * 8);
     }
+
     return value;
 }
 
@@ -686,9 +739,10 @@ lexical_word_view lexical_generation::words(file_id file) const noexcept {
             }
 
             return lexical_word_view::from_native(
-                std::span<const std::uint32_t>{
-                    arena.words.get() + record.word_offset,
-                    record.word_count});
+                this,
+                record.arena,
+                record.word_offset,
+                record.word_count);
         }
 
         lexical_file_view state;
@@ -716,9 +770,10 @@ lexical_word_view lexical_generation::words(file_id file) const noexcept {
     }
 
     return lexical_word_view::from_native(
-        std::span<const std::uint32_t>{
-            arena.words.get() + record.word_offset,
-            record.word_count});
+        this,
+        record.arena,
+        record.word_offset,
+        record.word_count);
 }
 
 lexical_directive_view lexical_generation::directives(file_id file) const noexcept {

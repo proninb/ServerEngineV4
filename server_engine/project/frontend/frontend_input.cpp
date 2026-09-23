@@ -36,6 +36,7 @@ server_status frontend_input::start_at(
         file,
         word_offset_value,
         source_base,
+        words,
     };
 
     stack_size = 1;
@@ -52,10 +53,14 @@ server_status frontend_input::enter(
         return server_status::project_configuration_invalid;
     }
 
+    const auto words =
+        lexical.words(file);
+
     stack[stack_size++] = {
         file,
         0,
         0,
+        words,
     };
 
     return server_status::success;
@@ -73,9 +78,8 @@ server_status frontend_input::next(
     auto& current =
         stack[stack_size - 1];
 
-    const auto words =
-        lexical.words(
-            current.file);
+    const auto& words =
+        current.words;
 
     auto position =
         static_cast<std::size_t>(
@@ -203,13 +207,9 @@ bool frontend_input::finished() const noexcept {
     const auto& current =
         stack[stack_size - 1];
 
-    const auto words =
-        lexical.words(
-            current.file);
-
     return static_cast<std::size_t>(
                current.word_offset) ==
-        words.size();
+        current.words.size();
 }
 
 }

@@ -2,8 +2,9 @@
  * Streaming Frontend lexical-input stack.
  *
  * frontend_input owns only active per-file lexical positions. Lexical storage
- * remains owned by lexical_generation; frames retain no pointer/span, so arena
- * growth during include discovery cannot invalidate suspended positions.
+ * remains owned by lexical_generation; each frame retains one stable lexical
+ * descriptor, so token iteration performs no repeated file/baseline lookup and
+ * arena growth during include discovery cannot invalidate suspended positions.
  */
 #pragma once
 
@@ -78,9 +79,10 @@ private:
         file_id file{};
         std::uint32_t word_offset = 0;
         std::uint32_t source_offset = 0;
+        lexical_word_view words;
     };
 
-    static_assert(sizeof(frame) == 12);
+    static_assert(sizeof(frame) <= 48);
 
     const lexical_generation& lexical;
     std::array<frame, frontend_include_depth_limit> stack{};

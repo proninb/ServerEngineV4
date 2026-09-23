@@ -358,6 +358,14 @@ void test_direct_database(
         build_lexical.token_count(header) == replacement_stream.token_count(),
         "BUILD lexical replacement publishes sparse native overlay");
 
+    const auto stable_replacement_words =
+        build_lexical.words(header);
+
+    const auto stable_first_word =
+        stable_replacement_words.empty()
+            ? 0u
+            : stable_replacement_words[0];
+
     database_layout replacement_layout;
 
     tests.expect(
@@ -369,12 +377,47 @@ void test_direct_database(
         replacement_layout.size() != 0,
         "database layout reads merged baseline and sparse lexical overlay");
 
+    const file_id appended{
+        static_cast<std::uint32_t>(
+            persisted_view.file_count() + 1)};
+
+    lexical_stream growth_stream;
+
+    bool growth_ready =
+        succeeded(
+            growth_stream.reset(
+                appended,
+                4096));
+
+    for (std::uint32_t offset = 0;
+         growth_ready &&
+         offset < 2048;
+         ++offset) {
+
+        growth_ready =
+            succeeded(
+                growth_stream.append(
+                    token_kind::identifier,
+                    offset,
+                    1));
+    }
+
     tests.expect(
+        !stable_replacement_words.empty() &&
+        growth_ready &&
         succeeded(
             build_lexical.extend(
                 persisted_view.file_count() + 1)) &&
-        build_lexical.size() == persisted_view.file_count() + 1,
-        "BUILD lexical generation appends one local record without baseline copy");
+        build_lexical.size() ==
+            persisted_view.file_count() + 1 &&
+        succeeded(
+            build_lexical.publish(
+                appended,
+                0,
+                growth_stream)) &&
+        stable_replacement_words[0] ==
+            stable_first_word,
+        "native lexical descriptor survives arena growth without stale pointer");
 }
 
 }

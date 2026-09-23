@@ -47,9 +47,12 @@ struct lexical_failure final {
     lexical_error error;
 };
 
-// Word view over either native construction storage or encoded database.bin
-// storage. Encoded words are decoded explicitly; no alignment/endian assumptions
-// or baseline copies enter the frontend.
+class lexical_generation;
+
+// Stable word descriptor over either native construction storage or encoded
+// database.bin storage. Native descriptors resolve the arena's current backing
+// allocation on every indexed read, so arena growth cannot invalidate suspended
+// frontend frames.
 class lexical_word_view final {
 public:
     class iterator final {
@@ -82,9 +85,6 @@ public:
 
     lexical_word_view() noexcept = default;
 
-    [[nodiscard]] static lexical_word_view from_native(
-        std::span<const std::uint32_t> values) noexcept;
-
     [[nodiscard]] static lexical_word_view from_encoded(
         std::span<const std::byte> values) noexcept;
 
@@ -95,9 +95,19 @@ public:
     [[nodiscard]] iterator end() const noexcept { return iterator{this, count}; }
 
 private:
-    std::span<const std::uint32_t> native;
-    std::span<const std::byte> encoded;
-    std::size_t count = 0;
+    [[nodiscard]] static lexical_word_view from_native(
+        const lexical_generation* owner,
+        std::uint32_t arena,
+        std::uint32_t offset,
+        std::uint32_t count) noexcept;
+
+    const lexical_generation* native_owner = nullptr;
+    const std::byte* encoded = nullptr;
+    std::uint32_t native_arena = invalid_lexical_arena;
+    std::uint32_t native_offset = 0;
+    std::uint32_t count = 0;
+
+    friend class lexical_generation;
 };
 
 class lexical_directive_view final {
@@ -248,6 +258,8 @@ public:
     }
 
 private:
+    friend class lexical_word_view;
+
     struct lexical_arena final {
         std::unique_ptr<std::uint32_t[]> words;
         std::size_t word_count = 0;

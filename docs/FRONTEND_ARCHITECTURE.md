@@ -1006,6 +1006,13 @@ The frontend reads both through alignment/endian-safe lexical value views.
 `begin_replacement(file_id)` masks the persisted entry before lexing, so failed
 or incomplete replacement work cannot silently fall back to stale tokens.
 
+`frontend_input` resolves the word view once when a file frame is entered.
+Persisted views point directly into immutable `database.bin`; native views retain
+`lexical_generation + arena + offset + count` and resolve the arena's current
+backing allocation on indexed reads. Suspended include frames therefore survive
+arena growth without storing invalidated native spans, while the token hot path
+avoids repeated replacement-index and database-record lookup.
+
 ## Include Guards
 
 Example:
