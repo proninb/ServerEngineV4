@@ -944,10 +944,12 @@ the platform filesystem-equivalence key and is never accepted as identity:
 `source_save_view::find_path()` confirms exact key equality before returning the
 existing `file_id`.
 
-This removes the O(F) path-index reconstruction that would otherwise be required
-before sparse BUILD can resolve quoted includes. BUILD may therefore keep the
-committed File Context mmap-backed and allocate mutable path state only for
-changed or newly discovered files.
+REBUILD constructs this table directly in the final `source.bin` mapping; the
+layout owns only its count/offset and never materializes a full transient copy.
+This removes both the extra persistence copy and the O(F) path-index
+reconstruction that would otherwise be required before sparse BUILD can resolve
+quoted includes. BUILD may therefore keep the committed File Context mmap-backed
+and allocate mutable path state only for changed or newly discovered files.
 
 ## BUILD Frontend Reuse
 

@@ -356,21 +356,22 @@ struct directory_index_slot final {
 }
 
 [[nodiscard]] bool insert_path_identity(
-    std::vector<std::uint32_t>& fingerprints,
-    std::vector<file_id>& files,
+    std::span<std::byte> output,
+    std::size_t index_offset,
+    std::uint32_t index_count,
     std::uint32_t fingerprint,
     file_id file) noexcept {
 
     if (fingerprint == 0 ||
-        fingerprints.empty() ||
-        fingerprints.size() != files.size() ||
+        index_count == 0 ||
         !file) {
 
         return false;
     }
 
     const auto mask =
-        fingerprints.size() - 1;
+        static_cast<std::size_t>(
+            index_count - 1);
 
     auto position =
         static_cast<std::size_t>(
@@ -378,16 +379,55 @@ struct directory_index_slot final {
         mask;
 
     for (std::size_t probe = 0;
-         probe < fingerprints.size();
+         probe < index_count;
          ++probe) {
 
-        auto& slot =
-            fingerprints[position];
+        const auto slot_offset =
+            index_offset +
+            position *
+                path_index_record_size;
 
-        if (slot == 0) {
-            slot = fingerprint;
-            files[position] = file;
-            return true;
+        std::size_t cursor =
+            slot_offset;
+
+        std::uint32_t stored_fingerprint = 0;
+        std::uint32_t stored_file = 0;
+
+        if (!read_u32(
+                output,
+                cursor,
+                stored_fingerprint) ||
+            !read_u32(
+                output,
+                cursor,
+                stored_file)) {
+
+            return false;
+        }
+
+        if (stored_fingerprint == 0) {
+            if (stored_file != 0) {
+                return false;
+            }
+
+            cursor =
+                slot_offset;
+
+            return write_u32(
+                       output,
+                       cursor,
+                       fingerprint) &&
+                write_u32(
+                       output,
+                       cursor,
+                       file.value()) &&
+                cursor ==
+                    slot_offset +
+                        path_index_record_size;
+        }
+
+        if (stored_file == 0) {
+            return false;
         }
 
         position =
@@ -1847,19 +1887,6 @@ source_save_result prepare_source_save_layout(const file_context &files,
         return source_save_result::failed;
     }
 
-    try {
-        output.path_index_fingerprints.assign(
-            path_index_capacity,
-            0);
-        output.path_index_files.assign(
-            path_index_capacity,
-            file_id{});
-    }
-    catch (...) {
-        output.reset();
-        return source_save_result::failed;
-    }
-
     std::uint32_t path_bytes = 0;
     std::uint32_t forward_count = 0;
     std::uint32_t reverse_count = 0;
@@ -1881,35 +1908,6 @@ source_save_result prepare_source_save_layout(const file_context &files,
 
             return source_save_result::
                 invalid_state;
-        }
-
-        filesystem_path_key path_key;
-
-        try {
-            const auto path_view =
-                files.path(file);
-
-            if (make_filesystem_path_key(
-                    std::filesystem::path{
-                        path_view.begin(),
-                        path_view.end()},
-                    path_key) !=
-                    filesystem_path_result::success ||
-                !insert_path_identity(
-                    output.path_index_fingerprints,
-                    output.path_index_files,
-                    persisted_path_fingerprint(
-                        path_key),
-                    file)) {
-
-                output.reset();
-                return source_save_result::
-                    invalid_state;
-            }
-        }
-        catch (...) {
-            output.reset();
-            return source_save_result::failed;
         }
 
         std::size_t path_size = 0;
@@ -1993,16 +1991,10 @@ source_save_result prepare_source_save_layout(const file_context &files,
         return source_save_result::failed;
     }
 
-    if (output.path_index_fingerprints.size() !=
-            output.path_index_files.size() ||
-        output.file_index_references.size() !=
+    if (output.file_index_references.size() !=
             output.file_index_files.size() ||
         output.directory_index_references.size() !=
             output.directory_index_flags.size() ||
-        output.path_index_fingerprints.size() >
-            static_cast<std::size_t>(
-                (std::numeric_limits<
-                    std::uint32_t>::max)()) ||
         output.file_index_references.size() >
             static_cast<std::size_t>(
                 (std::numeric_limits<
@@ -2019,7 +2011,7 @@ source_save_result prepare_source_save_layout(const file_context &files,
 
     const auto path_index_count =
         static_cast<std::uint32_t>(
-            output.path_index_fingerprints.size());
+            path_index_capacity);
 
     const auto file_index_count =
         static_cast<std::uint32_t>(
@@ -2228,10 +2220,14 @@ source_save_result encode_source_save_image(const file_context &files,
         output.size() -
             layout.checksum_offset !=
                 checksum_size ||
-        layout.path_index_fingerprints.size() !=
-            layout.path_index_count ||
-        layout.path_index_files.size() !=
-            layout.path_index_count ||
+        layout.path_index_count == 0 ||
+        layout.path_index_offset >
+            output.size() ||
+        static_cast<std::size_t>(
+            layout.path_index_count) >
+            (output.size() -
+                layout.path_index_offset) /
+                    path_index_record_size ||
         layout.file_index_references.size() !=
             layout.file_index_count ||
         layout.file_index_files.size() !=
@@ -2266,6 +2262,21 @@ source_save_result encode_source_save_image(const file_context &files,
 
         return source_save_result::failed;
     }
+
+    const auto path_index_size =
+        static_cast<std::size_t>(
+            layout.path_index_count) *
+        path_index_record_size;
+
+    std::fill(
+        output.begin() +
+            static_cast<std::ptrdiff_t>(
+                layout.path_index_offset),
+        output.begin() +
+            static_cast<std::ptrdiff_t>(
+                layout.path_index_offset +
+                path_index_size),
+        std::byte{0});
 
     std::size_t record_cursor =
         layout.records_offset;
@@ -2330,8 +2341,11 @@ source_save_result encode_source_save_image(const file_context &files,
                 layout.paths_offset +
                 path_cursor);
 
+        const auto path_view =
+            files.path(file);
+
         if (filesystem_path_to_utf8(
-                files.path(file),
+                path_view,
                 std::span<char>{
                     path_target,
                     remaining_path_bytes},
@@ -2348,6 +2362,31 @@ source_save_result encode_source_save_image(const file_context &files,
 
             return source_save_result::
                 invalid_state;
+        }
+
+        try {
+            filesystem_path_key path_key;
+
+            if (make_filesystem_path_key(
+                    std::filesystem::path{
+                        path_view.begin(),
+                        path_view.end()},
+                    path_key) !=
+                    filesystem_path_result::success ||
+                !insert_path_identity(
+                    output,
+                    layout.path_index_offset,
+                    layout.path_index_count,
+                    persisted_path_fingerprint(
+                        path_key),
+                    file)) {
+
+                return source_save_result::
+                    invalid_state;
+            }
+        }
+        catch (...) {
+            return source_save_result::failed;
         }
 
         std::uint32_t flags =
@@ -2441,35 +2480,6 @@ source_save_result encode_source_save_image(const file_context &files,
 
         return source_save_result::
             invalid_state;
-    }
-
-    std::size_t path_index_cursor =
-        layout.path_index_offset;
-
-    for (std::size_t index = 0;
-         index <
-            layout.path_index_fingerprints.size();
-         ++index) {
-
-        if (!write_u32(
-                output,
-                path_index_cursor,
-                layout.path_index_fingerprints[
-                    index]) ||
-            !write_u32(
-                output,
-                path_index_cursor,
-                layout.path_index_files[
-                    index].value())) {
-
-            return source_save_result::failed;
-        }
-    }
-
-    if (path_index_cursor !=
-        layout.forward_offset) {
-
-        return source_save_result::failed;
     }
 
     std::size_t forward_cursor =

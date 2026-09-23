@@ -1284,9 +1284,11 @@ reverse_edges[]             4 bytes / direct edge
 
 The current implementation owns all of these arrays directly for a fresh
 construction. `source.bin` v4 additionally persists an 8-byte/slot open-addressed
-path index `{stable fingerprint, file_id}`. BUILD probes it directly from mmap;
-full platform filesystem-key equality is confirmed on a fingerprint match, so
-the fingerprint is an accelerator and never file identity.
+path index `{stable fingerprint, file_id}`. REBUILD encodes this index directly
+into the final `source.bin` mapping; no full transient copy of the index exists.
+BUILD probes it directly from mmap, and full platform filesystem-key equality is
+confirmed on a fingerprint match, so the fingerprint is an accelerator and
+never file identity.
 
 BUILD will add persisted-view + mutable-overlay capability; it must not begin by
 copying every committed file record merely to change a small subset.

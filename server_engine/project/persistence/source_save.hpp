@@ -75,8 +75,6 @@ private:
         directory_index_count = 0;
 
         checkpoint = {};
-        path_index_fingerprints.clear();
-        path_index_files.clear();
         file_index_references.clear();
         file_index_files.clear();
         directory_index_references.clear();
@@ -104,11 +102,6 @@ private:
     std::uint32_t directory_index_count = 0;
 
     file_change_checkpoint checkpoint;
-
-    // Stable path fingerprints are persisted only as lookup accelerators. Exact
-    // filesystem-key equality is always confirmed before returning a file_id.
-    std::vector<std::uint32_t> path_index_fingerprints;
-    std::vector<file_id> path_index_files;
 
     // SoA avoids native padding: transient memory is the same 12 bytes/slot as
     // the persisted identity-index payload instead of a padded native struct.
