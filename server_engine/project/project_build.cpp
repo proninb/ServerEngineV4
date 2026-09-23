@@ -364,7 +364,11 @@ server_status build_project(
 
     if (context.compiled.bind(
             context.compiled_mapping.bytes()) !=
-        compiled_project_image_result::success) {
+        compiled_project_image_result::success ||
+        context.compiled.source_file_count() != context.source.file_count() ||
+        context.compiled.type_count() != context.source.type_presence_count() ||
+        context.compiled.object_count() != context.source.object_presence_count() ||
+        context.compiled.link_count() != context.source.link_presence_count()) {
 
         diagnostics.emit(
             diagnostic(
@@ -372,7 +376,7 @@ server_status build_project(
                 operation)
                 .file(layout.compiled)
                 .detail(
-                    "Committed compiled.bin failed structural BUILD-baseline binding")
+                    "Committed compiled.bin failed structural BUILD-baseline binding or SourceSave presence cardinalities disagree")
                 .build());
 
         return server_status::project_artifact_invalid;

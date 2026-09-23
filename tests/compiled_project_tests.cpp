@@ -1,5 +1,7 @@
 #include "project/persistence/compiled_project.hpp"
 #include "project/persistence/crc64_ecma.hpp"
+#include "project/file/file_context.hpp"
+#include "project/source/source_map.hpp"
 #include "read_only_file_mapping.hpp"
 #include "writable_file_mapping.hpp"
 
@@ -55,6 +57,8 @@ struct compiled_fixture final {
     string_table strings;
     identity_space identities;
     graph G;
+    file_context files;
+    source_map sources;
     assign_table assigns;
 
     string_id namespace_name{};
@@ -298,7 +302,32 @@ struct compiled_fixture final {
         return false;
     }
 
-    return true;
+    const auto directory = std::filesystem::temp_directory_path();
+    for (const char *name : {"source_root.hpp", "shared.hpp", "other_root.hpp"}) {
+        file_id file;
+        if (!success(tests,
+                     fixture.files.resolve(directory / name, file_kind::header, file),
+                     "resolve source map file"))
+            return false;
+    }
+    for (auto root : {file_id{1}, file_id{3}}) {
+        if (!success(tests, fixture.sources.begin_root(root), "begin persisted root") ||
+            !success(tests,
+                     fixture.sources.add(file_id{2},
+                                         source_data_ref::type_definition(fixture.type_identity)),
+                     "shared persisted definition") ||
+            !success(
+                tests,
+                fixture.sources.add(file_id{2}, source_data_ref::object(fixture.left_identity)),
+                "shared persisted object") ||
+            !success(tests,
+                     fixture.sources.add(file_id{2}, source_data_ref::link(fixture.link)),
+                     "shared persisted link") ||
+            !success(tests, fixture.sources.end_root(), "end persisted root"))
+            return false;
+    }
+    return tests.expect(succeeded(fixture.sources.finalize(fixture.files.size(), fixture.G)),
+                        "finalize empty Source Map fixture");
 }
 
 [[nodiscard]] std::uint32_t read_u32(
@@ -762,13 +791,13 @@ compiled_project_image_result build_test_compiled_image(
 
     compiled_project_layout layout;
 
-    const auto prepared =
-        prepare_compiled_project_layout(
-            fixture.strings,
-            fixture.identities,
-            fixture.G,
-            fixture.assigns,
-            layout);
+    const auto prepared = prepare_compiled_project_layout(fixture.strings,
+                                                          fixture.identities,
+                                                          fixture.G,
+                                                          fixture.assigns,
+                                                          fixture.files,
+                                                          fixture.sources,
+                                                          layout);
 
     if (prepared !=
         compiled_project_image_result::success) {
@@ -786,14 +815,14 @@ compiled_project_image_result build_test_compiled_image(
             failed;
     }
 
-    const auto encoded =
-        encode_compiled_project_image(
-            fixture.strings,
-            fixture.identities,
-            fixture.G,
-            fixture.assigns,
-            layout,
-            output.bytes);
+    const auto encoded = encode_compiled_project_image(fixture.strings,
+                                                       fixture.identities,
+                                                       fixture.G,
+                                                       fixture.assigns,
+                                                       fixture.files,
+                                                       fixture.sources,
+                                                       layout,
+                                                       output.bytes);
 
     if (encoded !=
         compiled_project_image_result::success) {
@@ -812,16 +841,16 @@ void test_direct_mmap_encoding(
 
     compiled_project_layout layout;
 
-    if (!tests.expect(
-            prepare_compiled_project_layout(
-                fixture.strings,
-                fixture.identities,
-                fixture.G,
-                fixture.assigns,
-                layout) ==
-                compiled_project_image_result::success &&
-            layout.size() != 0,
-            "prepare direct compiled layout")) {
+    if (!tests.expect(prepare_compiled_project_layout(fixture.strings,
+                                                      fixture.identities,
+                                                      fixture.G,
+                                                      fixture.assigns,
+                                                      fixture.files,
+                                                      fixture.sources,
+                                                      layout) ==
+                              compiled_project_image_result::success &&
+                          layout.size() != 0,
+                      "prepare direct compiled layout")) {
 
         return;
     }
@@ -847,16 +876,16 @@ void test_direct_mmap_encoding(
         return;
     }
 
-    if (!tests.expect(
-            encode_compiled_project_image(
-                fixture.strings,
-                fixture.identities,
-                fixture.G,
-                fixture.assigns,
-                layout,
-                writable.bytes()) ==
-                compiled_project_image_result::success,
-            "encode directly into compiled mmap")) {
+    if (!tests.expect(encode_compiled_project_image(fixture.strings,
+                                                    fixture.identities,
+                                                    fixture.G,
+                                                    fixture.assigns,
+                                                    fixture.files,
+                                                    fixture.sources,
+                                                    layout,
+                                                    writable.bytes()) ==
+                          compiled_project_image_result::success,
+                      "encode directly into compiled mmap")) {
 
         writable.reset();
         error.clear();
@@ -1133,15 +1162,15 @@ void test_build_lineage_overlays(
 
     compiled_project_layout merged_layout;
 
-    if (!tests.expect(
-            prepare_compiled_project_layout(
-                strings,
-                identities,
-                fixture.G,
-                fixture.assigns,
-                merged_layout) ==
-                compiled_project_image_result::success,
-            "prepare merged baseline+overlay compiled image")) {
+    if (!tests.expect(prepare_compiled_project_layout(strings,
+                                                      identities,
+                                                      fixture.G,
+                                                      fixture.assigns,
+                                                      fixture.files,
+                                                      fixture.sources,
+                                                      merged_layout) ==
+                          compiled_project_image_result::success,
+                      "prepare merged baseline+overlay compiled image")) {
         return;
     }
 
@@ -1159,16 +1188,16 @@ void test_build_lineage_overlays(
         return;
     }
 
-    if (!tests.expect(
-            encode_compiled_project_image(
-                strings,
-                identities,
-                fixture.G,
-                fixture.assigns,
-                merged_layout,
-                merged) ==
-                compiled_project_image_result::success,
-            "encode merged baseline+overlay compiled image")) {
+    if (!tests.expect(encode_compiled_project_image(strings,
+                                                    identities,
+                                                    fixture.G,
+                                                    fixture.assigns,
+                                                    fixture.files,
+                                                    fixture.sources,
+                                                    merged_layout,
+                                                    merged) ==
+                          compiled_project_image_result::success,
+                      "encode merged baseline+overlay compiled image")) {
         return;
     }
 
@@ -1207,6 +1236,101 @@ void test_build_lineage_overlays(
         "merged compiled image preserves and appends identity refs");
 }
 
+void test_persisted_sources(test_state &tests, const compiled_test_image &image) {
+    compiled_project_view view;
+    if (!tests.expect(view.bind(image.bytes) == compiled_project_image_result::success,
+                      "bind persisted provenance"))
+        return;
+    source_map_range root, file_range;
+    std::string_view path;
+    file_kind kind;
+    tests.expect(view.source_file_count() == 3 && view.source_contribution_count() == 3 &&
+                     view.source_root(file_id{1}, root) && root.count == 3 &&
+                     view.source_file(file_id{2}, path, kind, file_range) &&
+                     file_range.count == 3 && path.ends_with("shared.hpp") &&
+                     kind == file_kind::header,
+                 "mapped provenance and paths without reconstruction");
+    const auto corrupt = [&](compiled_project_section section,
+                             std::size_t offset,
+                             std::uint32_t value,
+                             std::string_view name) {
+        auto bytes = image.bytes;
+        write_u32(bytes.data() + section_offset(bytes, section) + offset, value);
+        rewrite_section_crc(bytes, section);
+        compiled_project_view altered;
+        tests.expect(altered.bind(bytes) == compiled_project_image_result::success &&
+                         altered.verify_contents() == compiled_project_image_result::invalid_image,
+                     name);
+    };
+    corrupt(compiled_project_section::source_root_indices,
+            0,
+            UINT32_MAX,
+            "reject dangling root contribution index");
+    corrupt(compiled_project_section::source_file_indices,
+            4,
+            0,
+            "reject duplicate file contribution index");
+    corrupt(compiled_project_section::source_contributions,
+            0,
+            0,
+            "reject invalid contribution physical file");
+    corrupt(compiled_project_section::source_roots,
+            8,
+            UINT32_MAX,
+            "reject out-of-bounds empty root range");
+    corrupt(compiled_project_section::source_roots, 16, 0, "reject overlapping ownership ranges");
+    corrupt(compiled_project_section::source_files,
+            24,
+            UINT32_MAX,
+            "reject invalid persisted path offset");
+    corrupt(compiled_project_section::source_contributions,
+            4,
+            source_data_ref::from_raw(0xffffffffu).raw(),
+            "reject nonexistent graph link");
+    auto old = image.bytes;
+    write_u32(old.data() + 8, 1);
+    rewrite_header_crc(old);
+    tests.expect(view.bind(old) == compiled_project_image_result::invalid_image,
+                 "reject previous compiled format");
+}
+
+void test_source_map_provenance(test_state &tests, const compiled_fixture &fixture) {
+
+    source_map sources;
+
+    if (!tests.expect(succeeded(sources.begin_root(file_id{1})), "Source Map begin first root") ||
+        !tests.expect(succeeded(sources.add(
+                          file_id{2}, source_data_ref::type_definition(fixture.type_identity))),
+                      "Source Map first contribution") ||
+        !tests.expect(succeeded(sources.end_root()), "Source Map end first root") ||
+        !tests.expect(succeeded(sources.begin_root(file_id{3})), "Source Map begin second root") ||
+        !tests.expect(succeeded(sources.add(
+                          file_id{2}, source_data_ref::type_definition(fixture.type_identity))),
+                      "Source Map shared physical contribution") ||
+        !tests.expect(succeeded(sources.end_root()), "Source Map end second root") ||
+        !tests.expect(succeeded(sources.finalize(3, fixture.G)), "Source Map finalize")) {
+        return;
+    }
+
+    const auto contributions = sources.contribution_entries();
+
+    const auto roots = sources.root_entries();
+
+    const auto files = sources.file_entries();
+
+    const auto presence = sources.type_presence_entries();
+
+    tests.expect(contributions.size() == 1 && sources.root_index_entries().size() == 2 &&
+                     sources.file_index_entries().size() == 1 && roots.size() == 3 &&
+                     roots[0].count == 1 && roots[2].count == 1 && files.size() == 3 &&
+                     files[1].count == 1,
+                 "Source Map canonical physical payload and dual indexes");
+
+    tests.expect(fixture.type.value() <= presence.size() &&
+                     presence[fixture.type.value() - 1].declarations == 2 &&
+                     presence[fixture.type.value() - 1].definitions == 2,
+                 "Source Map presence counts root ownership");
+}
 }
 }
 
@@ -1223,6 +1347,8 @@ int main() {
 
             return 1;
         }
+
+        test_source_map_provenance(tests, fixture);
 
         compiled_test_image first;
         compiled_test_image second;
@@ -1246,6 +1372,8 @@ int main() {
         tests.expect(
             first.bytes == second.bytes,
             "deterministic compiled image");
+
+        test_persisted_sources(tests, first);
 
         test_round_trip(
             tests,

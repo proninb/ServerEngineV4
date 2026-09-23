@@ -32,6 +32,7 @@ add_executable(ServerEngineV4
     server_engine/project/string/string_table.cpp
     server_engine/project/semantic/identity.cpp
     server_engine/project/graph/graph.cpp
+    server_engine/project/source/source_map.cpp
     server_engine/project/parser/parser.cpp
     server_engine/project/preprocessor/preprocessor.cpp
     server_engine/project/frontend/frontend_input.cpp
@@ -99,6 +100,10 @@ if(BUILD_TESTING)
         server_engine/project/file/file_identity.cpp
         server_engine/project/persistence/project_artifact.cpp
         server_engine/project/persistence/compiled_project.cpp
+        server_engine/filesystem_path.cpp
+        server_engine/project/project_path.cpp
+        server_engine/project/file/file_context.cpp
+        server_engine/project/source/source_map.cpp
     )
 
     target_include_directories(ServerEngineV4Tests PRIVATE
@@ -125,6 +130,12 @@ if(BUILD_TESTING)
         server_engine/project/file/file_identity.cpp
         server_engine/project/file/file_context.cpp
         server_engine/project/persistence/source_save.cpp
+        server_engine/project/graph/graph.cpp
+        server_engine/project/source/source_map.cpp
+        server_engine/project/string/string_table.cpp
+        server_engine/project/semantic/identity.cpp
+        server_engine/project/assign/assign_table.cpp
+        server_engine/project/persistence/compiled_project.cpp
     )
 
     target_include_directories(ServerEngineV4SourceSaveTests PRIVATE
@@ -171,6 +182,36 @@ if(BUILD_TESTING)
         COMMAND ServerEngineV4DatabaseTests
     )
 
+
+    add_executable(ServerEngineV4SourceMapTests
+        tests/source_map_tests.cpp
+        server_engine/project/source/source_map.cpp
+        server_engine/filesystem_path.cpp
+        server_engine/project/project_path.cpp
+        server_engine/project/file/file_identity.cpp
+        server_engine/project/file/file_context.cpp
+        server_engine/project/string/string_table.cpp
+        server_engine/project/semantic/identity.cpp
+        server_engine/project/graph/graph.cpp
+        server_engine/project/assign/assign_table.cpp
+        server_engine/project/persistence/compiled_project.cpp
+    )
+
+    target_include_directories(ServerEngineV4SourceMapTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(ServerEngineV4SourceMapTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4SourceMapTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(
+        NAME source_map
+        COMMAND ServerEngineV4SourceMapTests
+    )
+
     add_executable(ServerEngineV4FrontendTests
         tests/frontend_regression_tests.cpp
         server_engine/filesystem_path.cpp
@@ -178,6 +219,7 @@ if(BUILD_TESTING)
         server_engine/project/string/string_table.cpp
         server_engine/project/semantic/identity.cpp
         server_engine/project/graph/graph.cpp
+        server_engine/project/source/source_map.cpp
         server_engine/project/assign/assign_table.cpp
         server_engine/project/persistence/compiled_project.cpp
         server_engine/project/parser/parser.cpp

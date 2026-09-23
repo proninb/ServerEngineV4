@@ -1169,7 +1169,7 @@ server_status graph::add_link(
 
     if (links.size() >=
         static_cast<std::size_t>(
-            (std::numeric_limits<std::uint32_t>::max)())) {
+            link_handle::maximum_slot)) {
 
         return server_status::io_error;
     }

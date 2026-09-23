@@ -83,6 +83,49 @@ published and the Server remains `UNLOADED`.
 
 LOAD, BUILD, and REBUILD never substitute for each other.
 
+## Semantic Source Provenance
+
+G remains source-agnostic. Physical-file ownership is stored in a separate
+Source Map that is part of the final compiled Project.
+
+The canonical ownership unit is one semantic root execution:
+
+```text
+root file_id
+    -> contiguous uint32 contribution-index range
+```
+
+Each contribution records both the physical file that supplied the semantic
+token and a compact semantic datum:
+
+```text
+{ physical file_id, type declaration/definition | object | link }
+```
+
+This distinction is required because the same physical header may execute from
+multiple semantic roots and produce different semantic identities under
+different semantic/preprocessor contexts.
+
+The Runtime/Studio-facing physical-file projection is derived from the canonical
+root contributions:
+
+```text
+physical file_id
+    -> contribution indices
+```
+
+That projection is unique by `(physical file_id, semantic datum)`. Repeated
+contribution of the same datum through multiple roots is retained in root
+ownership for sparse BUILD correctness but appears once in the physical-file
+view. A type definition dominates a declaration of the same type in that file.
+
+Members are not duplicated in Source Map. A contributed type definition resolves
+to its members through G.
+
+File dependency topology and semantic source provenance are separate contracts.
+Source Map never introduces semantic dependency edges into the file DAG.
+
+
 ## One-G construction model
 
 Server Engine V4 has one Graph concept:
@@ -178,6 +221,80 @@ or Graph-generation object between Parser/Semantic and G.
 
 REBUILD operation state owns one temporary `G`; Parser/Semantic writes directly
 into it.
+
+
+## Source Provenance Map
+
+`G` deliberately contains no `file_id`. Runtime/Studio still needs to answer
+which semantic data came from which physical Project file, and sparse BUILD must
+replace semantic work by the semantic root that produced it.
+
+The final Project therefore has a separate cold Source Map:
+
+```text
+semantic root file_id
+    -> contiguous uint32 contribution-index range
+
+unique source contribution
+    -> physical file_id
+    -> semantic datum
+
+physical file_id
+    -> compact reverse contribution-index range
+```
+
+A contribution is only one of:
+
+```text
+type declaration
+type definition
+object
+link
+```
+
+Members are not duplicated in Source Map. A type definition identifies the
+canonical type; its members are read from G.
+
+Within one semantic root and physical file, repeated identical contributions are
+collapsed without sorting. A type definition subsumes a declaration of the same
+type in that same root/file pair.
+
+This separation is intentional:
+
+```text
+G
+    WHAT exists
+
+Source Map
+    WHERE it came from and WHICH semantic root produced it
+
+File dependency topology
+    WHICH files depend on which files
+```
+
+Source Map construction and persistence are implemented. `compiled.bin` v2 stores
+unique `{physical file_id, source_data_ref}` records, root ranges + uint32 indices,
+file ranges + uint32 indices, and UTF-8 file paths/kinds. LOAD queries these sections
+directly; BUILD-only artifacts are not required for provenance queries.
+
+Exact physical/data pairs are shared across roots. Declaration-to-definition
+promotion is root-local: a root seeing only a declaration keeps its own reference
+to that declaration even when another root contributes the definition. Unowned
+construction entries left by local promotion are compacted during finalization.
+
+BUILD-only aggregate semantic-presence state is separate from the file DAG and
+does not belong in G. Its persisted home is `source.bin` beside the dependency
+topology. `source.bin` v3 stores `{declarations, definitions}` counters per Graph
+type and uint32 counters per object/link. Each root -> contribution ownership
+increments presence; a definition also increments declarations. Repeated inclusion
+within one root counts once per physical datum. Removing one owner subtracts only
+that ownership, preserving data owned by other roots.
+
+The cold `verify_source_save_presence()` audit recomputes counters from the compiled
+Source Map and checks paths/kinds and Graph cardinalities across the two artifacts.
+Older compiled v1/source v2 images require REBUILD. The current lifecycle still
+returns unsupported and removes incomplete REBUILD artifacts; this format change
+does not claim to complete sparse BUILD or resident Runtime publication.
 
 ### Construction semantics in G
 
@@ -753,7 +870,7 @@ compiled.bin
 LOAD does not reconstruct `string_table`, `identity_space`, or mutable `graph`.
 The mapped bytes are the read-only compiled Project representation.
 
-V4 `compiled.bin` v1 uses a 256-byte header, a fixed 16-entry section directory,
+V4 `compiled.bin` v2 uses a 256-byte header, a fixed 22-entry section directory,
 64-byte aligned sections, canonical little-endian integers, per-section CRC64,
 directory CRC64, and header CRC64.
 
@@ -776,6 +893,12 @@ links
 graph_identity_index
 assign_records
 assign_bytes
+source_contributions
+source_roots
+source_root_indices
+source_files
+source_file_indices
+source_paths
 ```
 
 Numeric `string_id`, `identity_ref`, `type_handle`, `object_handle`,
@@ -1394,3 +1517,6 @@ contract.
 26. `identity_ref` carries no declaration/definition state; Parser/Semantic writes the compiled semantic result directly into G.
 27. Graph handles identify locations in the final compiled result and are not semantic identity.
 28. V4 has one Graph concept, `G`; persistence reuse does not create Graph generations.
+29. G contains no file ownership; physical-file semantic provenance belongs to the separate Source Map.
+30. Source Map ownership is by semantic root; each contribution also records its physical file_id.
+31. File dependency topology and semantic provenance are separate structures and must not be conflated.

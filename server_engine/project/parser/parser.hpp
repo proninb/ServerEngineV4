@@ -13,6 +13,7 @@
 #include "../graph/graph.hpp"
 #include "../preprocessor_configuration.hpp"
 #include "../semantic/identity.hpp"
+#include "../source/source_map.hpp"
 #include "../string/string_table.hpp"
 #include "../../server_status.hpp"
 
@@ -51,6 +52,7 @@ struct parser_failure final {
     string_table& strings,
     identity_space& identities,
     graph& G,
+    source_map& sources,
     parser_failure* failure = nullptr) noexcept;
 
 }

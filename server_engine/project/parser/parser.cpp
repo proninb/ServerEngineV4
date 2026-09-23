@@ -85,6 +85,7 @@ public:
         string_table& strings,
         identity_space& identities,
         graph& G,
+        source_map& sources,
         parser_failure* failure) noexcept
         : files(files_value),
           input(
@@ -94,6 +95,7 @@ public:
               strings),
           identities(identities),
           G(G),
+          sources(sources),
           failure(failure) {
     }
 
@@ -102,6 +104,13 @@ public:
 
         if (failure != nullptr) {
             *failure = {};
+        }
+
+        const auto provenance_started =
+            sources.begin_root(root);
+
+        if (!succeeded(provenance_started)) {
+            return provenance_started;
         }
 
         const auto started =
@@ -118,10 +127,17 @@ public:
             return advanced;
         }
 
-        return parse_scope(
-            identities.root(),
-            false,
-            0);
+        const auto parsed =
+            parse_scope(
+                identities.root(),
+                false,
+                0);
+
+        if (!succeeded(parsed)) {
+            return parsed;
+        }
+
+        return sources.end_root();
     }
 
 private:
@@ -1569,6 +1585,9 @@ private:
                 "Expected record identifier");
         }
 
+        const auto record_file =
+            current.file;
+
         const auto record_name =
             current.identifier;
 
@@ -1605,6 +1624,17 @@ private:
         }
 
         if (at(token_kind::semicolon)) {
+            status =
+                sources.add(
+                    record_file,
+                    source_data_ref::type(
+                        identity,
+                        false));
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
             return advance();
         }
 
@@ -1889,6 +1919,17 @@ private:
                 "Record definition conflicts with existing semantic definition");
         }
 
+        status =
+            sources.add(
+                record_file,
+                source_data_ref::type(
+                    identity,
+                    true));
+
+        if (!succeeded(status)) {
+            return status;
+        }
+
         return advance();
     }
 
@@ -1925,6 +1966,9 @@ private:
                 parser_failure_kind::syntax,
                 "Expected object identifier");
         }
+
+        const auto object_file =
+            current.file;
 
         const auto name =
             current.identifier;
@@ -2083,6 +2127,16 @@ private:
                 "Object declaration conflicts with existing semantic object");
         }
 
+        status =
+            sources.add(
+                object_file,
+                source_data_ref::object(
+                    identity));
+
+        if (!succeeded(status)) {
+            return status;
+        }
+
         return advance();
     }
 
@@ -2208,6 +2262,9 @@ private:
     [[nodiscard]] server_status parse_link(
         identity_ref scope) noexcept {
 
+        const auto link_file =
+            current.file;
+
         object_endpoint target;
 
         auto status =
@@ -2265,6 +2322,16 @@ private:
             return fail(
                 parser_failure_kind::semantic,
                 "Link conflicts with an existing binding for the target endpoint");
+        }
+
+        status =
+            sources.add(
+                link_file,
+                source_data_ref::link(
+                    link));
+
+        if (!succeeded(status)) {
+            return status;
         }
 
         return advance();
@@ -2364,6 +2431,7 @@ private:
     semantic_input input;
     identity_space& identities;
     graph& G;
+    source_map& sources;
     parser_failure* failure = nullptr;
     semantic_token current;
     semantic_token buffered;
@@ -2380,6 +2448,7 @@ server_status parse_semantic_project(
     string_table& strings,
     identity_space& identities,
     graph& G,
+    source_map& sources,
     parser_failure* failure) noexcept {
 
     if (failure != nullptr) {
@@ -2392,6 +2461,14 @@ server_status parse_semantic_project(
         return server_status::project_configuration_invalid;
     }
 
+    const auto source_reset =
+        sources.reset(
+            files.size());
+
+    if (!succeeded(source_reset)) {
+        return source_reset;
+    }
+
     semantic_parser parser{
         files,
         lexical,
@@ -2399,6 +2476,7 @@ server_status parse_semantic_project(
         strings,
         identities,
         G,
+        sources,
         failure};
 
     for (std::size_t index = 0;
@@ -2426,7 +2504,7 @@ server_status parse_semantic_project(
         }
     }
 
-    return server_status::success;
+    return sources.finalize(files.size(), G);
 }
 
 }

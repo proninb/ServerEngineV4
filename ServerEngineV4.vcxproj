@@ -94,6 +94,7 @@
     <ClCompile Include="server_engine\project\string\string_table.cpp" />
     <ClCompile Include="server_engine\project\semantic\identity.cpp" />
     <ClCompile Include="server_engine\project\graph\graph.cpp" />
+    <ClCompile Include="server_engine\project\source\source_map.cpp" />
     <ClCompile Include="server_engine\project\parser\parser.cpp" />
     <ClCompile Include="server_engine\project\preprocessor\preprocessor.cpp" />
     <ClCompile Include="server_engine\project\frontend\frontend_input.cpp" />
@@ -214,4 +215,7 @@
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
+  <ItemGroup>
+    <ClInclude Include="server_engine\project\source\source_map.hpp" />
+  </ItemGroup>
 </Project>

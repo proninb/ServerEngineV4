@@ -8,6 +8,7 @@
 #pragma once
 
 #include "../file/file_context.hpp"
+#include "../source/source_map.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -61,6 +62,8 @@ private:
         file_index_offset = 0;
         directory_index_offset = 0;
         checksum_offset = 0;
+        presence_offset = 0;
+        type_count = object_count = link_count = 0;
 
         file_count = 0;
         path_bytes = 0;
@@ -84,6 +87,8 @@ private:
     std::size_t file_index_offset = 0;
     std::size_t directory_index_offset = 0;
     std::size_t checksum_offset = 0;
+    std::size_t presence_offset = 0;
+    std::uint32_t type_count = 0, object_count = 0, link_count = 0;
 
     std::uint32_t file_count = 0;
     std::uint32_t path_bytes = 0;
@@ -101,17 +106,15 @@ private:
     std::vector<std::uint64_t> directory_index_references;
     std::vector<std::uint32_t> directory_index_flags;
 
-    friend source_save_result
-    prepare_source_save_layout(
-        const file_context&,
-        const source_save_build_options&,
-        source_save_layout&) noexcept;
+    friend source_save_result prepare_source_save_layout(const file_context &,
+                                                         const source_map &,
+                                                         const source_save_build_options &,
+                                                         source_save_layout &) noexcept;
 
-    friend source_save_result
-    encode_source_save_image(
-        const file_context&,
-        const source_save_layout&,
-        std::span<std::byte>) noexcept;
+    friend source_save_result encode_source_save_image(const file_context &,
+                                                       const source_map &,
+                                                       const source_save_layout &,
+                                                       std::span<std::byte>) noexcept;
 };
 
 class source_save_edge_view final {
@@ -178,10 +181,25 @@ public:
     [[nodiscard]] std::uint32_t directory_watch_flags(
         std::uint64_t file_reference) const noexcept;
 
-private:
+    [[nodiscard]] std::size_t type_presence_count() const noexcept {
+        return type_count;
+    }
+    [[nodiscard]] std::size_t object_presence_count() const noexcept {
+        return object_count;
+    }
+    [[nodiscard]] std::size_t link_presence_count() const noexcept {
+        return link_count;
+    }
+    [[nodiscard]] source_type_presence type_presence(std::size_t index) const noexcept;
+    [[nodiscard]] std::uint32_t object_presence(std::size_t index) const noexcept;
+    [[nodiscard]] std::uint32_t link_presence(std::size_t index) const noexcept;
+
+  private:
     friend source_save_result validate_source_save_image(
         std::span<const std::byte>) noexcept;
 
+    std::size_t presence_offset = 0;
+    std::uint32_t type_count = 0, object_count = 0, link_count = 0;
     std::span<const std::byte> bytes;
     std::size_t records_offset = 0;
     std::size_t paths_offset = 0;
@@ -226,22 +244,23 @@ struct source_save_change_scan final {
     file_change_checkpoint next_checkpoint;
 };
 
-[[nodiscard]] source_save_result prepare_source_save_layout(
-    const file_context& files,
-    const source_save_build_options& options,
-    source_save_layout& output) noexcept;
+[[nodiscard]] source_save_result
+prepare_source_save_layout(const file_context &files,
+                           const source_map &sources,
+                           const source_save_build_options &options,
+                           source_save_layout &output) noexcept;
 
-[[nodiscard]] source_save_result prepare_source_save_layout(
-    const file_context& files,
-    source_save_layout& output) noexcept;
+[[nodiscard]] source_save_result prepare_source_save_layout(const file_context &files,
+                                                            const source_map &sources,
+                                                            source_save_layout &output) noexcept;
 
 // Direct encoder. Precondition: File Context is unchanged since layout
 // preparation and its dependency topology remains finalized. No filesystem
 // discovery or whole-image allocation occurs here.
-[[nodiscard]] source_save_result encode_source_save_image(
-    const file_context& files,
-    const source_save_layout& layout,
-    std::span<std::byte> output) noexcept;
+[[nodiscard]] source_save_result encode_source_save_image(const file_context &files,
+                                                          const source_map &sources,
+                                                          const source_save_layout &layout,
+                                                          std::span<std::byte> output) noexcept;
 
 [[nodiscard]] source_save_result validate_source_save_image(
     std::span<const std::byte> image) noexcept;
@@ -256,4 +275,9 @@ struct source_save_change_scan final {
     std::span<const file_id> dirty,
     std::vector<file_id>& affected) noexcept;
 
+class compiled_project_view;
+// Cold cross-artifact audit: presence is derived from root -> contribution ownership.
+[[nodiscard]] source_save_result
+verify_source_save_presence(const source_save_view &source,
+                            const compiled_project_view &compiled) noexcept;
 }

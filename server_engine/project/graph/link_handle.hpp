@@ -33,6 +33,9 @@ public:
         link_handle,
         link_handle) noexcept = default;
 
+    static constexpr std::uint32_t maximum_slot =
+        0x3fffffffu;
+
 private:
     explicit constexpr link_handle(
         std::uint32_t value) noexcept

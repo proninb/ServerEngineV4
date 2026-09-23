@@ -16,6 +16,7 @@
 #include "persistence/database.hpp"
 #include "persistence/source_save.hpp"
 #include "semantic/identity.hpp"
+#include "source/source_map.hpp"
 #include "string/string_table.hpp"
 #include "../configuration/server_configuration.hpp"
 #include "../read_only_file_mapping.hpp"
@@ -74,6 +75,7 @@ public:
     string_table strings;
     identity_space identities;
     graph G;
+    source_map sources;
     assign_table assigns;
 
     preprocessor_configuration preprocessor;

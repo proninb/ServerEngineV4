@@ -10,6 +10,7 @@
 
 #include "project_artifact.hpp"
 #include "../assign/assign_table.hpp"
+#include "../source/source_map.hpp"
 #include "../graph/graph.hpp"
 #include "../semantic/identity.hpp"
 #include "../string/string_table.hpp"
@@ -22,14 +23,12 @@
 
 namespace cw::server {
 
-inline constexpr std::uint32_t
-compiled_project_format_version = 1;
+inline constexpr std::uint32_t compiled_project_format_version = 2;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;
 
-inline constexpr std::size_t
-compiled_project_directory_count = 16;
+inline constexpr std::size_t compiled_project_directory_count = 22;
 
 inline constexpr std::size_t
 compiled_project_directory_entry_size = 32;
@@ -59,6 +58,12 @@ enum class compiled_project_section : std::uint32_t {
     graph_identity_index = 14,
     assign_records = 15,
     assign_bytes = 16,
+    source_contributions = 17,
+    source_roots = 18,
+    source_root_indices = 19,
+    source_files = 20,
+    source_file_indices = 21,
+    source_paths = 22,
 };
 
 enum class compiled_project_image_result : std::uint8_t {
@@ -92,21 +97,23 @@ private:
     std::size_t size_value = 0;
 
     friend compiled_project_image_result
-    prepare_compiled_project_layout(
-        const string_table&,
-        const identity_space&,
-        const graph&,
-        const assign_table&,
-        compiled_project_layout&) noexcept;
+    prepare_compiled_project_layout(const string_table &,
+                                    const identity_space &,
+                                    const graph &,
+                                    const assign_table &,
+                                    const file_context &,
+                                    const source_map &,
+                                    compiled_project_layout &) noexcept;
 
     friend compiled_project_image_result
-    encode_compiled_project_image(
-        const string_table&,
-        const identity_space&,
-        const graph&,
-        const assign_table&,
-        const compiled_project_layout&,
-        std::span<std::byte>) noexcept;
+    encode_compiled_project_image(const string_table &,
+                                  const identity_space &,
+                                  const graph &,
+                                  const assign_table &,
+                                  const file_context &,
+                                  const source_map &,
+                                  const compiled_project_layout &,
+                                  std::span<std::byte>) noexcept;
 };
 
 // Read-only query view over one mapped/immutable compiled.bin image.
@@ -232,7 +239,20 @@ public:
         std::string_view& source,
         std::string_view& target) const noexcept;
 
-private:
+    [[nodiscard]] std::size_t source_file_count() const noexcept;
+    [[nodiscard]] std::size_t source_contribution_count() const noexcept;
+    [[nodiscard]] bool source_contribution(std::uint32_t index,
+                                           source_contribution_record &output) const noexcept;
+    [[nodiscard]] bool source_root(file_id root, source_map_range &output) const noexcept;
+    [[nodiscard]] bool source_file(file_id file,
+                                   std::string_view &path,
+                                   file_kind &kind,
+                                   source_map_range &output) const noexcept;
+    [[nodiscard]] bool source_root_index(std::uint32_t index, std::uint32_t &output) const noexcept;
+    [[nodiscard]] bool source_file_index(std::uint32_t index, std::uint32_t &output) const noexcept;
+    [[nodiscard]] compiled_project_image_result verify_sources() const noexcept;
+
+  private:
     struct section_view final {
         const std::byte* data = nullptr;
         std::uint64_t count = 0;
@@ -281,22 +301,25 @@ private:
 
 // Precomputes the exact final compiled.bin size and fixed section offsets
 // without allocating or copying Project payload bytes.
-[[nodiscard]] compiled_project_image_result prepare_compiled_project_layout(
-    const string_table& strings,
-    const identity_space& identities,
-    const graph& G,
-    const assign_table& assigns,
-    compiled_project_layout& output) noexcept;
+[[nodiscard]] compiled_project_image_result
+prepare_compiled_project_layout(const string_table &strings,
+                                const identity_space &identities,
+                                const graph &G,
+                                const assign_table &assigns,
+                                const file_context &files,
+                                const source_map &sources,
+                                compiled_project_layout &output) noexcept;
 
 // Encodes directly into caller-owned bytes, including writable mmap pages.
 // layout must come from prepare_compiled_project_layout() for the same unchanged
 // construction state. Encoding never performs a second layout pass.
-[[nodiscard]] compiled_project_image_result encode_compiled_project_image(
-    const string_table& strings,
-    const identity_space& identities,
-    const graph& G,
-    const assign_table& assigns,
-    const compiled_project_layout& layout,
-    std::span<std::byte> output) noexcept;
-
+[[nodiscard]] compiled_project_image_result
+encode_compiled_project_image(const string_table &strings,
+                              const identity_space &identities,
+                              const graph &G,
+                              const assign_table &assigns,
+                              const file_context &files,
+                              const source_map &sources,
+                              const compiled_project_layout &layout,
+                              std::span<std::byte> output) noexcept;
 }

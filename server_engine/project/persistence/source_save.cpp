@@ -1,4 +1,5 @@
 #include "source_save.hpp"
+#include "compiled_project.hpp"
 
 #include "../../filesystem_path.hpp"
 
@@ -30,11 +31,17 @@ namespace cw::server {
 namespace {
 
 constexpr std::array<std::byte, 8> magic{
-    std::byte{'C'}, std::byte{'W'}, std::byte{'S'}, std::byte{'R'},
-    std::byte{'C'}, std::byte{'0'}, std::byte{'0'}, std::byte{'2'},
+    std::byte{'C'},
+    std::byte{'W'},
+    std::byte{'S'},
+    std::byte{'R'},
+    std::byte{'C'},
+    std::byte{'0'},
+    std::byte{'0'},
+    std::byte{'3'},
 };
 
-constexpr std::uint32_t format_version = 2;
+constexpr std::uint32_t format_version = 3;
 
 constexpr std::uint32_t current_member_flag = 0x00000001u;
 constexpr std::uint32_t physical_present_flag = 0x00000002u;
@@ -1043,6 +1050,8 @@ file_id source_save_edge_view::operator[](
 }
 
 void source_save_view::reset() noexcept {
+    presence_offset = 0;
+    type_count = object_count = link_count = 0;
     bytes = {};
     records_offset = 0;
     paths_offset = 0;
@@ -1083,91 +1092,26 @@ source_save_result source_save_view::bind(
     std::uint32_t version = 0;
     std::uint32_t backend = 0;
     std::uint32_t reserved0 = 0;
-    std::uint32_t reserved1 = 0;
-    std::uint32_t reserved2 = 0;
-    std::uint32_t reserved3 = 0;
 
     std::uint64_t volume = 0;
     std::uint64_t journal = 0;
     std::uint64_t next_usn = 0;
 
-    if (!read_u32(
-            image,
-            offset,
-            version) ||
-        version != format_version ||
-        !read_u32(
-            image,
-            offset,
-            file_count_value) ||
-        file_count_value == 0 ||
-        !read_u32(
-            image,
-            offset,
-            path_bytes_value) ||
-        !read_u32(
-            image,
-            offset,
-            forward_count_value) ||
-        !read_u32(
-            image,
-            offset,
-            reverse_count_value) ||
-        forward_count_value !=
-            reverse_count_value ||
-        !read_u32(
-            image,
-            offset,
-            backend) ||
-        backend >
-            static_cast<std::uint32_t>(
-                file_change_backend::
-                    windows_usn) ||
-        !read_u32(
-            image,
-            offset,
-            file_index_count_value) ||
-        !valid_power_of_two_or_zero(
-            file_index_count_value) ||
-        !read_u32(
-            image,
-            offset,
-            directory_index_count_value) ||
-        !valid_power_of_two_or_zero(
-            directory_index_count_value) ||
-        !read_u32(
-            image,
-            offset,
-            reserved0) ||
-        reserved0 != 0 ||
-        !read_u64(
-            image,
-            offset,
-            volume) ||
-        !read_u64(
-            image,
-            offset,
-            journal) ||
-        !read_u64(
-            image,
-            offset,
-            next_usn) ||
-        !read_u32(
-            image,
-            offset,
-            reserved1) ||
-        reserved1 != 0 ||
-        !read_u32(
-            image,
-            offset,
-            reserved2) ||
-        reserved2 != 0 ||
-        !read_u32(
-            image,
-            offset,
-            reserved3) ||
-        reserved3 != 0 ||
-        offset != header_size) {
+    if (!read_u32(image, offset, version) || version != format_version ||
+        !read_u32(image, offset, file_count_value) || file_count_value == 0 ||
+        !read_u32(image, offset, path_bytes_value) ||
+        !read_u32(image, offset, forward_count_value) ||
+        !read_u32(image, offset, reverse_count_value) ||
+        forward_count_value != reverse_count_value || !read_u32(image, offset, backend) ||
+        backend > static_cast<std::uint32_t>(file_change_backend::windows_usn) ||
+        !read_u32(image, offset, file_index_count_value) ||
+        !valid_power_of_two_or_zero(file_index_count_value) ||
+        !read_u32(image, offset, directory_index_count_value) ||
+        !valid_power_of_two_or_zero(directory_index_count_value) ||
+        !read_u32(image, offset, reserved0) || reserved0 != 0 || !read_u64(image, offset, volume) ||
+        !read_u64(image, offset, journal) || !read_u64(image, offset, next_usn) ||
+        !read_u32(image, offset, type_count) || !read_u32(image, offset, object_count) ||
+        !read_u32(image, offset, link_count) || offset != header_size) {
 
         reset();
         return source_save_result::
@@ -1242,32 +1186,20 @@ source_save_result source_save_view::bind(
             invalid_image;
     }
 
+    std::size_t presence_size = 0, presence_words = type_count;
+    if (!add_size(presence_words, type_count) || !add_size(presence_words, object_count) ||
+        !add_size(presence_words, link_count) || !multiply_size(presence_words, 4, presence_size)) {
+        reset();
+        return source_save_result::invalid_image;
+    }
     std::size_t expected =
         header_size;
 
-    if (!add_size(
-            expected,
-            records_size) ||
-        !add_size(
-            expected,
-            path_bytes_value) ||
-        !add_size(
-            expected,
-            forward_size) ||
-        !add_size(
-            expected,
-            reverse_size) ||
-        !add_size(
-            expected,
-            file_index_size) ||
-        !add_size(
-            expected,
-            directory_index_size) ||
-        !add_size(
-            expected,
-            checksum_size) ||
-        expected !=
-            image.size()) {
+    if (!add_size(expected, records_size) || !add_size(expected, path_bytes_value) ||
+        !add_size(expected, forward_size) || !add_size(expected, reverse_size) ||
+        !add_size(expected, file_index_size) || !add_size(expected, directory_index_size) ||
+        !add_size(expected, presence_size) || !add_size(expected, checksum_size) ||
+        expected != image.size()) {
 
         reset();
         return source_save_result::
@@ -1297,6 +1229,7 @@ source_save_result source_save_view::bind(
         file_index_offset +
         file_index_size;
 
+    presence_offset = directory_index_offset + directory_index_size;
     bytes = image;
 
     return source_save_result::success;
@@ -1616,10 +1549,10 @@ std::uint32_t source_save_view::directory_watch_flags(
     return 0;
 }
 
-source_save_result prepare_source_save_layout(
-    const file_context& files,
-    const source_save_build_options& options,
-    source_save_layout& output) noexcept {
+source_save_result prepare_source_save_layout(const file_context &files,
+                                              const source_map &sources,
+                                              const source_save_build_options &options,
+                                              source_save_layout &output) noexcept {
 
     output.reset();
 
@@ -1874,6 +1807,25 @@ source_save_result prepare_source_save_layout(
         return source_save_result::failed;
     }
 
+    if (!sources.finalized() || sources.file_entries().size() != files.size() ||
+        sources.type_presence_entries().size() > UINT32_MAX ||
+        sources.object_presence_entries().size() > UINT32_MAX ||
+        sources.link_presence_entries().size() > UINT32_MAX) {
+        output.reset();
+        return source_save_result::invalid_state;
+    }
+    output.presence_offset = cursor;
+    output.type_count = static_cast<std::uint32_t>(sources.type_presence_entries().size());
+    output.object_count = static_cast<std::uint32_t>(sources.object_presence_entries().size());
+    output.link_count = static_cast<std::uint32_t>(sources.link_presence_entries().size());
+    std::size_t presence_words = output.type_count, presence_size = 0;
+    if (!add_size(presence_words, output.type_count) ||
+        !add_size(presence_words, output.object_count) ||
+        !add_size(presence_words, output.link_count) ||
+        !multiply_size(presence_words, 4, presence_size) || !add_size(cursor, presence_size)) {
+        output.reset();
+        return source_save_result::failed;
+    }
     output.checksum_offset =
         cursor;
 
@@ -1899,21 +1851,23 @@ source_save_result prepare_source_save_layout(
     return source_save_result::success;
 }
 
-source_save_result prepare_source_save_layout(
-    const file_context& files,
-    source_save_layout& output) noexcept {
+source_save_result prepare_source_save_layout(const file_context &files,
+                                              const source_map &sources,
+                                              source_save_layout &output) noexcept {
 
-    return prepare_source_save_layout(
-        files,
-        source_save_build_options{},
-        output);
+    return prepare_source_save_layout(files, sources, source_save_build_options{}, output);
 }
 
-source_save_result encode_source_save_image(
-    const file_context& files,
-    const source_save_layout& layout,
-    std::span<std::byte> output) noexcept {
+source_save_result encode_source_save_image(const file_context &files,
+                                            const source_map &sources,
+                                            const source_save_layout &layout,
+                                            std::span<std::byte> output) noexcept {
 
+    if (!sources.finalized() || sources.file_entries().size() != files.size() ||
+        sources.type_presence_entries().size() != layout.type_count ||
+        sources.object_presence_entries().size() != layout.object_count ||
+        sources.link_presence_entries().size() != layout.link_count)
+        return source_save_result::invalid_state;
     if (layout.size_value == 0 ||
         output.size() !=
             layout.size_value ||
@@ -1942,75 +1896,22 @@ source_save_result encode_source_save_image(
 
     std::size_t header_cursor = 0;
 
-    if (!write_bytes(
-            output,
-            header_cursor,
-            magic.data(),
-            magic.size()) ||
-        !write_u32(
-            output,
-            header_cursor,
-            format_version) ||
-        !write_u32(
-            output,
-            header_cursor,
-            layout.file_count) ||
-        !write_u32(
-            output,
-            header_cursor,
-            layout.path_bytes) ||
-        !write_u32(
-            output,
-            header_cursor,
-            layout.forward_count) ||
-        !write_u32(
-            output,
-            header_cursor,
-            layout.reverse_count) ||
-        !write_u32(
-            output,
-            header_cursor,
-            static_cast<std::uint32_t>(
-                layout.checkpoint.backend)) ||
-        !write_u32(
-            output,
-            header_cursor,
-            layout.file_index_count) ||
-        !write_u32(
-            output,
-            header_cursor,
-            layout.directory_index_count) ||
-        !write_u32(
-            output,
-            header_cursor,
-            0) ||
-        !write_u64(
-            output,
-            header_cursor,
-            layout.checkpoint.volume_serial) ||
-        !write_u64(
-            output,
-            header_cursor,
-            layout.checkpoint.journal_id) ||
-        !write_u64(
-            output,
-            header_cursor,
-            static_cast<std::uint64_t>(
-                layout.checkpoint.next_usn)) ||
-        !write_u32(
-            output,
-            header_cursor,
-            0) ||
-        !write_u32(
-            output,
-            header_cursor,
-            0) ||
-        !write_u32(
-            output,
-            header_cursor,
-            0) ||
-        header_cursor !=
-            header_size) {
+    if (!write_bytes(output, header_cursor, magic.data(), magic.size()) ||
+        !write_u32(output, header_cursor, format_version) ||
+        !write_u32(output, header_cursor, layout.file_count) ||
+        !write_u32(output, header_cursor, layout.path_bytes) ||
+        !write_u32(output, header_cursor, layout.forward_count) ||
+        !write_u32(output, header_cursor, layout.reverse_count) ||
+        !write_u32(output, header_cursor, static_cast<std::uint32_t>(layout.checkpoint.backend)) ||
+        !write_u32(output, header_cursor, layout.file_index_count) ||
+        !write_u32(output, header_cursor, layout.directory_index_count) ||
+        !write_u32(output, header_cursor, 0) ||
+        !write_u64(output, header_cursor, layout.checkpoint.volume_serial) ||
+        !write_u64(output, header_cursor, layout.checkpoint.journal_id) ||
+        !write_u64(output, header_cursor, static_cast<std::uint64_t>(layout.checkpoint.next_usn)) ||
+        !write_u32(output, header_cursor, layout.type_count) ||
+        !write_u32(output, header_cursor, layout.object_count) ||
+        !write_u32(output, header_cursor, layout.link_count) || header_cursor != header_size) {
 
         return source_save_result::failed;
     }
@@ -2319,11 +2220,25 @@ source_save_result encode_source_save_image(
         }
     }
 
-    if (directory_index_cursor !=
-        layout.checksum_offset) {
+    if (directory_index_cursor != layout.presence_offset) {
 
         return source_save_result::failed;
     }
+
+    auto presence_cursor = layout.presence_offset;
+    for (auto p : sources.type_presence_entries()) {
+        if (p.definitions > p.declarations || !write_u32(output, presence_cursor, p.declarations) ||
+            !write_u32(output, presence_cursor, p.definitions))
+            return source_save_result::invalid_state;
+    }
+    for (auto p : sources.object_presence_entries())
+        if (!write_u32(output, presence_cursor, p))
+            return source_save_result::failed;
+    for (auto p : sources.link_presence_entries())
+        if (!write_u32(output, presence_cursor, p))
+            return source_save_result::failed;
+    if (presence_cursor != layout.checksum_offset)
+        return source_save_result::invalid_state;
 
     const auto digest =
         checksum(
@@ -2346,7 +2261,6 @@ source_save_result encode_source_save_image(
 
     return source_save_result::success;
 }
-
 
 source_save_result validate_source_save_image(
     std::span<const std::byte> image) noexcept {
@@ -2378,6 +2292,12 @@ source_save_result validate_source_save_image(
 
         return source_save_result::
             invalid_image;
+    }
+
+    for (std::size_t i = 0; i < view.type_presence_count(); ++i) {
+        const auto p = view.type_presence(i);
+        if (p.definitions > p.declarations)
+            return source_save_result::invalid_image;
     }
 
     try {
@@ -3296,4 +3216,98 @@ server_status collect_source_save_affected(
     }
 }
 
+source_type_presence source_save_view::type_presence(std::size_t index) const noexcept {
+    source_type_presence result;
+    if (!valid() || index >= type_count)
+        return result;
+    auto cursor = presence_offset + index * 8;
+    (void)read_u32(bytes, cursor, result.declarations);
+    (void)read_u32(bytes, cursor, result.definitions);
+    return result;
 }
+std::uint32_t source_save_view::object_presence(std::size_t index) const noexcept {
+    std::uint32_t result = 0;
+    if (!valid() || index >= object_count)
+        return result;
+    auto cursor = presence_offset + std::size_t{type_count} * 8 + index * 4;
+    (void)read_u32(bytes, cursor, result);
+    return result;
+}
+std::uint32_t source_save_view::link_presence(std::size_t index) const noexcept {
+    std::uint32_t result = 0;
+    if (!valid() || index >= link_count)
+        return result;
+    auto cursor =
+        presence_offset + std::size_t{type_count} * 8 + std::size_t{object_count} * 4 + index * 4;
+    (void)read_u32(bytes, cursor, result);
+    return result;
+}
+source_save_result verify_source_save_presence(const source_save_view &source,
+                                               const compiled_project_view &compiled) noexcept {
+    if (!source.valid() || !compiled.valid() ||
+        source.file_count() != compiled.source_file_count() ||
+        source.type_presence_count() != compiled.type_count() ||
+        source.object_presence_count() != compiled.object_count() ||
+        source.link_presence_count() != compiled.link_count() ||
+        compiled.verify_sources() != compiled_project_image_result::success)
+        return source_save_result::invalid_image;
+    try {
+        std::vector<source_type_presence> types(compiled.type_count());
+        std::vector<std::uint32_t> objects(compiled.object_count()), links(compiled.link_count());
+        const auto increment = [](std::uint32_t &value) {
+            if (value == UINT32_MAX)
+                return false;
+            ++value;
+            return true;
+        };
+        for (std::uint32_t i = 0; i < source.file_count(); ++i) {
+            source_save_file_view physical;
+            source_map_range file_range, range;
+            std::string_view path;
+            file_kind kind;
+            if (!source.file(file_id{i + 1}, physical) ||
+                !compiled.source_file(file_id{i + 1}, path, kind, file_range) ||
+                physical.path_utf8 != path || physical.kind != kind ||
+                !compiled.source_root(file_id{i + 1}, range))
+                return source_save_result::invalid_image;
+            for (std::uint32_t j = 0; j < range.count; ++j) {
+                std::uint32_t id;
+                source_contribution_record c;
+                if (!compiled.source_root_index(range.begin + j, id) ||
+                    !compiled.source_contribution(id, c))
+                    return source_save_result::invalid_image;
+                if (c.data.kind() == source_data_kind::link) {
+                    if (c.data.slot() > links.size() || !increment(links[c.data.slot() - 1]))
+                        return source_save_result::invalid_image;
+                } else if (c.data.kind() == source_data_kind::object) {
+                    const auto handle =
+                        compiled.find_object(compiled.identity_at_slot(c.data.slot()));
+                    if (!handle || !increment(objects[handle.value() - 1]))
+                        return source_save_result::invalid_image;
+                } else {
+                    const auto handle =
+                        compiled.find_type(compiled.identity_at_slot(c.data.slot()));
+                    if (!handle || !increment(types[handle.value() - 1].declarations))
+                        return source_save_result::invalid_image;
+                    if (c.data.kind() == source_data_kind::type_definition &&
+                        !increment(types[handle.value() - 1].definitions))
+                        return source_save_result::invalid_image;
+                }
+            }
+        }
+        for (std::size_t i = 0; i < types.size(); ++i)
+            if (types[i] != source.type_presence(i))
+                return source_save_result::invalid_image;
+        for (std::size_t i = 0; i < objects.size(); ++i)
+            if (objects[i] != source.object_presence(i))
+                return source_save_result::invalid_image;
+        for (std::size_t i = 0; i < links.size(); ++i)
+            if (links[i] != source.link_presence(i))
+                return source_save_result::invalid_image;
+        return source_save_result::success;
+    } catch (...) {
+        return source_save_result::failed;
+    }
+}
+
+} // namespace cw::server

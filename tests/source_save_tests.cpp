@@ -2,7 +2,10 @@
 #include "read_only_file_mapping.hpp"
 #include "writable_file_mapping.hpp"
 #include "project/file/file_context.hpp"
+#include "project/graph/graph.hpp"
 #include "project/persistence/source_save.hpp"
+#include "project/source/source_map.hpp"
+#include "project/persistence/compiled_project.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -238,15 +241,48 @@ void test_direct_source_save(
         return;
     }
 
+    graph G;
+    source_map sources;
+    string_table strings;
+    identity_space identities{strings};
+    string_id name;
+    identity_ref identity;
+    type_handle type;
+    tests.expect(
+        succeeded(strings.intern("Shared", name)) &&
+            succeeded(identities.resolve(identities.root(), name, identity_kind::type, identity)) &&
+            succeeded(G.declare_record(identity, graph_record_kind::struct_type, type)),
+        "presence graph fixture");
+    string_id field_name, object_name; identity_ref object_identity;
+    object_handle object; link_handle link;
+    tests.expect(succeeded(strings.intern("value", field_name)) && succeeded(strings.intern("instance", object_name)) &&
+        succeeded(identities.resolve(identities.root(),object_name,identity_kind::object,object_identity)),"presence member/object identities");
+    const member_record field{field_name,G.intrinsic(intrinsic_type::signed_int),graph_member_access::public_access};
+    tests.expect(succeeded(G.define_record(type,graph_record_kind::struct_type,{&field,1})) &&
+        succeeded(G.add_object(object_identity,G.named(type),object)),"presence object fixture");
+    const object_endpoint endpoint{object,G.find_member(type,field_name)};
+    tests.expect(succeeded(G.add_link(endpoint,endpoint,link)),"presence link fixture");
+    for (auto owner : {first, second}) {
+        tests.expect(
+            succeeded(sources.begin_root(owner)) &&
+                succeeded(sources.add(second, source_data_ref::type_definition(identity))) &&
+                succeeded(sources.add(second, source_data_ref::object(object_identity))) &&
+                succeeded(sources.add(second, source_data_ref::link(link))) &&
+                succeeded(sources.end_root()),
+            "source-save root ownership");
+    }
+
+    if (!tests.expect(succeeded(sources.finalize(files.size(), G)),
+                      "finalize source-save semantic presence")) {
+        return;
+    }
+
     source_save_layout layout;
 
-    if (!tests.expect(
-            prepare_source_save_layout(
-                files,
-                layout) ==
-                source_save_result::success &&
-            layout.size() != 0,
-            "prepare direct source-save layout")) {
+    if (!tests.expect(prepare_source_save_layout(files, sources, layout) ==
+                              source_save_result::success &&
+                          layout.size() != 0,
+                      "prepare direct source-save layout")) {
 
         return;
     }
@@ -266,13 +302,9 @@ void test_direct_source_save(
         return;
     }
 
-    if (!tests.expect(
-            encode_source_save_image(
-                files,
-                layout,
-                writable.bytes()) ==
-                source_save_result::success,
-            "encode source.bin directly into mmap")) {
+    if (!tests.expect(encode_source_save_image(files, sources, layout, writable.bytes()) ==
+                          source_save_result::success,
+                      "encode source.bin directly into mmap")) {
 
         return;
     }
@@ -296,6 +328,37 @@ void test_direct_source_save(
 
         return;
     }
+
+    tests.expect(writable_view.type_presence_count() == 1 &&
+                     writable_view.type_presence(0) == source_type_presence{2, 2},
+                 "presence persisted by root ownership");
+    tests.expect(writable_view.object_presence_count()==1 && writable_view.link_presence_count()==1 &&
+        writable_view.object_presence(0)==2 && writable_view.link_presence(0)==2,"object and link presence persisted");
+    assign_table assigns;
+    compiled_project_layout compiled_layout;
+    tests.expect(prepare_compiled_project_layout(
+                     strings, identities, G, assigns, files, sources, compiled_layout) ==
+                     compiled_project_image_result::success,
+                 "prepare cross-artifact fixture");
+    std::vector<std::byte> compiled_bytes(compiled_layout.size());
+    tests.expect(
+        encode_compiled_project_image(
+            strings, identities, G, assigns, files, sources, compiled_layout, compiled_bytes) ==
+            compiled_project_image_result::success,
+        "encode cross-artifact fixture");
+    compiled_project_view compiled;
+    tests.expect(compiled.bind(compiled_bytes) == compiled_project_image_result::success &&
+                     verify_source_save_presence(writable_view, compiled) ==
+                         source_save_result::success,
+                 "presence matches compiled root ownership");
+    auto altered = std::vector<std::byte>(writable.bytes().begin(), writable.bytes().end());
+    // Presence has one type pair, one object and one link counter before SHA-256.
+    altered[altered.size() - 32 - 16] = std::byte{1};
+    source_save_view stale;
+    tests.expect(stale.bind(altered) == source_save_result::success &&
+                     verify_source_save_presence(stale, compiled) ==
+                         source_save_result::invalid_image,
+                 "cross-artifact validation rejects stale presence");
 
     source_save_file_view first_state;
     source_save_file_view second_state;

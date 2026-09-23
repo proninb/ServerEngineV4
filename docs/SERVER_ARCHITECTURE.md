@@ -404,8 +404,8 @@ REBUILD
 
 `compiled.bin` contains the one compiled Project result used by LOAD to obtain
 G. It is mmap-native: semantic strings/identities, G arrays, persisted read
-indexes, and the ordered Studio-facing Assign table are bound directly from the
-mapped file without reconstructing mutable containers. ABI-derived Runtime
+indexes, the physical-file/root Source Map, and the ordered Studio-facing Assign
+table are bound directly from the mapped file without reconstructing mutable containers. ABI-derived Runtime
 layout belongs to Phase 2 and is not part of the current compiled format.
 
 `project.manifest`, `source.bin`, and `database.bin` are BUILD
@@ -417,7 +417,8 @@ continue and REBUILD is required.
 There is no selector file or active/inactive persistence slot.
 
 `source.bin` has a versioned/checksummed image contract for finalized File
-Context state. BUILD memory-maps it read-only directly.
+Context state plus BUILD-only semantic presence sidecars. BUILD memory-maps it
+read-only directly.
 `source_save_view::bind()` is O(1) and allocation-free.
 
 BUILD change discovery is journal-first. Before dirty detection, BUILD captures
@@ -483,6 +484,17 @@ Relative locators resolve from the declaring Project directory. Absolute locator
 resolve directly and are location-bound. Resolved paths and platform path keys
 remain temporary construction state.
 
+### Source provenance boundary
+
+Resident Project source provenance is final compiled metadata, not Graph hot
+state. Runtime/Studio will obtain `physical file -> semantic data` from the
+`compiled.bin` Source Map. BUILD-only physical dependency topology remains in
+`source.bin`; aggregate semantic presence will live beside that topology rather
+than inside G or inside individual DAG nodes.
+
+Construction provenance is already produced directly by Parser/Semantic. The
+mmap persistence sections are the next implementation slice.
+
 ## Project lifecycle state machine
 
 ```text
@@ -505,6 +517,25 @@ does not consume `server_context.project`.
 
 If BUILD fails, the old persisted BUILD state remains available for later
 incremental reuse, but no resident Project remains active.
+
+## Compiled Source Provenance Boundary
+
+The final Project keeps G free of file ownership. Source provenance is a cold
+compiled sidecar intended for Runtime/Studio inspection and sparse BUILD
+reconciliation.
+
+```text
+G
+    semantic/runtime result
+
+Source Map
+    semantic root -> contributions
+    physical file -> unique semantic data
+```
+
+Source Map is not a semantic dependency graph and does not alter the File
+Context dependency DAG.
+
 
 ## Development phase boundary
 
@@ -723,3 +754,72 @@ BUILD must update topology sparsely while preserving the same logical
 There is no generation-specific dependency-node identity and no Graph-generation
 model. BUILD may reuse persisted storage internally, but the architectural
 result of LOAD, BUILD, or REBUILD is always one `G`.
+
+
+## Semantic Source Map
+
+V4 keeps semantic source provenance separate from hot G records.
+
+```text
+G
+    final semantic WHAT
+    no file_id/source_id in type/object/link records
+
+compiled.bin Source Map
+    physical file_id -> semantic data
+    semantic root -> semantic contributions
+
+source.bin
+    physical file state
+    direct preprocessing/file dependency DAG
+    BUILD-only semantic presence counters
+```
+
+One canonical Source Map contribution is:
+
+```text
+{ physical file_id, semantic data }
+```
+
+The semantic data is one of:
+
+```text
+type declaration -> identity_ref slot
+type definition  -> identity_ref slot
+object           -> identity_ref slot
+link             -> link_handle slot
+```
+
+Members are not duplicated in Source Map. A type definition maps to G and its
+members are queried from that type. Object type and link endpoints are likewise
+queried from G.
+
+The same physical header may execute under more than one semantic root. Source
+Map therefore canonicalizes the physical contribution once and stores two compact
+many-to-many indexes:
+
+```text
+root_file_id -> contribution_id[]
+file_id      -> contribution_id[]
+```
+
+The first index is sparse-BUILD ownership: replacing one affected semantic root
+removes/replaces only that root's contribution references. The second is the
+Runtime/Studio query: what semantic data physically resides in this file.
+Common-header semantic payload is not copied once per root.
+
+The File Context DAG remains only direct file dependency topology produced by
+actual preprocessing execution. Source Map ownership is not a second semantic
+dependency DAG.
+
+`source.bin` persists only aggregate semantic presence needed to subtract/add a
+root without scanning all Source Map files:
+
+```text
+type_handle   -> declaration_count, definition_count
+object_handle -> producer_count
+link_handle   -> producer_count
+```
+
+These counters are derived from root ownership and are BUILD state. They are not
+Runtime semantic payload and are not embedded in G.

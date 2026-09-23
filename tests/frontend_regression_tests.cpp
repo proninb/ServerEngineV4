@@ -6,6 +6,7 @@
 #include "project/preprocessor/preprocessor.hpp"
 #include "project/preprocessor_configuration.hpp"
 #include "project/semantic/identity.hpp"
+#include "project/source/source_map.hpp"
 #include "project/string/string_table.hpp"
 
 #include <chrono>
@@ -211,16 +212,10 @@ private:
     string_table strings;
     identity_space identities{strings};
     graph G;
+    source_map sources;
 
     return parse_semantic_project(
-        files,
-        lexical,
-        1,
-        configuration,
-        strings,
-        identities,
-        G,
-        &failure);
+        files, lexical, 1, configuration, strings, identities, G, sources, &failure);
 }
 
 void test_header_name_diagnostics(
@@ -496,6 +491,68 @@ void test_parser_scope_limit(
     }
 }
 
+void test_parser_provenance(test_state &tests) {
+    const temporary_source common{"common_provenance", "struct Shared { int field; };"};
+    const auto include = "#include \"" + common.path().filename().string() + "\"\n";
+    const temporary_source first{"first_provenance", include};
+    const temporary_source second{"second_provenance", include};
+    file_context files;
+    lexical_generation lexical;
+    file_id a, b;
+    if (!prepare_root(tests, first.path(), files, lexical, a) ||
+        !prepare_root(tests, second.path(), files, lexical, b))
+        return;
+    lexical_stream stream;
+    if (!tests.expect(succeeded(lexer::tokenize(a, files.content(a), stream)) &&
+                          succeeded(lexical.publish(a, 0, stream)),
+                      "restore first root tokens"))
+        return;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    preprocessor_configuration configuration;
+    parser_failure failure;
+    tests.expect(succeeded(parse_semantic_project(
+                     files, lexical, 2, configuration, strings, identities, G, sources, &failure)),
+                 "parse shared discovered include");
+    tests.expect(files.size() == 3 && sources.finalized() && sources.file_entries().size() == 3 &&
+                     sources.contribution_entries().size() == 1 &&
+                     sources.root_index_entries().size() == 2 &&
+                     sources.contribution_entries()[0].file == file_id{3} &&
+                     sources.type_presence_entries()[0] == source_type_presence{2, 2},
+                 "parser finalizes after include discovery and deduplicates physical provenance");
+    const auto rejected = [&](std::string_view initial, std::string_view conflict,
+                              std::size_t expected_contributions) {
+        const temporary_source child{"conflict_provenance", conflict};
+        const auto text =
+            std::string{initial} + "\n#include \"" + child.path().filename().string() + "\"\n";
+        const temporary_source root{"conflicting_root", text};
+        file_context inputs;
+        lexical_generation tokens;
+        file_id id;
+        if (!prepare_root(tests, root.path(), inputs, tokens, id))
+            return;
+        string_table atoms;
+        identity_space names{atoms};
+        graph candidate;
+        source_map provenance;
+        parser_failure error;
+        tests.expect(
+            !succeeded(parse_semantic_project(
+                inputs, tokens, 1, configuration, atoms, names, candidate, provenance, &error)),
+            "reject semantic conflict");
+        bool only_root = true;
+        for (const auto &entry : provenance.contribution_entries())
+            only_root = only_root && entry.file == id;
+        tests.expect(!provenance.finalized() &&
+                         provenance.contribution_entries().size() == expected_contributions && only_root,
+                     "failed G operation adds no child provenance");
+    };
+    rejected("struct T { int a; };", "struct T { double a; };", 1);
+    rejected("int value;", "double value;", 1);
+    rejected("struct T { int a; int b; }; T x; T y; x.a = y.a;", "x.a = y.b;", 4);
+}
 }
 }
 
@@ -504,6 +561,8 @@ int main() {
 
     try {
         test_state tests;
+
+        test_parser_provenance(tests);
 
         test_header_name_diagnostics(
             tests);

@@ -245,6 +245,7 @@ server_status rebuild_project(
             context.strings,
             context.identities,
             context.G,
+            context.sources,
             &semantic_failure);
 
     if (!succeeded(parsed)) {
@@ -298,6 +299,7 @@ server_status rebuild_project(
     const auto source_prepared =
         prepare_source_save_layout(
             context.files,
+            context.sources,
             source_options,
             source_layout);
 
@@ -365,6 +367,8 @@ server_status rebuild_project(
             context.identities,
             context.G,
             context.assigns,
+            context.files,
+            context.sources,
             compiled_layout);
 
     if (prepared !=
@@ -517,6 +521,7 @@ server_status rebuild_project(
     const auto source_encoded =
         encode_source_save_image(
             context.files,
+            context.sources,
             source_layout,
             source_mapping.bytes());
 
@@ -707,6 +712,8 @@ server_status rebuild_project(
             context.identities,
             context.G,
             context.assigns,
+            context.files,
+            context.sources,
             compiled_layout,
             compiled_mapping.bytes());
 
@@ -749,6 +756,11 @@ server_status rebuild_project(
         return server_status::
             project_artifact_invalid;
     }
+
+    source_save_view persisted_source;
+    if (persisted_source.bind(source_mapping.bytes()) != source_save_result::success ||
+        verify_source_save_presence(persisted_source, compiled_view) != source_save_result::success)
+        return server_status::project_artifact_invalid;
 
     if (compiled_mapping.flush() !=
         writable_file_mapping_result::success) {
