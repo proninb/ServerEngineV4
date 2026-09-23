@@ -169,15 +169,104 @@ struct construction_content_hash final {
         const construction_content_hash&) noexcept = default;
 };
 
-// Mutable physical-file state for one construction operation. The operation
-// owner is the rollback boundary, so File Context has no nested update
-// transaction and no mutex.
+// Lightweight adjacency view used by both fresh native arenas and persisted
+// source.bin topology. Encoded BUILD edges are decoded without alignment or
+// native-endian assumptions and are never copied merely to expose adjacency.
+class file_dependency_view final {
+public:
+    class iterator final {
+    public:
+        [[nodiscard]] file_id operator*() const noexcept {
+            return (*owner)[index];
+        }
+
+        iterator& operator++() noexcept {
+            ++index;
+            return *this;
+        }
+
+        friend bool operator==(
+            const iterator& left,
+            const iterator& right) noexcept {
+
+            return left.owner == right.owner &&
+                left.index == right.index;
+        }
+
+        friend bool operator!=(
+            const iterator& left,
+            const iterator& right) noexcept {
+
+            return !(left == right);
+        }
+
+    private:
+        iterator(
+            const file_dependency_view* value,
+            std::size_t position) noexcept
+            : owner(value),
+              index(position) {
+        }
+
+        const file_dependency_view* owner = nullptr;
+        std::size_t index = 0;
+
+        friend class file_dependency_view;
+    };
+
+    file_dependency_view() noexcept = default;
+
+    [[nodiscard]] static file_dependency_view from_native(
+        std::span<const file_id> values) noexcept;
+
+    [[nodiscard]] static file_dependency_view from_encoded(
+        std::span<const std::byte> values) noexcept;
+
+    [[nodiscard]] std::size_t size() const noexcept {
+        return count;
+    }
+
+    [[nodiscard]] bool empty() const noexcept {
+        return count == 0;
+    }
+
+    [[nodiscard]] file_id operator[](
+        std::size_t index) const noexcept;
+
+    [[nodiscard]] iterator begin() const noexcept {
+        return iterator{this, 0};
+    }
+
+    [[nodiscard]] iterator end() const noexcept {
+        return iterator{this, count};
+    }
+
+private:
+    std::span<const file_id> native;
+    std::span<const std::byte> encoded;
+    std::size_t count = 0;
+};
+
+class source_save_view;
+
+// Mutable physical-file state for one construction operation. REBUILD owns fresh
+// dense arrays. BUILD may bind one immutable source.bin lineage and keeps only
+// touched existing files plus newly appended identities in mutable memory.
 class file_context final {
 public:
     file_context() = default;
 
     file_context(const file_context&) = delete;
     file_context& operator=(const file_context&) = delete;
+
+    // Binds immutable BUILD lineage without reconstructing committed file/path/
+    // physical/topology arrays. The source_save_view must outlive this context.
+    [[nodiscard]] server_status bind_baseline(
+        const source_save_view& source) noexcept;
+
+    [[nodiscard]] bool baseline_bound() const noexcept {
+        return baseline != nullptr;
+    }
 
     [[nodiscard]] server_status resolve(
         const std::filesystem::path& path,
@@ -204,26 +293,26 @@ public:
         std::span<const file_id> ordered_files,
         construction_content_hash& output) const noexcept;
 
-    // Stages one direct relation in the shared construction topology.
+    // Fresh REBUILD stages direct relations here. BUILD topology replacement is
+    // a separate sparse-overlay slice; committed adjacency remains readable from
+    // source.bin immediately after bind_baseline().
     [[nodiscard]] server_status add_dependency(
         file_id source,
         file_id target) noexcept;
 
-    // Finalizes all staged relations exactly once after dependency discovery
-    // reaches closure. Duplicate (source,target) relations collapse to one edge.
     [[nodiscard]] server_status finalize_dependency_topology() noexcept;
 
-    [[nodiscard]] std::span<const file_id> dependencies(
+    [[nodiscard]] file_dependency_view dependencies(
         file_id file) const noexcept;
 
-    [[nodiscard]] std::span<const file_id> dependents(
+    [[nodiscard]] file_dependency_view dependents(
         file_id file) const noexcept;
 
     [[nodiscard]] bool contains(
         file_id file) const noexcept;
 
-    // Precondition: contains(file) == true. The view remains valid until File
-    // Context mutates its path arena.
+    // Baseline paths are converted from persisted UTF-8 only when that file is
+    // touched. The returned view follows the existing path-arena lifetime rule.
     [[nodiscard]] file_path_view path(
         file_id file) const noexcept;
 
@@ -233,23 +322,24 @@ public:
     [[nodiscard]] const file_physical_record* physical(
         file_id file) const noexcept;
 
-    // A present file may have no construction bytes only when restored metadata
-    // has not yet been materialized. Empty files are available with size()==0.
     [[nodiscard]] bool content_available(
         file_id file) const noexcept;
 
-    // Precondition: content_available(file) == true. The view remains valid
-    // until File Context mutates its construction content arena.
     [[nodiscard]] std::string_view content(
         file_id file) const noexcept;
 
+    // Fresh-only contiguous physical storage. BUILD baseline state is sparse and
+    // intentionally cannot be exposed as a synthetic contiguous copy.
     [[nodiscard]] std::span<const file_physical_record>
     physical_records() const noexcept {
-        return physical_files;
+        return baseline == nullptr
+            ? std::span<const file_physical_record>{physical_files}
+            : std::span<const file_physical_record>{};
     }
 
     [[nodiscard]] std::size_t size() const noexcept {
-        return files.size();
+        return baseline_file_count +
+            files.size();
     }
 
     [[nodiscard]] bool dependency_topology_finalized() const noexcept {
@@ -261,8 +351,6 @@ private:
         std::uint32_t path_offset = 0;
         std::uint32_t path_length = 0;
 
-        // Derived in-memory accelerator. Rebuild from the physical path when a
-        // persisted File Context is restored; never use as durable identity.
         std::uint32_t path_hash = 0;
 
         file_kind kind = file_kind::project;
@@ -274,11 +362,29 @@ private:
         file_id file{};
     };
 
+    struct baseline_overlay_record final {
+        file_id file{};
+        std::uint32_t path_offset = 0;
+        std::uint32_t path_length = 0;
+        file_physical_record physical;
+        file_content_record content;
+    };
+
+    struct baseline_overlay_slot final {
+        file_id file{};
+        std::uint32_t record = 0;
+    };
+
     static_assert(sizeof(file_record) == 16);
     static_assert(sizeof(path_slot) == 8);
+    static_assert(sizeof(baseline_overlay_slot) == 8);
 
     [[nodiscard]] static std::uint32_t fingerprint(
         const filesystem_path_key& key) noexcept;
+
+    [[nodiscard]] bool local_index(
+        file_id file,
+        std::size_t& output) const noexcept;
 
     [[nodiscard]] server_status same_key(
         file_id file,
@@ -298,28 +404,44 @@ private:
         file_id file,
         std::uint32_t hash) const noexcept;
 
+    [[nodiscard]] bool find_baseline_overlay(
+        file_id file,
+        std::size_t& output) const noexcept;
+
+    [[nodiscard]] server_status ensure_baseline_overlay_capacity(
+        std::size_t additional) const noexcept;
+
+    void insert_baseline_overlay(
+        std::vector<baseline_overlay_slot>& index,
+        file_id file,
+        std::uint32_t record) const noexcept;
+
+    [[nodiscard]] server_status ensure_baseline_overlay(
+        file_id file,
+        std::size_t& output) const noexcept;
+
+    const source_save_view* baseline = nullptr;
+    std::size_t baseline_file_count = 0;
+
     std::vector<file_record> files;
     std::vector<file_path_char> path_chars;
     std::vector<path_slot> path_index;
 
-    // Kept separate from hot path/identity records so SHA-256/change-token data
-    // is not pulled into cache during path lookup.
     std::vector<file_physical_record> physical_files;
-
-    // Construction-only current source bytes. Records are direct-indexed by
-    // file_id; the byte arena is append-only during initial materialization.
     std::vector<file_content_record> content_files;
     std::vector<char> content_bytes;
 
-    // Direct-indexed SoA topology state. file_id N maps to dependency_files[N-1].
     std::vector<file_dependency_record> dependency_files;
     std::vector<file_id> forward_edges;
     std::vector<file_id> reverse_edges;
 
-    // Shared construction-only staging arena used by all syntax domains before
-    // one terminal topology finalization.
     std::vector<file_dependency_edge> dependency_edges;
     bool topology_finalized = false;
+
+    mutable std::vector<baseline_overlay_record> baseline_overlays;
+    mutable std::vector<baseline_overlay_slot> baseline_overlay_index;
+    mutable std::vector<file_path_char> baseline_path_chars;
+
 };
 
 }

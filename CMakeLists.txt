@@ -53,6 +53,7 @@ add_executable(ServerEngineV4
     server_engine/project/persistence/compiled_project.cpp
     server_engine/project/persistence/source_save.cpp
     server_engine/project/persistence/database.cpp
+    server_engine/project/persistence/source_save_view.cpp
     server_engine/project/file/file_context.cpp
     server_engine/project/project_load.cpp
     server_engine/project/project_build.cpp
@@ -103,6 +104,7 @@ if(BUILD_TESTING)
         server_engine/project/persistence/compiled_project.cpp
         server_engine/filesystem_path.cpp
         server_engine/project/project_path.cpp
+        server_engine/project/persistence/source_save_view.cpp
         server_engine/project/file/file_context.cpp
         server_engine/project/source/source_map.cpp
     )
@@ -129,6 +131,7 @@ if(BUILD_TESTING)
         server_engine/writable_file_mapping.cpp
         server_engine/project/project_path.cpp
         server_engine/project/file/file_identity.cpp
+        server_engine/project/persistence/source_save_view.cpp
         server_engine/project/file/file_context.cpp
         server_engine/project/persistence/source_save.cpp
         server_engine/project/graph/graph.cpp
@@ -164,6 +167,7 @@ if(BUILD_TESTING)
         server_engine/project/frontend/lexer.cpp
         server_engine/project/frontend/lexical_generation.cpp
         server_engine/project/file/file_identity.cpp
+        server_engine/project/persistence/source_save_view.cpp
         server_engine/project/file/file_context.cpp
         server_engine/project/persistence/database.cpp
     )
@@ -190,6 +194,7 @@ if(BUILD_TESTING)
         server_engine/filesystem_path.cpp
         server_engine/project/project_path.cpp
         server_engine/project/file/file_identity.cpp
+        server_engine/project/persistence/source_save_view.cpp
         server_engine/project/file/file_context.cpp
         server_engine/project/string/string_table.cpp
         server_engine/project/semantic/identity.cpp
@@ -233,6 +238,7 @@ if(BUILD_TESTING)
         server_engine/project/frontend/lexer.cpp
         server_engine/project/frontend/lexical_generation.cpp
         server_engine/project/file/file_identity.cpp
+        server_engine/project/persistence/source_save_view.cpp
         server_engine/project/file/file_context.cpp
     )
 

@@ -121,24 +121,6 @@ private:
                                                        std::span<std::byte>) noexcept;
 };
 
-class source_save_edge_view final {
-public:
-    source_save_edge_view() noexcept = default;
-
-    [[nodiscard]] std::size_t size() const noexcept {
-        return count;
-    }
-
-    [[nodiscard]] file_id operator[](
-        std::size_t index) const noexcept;
-
-private:
-    friend class source_save_view;
-
-    std::span<const std::byte> bytes;
-    std::size_t count = 0;
-};
-
 struct source_save_file_view final {
     file_id file{};
     file_kind kind = file_kind::project;
@@ -146,8 +128,8 @@ struct source_save_file_view final {
     file_physical_record physical;
     std::uint64_t file_reference = 0;
     std::string_view path_utf8;
-    source_save_edge_view dependencies;
-    source_save_edge_view dependents;
+    file_dependency_view dependencies;
+    file_dependency_view dependents;
 };
 
 class source_save_view final {

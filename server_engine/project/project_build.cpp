@@ -303,6 +303,23 @@ server_status build_project(
         return server_status::project_artifact_invalid;
     }
 
+    const auto files_bound =
+        context.files.bind_baseline(
+            context.source);
+
+    if (!succeeded(files_bound)) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_source_save_invalid,
+                operation)
+                .file(layout.source_save)
+                .detail(
+                    "Committed source.bin could not initialize mmap-backed BUILD File Context")
+                .build());
+
+        return files_bound;
+    }
+
     std::vector<file_id> dirty;
     source_save_change_scan scan;
 

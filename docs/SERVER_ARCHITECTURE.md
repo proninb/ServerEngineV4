@@ -735,10 +735,16 @@ forward_edges[]
 reverse_edges[]
 ```
 
-The current implementation materializes these arrays for a fresh construction.
+REBUILD materializes these arrays for a fresh construction.
 
-BUILD will add persisted-state views plus sparse mutable overlays. It must not
-copy or rebuild all file state merely to change a sparse subset.
+BUILD now binds `source.bin` directly as the committed File Context baseline.
+Existing file identity and adjacency remain mmap-backed; only touched existing
+files materialize sparse native-path/physical/content state, while newly
+discovered files append local records after the committed `file_id` range.
+No O(F) File Context reconstruction is performed at BUILD startup.
+
+Sparse replacement of affected dependency adjacency remains a separate next
+slice; BUILD does not fall back to dense topology reconstruction.
 
 Physical acquisition retains the existing fast proof contract:
 

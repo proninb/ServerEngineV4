@@ -1,4 +1,5 @@
 #include "source_save.hpp"
+#include "source_save_format.hpp"
 #include "compiled_project.hpp"
 
 #include "../../filesystem_path.hpp"
@@ -44,22 +45,28 @@ constexpr std::array<std::byte, 8> magic{
 
 constexpr std::uint32_t format_version = 4;
 
-constexpr std::uint32_t current_member_flag = 0x00000001u;
-constexpr std::uint32_t physical_present_flag = 0x00000002u;
-constexpr std::uint32_t file_reference_flag = 0x00000004u;
+constexpr std::uint32_t current_member_flag =
+    source_save_current_member_flag;
+
+constexpr std::uint32_t physical_present_flag =
+    source_save_physical_present_flag;
+
+constexpr std::uint32_t file_reference_flag =
+    source_save_file_reference_flag;
 
 constexpr std::uint32_t known_file_flags =
-    current_member_flag |
-    physical_present_flag |
-    file_reference_flag;
+    source_save_known_file_flags;
 
 constexpr std::uint32_t directory_watch_topology = 0x00000001u;
 constexpr std::uint32_t directory_watch_known =
     directory_watch_topology;
 
 constexpr std::size_t header_size = 80;
-constexpr std::size_t record_size = 72;
-constexpr std::size_t path_index_record_size = 8;
+constexpr std::size_t record_size =
+    source_save_record_size;
+
+constexpr std::size_t path_index_record_size =
+    source_save_path_index_record_size;
 constexpr std::size_t file_index_record_size = 12;
 constexpr std::size_t directory_index_record_size = 12;
 constexpr std::size_t checksum_size = 32;
@@ -311,48 +318,8 @@ struct directory_index_slot final {
 [[nodiscard]] std::uint32_t persisted_path_fingerprint(
     const filesystem_path_key& key) noexcept {
 
-    constexpr std::uint64_t offset =
-        1469598103934665603ULL;
-    constexpr std::uint64_t prime =
-        1099511628211ULL;
-
-    std::uint64_t hash = offset;
-
-    using native_char =
-        std::filesystem::path::value_type;
-    using unsigned_char =
-        std::make_unsigned_t<native_char>;
-
-    for (const auto value :
-         key.value.native()) {
-
-        auto code =
-            static_cast<std::uint64_t>(
-                static_cast<unsigned_char>(
-                    value));
-
-#if defined(_WIN32)
-        if (code ==
-            static_cast<std::uint64_t>(
-                L'\\')) {
-
-            code =
-                static_cast<std::uint64_t>(
-                    L'/');
-        }
-#endif
-
-        hash ^= code;
-        hash *= prime;
-    }
-
-    auto output =
-        static_cast<std::uint32_t>(hash) ^
-        static_cast<std::uint32_t>(hash >> 32);
-
-    return output != 0
-        ? output
-        : 1u;
+    return source_save_path_fingerprint(
+        key);
 }
 
 [[nodiscard]] bool insert_path_identity(
@@ -1182,37 +1149,6 @@ private:
 
 }
 
-file_id source_save_edge_view::operator[](
-    std::size_t index) const noexcept {
-
-    if (index >= count) {
-        return {};
-    }
-
-    const auto offset =
-        index *
-        sizeof(std::uint32_t);
-
-    if (offset > bytes.size() ||
-        bytes.size() - offset <
-            sizeof(std::uint32_t)) {
-
-        return {};
-    }
-
-    std::size_t cursor =
-        offset;
-
-    std::uint32_t value = 0;
-
-    return read_u32(
-            bytes,
-            cursor,
-            value)
-        ? file_id{value}
-        : file_id{};
-}
-
 void source_save_view::reset() noexcept {
     presence_offset = 0;
     type_count = object_count = link_count = 0;
@@ -1411,332 +1347,6 @@ source_save_result source_save_view::bind(
     bytes = image;
 
     return source_save_result::success;
-}
-
-bool source_save_view::contains(
-    file_id file) const noexcept {
-
-    return valid() &&
-        file &&
-        file.value() <=
-            file_count_value;
-}
-
-bool source_save_view::file(
-    file_id id,
-    source_save_file_view& output) const noexcept {
-
-    output = {};
-
-    if (!contains(id)) {
-        return false;
-    }
-
-    auto offset =
-        records_offset +
-        static_cast<std::size_t>(
-            id.value() - 1) *
-            record_size;
-
-    std::uint32_t path_offset = 0;
-    std::uint32_t path_size = 0;
-    std::uint32_t kind = 0;
-    std::uint32_t flags = 0;
-    std::uint64_t file_reference = 0;
-    std::uint32_t dependency_offset = 0;
-    std::uint32_t dependency_count = 0;
-    std::uint32_t dependent_offset = 0;
-    std::uint32_t dependent_count = 0;
-
-    if (!read_u32(
-            bytes,
-            offset,
-            path_offset) ||
-        !read_u32(
-            bytes,
-            offset,
-            path_size) ||
-        path_size == 0 ||
-        !read_u32(
-            bytes,
-            offset,
-            kind) ||
-        kind >
-            static_cast<std::uint32_t>(
-                file_kind::assign) ||
-        !read_u32(
-            bytes,
-            offset,
-            flags) ||
-        (flags &
-            ~known_file_flags) != 0) {
-
-        return false;
-    }
-
-    file_content_hash content_hash{};
-
-    if (offset > bytes.size() ||
-        bytes.size() - offset <
-            content_hash.bytes.size()) {
-
-        return false;
-    }
-
-    std::copy_n(
-        bytes.begin() +
-            static_cast<std::ptrdiff_t>(
-                offset),
-        content_hash.bytes.size(),
-        content_hash.bytes.begin());
-
-    offset +=
-        content_hash.bytes.size();
-
-    if (!read_u64(
-            bytes,
-            offset,
-            file_reference) ||
-        !read_u32(
-            bytes,
-            offset,
-            dependency_offset) ||
-        !read_u32(
-            bytes,
-            offset,
-            dependency_count) ||
-        !read_u32(
-            bytes,
-            offset,
-            dependent_offset) ||
-        !read_u32(
-            bytes,
-            offset,
-            dependent_count) ||
-        path_offset >
-            path_bytes_value ||
-        path_size >
-            path_bytes_value -
-                path_offset ||
-        dependency_offset >
-            forward_count_value ||
-        dependency_count >
-            forward_count_value -
-                dependency_offset ||
-        dependent_offset >
-            reverse_count_value ||
-        dependent_count >
-            reverse_count_value -
-                dependent_offset) {
-
-        return false;
-    }
-
-    const auto current =
-        (flags &
-            current_member_flag) != 0;
-
-    const auto present =
-        (flags &
-            physical_present_flag) != 0;
-
-    const auto has_reference =
-        (flags &
-            file_reference_flag) != 0;
-
-    if (current &&
-        !present) {
-
-        return false;
-    }
-
-    if (has_reference !=
-        (file_reference != 0)) {
-
-        return false;
-    }
-
-    output.file = id;
-
-    output.kind =
-        static_cast<file_kind>(
-            kind);
-
-    output.current_member =
-        current;
-
-    output.physical.content_hash =
-        content_hash;
-
-    if (present) {
-        output.physical.flags |=
-            file_physical_present;
-    }
-
-    output.file_reference =
-        file_reference;
-
-    output.path_utf8 = {
-        reinterpret_cast<const char*>(
-            bytes.data() +
-            paths_offset +
-            path_offset),
-        path_size,
-    };
-
-    output.dependencies.bytes =
-        bytes.subspan(
-            forward_offset +
-                static_cast<std::size_t>(
-                    dependency_offset) *
-                    sizeof(std::uint32_t),
-            static_cast<std::size_t>(
-                dependency_count) *
-                sizeof(std::uint32_t));
-
-    output.dependencies.count =
-        dependency_count;
-
-    output.dependents.bytes =
-        bytes.subspan(
-            reverse_offset +
-                static_cast<std::size_t>(
-                    dependent_offset) *
-                    sizeof(std::uint32_t),
-            static_cast<std::size_t>(
-                dependent_count) *
-                sizeof(std::uint32_t));
-
-    output.dependents.count =
-        dependent_count;
-
-    return true;
-}
-
-server_status source_save_view::find_path(
-    const std::filesystem::path& value,
-    file_id& output) const noexcept {
-
-    output = {};
-
-    if (!valid() ||
-        path_index_count_value == 0) {
-
-        return server_status::
-            project_artifact_invalid;
-    }
-
-    std::filesystem::path resolved;
-
-    if (resolve_project_path(
-            value,
-            resolved) !=
-        project_path_result::success) {
-
-        return server_status::io_error;
-    }
-
-    filesystem_path_key key;
-
-    if (make_filesystem_path_key(
-            resolved,
-            key) !=
-        filesystem_path_result::success) {
-
-        return server_status::io_error;
-    }
-
-    const auto fingerprint =
-        persisted_path_fingerprint(
-            key);
-
-    const auto mask =
-        static_cast<std::size_t>(
-            path_index_count_value - 1);
-
-    auto position =
-        static_cast<std::size_t>(
-            fingerprint) &
-        mask;
-
-    for (std::size_t probe = 0;
-         probe < path_index_count_value;
-         ++probe) {
-
-        path_index_slot slot;
-
-        if (!decode_path_index_slot(
-                bytes,
-                path_index_offset +
-                    position *
-                        path_index_record_size,
-                slot)) {
-
-            return server_status::
-                project_artifact_invalid;
-        }
-
-        if (slot.fingerprint == 0) {
-            return slot.file
-                ? server_status::project_artifact_invalid
-                : server_status::success;
-        }
-
-        if (!slot.file ||
-            !contains(slot.file)) {
-
-            return server_status::
-                project_artifact_invalid;
-        }
-
-        if (slot.fingerprint ==
-            fingerprint) {
-
-            source_save_file_view state;
-
-            if (!file(
-                    slot.file,
-                    state)) {
-
-                return server_status::
-                    project_artifact_invalid;
-            }
-
-            std::filesystem::path candidate;
-
-            if (filesystem_path_from_utf8(
-                    state.path_utf8,
-                    candidate) !=
-                filesystem_path_result::success) {
-
-                return server_status::
-                    project_artifact_invalid;
-            }
-
-            filesystem_path_key candidate_key;
-
-            if (make_filesystem_path_key(
-                    candidate,
-                    candidate_key) !=
-                filesystem_path_result::success) {
-
-                return server_status::
-                    project_artifact_invalid;
-            }
-
-            if (candidate_key == key) {
-                output = slot.file;
-                return server_status::success;
-            }
-        }
-
-        position =
-            (position + 1) &
-            mask;
-    }
-
-    return server_status::
-        project_artifact_invalid;
 }
 
 file_id source_save_view::find_file_reference(

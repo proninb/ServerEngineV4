@@ -440,6 +440,86 @@ void test_direct_source_save(
             source_save_result::success,
         "validate persisted source.bin mmap");
 
+    file_context build_files;
+
+    tests.expect(
+        succeeded(
+            build_files.bind_baseline(
+                persisted_view)) &&
+            build_files.baseline_bound() &&
+            build_files.size() == 2 &&
+            build_files.contains(first) &&
+            build_files.contains(second),
+        "BUILD File Context binds SourceSave without dense reconstruction");
+
+    file_id baseline_found;
+
+    tests.expect(
+        succeeded(
+            build_files.find(
+                first_path,
+                baseline_found)) &&
+            baseline_found == first &&
+        succeeded(
+            build_files.resolve(
+                second_path,
+                file_kind::header,
+                baseline_found)) &&
+            baseline_found == second,
+        "BUILD File Context preserves persisted file_id path lookup");
+
+    const auto baseline_dependencies =
+        build_files.dependencies(
+            first);
+
+    tests.expect(
+        baseline_dependencies.size() == 1 &&
+            baseline_dependencies[0] == second,
+        "BUILD File Context reads committed topology directly from mmap");
+
+    file_acquire_job baseline_job;
+    file_acquire_result baseline_result;
+    bool baseline_changed = true;
+
+    if (tests.expect(
+            succeeded(
+                build_files.prepare_acquire(
+                    first,
+                    baseline_job)),
+            "prepare sparse baseline acquisition")) {
+
+        file_context::execute_acquire(
+            baseline_job,
+            baseline_result);
+
+        tests.expect(
+            baseline_result.kind ==
+                file_acquire_result_kind::present &&
+            succeeded(
+                build_files.apply_acquire(
+                    baseline_result,
+                    baseline_changed)) &&
+            !baseline_changed &&
+            build_files.content_available(
+                first),
+            "unchanged baseline file materializes sparse content overlay");
+    }
+
+    file_id appended;
+
+    tests.expect(
+        succeeded(
+            build_files.resolve(
+                root / "new.hpp",
+                file_kind::header,
+                appended)) &&
+            appended ==
+                file_id{3} &&
+            build_files.size() == 3 &&
+            build_files.kind(appended) ==
+                file_kind::header,
+        "BUILD File Context appends new file_id after committed lineage");
+
     found_path = {};
 
     tests.expect(

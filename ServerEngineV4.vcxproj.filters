@@ -186,6 +186,9 @@
     <ClCompile Include="server_engine\project\persistence\source_save.cpp">
       <Filter>server_engine\project\persistence</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\project\persistence\source_save_view.cpp">
+      <Filter>server_engine\project\persistence</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\project\persistence\database.cpp">
       <Filter>server_engine\project\persistence</Filter>
     </ClCompile>
@@ -342,6 +345,9 @@
       <Filter>server_engine\project\persistence</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\persistence\source_save.hpp">
+      <Filter>server_engine\project\persistence</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\persistence\source_save_format.hpp">
       <Filter>server_engine\project\persistence</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\persistence\database.hpp">

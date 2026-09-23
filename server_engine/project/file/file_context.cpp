@@ -1,5 +1,7 @@
 #include "file_context.hpp"
 
+#include "../persistence/source_save.hpp"
+
 #include <algorithm>
 #include <cassert>
 #include <limits>
@@ -52,6 +54,395 @@ void append_u64(
         value.end()};
 }
 
+}
+
+file_dependency_view file_dependency_view::from_native(
+    std::span<const file_id> values) noexcept {
+
+    file_dependency_view output;
+    output.native = values;
+    output.count = values.size();
+    return output;
+}
+
+file_dependency_view file_dependency_view::from_encoded(
+    std::span<const std::byte> values) noexcept {
+
+    if (values.size() %
+        sizeof(std::uint32_t) != 0) {
+
+        return {};
+    }
+
+    file_dependency_view output;
+    output.encoded = values;
+    output.count =
+        values.size() /
+        sizeof(std::uint32_t);
+
+    return output;
+}
+
+file_id file_dependency_view::operator[](
+    std::size_t index) const noexcept {
+
+    if (index >= count) {
+        return {};
+    }
+
+    if (!native.empty()) {
+        return native[index];
+    }
+
+    const auto offset =
+        index *
+        sizeof(std::uint32_t);
+
+    if (offset > encoded.size() ||
+        encoded.size() - offset <
+            sizeof(std::uint32_t)) {
+
+        return {};
+    }
+
+    std::uint32_t value = 0;
+
+    for (std::size_t byte = 0;
+         byte < sizeof(std::uint32_t);
+         ++byte) {
+
+        value |=
+            static_cast<std::uint32_t>(
+                std::to_integer<std::uint8_t>(
+                    encoded[offset + byte]))
+            << (byte * 8);
+    }
+
+    return file_id{value};
+}
+
+server_status file_context::bind_baseline(
+    const source_save_view& source) noexcept {
+
+    if (!source.valid() ||
+        source.file_count() == 0 ||
+        baseline != nullptr ||
+        !files.empty() ||
+        !path_chars.empty() ||
+        !path_index.empty() ||
+        !physical_files.empty() ||
+        !content_files.empty() ||
+        !content_bytes.empty() ||
+        !dependency_files.empty() ||
+        !forward_edges.empty() ||
+        !reverse_edges.empty() ||
+        !dependency_edges.empty() ||
+        topology_finalized ||
+        !baseline_overlays.empty() ||
+        !baseline_overlay_index.empty() ||
+        !baseline_path_chars.empty()) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    baseline = &source;
+    baseline_file_count =
+        source.file_count();
+
+    return server_status::success;
+}
+
+bool file_context::local_index(
+    file_id file,
+    std::size_t& output) const noexcept {
+
+    output = 0;
+
+    if (!file ||
+        file.value() <=
+            baseline_file_count) {
+
+        return false;
+    }
+
+    const auto index =
+        static_cast<std::size_t>(
+            file.value() -
+            baseline_file_count -
+            1);
+
+    if (index >= files.size() ||
+        physical_files.size() != files.size() ||
+        content_files.size() != files.size() ||
+        dependency_files.size() != files.size()) {
+
+        return false;
+    }
+
+    output = index;
+    return true;
+}
+
+bool file_context::find_baseline_overlay(
+    file_id file,
+    std::size_t& output) const noexcept {
+
+    output = 0;
+
+    if (baseline == nullptr ||
+        !file ||
+        file.value() >
+            baseline_file_count ||
+        baseline_overlay_index.empty()) {
+
+        return false;
+    }
+
+    const auto mask =
+        baseline_overlay_index.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            file.value() *
+                2654435761u) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe <
+            baseline_overlay_index.size();
+         ++probe) {
+
+        const auto& slot =
+            baseline_overlay_index[
+                position];
+
+        if (!slot.file) {
+            return false;
+        }
+
+        if (slot.file == file) {
+            if (slot.record == 0 ||
+                slot.record >
+                    baseline_overlays.size()) {
+
+                return false;
+            }
+
+            output =
+                static_cast<std::size_t>(
+                    slot.record - 1);
+
+            return baseline_overlays[
+                    output].file ==
+                file;
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return false;
+}
+
+void file_context::insert_baseline_overlay(
+    std::vector<baseline_overlay_slot>& index,
+    file_id file,
+    std::uint32_t record) const noexcept {
+
+    const auto mask =
+        index.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            file.value() *
+                2654435761u) &
+        mask;
+
+    while (index[position].file) {
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    index[position] = {
+        file,
+        record,
+    };
+}
+
+server_status file_context::ensure_baseline_overlay_capacity(
+    std::size_t additional) const noexcept {
+
+    if (additional >
+        (std::numeric_limits<std::size_t>::max)() -
+            baseline_overlays.size()) {
+
+        return server_status::io_error;
+    }
+
+    const auto required =
+        baseline_overlays.size() +
+        additional;
+
+    if (!baseline_overlay_index.empty() &&
+        required <=
+            baseline_overlay_index.size() / 2) {
+
+        return server_status::success;
+    }
+
+    const auto capacity =
+        next_index_capacity(
+            required);
+
+    if (capacity == 0) {
+        return server_status::io_error;
+    }
+
+    try {
+        std::vector<baseline_overlay_slot>
+            candidate(capacity);
+
+        for (std::size_t index = 0;
+             index <
+                baseline_overlays.size();
+             ++index) {
+
+            insert_baseline_overlay(
+                candidate,
+                baseline_overlays[index].file,
+                static_cast<std::uint32_t>(
+                    index + 1));
+        }
+
+        baseline_overlay_index =
+            std::move(candidate);
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
+server_status file_context::ensure_baseline_overlay(
+    file_id file,
+    std::size_t& output) const noexcept {
+
+    output = 0;
+
+    if (baseline == nullptr ||
+        !file ||
+        file.value() >
+            baseline_file_count ||
+        !baseline->contains(file)) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    if (find_baseline_overlay(
+            file,
+            output)) {
+
+        return server_status::success;
+    }
+
+    source_save_file_view state;
+
+    if (!baseline->file(
+            file,
+            state)) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    std::filesystem::path decoded;
+
+    if (filesystem_path_from_utf8(
+            state.path_utf8,
+            decoded) !=
+        filesystem_path_result::success) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    const auto& native =
+        decoded.native();
+
+    const auto max_u32 =
+        static_cast<std::size_t>(
+            (std::numeric_limits<std::uint32_t>::max)());
+
+    if (baseline_path_chars.size() >
+            max_u32 ||
+        native.size() >
+            max_u32 -
+                baseline_path_chars.size() -
+                1 ||
+        baseline_overlays.size() >=
+            max_u32) {
+
+        return server_status::io_error;
+    }
+
+    const auto prepared =
+        ensure_baseline_overlay_capacity(
+            1);
+
+    if (!succeeded(prepared)) {
+        return prepared;
+    }
+
+    const auto old_path_size =
+        baseline_path_chars.size();
+
+    try {
+        const auto offset =
+            static_cast<std::uint32_t>(
+                old_path_size);
+
+        baseline_path_chars.insert(
+            baseline_path_chars.end(),
+            native.begin(),
+            native.end());
+
+        baseline_path_chars.push_back(
+            file_path_char{});
+
+        baseline_overlay_record overlay;
+        overlay.file = file;
+        overlay.path_offset = offset;
+        overlay.path_length =
+            static_cast<std::uint32_t>(
+                native.size());
+        overlay.physical =
+            state.physical;
+
+        baseline_overlays.push_back(
+            overlay);
+
+        output =
+            baseline_overlays.size() - 1;
+
+        insert_baseline_overlay(
+            baseline_overlay_index,
+            file,
+            static_cast<std::uint32_t>(
+                output + 1));
+
+        return server_status::success;
+    }
+    catch (...) {
+        baseline_path_chars.resize(
+            old_path_size);
+
+        return server_status::io_error;
+    }
 }
 
 std::uint32_t file_context::fingerprint(
@@ -221,7 +612,9 @@ server_status file_context::ensure_index_capacity(
 
             const file_id file{
                 static_cast<std::uint32_t>(
-                    index + 1)};
+                    baseline_file_count +
+                    index +
+                    1)};
 
             insert_index(
                 candidate,
@@ -279,21 +672,39 @@ server_status file_context::resolve(
         return found;
     }
 
+    if (!output &&
+        baseline != nullptr) {
+
+        const auto baseline_found =
+            baseline->find_path(
+                resolved,
+                output);
+
+        if (!succeeded(
+                baseline_found)) {
+
+            return baseline_found;
+        }
+    }
+
     if (output) {
         return kind(output) == requested_kind
             ? server_status::success
-            : server_status::project_configuration_invalid;
+            : server_status::
+                project_configuration_invalid;
     }
 
     if (topology_finalized) {
-        return server_status::project_configuration_invalid;
+        return server_status::
+            project_configuration_invalid;
     }
 
     const auto max_u32 =
         static_cast<std::size_t>(
-            (std::numeric_limits<std::uint32_t>::max)());
+            (std::numeric_limits<
+                std::uint32_t>::max)());
 
-    if (files.size() >= max_u32) {
+    if (size() >= max_u32) {
         return server_status::io_error;
     }
 
@@ -365,6 +776,7 @@ server_status file_context::resolve(
 
         output = file_id{
             static_cast<std::uint32_t>(
+                baseline_file_count +
                 files.size())};
 
         insert_index(
@@ -409,9 +821,21 @@ server_status file_context::find(
         return server_status::io_error;
     }
 
-    return find_key(
-        key,
-        fingerprint(key),
+    const auto local_found =
+        find_key(
+            key,
+            fingerprint(key),
+            output);
+
+    if (!succeeded(local_found) ||
+        output ||
+        baseline == nullptr) {
+
+        return local_found;
+    }
+
+    return baseline->find_path(
+        resolved,
         output);
 }
 
@@ -422,22 +846,60 @@ server_status file_context::prepare_acquire(
     output = {};
 
     if (!contains(file)) {
-        return server_status::project_configuration_invalid;
+        return server_status::
+            project_configuration_invalid;
     }
 
-    const auto& state =
-        physical_files[file.value() - 1];
+    const file_physical_record* state = nullptr;
+
+    if (baseline != nullptr &&
+        file.value() <=
+            baseline_file_count) {
+
+        std::size_t overlay = 0;
+
+        const auto prepared =
+            ensure_baseline_overlay(
+                file,
+                overlay);
+
+        if (!succeeded(prepared)) {
+            return prepared;
+        }
+
+        state =
+            &baseline_overlays[
+                overlay].physical;
+    }
+    else {
+        std::size_t index = 0;
+
+        if (!local_index(
+                file,
+                index)) {
+
+            return server_status::
+                project_configuration_invalid;
+        }
+
+        state =
+            &physical_files[index];
+    }
 
     output.file = file;
     output.path = path(file);
     output.baseline_present =
-        state.present();
+        state->present();
     output.baseline_token_available =
-        state.has_change_token();
+        state->has_change_token();
+
+    if (output.path.empty()) {
+        return server_status::io_error;
+    }
 
     if (output.baseline_token_available) {
         output.baseline_token =
-            state.change_token;
+            state->change_token;
     }
 
     return server_status::success;
@@ -544,52 +1006,84 @@ server_status file_context::apply_acquire(
     content_changed = false;
 
     if (!contains(result.file)) {
-        return server_status::project_configuration_invalid;
+        return server_status::
+            project_configuration_invalid;
     }
 
-    const auto index =
-        static_cast<std::size_t>(
-            result.file.value() - 1);
+    file_physical_record* state = nullptr;
+    file_content_record* content_state = nullptr;
 
-    auto& state =
-        physical_files[index];
+    if (baseline != nullptr &&
+        result.file.value() <=
+            baseline_file_count) {
 
-    auto& content_state =
-        content_files[index];
+        std::size_t overlay = 0;
+
+        const auto prepared =
+            ensure_baseline_overlay(
+                result.file,
+                overlay);
+
+        if (!succeeded(prepared)) {
+            return prepared;
+        }
+
+        state =
+            &baseline_overlays[
+                overlay].physical;
+
+        content_state =
+            &baseline_overlays[
+                overlay].content;
+    }
+    else {
+        std::size_t index = 0;
+
+        if (!local_index(
+                result.file,
+                index)) {
+
+            return server_status::
+                project_configuration_invalid;
+        }
+
+        state =
+            &physical_files[index];
+
+        content_state =
+            &content_files[index];
+    }
 
     const auto baseline_present =
-        state.present();
+        state->present();
 
     switch (result.kind) {
     case file_acquire_result_kind::unchanged:
         return baseline_present
             ? server_status::success
-            : server_status::project_artifact_invalid;
+            : server_status::
+                project_artifact_invalid;
 
     case file_acquire_result_kind::missing:
-        if (content_state.materialized()) {
-            // Replacing an already materialized image would leave unreachable
-            // bytes in the construction arena. BUILD replacement policy is a
-            // separate slice and must not be smuggled into this representation.
+        if (content_state->materialized()) {
             return server_status::unsupported;
         }
 
         content_changed =
             baseline_present;
-        state = {};
-        content_state = {};
+
+        *state = {};
+        *content_state = {};
         return server_status::success;
 
     case file_acquire_result_kind::present: {
         const auto changed =
             !baseline_present ||
-            !(state.content_hash ==
+            !(state->content_hash ==
               result.snapshot.content_hash);
 
-        if (content_state.materialized()) {
+        if (content_state->materialized()) {
             if (changed) {
-                // Current arena is optimized for one initial materialization per
-                // file. Sparse BUILD replacement needs its own no-garbage policy.
                 return server_status::unsupported;
             }
 
@@ -599,11 +1093,14 @@ server_status file_context::apply_acquire(
 
         const auto max_u32 =
             static_cast<std::size_t>(
-                (std::numeric_limits<std::uint32_t>::max)());
+                (std::numeric_limits<
+                    std::uint32_t>::max)());
 
-        if (content_bytes.size() > max_u32 ||
+        if (content_bytes.size() >
+                max_u32 ||
             result.snapshot.bytes.size() >
-                max_u32 - content_bytes.size()) {
+                max_u32 -
+                    content_bytes.size()) {
 
             return server_status::io_error;
         }
@@ -621,26 +1118,26 @@ server_status file_context::apply_acquire(
             return server_status::io_error;
         }
 
-        content_state.offset =
+        content_state->offset =
             static_cast<std::uint32_t>(
                 old_size);
 
-        content_state.size =
+        content_state->size =
             static_cast<std::uint32_t>(
                 result.snapshot.bytes.size());
 
-        state = {};
-        state.content_hash =
+        *state = {};
+        state->content_hash =
             result.snapshot.content_hash;
-        state.flags =
+        state->flags =
             file_physical_present;
 
         if (result.snapshot.change_token_available &&
             result.snapshot.change_token) {
 
-            state.change_token =
+            state->change_token =
                 result.snapshot.change_token;
-            state.flags |=
+            state->flags |=
                 file_physical_change_token;
         }
 
@@ -727,6 +1224,10 @@ server_status file_context::add_dependency(
     file_id source,
     file_id target) noexcept {
 
+    if (baseline != nullptr) {
+        return server_status::unsupported;
+    }
+
     if (topology_finalized ||
         !contains(source) ||
         !contains(target)) {
@@ -749,6 +1250,10 @@ server_status file_context::add_dependency(
 }
 
 server_status file_context::finalize_dependency_topology() noexcept {
+
+    if (baseline != nullptr) {
+        return server_status::unsupported;
+    }
 
     if (topology_finalized) {
         return server_status::success;
@@ -1061,17 +1566,38 @@ server_status file_context::finalize_dependency_topology() noexcept {
     }
 }
 
-std::span<const file_id> file_context::dependencies(
+file_dependency_view file_context::dependencies(
     file_id file) const noexcept {
 
     if (!contains(file)) {
         return {};
     }
 
+    if (baseline != nullptr &&
+        file.value() <=
+            baseline_file_count) {
+
+        source_save_file_view state;
+
+        return baseline->file(
+                file,
+                state)
+            ? state.dependencies
+            : file_dependency_view{};
+    }
+
+    std::size_t index = 0;
+
+    if (!local_index(
+            file,
+            index)) {
+
+        return {};
+    }
+
     const auto range =
         dependency_files[
-            file.value() - 1]
-            .dependencies;
+            index].dependencies;
 
     if (range.count == 0) {
         return {};
@@ -1086,24 +1612,45 @@ std::span<const file_id> file_context::dependencies(
         return {};
     }
 
-    return {
-        forward_edges.data() +
-            range.offset,
-        range.count,
-    };
+    return file_dependency_view::from_native(
+        std::span<const file_id>{
+            forward_edges.data() +
+                range.offset,
+            range.count});
 }
 
-std::span<const file_id> file_context::dependents(
+file_dependency_view file_context::dependents(
     file_id file) const noexcept {
 
     if (!contains(file)) {
         return {};
     }
 
+    if (baseline != nullptr &&
+        file.value() <=
+            baseline_file_count) {
+
+        source_save_file_view state;
+
+        return baseline->file(
+                file,
+                state)
+            ? state.dependents
+            : file_dependency_view{};
+    }
+
+    std::size_t index = 0;
+
+    if (!local_index(
+            file,
+            index)) {
+
+        return {};
+    }
+
     const auto range =
         dependency_files[
-            file.value() - 1]
-            .dependents;
+            index].dependents;
 
     if (range.count == 0) {
         return {};
@@ -1118,26 +1665,33 @@ std::span<const file_id> file_context::dependents(
         return {};
     }
 
-    return {
-        reverse_edges.data() +
-            range.offset,
-        range.count,
-    };
+    return file_dependency_view::from_native(
+        std::span<const file_id>{
+            reverse_edges.data() +
+                range.offset,
+            range.count});
 }
 
 bool file_context::contains(
     file_id file) const noexcept {
 
-    return file &&
-        static_cast<std::size_t>(
-            file.value()) <=
-            files.size() &&
-        physical_files.size() ==
-            files.size() &&
-        content_files.size() ==
-            files.size() &&
-        dependency_files.size() ==
-            files.size();
+    if (!file) {
+        return false;
+    }
+
+    if (baseline != nullptr &&
+        file.value() <=
+            baseline_file_count) {
+
+        return baseline->contains(
+            file);
+    }
+
+    std::size_t index = 0;
+
+    return local_index(
+        file,
+        index);
 }
 
 file_path_view file_context::path(
@@ -1145,8 +1699,51 @@ file_path_view file_context::path(
 
     assert(contains(file));
 
+    if (baseline != nullptr &&
+        file.value() <=
+            baseline_file_count) {
+
+        std::size_t overlay = 0;
+
+        if (!succeeded(
+                ensure_baseline_overlay(
+                    file,
+                    overlay))) {
+
+            return {};
+        }
+
+        const auto& record =
+            baseline_overlays[
+                overlay];
+
+        if (record.path_offset >
+                baseline_path_chars.size() ||
+            record.path_length >
+                baseline_path_chars.size() -
+                    record.path_offset) {
+
+            return {};
+        }
+
+        return {
+            baseline_path_chars.data() +
+                record.path_offset,
+            record.path_length,
+        };
+    }
+
+    std::size_t index = 0;
+
+    if (!local_index(
+            file,
+            index)) {
+
+        return {};
+    }
+
     const auto& record =
-        files[file.value() - 1];
+        files[index];
 
     return {
         path_chars.data() +
@@ -1159,15 +1756,60 @@ file_kind file_context::kind(
     file_id file) const noexcept {
 
     assert(contains(file));
-    return files[file.value() - 1].kind;
+
+    if (baseline != nullptr &&
+        file.value() <=
+            baseline_file_count) {
+
+        source_save_file_view state;
+
+        return baseline->file(
+                file,
+                state)
+            ? state.kind
+            : file_kind::project;
+    }
+
+    std::size_t index = 0;
+
+    return local_index(
+            file,
+            index)
+        ? files[index].kind
+        : file_kind::project;
 }
 
 const file_physical_record* file_context::physical(
     file_id file) const noexcept {
 
-    return contains(file)
-        ? &physical_files[
-            file.value() - 1]
+    if (!contains(file)) {
+        return nullptr;
+    }
+
+    if (baseline != nullptr &&
+        file.value() <=
+            baseline_file_count) {
+
+        std::size_t overlay = 0;
+
+        if (!succeeded(
+                ensure_baseline_overlay(
+                    file,
+                    overlay))) {
+
+            return nullptr;
+        }
+
+        return &baseline_overlays[
+            overlay].physical;
+    }
+
+    std::size_t index = 0;
+
+    return local_index(
+            file,
+            index)
+        ? &physical_files[index]
         : nullptr;
 }
 
@@ -1178,11 +1820,27 @@ bool file_context::content_available(
         return false;
     }
 
-    const auto index =
-        static_cast<std::size_t>(
-            file.value() - 1);
+    if (baseline != nullptr &&
+        file.value() <=
+            baseline_file_count) {
 
-    return physical_files[index].present() &&
+        std::size_t overlay = 0;
+
+        return find_baseline_overlay(
+                file,
+                overlay) &&
+            baseline_overlays[
+                overlay].physical.present() &&
+            baseline_overlays[
+                overlay].content.materialized();
+    }
+
+    std::size_t index = 0;
+
+    return local_index(
+            file,
+            index) &&
+        physical_files[index].present() &&
         content_files[index].materialized();
 }
 
@@ -1191,23 +1849,52 @@ std::string_view file_context::content(
 
     assert(content_available(file));
 
-    const auto& record =
-        content_files[
-            file.value() - 1];
+    const file_content_record* record = nullptr;
 
-    if (record.offset >
+    if (baseline != nullptr &&
+        file.value() <=
+            baseline_file_count) {
+
+        std::size_t overlay = 0;
+
+        if (!find_baseline_overlay(
+                file,
+                overlay)) {
+
+            return {};
+        }
+
+        record =
+            &baseline_overlays[
+                overlay].content;
+    }
+    else {
+        std::size_t index = 0;
+
+        if (!local_index(
+                file,
+                index)) {
+
+            return {};
+        }
+
+        record =
+            &content_files[index];
+    }
+
+    if (record->offset >
             content_bytes.size() ||
-        record.size >
+        record->size >
             content_bytes.size() -
-                record.offset) {
+                record->offset) {
 
         return {};
     }
 
     return {
         content_bytes.data() +
-            record.offset,
-        record.size,
+            record->offset,
+        record->size,
     };
 }
 

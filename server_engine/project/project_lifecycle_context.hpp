@@ -50,6 +50,7 @@ public:
     read_only_file_mapping compiled_mapping;
 
     source_save_view source;
+    file_context files;
     database_view database;
     compiled_project_view compiled;
 

@@ -948,8 +948,10 @@ REBUILD constructs this table directly in the final `source.bin` mapping; the
 layout owns only its count/offset and never materializes a full transient copy.
 This removes both the extra persistence copy and the O(F) path-index
 reconstruction that would otherwise be required before sparse BUILD can resolve
-quoted includes. BUILD may therefore keep the committed File Context mmap-backed
-and allocate mutable path state only for changed or newly discovered files.
+quoted includes. BUILD File Context now binds the committed SourceSave directly:
+persisted path/kind/topology reads remain mmap-backed, touched existing files get
+sparse physical/content state, and new physical identities append after the
+committed `file_id` range. Sparse dependency replacement remains the next slice.
 
 ## BUILD Frontend Reuse
 

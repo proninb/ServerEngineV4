@@ -1290,8 +1290,15 @@ BUILD probes it directly from mmap, and full platform filesystem-key equality is
 confirmed on a fingerprint match, so the fingerprint is an accelerator and
 never file identity.
 
-BUILD will add persisted-view + mutable-overlay capability; it must not begin by
-copying every committed file record merely to change a small subset.
+BUILD File Context now binds `source.bin` as an immutable baseline. Existing
+`file_id` path/kind/topology reads stay mmap-backed, while a touched existing
+file lazily acquires only a sparse native-path/physical/content overlay. Newly
+discovered files append after the committed `file_id` range. No dense committed
+file/path/physical array is reconstructed.
+
+Sparse replacement of dependency adjacency is the next File Context slice;
+until then BUILD topology mutation is explicitly unsupported rather than silently
+materializing or replacing the committed DAG.
 
 The physical path is retained exactly for I/O. Platform-equivalence keys remain
 transient lookup values.
