@@ -220,13 +220,18 @@ struct source_save_change_scan_metrics final {
     std::uint64_t matched_files = 0;
 
     std::uint64_t current_files = 0;
-    std::uint64_t files_read = 0;
-    std::uint64_t bytes_read = 0;
-    std::uint64_t dirty_files = 0;
-    std::uint64_t missing_files = 0;
+    std::uint64_t candidate_files = 0;
 
     bool fast_path = false;
     bool fallback = false;
+};
+
+struct source_save_change_classification_metrics final {
+    std::uint64_t files_read = 0;
+    std::uint64_t bytes_read = 0;
+    std::uint64_t missing_files = 0;
+    std::uint64_t semantic_changed_files = 0;
+    std::uint64_t active_lanes = 0;
 };
 
 // Checkpoint for source.bin produced by this BUILD. It is captured before
@@ -259,14 +264,27 @@ prepare_source_save_layout(const file_context &files,
 [[nodiscard]] source_save_result validate_source_save_image(
     std::span<const std::byte> image) noexcept;
 
-[[nodiscard]] server_status scan_source_save_changes(
+// Selects the physical files that require exact acquisition. The Windows
+// journal path is sparse. Portable fallback enumerates every current file_id but
+// performs no filesystem reads; exact bytes are acquired once by the classifier.
+[[nodiscard]] server_status scan_source_save_change_candidates(
     const source_save_view& persisted,
-    std::vector<file_id>& dirty,
+    std::vector<file_id>& candidates,
     source_save_change_scan* scan = nullptr) noexcept;
+
+// Reads/hashes each candidate exactly once. Only SHA-256-different or missing
+// files are published into sparse File Context overlays; unchanged acquisition
+// bytes are discarded immediately and never reconstruct the committed baseline.
+[[nodiscard]] server_status classify_source_save_changes(
+    const source_save_view& persisted,
+    std::span<const file_id> candidates,
+    file_context& files,
+    std::vector<file_id>& semantic_changed,
+    source_save_change_classification_metrics* metrics = nullptr) noexcept;
 
 [[nodiscard]] server_status collect_source_save_affected(
     const source_save_view& persisted,
-    std::span<const file_id> dirty,
+    std::span<const file_id> semantic_changed,
     std::vector<file_id>& affected) noexcept;
 
 class compiled_project_view;

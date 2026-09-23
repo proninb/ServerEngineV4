@@ -433,8 +433,12 @@ maps changed file references through the persisted `file_reference -> file_id`
 index. Matching data events are rebuilt directly. A dense bitset emits ascending
 `file_id` order without sorting or per-file opens.
 
-If journal continuity/support is unavailable, BUILD performs the portable exact
-SHA-256 file scan. The dirty set is expanded through persisted reverse topology.
+If journal continuity/support is unavailable, BUILD selects every current
+persisted `file_id` as an acquisition candidate without filesystem reads.
+A shared parallel exact-acquisition stage then reads/hashes each candidate once;
+only SHA-256-different or missing files enter sparse File Context overlays.
+Persisted OLD reverse topology expands `semantic_changed`, not raw journal
+events, into the affected closure.
 
 `database.bin` is BUILD-only retained frontend state keyed by `file_id`. It
 pairs exact Header/Source snapshot bytes with their lexical words/directive

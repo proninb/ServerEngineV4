@@ -791,13 +791,16 @@ rename/create/delete/hard-link/reparse event that invalidates the fast path
 falls back to the portable full scan. That fallback does not advance the
 persisted journal checkpoint.
 
-The portable fallback deliberately hashes current file bytes; size/mtime equality
-is not treated as exact content proof.
+The portable fallback only enumerates every current persisted `file_id` as an
+acquisition candidate; it performs no filesystem reads and creates no File
+Context overlays. The shared exact classifier then reads/hashes each candidate
+once. Only SHA-256-different or missing files become `semantic_changed`;
+same-byte snapshots are discarded immediately.
 
-`scan_source_save_changes()` therefore produces the exact dirty `file_id` set
-without O(F) per-file USN opens on the normal Windows path.
-`collect_source_save_affected()` then walks the OLD committed reverse topology
-before any affected dependency relation is replaced.
+`scan_source_save_change_candidates()` therefore separates physical change hints
+from exact semantic change. `collect_source_save_affected()` walks the OLD
+committed reverse topology from `semantic_changed` before any affected dependency
+relation is replaced.
 
 ### Affected closure
 
@@ -805,7 +808,7 @@ The affected set is computed from the **persisted old reverse topology** before
 affected dependency relations are recomputed:
 
 ```text
-dirty file_id set
+semantic_changed file_id set
     -> walk persisted dependents
     -> affected closure
 ```
@@ -826,18 +829,20 @@ new exact bytes
     -> affected preprocessing / Parser work
 ```
 
-For an unchanged but semantically affected file:
+For an unchanged but semantically affected Header/Source:
 
 ```text
-reuse persisted lexical state where sufficient
-materialize current physical bytes only when the frontend needs source spelling
+source spelling -> database.bin mmap
+lexical state   -> database.bin mmap
     -> rerun only required preprocessing / Parser / Semantic work
 ```
 
-`source.bin` never stores a second copy of Project source bytes.
+No filesystem reopen, source-byte copy, or re-lex is required for the unchanged
+file. `source.bin` never stores Project source bytes; `database.bin` owns the
+exact committed Header/Source snapshot paired with its lexical stream.
 
-The compact lexical representation is therefore DB/build-cache data across
-BUILD, not resident runtime Project state.
+The frontend representation is BUILD-cache state only and never resident Runtime
+Project state.
 
 ### mmap-native compiled Project
 
@@ -951,7 +956,9 @@ load project.manifest
     -> compare aggregate configuration hash
     -> read-only mmap/bind source.bin
     -> mmap-native normalized-path -> file_id lookup
-    -> exact physical dirty detection
+    -> physical change-candidate discovery
+    -> parallel exact acquire/hash classification
+    -> semantic_changed
     -> OLD reverse dependency affected closure
     -> read-only mmap/bind compiled.bin
     -> bind append-only string_id / identity_ref overlays

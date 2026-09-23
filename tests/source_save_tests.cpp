@@ -477,6 +477,49 @@ void test_direct_source_save(
             baseline_dependencies[0] == second,
         "BUILD File Context reads committed topology directly from mmap");
 
+
+    std::vector<file_id>
+        fallback_candidates;
+
+    source_save_change_scan
+        candidate_scan;
+
+    if (tests.expect(
+            succeeded(
+                scan_source_save_change_candidates(
+                    persisted_view,
+                    fallback_candidates,
+                    &candidate_scan)) &&
+            candidate_scan.metrics.fallback &&
+            candidate_scan.metrics.current_files == 2 &&
+            candidate_scan.metrics.candidate_files == 2 &&
+            fallback_candidates.size() == 2 &&
+            fallback_candidates[0] == first &&
+            fallback_candidates[1] == second,
+            "portable SourceSave fallback selects candidates without pre-reading files")) {
+
+        std::vector<file_id>
+            semantic_changed;
+
+        source_save_change_classification_metrics
+            classification;
+
+        tests.expect(
+            succeeded(
+                classify_source_save_changes(
+                    persisted_view,
+                    fallback_candidates,
+                    build_files,
+                    semantic_changed,
+                    &classification)) &&
+            semantic_changed.empty() &&
+            classification.files_read == 2 &&
+            classification.semantic_changed_files == 0 &&
+            !build_files.content_available(first) &&
+            !build_files.content_available(second),
+            "exact candidate classifier reads once and keeps unchanged baseline mmap-only");
+    }
+
     file_acquire_job baseline_job;
     file_acquire_result baseline_result;
     bool baseline_changed = true;

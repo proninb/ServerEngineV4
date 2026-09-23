@@ -2,6 +2,7 @@
 #include "source_save_format.hpp"
 #include "compiled_project.hpp"
 
+#include "../construction/execution_lanes.hpp"
 #include "../../filesystem_path.hpp"
 
 #include <algorithm>
@@ -2914,9 +2915,9 @@ enum class journal_scan_result : std::uint8_t {
             start = next;
         }
 
-        // A matching USN data event means that file is rebuilt. The dense
-        // bitset only canonicalizes output into ascending file_id order; no
-        // per-file reopen/hash is required on the journal fast path.
+        // A matching USN data event selects an exact-acquisition candidate.
+        // The dense bitset canonicalizes output into ascending file_id order;
+        // semantic change is decided later by SHA-256, never by the journal.
         for (std::size_t word = 0;
              word < candidates.size();
              ++word) {
@@ -2972,7 +2973,7 @@ enum class journal_scan_result : std::uint8_t {
 
         metrics.fast_path = true;
 
-        metrics.dirty_files =
+        metrics.candidate_files =
             dirty.size();
 
         return journal_scan_result::success;
@@ -2985,19 +2986,17 @@ enum class journal_scan_result : std::uint8_t {
 
 #endif
 
-[[nodiscard]] server_status scan_exact_fallback(
+[[nodiscard]] server_status scan_fallback_candidates(
     const source_save_view& persisted,
-    std::vector<file_id>& dirty,
+    std::vector<file_id>& candidates,
     source_save_change_scan_metrics& metrics) noexcept {
 
-    dirty.clear();
+    candidates.clear();
     metrics.fallback = true;
 
     try {
-        dirty.reserve(
-            persisted.file_count() /
-                32 +
-            1);
+        candidates.reserve(
+            persisted.file_count());
 
         for (std::size_t index = 0;
              index <
@@ -3012,87 +3011,40 @@ enum class journal_scan_result : std::uint8_t {
 
             if (!persisted.file(
                     file,
-                    state)) {
+                    state) ||
+                !state.current_member ||
+                !state.physical.present()) {
 
+                candidates.clear();
                 return server_status::
                     project_artifact_invalid;
-            }
-
-            if (!state.current_member) {
-                continue;
             }
 
             ++metrics.current_files;
 
-            std::filesystem::path path;
-
-            if (filesystem_path_from_utf8(
-                    state.path_utf8,
-                    path) !=
-                    filesystem_path_result::
-                        success ||
-                path.empty()) {
-
-                return server_status::
-                    project_artifact_invalid;
-            }
-
-            file_content_proof proof;
-
-            const auto acquired =
-                acquire_file_content_proof(
-                    path,
-                    proof);
-
-            if (acquired ==
-                file_content_result::
-                    missing) {
-
-                dirty.push_back(file);
-                ++metrics.dirty_files;
-                ++metrics.missing_files;
-                continue;
-            }
-
-            if (acquired !=
-                file_content_result::
-                    acquired) {
-
-                return server_status::io_error;
-            }
-
-            ++metrics.files_read;
-
-            metrics.bytes_read +=
-                static_cast<std::uint64_t>(
-                    proof.observation.size);
-
-            if (proof.content_hash ==
-                state.physical.content_hash) {
-
-                continue;
-            }
-
-            dirty.push_back(file);
-            ++metrics.dirty_files;
+            candidates.push_back(
+                file);
         }
+
+        metrics.candidate_files =
+            candidates.size();
 
         return server_status::success;
     }
     catch (...) {
-        dirty.clear();
+        candidates.clear();
         return server_status::io_error;
     }
 }
 
 }
 
-server_status scan_source_save_changes(
+server_status scan_source_save_change_candidates(
     const source_save_view& persisted,
-    std::vector<file_id>& dirty,
+    std::vector<file_id>& candidates,
     source_save_change_scan* scan) noexcept {
 
-    dirty.clear();
+    candidates.clear();
 
     source_save_change_scan local;
 
@@ -3106,8 +3058,8 @@ server_status scan_source_save_changes(
     }
 
 #if defined(_WIN32)
-    // V3 contract: capture the checkpoint for the resulting BUILD before dirty
-    // detection. Any later filesystem event remains visible to the next BUILD.
+    // Capture the checkpoint for the resulting BUILD before candidate discovery.
+    // Filesystem events after this point remain visible to the next BUILD.
     const auto baseline_checkpoint =
         persisted.change_checkpoint();
 
@@ -3144,14 +3096,14 @@ server_status scan_source_save_changes(
     const auto journal =
         scan_usn_journal(
             persisted,
-            dirty,
+            candidates,
             local.metrics);
 
     if (journal ==
         journal_scan_result::success) {
 
-        local.metrics.dirty_files =
-            dirty.size();
+        local.metrics.candidate_files =
+            candidates.size();
 
         if (scan != nullptr) {
             *scan =
@@ -3172,14 +3124,15 @@ server_status scan_source_save_changes(
     }
 #endif
 
-    // Same rule as V3: a portable full scan can determine what to rebuild, but
-    // it does not advance journal identity continuity for the resulting persisted.
+    // Portable fallback does not hash here. It only selects all current files;
+    // the common exact classifier performs the one authoritative disk read/hash.
+    // Journal continuity is not carried across this fallback boundary yet.
     local.next_checkpoint = {};
 
     const auto fallback =
-        scan_exact_fallback(
+        scan_fallback_candidates(
             persisted,
-            dirty,
+            candidates,
             local.metrics);
 
     if (scan != nullptr) {
@@ -3190,9 +3143,442 @@ server_status scan_source_save_changes(
     return fallback;
 }
 
+
+namespace {
+
+struct classified_source_change final {
+    file_id file{};
+    file_acquire_result_kind kind =
+        file_acquire_result_kind::failed;
+    file_content_snapshot snapshot;
+};
+
+struct classification_lane_state final {
+    std::size_t begin = 0;
+    std::size_t end = 0;
+    server_status status =
+        server_status::success;
+    std::vector<classified_source_change> changes;
+    std::uint64_t files_read = 0;
+    std::uint64_t bytes_read = 0;
+    std::uint64_t missing_files = 0;
+};
+
+class source_save_change_classifier final {
+public:
+    source_save_change_classifier(
+        const source_save_view& persisted,
+        std::span<const file_id> candidates) noexcept
+        : persisted(persisted),
+          candidates(candidates) {
+    }
+
+    [[nodiscard]] server_status run(
+        file_context& files,
+        std::vector<file_id>& semantic_changed,
+        source_save_change_classification_metrics& metrics) noexcept {
+
+        semantic_changed.clear();
+        metrics = {};
+
+        if (!persisted.valid() ||
+            files.size() !=
+                persisted.file_count()) {
+
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        if (candidates.empty()) {
+            return server_status::success;
+        }
+
+        std::uint32_t previous = 0;
+
+        for (const auto file :
+             candidates) {
+
+            if (!file ||
+                file.value() <=
+                    previous ||
+                !persisted.contains(file)) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            source_save_file_view state;
+
+            if (!persisted.file(
+                    file,
+                    state) ||
+                !state.current_member ||
+                !state.physical.present()) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            previous =
+                file.value();
+        }
+
+        const auto capacity =
+            execution_lane_capacity();
+
+        const auto active_lanes =
+            (std::min)(
+                candidates.size(),
+                capacity);
+
+        if (active_lanes == 0) {
+            return server_status::io_error;
+        }
+
+        try {
+            lanes.resize(
+                active_lanes);
+        }
+        catch (...) {
+            return server_status::io_error;
+        }
+
+        const auto base =
+            candidates.size() /
+            active_lanes;
+
+        const auto remainder =
+            candidates.size() %
+            active_lanes;
+
+        std::size_t cursor = 0;
+
+        for (std::size_t lane = 0;
+             lane < active_lanes;
+             ++lane) {
+
+            const auto count =
+                base +
+                (lane < remainder
+                    ? 1
+                    : 0);
+
+            lanes[lane].begin =
+                cursor;
+            lanes[lane].end =
+                cursor + count;
+
+            cursor +=
+                count;
+        }
+
+        if (cursor !=
+            candidates.size()) {
+
+            return server_status::io_error;
+        }
+
+        const auto started =
+            workers.start(
+                active_lanes);
+
+        if (!succeeded(started)) {
+            return started;
+        }
+
+        const auto executed =
+            workers.run(
+                active_lanes,
+                lane_entry,
+                this);
+
+        if (!succeeded(executed)) {
+            return executed;
+        }
+
+        std::size_t changed_count = 0;
+
+        for (const auto& lane :
+             lanes) {
+
+            if (!succeeded(
+                    lane.status)) {
+
+                return lane.status;
+            }
+
+            if (lane.changes.size() >
+                (std::numeric_limits<
+                    std::size_t>::max)() -
+                    changed_count) {
+
+                return server_status::io_error;
+            }
+
+            changed_count +=
+                lane.changes.size();
+
+            metrics.files_read +=
+                lane.files_read;
+            metrics.bytes_read +=
+                lane.bytes_read;
+            metrics.missing_files +=
+                lane.missing_files;
+        }
+
+        try {
+            semantic_changed.reserve(
+                changed_count);
+        }
+        catch (...) {
+            return server_status::io_error;
+        }
+
+        for (auto& lane :
+             lanes) {
+
+            for (auto& change :
+                 lane.changes) {
+
+                file_acquire_result result;
+                result.file =
+                    change.file;
+                result.kind =
+                    change.kind;
+                result.snapshot =
+                    std::move(
+                        change.snapshot);
+
+                bool content_changed = false;
+
+                const auto applied =
+                    files.apply_acquire(
+                        result,
+                        content_changed);
+
+                if (!succeeded(applied) ||
+                    !content_changed) {
+
+                    semantic_changed.clear();
+
+                    return succeeded(applied)
+                        ? server_status::
+                            project_artifact_invalid
+                        : applied;
+                }
+
+                semantic_changed.push_back(
+                    change.file);
+            }
+        }
+
+        metrics.semantic_changed_files =
+            semantic_changed.size();
+
+        metrics.active_lanes =
+            active_lanes;
+
+        return server_status::success;
+    }
+
+private:
+    static void lane_entry(
+        void* context,
+        std::size_t lane) noexcept {
+
+        static_cast<
+            source_save_change_classifier*>(
+                context)
+            ->run_lane(
+                lane);
+    }
+
+    void run_lane(
+        std::size_t lane) noexcept {
+
+        if (lane >=
+            lanes.size()) {
+
+            return;
+        }
+
+        auto& state =
+            lanes[lane];
+
+        try {
+            state.changes.reserve(
+                (state.end -
+                 state.begin) /
+                    16 +
+                1);
+
+            for (auto position =
+                     state.begin;
+                 position <
+                     state.end;
+                 ++position) {
+
+                const auto file =
+                    candidates[
+                        position];
+
+                source_save_file_view
+                    persisted_file;
+
+                if (!persisted.file(
+                        file,
+                        persisted_file) ||
+                    !persisted_file.
+                        current_member ||
+                    !persisted_file.
+                        physical.present() ||
+                    persisted_file.
+                        path_utf8.empty()) {
+
+                    state.status =
+                        server_status::
+                            project_artifact_invalid;
+                    return;
+                }
+
+                std::filesystem::path path;
+
+                if (filesystem_path_from_utf8(
+                        persisted_file.path_utf8,
+                        path) !=
+                    filesystem_path_result::
+                        success) {
+
+                    state.status =
+                        server_status::
+                            project_artifact_invalid;
+                    return;
+                }
+
+                file_content_snapshot snapshot;
+
+                const auto acquired =
+                    acquire_file_content(
+                        path,
+                        snapshot);
+
+                if (acquired ==
+                    file_content_result::
+                        missing) {
+
+                    classified_source_change
+                        change;
+
+                    change.file = file;
+                    change.kind =
+                        file_acquire_result_kind::
+                            missing;
+
+                    state.changes.push_back(
+                        std::move(change));
+
+                    ++state.missing_files;
+                    continue;
+                }
+
+                if (acquired !=
+                    file_content_result::
+                        acquired) {
+
+                    state.status =
+                        acquired ==
+                            file_content_result::
+                                allocation_failed
+                        ? server_status::io_error
+                        : server_status::io_error;
+                    return;
+                }
+
+                ++state.files_read;
+
+                if (snapshot.observation.size >
+                    (std::numeric_limits<
+                        std::uint64_t>::max)() -
+                        state.bytes_read) {
+
+                    state.status =
+                        server_status::io_error;
+                    return;
+                }
+
+                state.bytes_read +=
+                    static_cast<std::uint64_t>(
+                        snapshot.observation.size);
+
+                if (snapshot.content_hash ==
+                    persisted_file.
+                        physical.content_hash) {
+
+                    continue;
+                }
+
+                classified_source_change
+                    change;
+
+                change.file = file;
+                change.kind =
+                    file_acquire_result_kind::
+                        present;
+                change.snapshot =
+                    std::move(snapshot);
+
+                state.changes.push_back(
+                    std::move(change));
+            }
+        }
+        catch (...) {
+            state.status =
+                server_status::io_error;
+        }
+    }
+
+    const source_save_view& persisted;
+    std::span<const file_id> candidates;
+    execution_lanes workers;
+    std::vector<classification_lane_state>
+        lanes;
+};
+
+}
+
+server_status classify_source_save_changes(
+    const source_save_view& persisted,
+    std::span<const file_id> candidates,
+    file_context& files,
+    std::vector<file_id>& semantic_changed,
+    source_save_change_classification_metrics* metrics) noexcept {
+
+    source_save_change_classification_metrics
+        local;
+
+    source_save_change_classifier classifier{
+        persisted,
+        candidates};
+
+    const auto result =
+        classifier.run(
+            files,
+            semantic_changed,
+            local);
+
+    if (metrics != nullptr) {
+        *metrics =
+            succeeded(result)
+            ? local
+            : source_save_change_classification_metrics{};
+    }
+
+    return result;
+}
+
 server_status collect_source_save_affected(
     const source_save_view& persisted,
-    std::span<const file_id> dirty,
+    std::span<const file_id> semantic_changed,
     std::vector<file_id>& affected) noexcept {
 
     affected.clear();
@@ -3208,10 +3594,10 @@ server_status collect_source_save_affected(
                 persisted.file_count());
 
         affected.reserve(
-            dirty.size());
+            semantic_changed.size());
 
         for (const auto file :
-             dirty) {
+             semantic_changed) {
 
             if (!persisted.contains(file)) {
                 return server_status::

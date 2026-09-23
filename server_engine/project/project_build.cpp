@@ -321,13 +321,13 @@ server_status build_project(
         return files_bound;
     }
 
-    std::vector<file_id> dirty;
+    std::vector<file_id> candidates;
     source_save_change_scan scan;
 
     const auto scanned =
-        scan_source_save_changes(
+        scan_source_save_change_candidates(
             context.source,
-            dirty,
+            candidates,
             &scan);
 
     if (!succeeded(scanned)) {
@@ -339,10 +339,37 @@ server_status build_project(
                 operation)
                 .file(layout.source_save)
                 .detail(
-                    "Physical change detection over committed SourceSave failed")
+                    "Physical change-candidate discovery over committed SourceSave failed")
                 .build());
 
         return scanned;
+    }
+
+    std::vector<file_id> semantic_changed;
+    source_save_change_classification_metrics
+        classification;
+
+    const auto classified =
+        classify_source_save_changes(
+            context.source,
+            candidates,
+            context.files,
+            semantic_changed,
+            &classification);
+
+    if (!succeeded(classified)) {
+        diagnostics.emit(
+            diagnostic(
+                classified == server_status::io_error
+                    ? diagnostics::project_source_save_io_failed
+                    : diagnostics::project_source_save_invalid,
+                operation)
+                .file(layout.source_save)
+                .detail(
+                    "Exact SourceSave candidate acquisition/classification failed")
+                .build());
+
+        return classified;
     }
 
     std::vector<file_id> affected;
@@ -350,7 +377,7 @@ server_status build_project(
     const auto collected =
         collect_source_save_affected(
             context.source,
-            dirty,
+            semantic_changed,
             affected);
 
     if (!succeeded(collected)) {
@@ -513,15 +540,24 @@ server_status build_project(
             ", fallback=" +
             std::to_string(
                 scan.metrics.fallback ? 1 : 0) +
+            ", candidates=" +
+            std::to_string(
+                candidates.size()) +
             ", files_read=" +
             std::to_string(
-                scan.metrics.files_read) +
+                classification.files_read) +
             ", bytes_read=" +
             std::to_string(
-                scan.metrics.bytes_read) +
-            ", dirty=" +
+                classification.bytes_read) +
+            ", missing=" +
             std::to_string(
-                dirty.size()) +
+                classification.missing_files) +
+            ", semantic_changed=" +
+            std::to_string(
+                semantic_changed.size()) +
+            ", classify_lanes=" +
+            std::to_string(
+                classification.active_lanes) +
             ", next_checkpoint=" +
             std::to_string(
                 scan.next_checkpoint ? 1 : 0) +
@@ -542,7 +578,7 @@ server_status build_project(
             ", baseline_identities=" +
             std::to_string(
                 context.compiled.identity_count()) +
-            "; sparse physical mutation, affected lexical replacement, Parser/Semantic reconstruction, and final G construction are not implemented yet";
+            "; affected lexical replacement, Parser/Semantic reconstruction, and final G construction are not implemented yet";
     }
     catch (...) {
         return server_status::io_error;
