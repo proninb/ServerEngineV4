@@ -561,29 +561,20 @@ Development is intentionally split into two boundaries:
 
 ```text
 PHASE 1
-root project.json
-    -> recursive Project configuration composition
-    -> root preprocessor configuration
-    -> fresh configuration manifest
-    -> fresh File Context / SourceSave state
-    -> fresh lexical construction
-    -> fresh string_id space
-    -> fresh identity_ref space
-    -> parse Assign inputs -> assign_table
-    -> Parser / Semantic -> G
-    -> complete dependency topology
-    -> persist REBUILD artifacts
+LOAD / BUILD / REBUILD
+    -> compiled G
+    -> resident Project semantic state
 
 PHASE 2
-G
+resident compiled G
     -> Runtime
     -> SHM
-    -> resident Project
 ```
 
-Phase 1 must be complete for LOAD, BUILD, and REBUILD before Runtime/SHM work
-continues. ABI-derived Runtime layout belongs to Phase 2 and is not part of the
-current construction/persistence boundary.
+The Phase-1 resident Project owns only runtime-required immutable compiled
+semantic state: the `compiled.bin` mapping and `compiled_project_view`.
+Construction state never crosses this boundary. ABI-derived Runtime layout and
+SHM belong to Phase 2.
 
 REBUILD ignores the previous incremental construction state.
 
@@ -635,7 +626,7 @@ project -> duplicate reference is an error
 
 File IDs are assigned root-first in declaration-order DFS. There is no sort.
 
-The current implementation already reaches:
+The current implementation reaches:
 
 ```text
 current inputs
@@ -643,44 +634,28 @@ current inputs
     -> Parser/Semantic
     -> G
     -> finalized dependency topology
-    -> exact project.manifest layout
-    -> final project.manifest writable mmap
-    -> direct manifest encoding + flush
-    -> exact source.bin layout
-    -> final source.bin writable mmap
-    -> direct File Context encoding + cold validation + flush
-    -> exact database.bin layout
-    -> final database.bin writable mmap
-    -> direct Lexical Generation encoding + cold construction audit + flush
-    -> exact compiled.bin layout
-    -> final compiled.bin writable mmap
-    -> direct G encoding into mapped pages
-    -> structural + cold semantic validation
+    -> exact project.manifest/source.bin/database.bin/compiled.bin layouts
+    -> direct final-path writable mappings
+    -> encode + cold validation
+    -> flush all four artifacts
+    -> close construction mappings
+    -> reopen compiled.bin read-only
+    -> resident Project owns compiled mapping/view
 ```
 
-The production REBUILD project.manifest, source.bin, database.bin, and
-compiled.bin paths do not allocate full-size serialized
-`std::vector<std::byte>` images and do not create `.tmp` artifacts. source.bin
-does not materialize a `vector<string>` of persisted paths. database.bin writes
-only retained Lexical Generation records, words, and directive anchors directly
-into final mapped sections. `compiled.bin` is the sole persisted owner of
-string/identity lineage, so database.bin does not duplicate String Table or
-Identity Space state. Parser/Semantic already populates `identity_space` and G
-directly.
+The production REBUILD paths do not allocate full-size serialized
+`std::vector<std::byte>` images and do not create `.tmp` artifacts. BUILD-only
+File Context, lexical, SourceSave, and database construction state does not enter
+the resident Project.
 
-The current implementation still stops before:
+A failure before or during resident publication is still a REBUILD failure. The
+operation scope destroys all mappings first, then the existing REBUILD cleanup
+removes `project.manifest`, `source.bin`, `database.bin`, and `compiled.bin`.
 
-```text
-remaining C++ declaration semantics beyond the supported direct Parser slice
-BUILD persisted-state reconstruction and sparse affected rebuild to G
-LOAD/BUILD/REBUILD Phase-1 completion
-Runtime
-SHM
-```
+The remaining Phase-1 lifecycle work is BUILD persisted-state reconstruction and
+sparse affected rebuild to G. Runtime and SHM remain Phase 2.
 
-Because REBUILD still returns `unsupported`, the REBUILD cleanup contract removes
-all four artifact files on return. No incomplete REBUILD artifact set is retained.
-
+## BUILD
 ## BUILD
 
 BUILD starts only from `UNLOADED` and receives the root Project path explicitly.
@@ -1000,34 +975,25 @@ BUILD failure contract that preserves the previously persisted BUILD state.
 LOAD opens only `compiled.bin`; it never validates `project.json` as a substitute
 for persisted compiled state.
 
-The normal LOAD hot path is:
+The normal LOAD path is:
 
 ```text
 compiled.bin
     -> read-only mmap
     -> compiled_project_view::bind()
+    -> resident Project owns mapping/view
+    -> success
 ```
 
 `bind()` validates the fixed format, header/directory CRCs, aligned section
 extents, numeric slot bounds, and persisted index capacities. It does not scan
-section payloads.
-
-`verify_contents()` is the separate cold integrity/semantic audit. It verifies
-per-section CRCs and deep persisted invariants and is not part of normal LOAD.
+section payloads. `verify_contents()` remains the separate cold audit.
 
 There is no mutable Graph/string/identity reconstruction and therefore no
-allocation proportional to Project semantic size on LOAD.
+allocation proportional to Project semantic size on LOAD. Opening or parsing
+`project.json` is not part of the LOAD proof.
 
-Runtime/SHM construction and resident Project ownership of the mapping are still
-not implemented, so successful structural bind currently ends with:
-
-```text
-project.load_incomplete
-server_status::unsupported
-```
-
-Opening or parsing `project.json` is not part of the LOAD proof.
-
+## Configuration Manifest
 ## Configuration Manifest
 
 The complete composed Project configuration proof is represented by:

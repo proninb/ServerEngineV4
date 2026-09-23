@@ -9,6 +9,7 @@
 #include "../read_only_file_mapping.hpp"
 
 #include <memory>
+#include <utility>
 
 namespace cw::server {
 
@@ -106,16 +107,28 @@ server_status load_project(
             project_artifact_invalid;
     }
 
-    diagnostics.emit(
-        diagnostic(
-            diagnostics::project_load_incomplete,
-            operation)
-            .file(layout.compiled)
-            .detail(
-                "compiled.bin is mmap-bound and structurally validated without reconstructing mutable Project/Graph state; Runtime/SHM construction and resident Project publication are not implemented yet")
-            .build());
+    try {
+        output =
+            std::make_unique<project>(
+                project_path,
+                std::move(mapping),
+                compiled);
+    }
+    catch (...) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_load_failed,
+                operation)
+                .file(layout.compiled)
+                .detail(
+                    "Cannot publish resident Project from compiled.bin")
+                .build());
 
-    return server_status::unsupported;
+        return server_status::
+            project_load_failed;
+    }
+
+    return server_status::success;
 }
 
 }

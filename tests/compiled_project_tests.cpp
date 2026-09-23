@@ -1,3 +1,4 @@
+#include "project/project.hpp"
 #include "project/persistence/compiled_project.hpp"
 #include "project/persistence/crc64_ecma.hpp"
 #include "project/file/file_context.hpp"
@@ -13,6 +14,7 @@
 #include <span>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace cw::server {
@@ -935,6 +937,22 @@ void test_direct_mmap_encoding(
                 fixture.type_identity) ==
                 fixture.type,
             "direct compiled mmap preserves Graph lookup");
+
+        {
+            project resident{
+                std::filesystem::temp_directory_path() /
+                    "server_engine_v4_project.json",
+                std::move(persisted),
+                persisted_view};
+
+            tests.expect(
+                !persisted.valid() &&
+                    resident.compiled().valid() &&
+                    resident.compiled().find_type(
+                        fixture.type_identity) ==
+                        fixture.type,
+                "resident Project owns compiled mmap and preserves Graph view lifetime");
+        }
     }
 
     persisted.reset();

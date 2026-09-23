@@ -603,9 +603,15 @@ and database.bin receive cold verification before flush;
 compiled mapped bytes.
 
 LOAD maps and structurally binds an existing `compiled.bin` read-only without
-rebuilding Graph/string/identity containers. `verify_contents()` remains a
-separate cold audit and is not part of the normal LOAD hot path. Phase 1 still
-must complete BUILD/LOAD/REBUILD -> G before Runtime/SHM work begins.
+rebuilding Graph/string/identity containers. The mapping and
+`compiled_project_view` are owned by the resident `project`; `verify_contents()`
+remains a separate cold audit and is not part of the normal LOAD hot path.
+
+REBUILD publishes through the same resident representation only after all four
+artifacts are validated, flushed, and their writable construction mappings are
+closed. A publication failure is still a REBUILD failure and removes the full
+artifact set. LOAD and REBUILD therefore complete their Phase-1 `-> G` contract;
+BUILD remains the unfinished Phase-1 lifecycle path before Runtime/SHM work.
 
 The implemented BUILD code currently reaches:
 

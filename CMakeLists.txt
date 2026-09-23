@@ -91,6 +91,7 @@ include(CTest)
 if(BUILD_TESTING)
     add_executable(ServerEngineV4Tests
         tests/compiled_project_tests.cpp
+        server_engine/project/project.cpp
         server_engine/read_only_file_mapping.cpp
         server_engine/writable_file_mapping.cpp
         server_engine/project/string/string_table.cpp

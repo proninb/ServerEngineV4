@@ -11,11 +11,14 @@
 #include "persistence/source_save.hpp"
 
 #include "../diagnostics/diagnostic_builder.hpp"
+#include "../read_only_file_mapping.hpp"
 #include "../writable_file_mapping.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 
+#include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace cw::server {
 namespace {
@@ -96,7 +99,7 @@ server_status rebuild_project(
 
         diagnostics.emit(
             diagnostic(
-                diagnostics::project_rebuild_incomplete,
+                diagnostics::project_invalid_configuration,
                 operation)
                 .file(project_path)
                 .detail(
@@ -777,17 +780,71 @@ server_status rebuild_project(
         return server_status::io_error;
     }
 
-    // REBUILD is not yet a successful lifecycle operation. cleanup therefore
-    // removes project.manifest/source.bin/database.bin/compiled.bin on return.
-    diagnostics.emit(
-        diagnostic(
-            diagnostics::project_rebuild_incomplete,
-            operation)
-            .detail(
-                "Direct final-path project.manifest/source.bin/database.bin persistence and writable-mmap compiled.bin construction from final G are complete for the supported semantic slice; remaining Phase-1 BUILD/LOAD/REBUILD completion is not implemented yet")
-            .build());
+    // Durability precedes resident publication. No construction mapping survives
+    // the boundary into the resident Project.
+    manifest_mapping.reset();
+    source_mapping.reset();
+    database_mapping.reset();
+    compiled_mapping.reset();
 
-    return server_status::unsupported;
+    read_only_file_mapping resident_mapping;
+
+    if (resident_mapping.open(
+            layout.compiled) !=
+        read_only_file_mapping_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_compiled_io_failed,
+                operation)
+                .file(layout.compiled)
+                .detail(
+                    "Cannot reopen committed compiled.bin for resident publication")
+                .build());
+
+        return server_status::io_error;
+    }
+
+    compiled_project_view resident_compiled;
+
+    if (resident_compiled.bind(
+            resident_mapping.bytes()) !=
+        compiled_project_image_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_compiled_invalid,
+                operation)
+                .file(layout.compiled)
+                .detail(
+                    "Committed compiled.bin failed resident structural bind")
+                .build());
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    try {
+        output =
+            std::make_unique<project>(
+                project_path,
+                std::move(resident_mapping),
+                resident_compiled);
+    }
+    catch (...) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_compiled_io_failed,
+                operation)
+                .file(layout.compiled)
+                .detail(
+                    "Cannot publish resident Project from committed compiled.bin")
+                .build());
+
+        return server_status::io_error;
+    }
+
+    return server_status::success;
         }();
 
     if (succeeded(rebuilt)) {
