@@ -2504,7 +2504,7 @@ server_status parse_semantic_project(
         }
     }
 
-    return sources.finalize(files.size(), G);
+    return sources.finalize(files.size(), identities, G);
 }
 
 }
