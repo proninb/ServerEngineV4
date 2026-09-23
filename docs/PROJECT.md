@@ -656,7 +656,6 @@ The remaining Phase-1 lifecycle work is BUILD persisted-state reconstruction and
 sparse affected rebuild to G. Runtime and SHM remain Phase 2.
 
 ## BUILD
-## BUILD
 
 BUILD starts only from `UNLOADED` and receives the root Project path explicitly.
 
@@ -993,7 +992,6 @@ There is no mutable Graph/string/identity reconstruction and therefore no
 allocation proportional to Project semantic size on LOAD. Opening or parsing
 `project.json` is not part of the LOAD proof.
 
-## Configuration Manifest
 ## Configuration Manifest
 
 The complete composed Project configuration proof is represented by:
