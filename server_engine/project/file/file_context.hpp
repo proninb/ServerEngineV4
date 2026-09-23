@@ -169,6 +169,48 @@ struct construction_content_hash final {
         const construction_content_hash&) noexcept = default;
 };
 
+class database_view;
+
+// Borrowed exact-source baseline used by BUILD. The provider owns the bytes;
+// File Context only overlays changed/appended content and never copies unchanged
+// committed source text into its construction arena.
+class file_content_baseline_view final {
+public:
+    using reader_function = bool (*)(
+        const void* context,
+        file_id file,
+        std::string_view& output) noexcept;
+
+    [[nodiscard]] bool valid() const noexcept {
+        return context != nullptr &&
+            reader != nullptr &&
+            file_count_value != 0;
+    }
+
+    [[nodiscard]] std::size_t file_count() const noexcept {
+        return file_count_value;
+    }
+
+    [[nodiscard]] bool read(
+        file_id file,
+        std::string_view& output) const noexcept {
+
+        output = {};
+
+        return valid() &&
+            file &&
+            file.value() <= file_count_value &&
+            reader(context, file, output);
+    }
+
+private:
+    const void* context = nullptr;
+    std::size_t file_count_value = 0;
+    reader_function reader = nullptr;
+
+    friend class database_view;
+};
+
 // Lightweight adjacency view used by fresh arenas, persisted source.bin edges,
 // and sparse BUILD reverse deltas. The overlay form filters removed baseline
 // edges and appends only true additions without materializing full adjacency.
@@ -291,6 +333,15 @@ public:
 
     [[nodiscard]] bool baseline_bound() const noexcept {
         return baseline != nullptr;
+    }
+
+    // Binds exact Header/Source bytes from the same committed BUILD snapshot as
+    // the lexical baseline. The provider must outlive this File Context.
+    [[nodiscard]] server_status bind_content_baseline(
+        file_content_baseline_view source) noexcept;
+
+    [[nodiscard]] bool content_baseline_bound() const noexcept {
+        return content_baseline.valid();
     }
 
     [[nodiscard]] server_status resolve(
@@ -502,6 +553,7 @@ private:
 
     const source_save_view* baseline = nullptr;
     std::size_t baseline_file_count = 0;
+    file_content_baseline_view content_baseline;
 
     std::vector<file_record> files;
     std::vector<file_path_char> path_chars;

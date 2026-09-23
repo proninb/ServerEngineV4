@@ -19,7 +19,7 @@ identity_ref
 
 The architecture must remain deterministic, compact, and free of duplicated identity systems.
 
-Physical lexing may retain one compact construction-only lexical stream per physical file. That stream is not a semantic graph and carries no textual or semantic identity.
+Physical lexing may retain one compact construction-only lexical stream per physical file. That stream is not a semantic graph and carries no textual or semantic identity. BUILD persistence pairs the stream with the exact immutable Header/Source byte snapshot that produced it so unchanged semantic replay never combines lexical data from one filesystem epoch with source spelling from another.
 
 ---
 
@@ -234,7 +234,8 @@ G / compiled.bin
     STRING / IDENTITY LINEAGE OWNER
 
 database.bin
-    RETAINED PER-FILE LEXICAL BUILD STATE
+    EXACT HEADER/SOURCE SNAPSHOT BYTES
+    + RETAINED PER-FILE LEXICAL BUILD STATE
 ```
 
 An identity may remain in the BUILD lineage after it no longer appears in the
@@ -997,8 +998,8 @@ REBUILD
     fresh dense native records + lane arenas
 
 BUILD
-    immutable database.bin lexical baseline
-    + sparse replacement records
+    immutable database.bin source + lexical baseline
+    + sparse changed-content / lexical replacement
     + append-only records for new file_id values
 ```
 
@@ -1311,7 +1312,8 @@ failure; dense record/kind storage begins at slot `2`.
 `compiled.bin` persists identity lineage canonically together with the
 String Table and G. BUILD now binds those mapped semantic sections as the
 baseline for append-only string/identity overlays. `database.bin` deliberately
-contains no semantic identity copy; it retains only per-file lexical state.
+contains no semantic identity copy; it retains exact Header/Source snapshot bytes
+paired with per-file lexical state.
 
 Parser/Semantic now writes `G` directly for the implemented namespace,
 record/member, Project-object, construction, managed-constructor, and static-link

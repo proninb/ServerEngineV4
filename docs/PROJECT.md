@@ -754,9 +754,11 @@ optional native change token
 direct dependency topology
 ```
 
-`source.bin` deliberately does not copy Project file contents. The physical
-Project files remain the source of exact bytes; retained lexical state belongs
-to `database.bin` when BUILD reuse requires it.
+`source.bin` deliberately does not copy Project file contents. Physical files
+remain the change-acquisition inputs. `database.bin` v4 retains the exact
+Header/Source snapshot bytes paired with their lexical state, so unchanged
+semantic replay uses one immutable committed filesystem epoch without reopening
+those files.
 
 BUILD memory-maps `source.bin` read-only directly and performs an O(1),
 allocation-free `source_save_view::bind()`. Records and edges fail closed as
@@ -1149,6 +1151,7 @@ source.bin
     BUILD only
 
 database.bin
+    exact Header/Source snapshot bytes
     retained per-file lexical state
     BUILD acceleration
     BUILD only
@@ -1335,14 +1338,18 @@ Change tokens are proof optimizations only.
 `construction_content_hash` remains a byte-content aggregate only. Path, role,
 topology, semantic identity, and DB state belong to higher layers.
 
-### BUILD lexical baseline
+### BUILD source / lexical baseline
 
-`database.bin` remains the retained lexical BUILD cache. BUILD binds it through a
-borrowed `lexical_baseline_view`; `lexical_generation` itself has no persistence
-dependency.
+`database.bin` is the retained frontend BUILD cache. One persisted file record
+pairs exact Header/Source snapshot bytes with the lexical stream produced from
+that same snapshot. BUILD binds source bytes through a borrowed
+`file_content_baseline_view` and lexical state through `lexical_baseline_view`;
+File Context and `lexical_generation` remain independent from database persistence
+types.
 
 ```text
 unchanged committed file
+    -> source spelling bytes from database.bin mmap
     -> words/directives/token_count from database.bin mmap
 
 affected committed file

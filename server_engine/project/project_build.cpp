@@ -454,6 +454,23 @@ server_status build_project(
             return server_status::project_artifact_invalid;
         }
 
+        const auto content_bound =
+            context.files.bind_content_baseline(
+                context.database.content_baseline());
+
+        if (!succeeded(content_bound)) {
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_database_invalid,
+                    operation)
+                    .file(layout.database)
+                    .detail(
+                        "Committed database.bin could not initialize mmap-backed BUILD source-content baseline")
+                    .build());
+
+            return content_bound;
+        }
+
         const auto lexical_bound =
             context.lexical.bind_baseline(
                 context.database.lexical_baseline(),

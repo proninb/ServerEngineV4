@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string_view>
 
@@ -67,6 +68,31 @@ private:
     bool valid_value = false;
 };
 
+constexpr std::string_view database_fixture_source{
+    "#include \"other.hpp\"\n"
+    "struct A { int x; };\n"};
+
+bool write_text(
+    const std::filesystem::path& path,
+    std::string_view value) {
+
+    std::ofstream output(
+        path,
+        std::ios::binary |
+            std::ios::trunc);
+
+    if (!output) {
+        return false;
+    }
+
+    output.write(
+        value.data(),
+        static_cast<std::streamsize>(
+            value.size()));
+
+    return static_cast<bool>(output);
+}
+
 bool prepare_fixture(
     test_state& tests,
     const std::filesystem::path& root,
@@ -74,6 +100,14 @@ bool prepare_fixture(
     lexical_generation& lexical,
     file_id& header,
     file_id& project) {
+
+    if (!tests.expect(
+            write_text(
+                root / "types.hpp",
+                database_fixture_source),
+            "write database fixture source")) {
+        return false;
+    }
 
     if (!tests.expect(
             succeeded(
@@ -90,6 +124,36 @@ bool prepare_fixture(
         return false;
     }
 
+    file_acquire_job job;
+    file_acquire_result acquired;
+    bool content_changed = false;
+
+    if (!tests.expect(
+            succeeded(
+                files.prepare_acquire(
+                    header,
+                    job)),
+            "prepare database fixture acquisition")) {
+        return false;
+    }
+
+    file_context::execute_acquire(
+        job,
+        acquired);
+
+    if (!tests.expect(
+            succeeded(
+                files.apply_acquire(
+                    acquired,
+                    content_changed)) &&
+            content_changed &&
+            files.content_available(header) &&
+            files.content(header) ==
+                database_fixture_source,
+            "materialize exact database fixture source")) {
+        return false;
+    }
+
     if (!tests.expect(
             succeeded(
                 lexical.reset(
@@ -99,10 +163,6 @@ bool prepare_fixture(
         return false;
     }
 
-    constexpr std::string_view source{
-        "#include \"other.hpp\"\n"
-        "struct A { int x; };\n"};
-
     lexical_stream stream;
     lexical_error error;
 
@@ -110,7 +170,7 @@ bool prepare_fixture(
             succeeded(
                 lexer::tokenize(
                     header,
-                    source,
+                    files.content(header),
                     stream,
                     &error)),
             "tokenize database lexical fixture") &&
@@ -195,6 +255,8 @@ void test_direct_database(
 
     database_lexical_file_view header_state;
     database_lexical_file_view project_state;
+    std::string_view header_content;
+    std::string_view project_content;
 
     if (!tests.expect(
             mapped.file(
@@ -207,9 +269,37 @@ void test_direct_database(
                 project,
                 project_state) &&
             !project_state.available,
-            "non-C++ file has no lexical state")) {
+            "non-C++ file has no lexical state") ||
+        !tests.expect(
+            mapped.content(
+                header,
+                header_content) &&
+            header_content ==
+                database_fixture_source,
+            "read exact persisted Header source bytes") ||
+        !tests.expect(
+            !mapped.content(
+                project,
+                project_content),
+            "non-C++ file has no persisted source bytes")) {
         return;
     }
+
+    const auto content_baseline =
+        mapped.content_baseline();
+
+    std::string_view baseline_content;
+
+    tests.expect(
+        content_baseline.valid() &&
+        content_baseline.file_count() ==
+            files.size() &&
+        content_baseline.read(
+            header,
+            baseline_content) &&
+        baseline_content ==
+            database_fixture_source,
+        "database exports borrowed mmap source-content baseline");
 
     const auto words =
         lexical.words(header);

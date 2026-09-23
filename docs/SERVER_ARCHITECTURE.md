@@ -436,8 +436,10 @@ index. Matching data events are rebuilt directly. A dense bitset emits ascending
 If journal continuity/support is unavailable, BUILD performs the portable exact
 SHA-256 file scan. The dirty set is expanded through persisted reverse topology.
 
-`database.bin` is BUILD-only retained lexical state keyed by `file_id`. It is
-not a Semantic DB and does not persist String Table or Identity Space state.
+`database.bin` is BUILD-only retained frontend state keyed by `file_id`. It
+pairs exact Header/Source snapshot bytes with their lexical words/directive
+anchors. It is not a Semantic DB and does not persist String Table or Identity
+Space state.
 `compiled.bin` is the sole persisted owner of `string_id` / `identity_ref`
 lineage as well as G.
 
@@ -595,9 +597,10 @@ failure is reported explicitly and leaves the Server `UNLOADED`.
 After topology finalization, the current REBUILD implementation persists
 `project.manifest`, `source.bin`, `database.bin`, and `compiled.bin` directly to
 their final paths using exact-size writable mappings. source.bin is encoded
-directly from finalized File Context state. database.bin streams only retained
-Lexical Generation records, words, and directive anchors into mapped sections;
-String Table and Identity Space lineage are persisted once in compiled.bin.
+directly from finalized File Context state. database.bin streams exact
+Header/Source snapshot bytes together with retained Lexical Generation records,
+words, and directive anchors into mapped sections; String Table and Identity
+Space lineage are persisted once in compiled.bin.
 The optional SourceSave USN identity indexes are prepared once and retained only
 as persistence-specific tracking state. None of these production paths creates
 a full-size serialized `std::vector<std::byte>` or `.tmp` artifact. source.bin
@@ -763,12 +766,12 @@ The direct reverse topology is persisted SourceSave data because BUILD uses it
 to compute the affected closure before updating dependency relations for the
 current construction.
 
-`database.bin` is bound separately as the immutable lexical BUILD baseline.
-`lexical_generation` does not reconstruct committed per-file records: unchanged
-files read encoded words/directive anchors directly from mmap through value
-views, while affected committed files and appended `file_id` values occupy sparse
-native overlay storage. The baseline-provider contract keeps frontend storage
-independent from persistence implementation types.
+`database.bin` is bound separately as the immutable source/lexical BUILD
+baseline. File Context reads unchanged Header/Source spelling directly from mmap
+through `file_content_baseline_view`; `lexical_generation` reads encoded
+words/directive anchors through `lexical_baseline_view`. Changed/appended files
+occupy sparse native overlays. Neither construction subsystem depends on
+database persistence implementation types.
 
 REBUILD may build complete topology in `O(F + E)` with the current no-sort
 finalizer.

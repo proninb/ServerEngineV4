@@ -1,7 +1,8 @@
 /*
- * Persisted BUILD lexical database.
+ * Persisted BUILD frontend database.
  *
- * database.bin stores retained per-file lexical state only. string_id and
+ * database.bin stores the exact Header/Source byte snapshots paired with their
+ * retained per-file lexical state. It is not a Semantic DB. string_id and
  * identity_ref lineage remain canonically owned by compiled.bin and are not
  * duplicated here.
  */
@@ -23,8 +24,9 @@ enum class database_image_result : std::uint8_t {
     failed,
 };
 
-// Exact direct-encoding plan for one unchanged lexical construction state.
-// The layout owns scalar offsets/counts only; lexical arenas remain authoritative.
+// Exact direct-encoding plan for one unchanged frontend construction state.
+// The layout owns scalar offsets/counts only; File Context source bytes and
+// lexical arenas remain authoritative.
 class database_layout final {
 public:
     database_layout() = default;
@@ -39,8 +41,10 @@ private:
     }
 
     std::size_t size_value = 0;
-    std::size_t lexical_records_offset = 0;
-    std::size_t lexical_records_size = 0;
+    std::size_t file_records_offset = 0;
+    std::size_t file_records_size = 0;
+    std::size_t source_bytes_offset = 0;
+    std::size_t source_bytes_size = 0;
     std::size_t lexical_words_offset = 0;
     std::size_t lexical_words_size = 0;
     std::size_t lexical_directives_offset = 0;
@@ -91,9 +95,21 @@ public:
         file_id id,
         database_lexical_file_view& output) const noexcept;
 
+    [[nodiscard]] bool content(
+        file_id id,
+        std::string_view& output) const noexcept;
+
+    [[nodiscard]] file_content_baseline_view
+    content_baseline() const noexcept;
+
     [[nodiscard]] lexical_baseline_view lexical_baseline() const noexcept;
 
 private:
+    [[nodiscard]] static bool read_content_baseline(
+        const void* context,
+        file_id file,
+        std::string_view& output) noexcept;
+
     [[nodiscard]] static bool read_lexical_baseline(
         const void* context,
         file_id file,
@@ -103,7 +119,9 @@ private:
         std::span<const std::byte>) noexcept;
 
     std::span<const std::byte> bytes;
-    std::size_t lexical_records_offset = 0;
+    std::size_t file_records_offset = 0;
+    std::size_t source_bytes_offset = 0;
+    std::size_t source_bytes_size_value = 0;
     std::size_t lexical_words_offset = 0;
     std::size_t lexical_directives_offset = 0;
 

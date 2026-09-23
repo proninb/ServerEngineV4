@@ -12,11 +12,11 @@ namespace {
 
 constexpr std::array<std::byte, 8> magic{
     std::byte{'C'}, std::byte{'W'}, std::byte{'D'}, std::byte{'B'},
-    std::byte{'0'}, std::byte{'0'}, std::byte{'0'}, std::byte{'3'},
+    std::byte{'0'}, std::byte{'0'}, std::byte{'0'}, std::byte{'4'},
 };
 
-constexpr std::uint32_t format_version = 3;
-constexpr std::uint32_t section_count = 3;
+constexpr std::uint32_t format_version = 4;
+constexpr std::uint32_t section_count = 4;
 constexpr std::size_t header_size = 16;
 constexpr std::size_t section_record_size = 24;
 constexpr std::size_t section_table_size =
@@ -31,28 +31,32 @@ constexpr std::uint32_t lexical_known_flags =
     lexical_available_flag;
 
 enum class section_kind : std::uint32_t {
-    lexical_records = 1,
-    lexical_words = 2,
-    lexical_directives = 3,
+    file_records = 1,
+    source_bytes = 2,
+    lexical_words = 3,
+    lexical_directives = 4,
 };
 
 struct section_record final {
     section_kind kind =
-        section_kind::lexical_records;
+        section_kind::file_records;
     std::uint64_t offset = 0;
     std::uint64_t size = 0;
 };
 
-struct persisted_lexical_record final {
+struct persisted_file_record final {
     std::uint32_t flags = 0;
+    std::uint32_t source_size = 0;
+    std::uint64_t source_offset = 0;
     std::uint32_t word_offset = 0;
     std::uint32_t word_count = 0;
     std::uint32_t directive_offset = 0;
     std::uint32_t directive_count = 0;
     std::uint32_t token_count = 0;
+    std::uint32_t reserved = 0;
 };
 
-static_assert(sizeof(persisted_lexical_record) == 24);
+static_assert(sizeof(persisted_file_record) == 40);
 
 [[nodiscard]] bool write_u32(
     std::span<std::byte> output,
@@ -255,7 +259,7 @@ static_assert(sizeof(persisted_lexical_record) == 24);
 
     if (kind <
             static_cast<std::uint32_t>(
-                section_kind::lexical_records) ||
+                section_kind::file_records) ||
         kind >
             static_cast<std::uint32_t>(
                 section_kind::lexical_directives)) {
@@ -268,12 +272,12 @@ static_assert(sizeof(persisted_lexical_record) == 24);
     return true;
 }
 
-[[nodiscard]] bool decode_lexical_record(
+[[nodiscard]] bool decode_file_record(
     std::span<const std::byte> image,
     std::size_t records_offset,
     std::uint32_t file_count,
     std::uint32_t index,
-    persisted_lexical_record& output) noexcept {
+    persisted_file_record& output) noexcept {
 
     output = {};
 
@@ -285,14 +289,17 @@ static_assert(sizeof(persisted_lexical_record) == 24);
         records_offset +
         16 +
         static_cast<std::size_t>(index) *
-            sizeof(persisted_lexical_record);
+            sizeof(persisted_file_record);
 
     return read_u32(image, offset, output.flags) &&
+        read_u32(image, offset, output.source_size) &&
+        read_u64(image, offset, output.source_offset) &&
         read_u32(image, offset, output.word_offset) &&
         read_u32(image, offset, output.word_count) &&
         read_u32(image, offset, output.directive_offset) &&
         read_u32(image, offset, output.directive_count) &&
-        read_u32(image, offset, output.token_count);
+        read_u32(image, offset, output.token_count) &&
+        read_u32(image, offset, output.reserved);
 }
 
 }
@@ -382,7 +389,12 @@ database_image_result database_view::bind(
     const auto& records =
         sections[
             static_cast<std::size_t>(
-                section_kind::lexical_records) - 1];
+                section_kind::file_records) - 1];
+
+    const auto& sources =
+        sections[
+            static_cast<std::size_t>(
+                section_kind::source_bytes) - 1];
 
     const auto& words =
         sections[
@@ -435,7 +447,7 @@ database_image_result database_view::bind(
 
     if (!multiply_size(
             file_count,
-            sizeof(persisted_lexical_record),
+            sizeof(persisted_file_record),
             record_payload_size) ||
         !add_size(
             expected_records_size,
@@ -458,9 +470,15 @@ database_image_result database_view::bind(
     }
 
     bytes = image;
-    lexical_records_offset =
+    file_records_offset =
         static_cast<std::size_t>(
             records.offset);
+    source_bytes_offset =
+        static_cast<std::size_t>(
+            sources.offset);
+    source_bytes_size_value =
+        static_cast<std::size_t>(
+            sources.size);
     lexical_words_offset =
         static_cast<std::size_t>(
             words.offset);
@@ -494,14 +512,15 @@ bool database_view::file(
         return false;
     }
 
-    persisted_lexical_record record;
+    persisted_file_record record;
 
-    if (!decode_lexical_record(
+    if (!decode_file_record(
             bytes,
-            lexical_records_offset,
+            file_records_offset,
             file_count_value,
             id.value() - 1,
             record) ||
+        record.reserved != 0 ||
         (record.flags &
             ~lexical_known_flags) != 0) {
         return false;
@@ -512,14 +531,22 @@ bool database_view::file(
             lexical_available_flag) != 0;
 
     if (!available) {
-        return record.word_offset == 0 &&
+        return record.source_size == 0 &&
+            record.source_offset == 0 &&
+            record.word_offset == 0 &&
             record.word_count == 0 &&
             record.directive_offset == 0 &&
             record.directive_count == 0 &&
             record.token_count == 0;
     }
 
-    if (record.word_offset >
+    if (record.source_offset >
+            source_bytes_size_value ||
+        record.source_size >
+            source_bytes_size_value -
+                static_cast<std::size_t>(
+                    record.source_offset) ||
+        record.word_offset >
             word_count_value ||
         record.word_count >
             word_count_value -
@@ -569,6 +596,84 @@ bool database_view::file(
     return true;
 }
 
+
+bool database_view::content(
+    file_id id,
+    std::string_view& output) const noexcept {
+
+    output = {};
+
+    if (!contains(id)) {
+        return false;
+    }
+
+    persisted_file_record record;
+
+    if (!decode_file_record(
+            bytes,
+            file_records_offset,
+            file_count_value,
+            id.value() - 1,
+            record) ||
+        record.reserved != 0 ||
+        (record.flags &
+            ~lexical_known_flags) != 0 ||
+        (record.flags &
+            lexical_available_flag) == 0 ||
+        record.source_offset >
+            source_bytes_size_value ||
+        record.source_size >
+            source_bytes_size_value -
+                static_cast<std::size_t>(
+                    record.source_offset)) {
+
+        return false;
+    }
+
+    output = {
+        reinterpret_cast<const char*>(
+            bytes.data() +
+            source_bytes_offset +
+            static_cast<std::size_t>(
+                record.source_offset)),
+        record.source_size,
+    };
+
+    return true;
+}
+
+file_content_baseline_view
+database_view::content_baseline() const noexcept {
+
+    file_content_baseline_view output;
+
+    if (!valid()) {
+        return output;
+    }
+
+    output.context = this;
+    output.file_count_value =
+        file_count_value;
+    output.reader =
+        read_content_baseline;
+
+    return output;
+}
+
+bool database_view::read_content_baseline(
+    const void* context,
+    file_id file,
+    std::string_view& output) noexcept {
+
+    output = {};
+
+    return context != nullptr &&
+        static_cast<const database_view*>(
+            context)->content(
+                file,
+                output);
+}
+
 lexical_baseline_view database_view::lexical_baseline() const noexcept {
     lexical_baseline_view output;
 
@@ -610,6 +715,7 @@ database_image_result prepare_database_layout(
         static_cast<std::uint32_t>(
             files.size());
 
+    std::size_t source_bytes_size = 0;
     std::uint32_t word_count = 0;
     std::uint32_t directive_count = 0;
 
@@ -631,13 +737,23 @@ database_image_result prepare_database_layout(
             continue;
         }
 
+        if (!files.content_available(file)) {
+            return database_image_result::invalid_state;
+        }
+
+        const auto source =
+            files.content(file);
         const auto words =
             lexical.words(file);
         const auto directives =
             lexical.directives(file);
 
-        if (!fits_u32(words.size()) ||
+        if (!fits_u32(source.size()) ||
+            !fits_u32(words.size()) ||
             !fits_u32(directives.size()) ||
+            !add_size(
+                source_bytes_size,
+                source.size()) ||
             words.size() >
                 static_cast<std::size_t>(
                     (std::numeric_limits<
@@ -669,14 +785,14 @@ database_image_result prepare_database_layout(
                 directives.size());
     }
 
-    std::size_t lexical_records_payload = 0;
+    std::size_t file_records_payload = 0;
     std::size_t lexical_words_size = 0;
     std::size_t lexical_directives_size = 0;
 
     if (!multiply_size(
             file_count,
-            sizeof(persisted_lexical_record),
-            lexical_records_payload) ||
+            sizeof(persisted_file_record),
+            file_records_payload) ||
         !multiply_size(
             word_count,
             sizeof(std::uint32_t),
@@ -688,25 +804,37 @@ database_image_result prepare_database_layout(
         return database_image_result::failed;
     }
 
-    std::size_t lexical_records_size = 16;
+    std::size_t file_records_size = 16;
 
     if (!add_size(
-            lexical_records_size,
-            lexical_records_payload)) {
+            file_records_size,
+            file_records_payload)) {
         return database_image_result::failed;
     }
 
     std::size_t cursor =
         payload_offset;
 
-    output.lexical_records_offset =
+    output.file_records_offset =
         cursor;
-    output.lexical_records_size =
-        lexical_records_size;
+    output.file_records_size =
+        file_records_size;
 
     if (!add_size(
             cursor,
-            lexical_records_size)) {
+            file_records_size)) {
+        output.reset();
+        return database_image_result::failed;
+    }
+
+    output.source_bytes_offset =
+        cursor;
+    output.source_bytes_size =
+        source_bytes_size;
+
+    if (!add_size(
+            cursor,
+            source_bytes_size)) {
         output.reset();
         return database_image_result::failed;
     }
@@ -767,7 +895,7 @@ database_image_result encode_database_image(
             layout.file_count ||
         lexical.size() !=
             layout.file_count ||
-        layout.lexical_records_offset !=
+        layout.file_records_offset !=
             payload_offset ||
         layout.checksum_offset >
             output.size() ||
@@ -803,9 +931,15 @@ database_image_result encode_database_image(
     if (!write_section_record(
             output,
             table_cursor,
-            section_kind::lexical_records,
-            layout.lexical_records_offset,
-            layout.lexical_records_size) ||
+            section_kind::file_records,
+            layout.file_records_offset,
+            layout.file_records_size) ||
+        !write_section_record(
+            output,
+            table_cursor,
+            section_kind::source_bytes,
+            layout.source_bytes_offset,
+            layout.source_bytes_size) ||
         !write_section_record(
             output,
             table_cursor,
@@ -823,33 +957,36 @@ database_image_result encode_database_image(
         return database_image_result::failed;
     }
 
-    std::size_t lexical_record_cursor =
-        layout.lexical_records_offset;
+    std::size_t record_cursor =
+        layout.file_records_offset;
 
     if (!write_u32(
             output,
-            lexical_record_cursor,
+            record_cursor,
             layout.file_count) ||
         !write_u32(
             output,
-            lexical_record_cursor,
+            record_cursor,
             layout.word_count) ||
         !write_u32(
             output,
-            lexical_record_cursor,
+            record_cursor,
             layout.directive_count) ||
         !write_u32(
             output,
-            lexical_record_cursor,
+            record_cursor,
             0)) {
         return database_image_result::failed;
     }
 
+    std::size_t source_cursor =
+        layout.source_bytes_offset;
     std::size_t word_cursor =
         layout.lexical_words_offset;
     std::size_t directive_cursor =
         layout.lexical_directives_offset;
 
+    std::uint64_t source_offset = 0;
     std::uint32_t word_offset = 0;
     std::uint32_t directive_offset = 0;
 
@@ -867,110 +1004,163 @@ database_image_result encode_database_image(
             return database_image_result::invalid_state;
         }
 
-        if (!available) {
-            for (std::size_t index = 0;
-                 index < 6;
-                 ++index) {
+        persisted_file_record record;
+
+        if (available) {
+            if (!files.content_available(file)) {
+                return database_image_result::invalid_state;
+            }
+
+            const auto source =
+                files.content(file);
+            const auto words =
+                lexical.words(file);
+            const auto directives =
+                lexical.directives(file);
+
+            if (!fits_u32(source.size()) ||
+                !fits_u32(words.size()) ||
+                !fits_u32(directives.size()) ||
+                source_offset >
+                    layout.source_bytes_size ||
+                source.size() >
+                    layout.source_bytes_size -
+                        static_cast<std::size_t>(
+                            source_offset) ||
+                words.size() >
+                    static_cast<std::size_t>(
+                        (std::numeric_limits<
+                            std::uint32_t>::max)()) -
+                        word_offset ||
+                directives.size() >
+                    static_cast<std::size_t>(
+                        (std::numeric_limits<
+                            std::uint32_t>::max)()) -
+                        directive_offset ||
+                lexical.token_count(file) >
+                    words.size()) {
+                return database_image_result::invalid_state;
+            }
+
+            record.flags =
+                lexical_available_flag;
+            record.source_size =
+                static_cast<std::uint32_t>(
+                    source.size());
+            record.source_offset =
+                source_offset;
+            record.word_offset =
+                word_offset;
+            record.word_count =
+                static_cast<std::uint32_t>(
+                    words.size());
+            record.directive_offset =
+                directive_offset;
+            record.directive_count =
+                static_cast<std::uint32_t>(
+                    directives.size());
+            record.token_count =
+                lexical.token_count(file);
+            record.reserved = 0;
+
+            if (!write_bytes(
+                    output,
+                    source_cursor,
+                    reinterpret_cast<const std::byte*>(
+                        source.data()),
+                    source.size())) {
+                return database_image_result::failed;
+            }
+
+            for (const auto word :
+                 words) {
                 if (!write_u32(
                         output,
-                        lexical_record_cursor,
-                        0)) {
+                        word_cursor,
+                        word)) {
                     return database_image_result::failed;
                 }
             }
 
-            continue;
-        }
-
-        const auto words =
-            lexical.words(file);
-        const auto directives =
-            lexical.directives(file);
-
-        if (!fits_u32(words.size()) ||
-            !fits_u32(directives.size()) ||
-            words.size() >
-                static_cast<std::size_t>(
-                    (std::numeric_limits<
-                        std::uint32_t>::max)()) -
-                    word_offset ||
-            directives.size() >
-                static_cast<std::size_t>(
-                    (std::numeric_limits<
-                        std::uint32_t>::max)()) -
-                    directive_offset ||
-            lexical.token_count(file) >
-                words.size() ||
-            !write_u32(
-                output,
-                lexical_record_cursor,
-                lexical_available_flag) ||
-            !write_u32(
-                output,
-                lexical_record_cursor,
-                word_offset) ||
-            !write_u32(
-                output,
-                lexical_record_cursor,
-                static_cast<std::uint32_t>(
-                    words.size())) ||
-            !write_u32(
-                output,
-                lexical_record_cursor,
-                directive_offset) ||
-            !write_u32(
-                output,
-                lexical_record_cursor,
-                static_cast<std::uint32_t>(
-                    directives.size())) ||
-            !write_u32(
-                output,
-                lexical_record_cursor,
-                lexical.token_count(file))) {
-            return database_image_result::invalid_state;
-        }
-
-        for (const auto word :
-             words) {
-            if (!write_u32(
-                    output,
-                    word_cursor,
-                    word)) {
-                return database_image_result::failed;
+            for (const auto& anchor :
+                 directives) {
+                if (anchor.word_offset >=
+                        words.size() ||
+                    !write_u32(
+                        output,
+                        directive_cursor,
+                        anchor.word_offset) ||
+                    !write_u32(
+                        output,
+                        directive_cursor,
+                        anchor.source_base)) {
+                    return database_image_result::invalid_state;
+                }
             }
+
+            source_offset +=
+                static_cast<std::uint64_t>(
+                    source.size());
+            word_offset +=
+                static_cast<std::uint32_t>(
+                    words.size());
+            directive_offset +=
+                static_cast<std::uint32_t>(
+                    directives.size());
         }
 
-        for (const auto& anchor :
-             directives) {
-            if (anchor.word_offset >=
-                    words.size() ||
-                !write_u32(
-                    output,
-                    directive_cursor,
-                    anchor.word_offset) ||
-                !write_u32(
-                    output,
-                    directive_cursor,
-                    anchor.source_base)) {
-                return database_image_result::invalid_state;
-            }
+        if (!write_u32(
+                output,
+                record_cursor,
+                record.flags) ||
+            !write_u32(
+                output,
+                record_cursor,
+                record.source_size) ||
+            !write_u64(
+                output,
+                record_cursor,
+                record.source_offset) ||
+            !write_u32(
+                output,
+                record_cursor,
+                record.word_offset) ||
+            !write_u32(
+                output,
+                record_cursor,
+                record.word_count) ||
+            !write_u32(
+                output,
+                record_cursor,
+                record.directive_offset) ||
+            !write_u32(
+                output,
+                record_cursor,
+                record.directive_count) ||
+            !write_u32(
+                output,
+                record_cursor,
+                record.token_count) ||
+            !write_u32(
+                output,
+                record_cursor,
+                record.reserved)) {
+            return database_image_result::failed;
         }
-
-        word_offset +=
-            static_cast<std::uint32_t>(
-                words.size());
-        directive_offset +=
-            static_cast<std::uint32_t>(
-                directives.size());
     }
 
-    if (word_offset !=
+    if (source_offset !=
+            layout.source_bytes_size ||
+        word_offset !=
             layout.word_count ||
         directive_offset !=
             layout.directive_count ||
-        lexical_record_cursor !=
-            layout.lexical_records_offset +
-                layout.lexical_records_size ||
+        record_cursor !=
+            layout.file_records_offset +
+                layout.file_records_size ||
+        source_cursor !=
+            layout.source_bytes_offset +
+                layout.source_bytes_size ||
         word_cursor !=
             layout.lexical_words_offset +
                 layout.lexical_words_size ||
@@ -1028,6 +1218,7 @@ database_image_result validate_database_image(
         return database_image_result::invalid_image;
     }
 
+    std::uint64_t expected_source_offset = 0;
     std::uint32_t expected_word_offset = 0;
     std::uint32_t expected_directive_offset = 0;
 
@@ -1035,14 +1226,15 @@ database_image_result validate_database_image(
          index < view.file_count_value;
          ++index) {
 
-        persisted_lexical_record record;
+        persisted_file_record record;
 
-        if (!decode_lexical_record(
+        if (!decode_file_record(
                 image,
-                view.lexical_records_offset,
+                view.file_records_offset,
                 view.file_count_value,
                 index,
                 record) ||
+            record.reserved != 0 ||
             (record.flags &
                 ~lexical_known_flags) != 0) {
             return database_image_result::invalid_image;
@@ -1053,7 +1245,9 @@ database_image_result validate_database_image(
                 lexical_available_flag) != 0;
 
         if (!available) {
-            if (record.word_offset != 0 ||
+            if (record.source_size != 0 ||
+                record.source_offset != 0 ||
+                record.word_offset != 0 ||
                 record.word_count != 0 ||
                 record.directive_offset != 0 ||
                 record.directive_count != 0 ||
@@ -1064,7 +1258,15 @@ database_image_result validate_database_image(
             continue;
         }
 
-        if (record.word_offset !=
+        if (record.source_offset !=
+                expected_source_offset ||
+            record.source_offset >
+                view.source_bytes_size_value ||
+            record.source_size >
+                view.source_bytes_size_value -
+                    static_cast<std::size_t>(
+                        record.source_offset) ||
+            record.word_offset !=
                 expected_word_offset ||
             record.directive_offset !=
                 expected_directive_offset ||
@@ -1080,11 +1282,17 @@ database_image_result validate_database_image(
         }
 
         database_lexical_file_view state;
+        std::string_view source;
 
         if (!view.file(
                 file_id{index + 1},
                 state) ||
-            !state.available) {
+            !state.available ||
+            !view.content(
+                file_id{index + 1},
+                source) ||
+            source.size() !=
+                record.source_size) {
             return database_image_result::invalid_image;
         }
 
@@ -1099,13 +1307,17 @@ database_image_result validate_database_image(
             }
         }
 
+        expected_source_offset +=
+            record.source_size;
         expected_word_offset +=
             record.word_count;
         expected_directive_offset +=
             record.directive_count;
     }
 
-    if (expected_word_offset !=
+    if (expected_source_offset !=
+            view.source_bytes_size_value ||
+        expected_word_offset !=
             view.word_count_value ||
         expected_directive_offset !=
             view.directive_count_value) {
@@ -1164,7 +1376,32 @@ database_image_result verify_database_image(
         }
 
         if (!available) {
+            std::string_view absent;
+
+            if (view.content(
+                    file,
+                    absent)) {
+                return database_image_result::invalid_image;
+            }
+
             continue;
+        }
+
+        if (!files.content_available(file)) {
+            return database_image_result::invalid_image;
+        }
+
+        const auto source =
+            files.content(file);
+
+        std::string_view persisted_source;
+
+        if (!view.content(
+                file,
+                persisted_source) ||
+            persisted_source !=
+                source) {
+            return database_image_result::invalid_image;
         }
 
         const auto words =

@@ -342,6 +342,24 @@ server_status file_context::bind_baseline(
     return server_status::success;
 }
 
+server_status file_context::bind_content_baseline(
+    file_content_baseline_view source) noexcept {
+
+    if (baseline == nullptr ||
+        baseline_file_count == 0 ||
+        content_baseline.valid() ||
+        !source.valid() ||
+        source.file_count() !=
+            baseline_file_count) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    content_baseline = source;
+    return server_status::success;
+}
+
 bool file_context::local_index(
     file_id file,
     std::size_t& output) const noexcept {
@@ -3126,13 +3144,28 @@ bool file_context::content_available(
 
         std::size_t overlay = 0;
 
-        return find_baseline_overlay(
+        if (find_baseline_overlay(
                 file,
-                overlay) &&
-            baseline_overlays[
-                overlay].physical.present() &&
-            baseline_overlays[
-                overlay].content.materialized();
+                overlay)) {
+
+            const auto& state =
+                baseline_overlays[
+                    overlay];
+
+            if (!state.physical.present()) {
+                return false;
+            }
+
+            if (state.content.materialized()) {
+                return true;
+            }
+        }
+
+        std::string_view persisted;
+
+        return content_baseline.read(
+            file,
+            persisted);
     }
 
     std::size_t index = 0;
@@ -3149,52 +3182,79 @@ std::string_view file_context::content(
 
     assert(content_available(file));
 
-    const file_content_record* record = nullptr;
-
     if (baseline != nullptr &&
         file.value() <=
             baseline_file_count) {
 
         std::size_t overlay = 0;
 
-        if (!find_baseline_overlay(
+        if (find_baseline_overlay(
                 file,
                 overlay)) {
 
-            return {};
+            const auto& state =
+                baseline_overlays[
+                    overlay];
+
+            if (!state.physical.present()) {
+                return {};
+            }
+
+            if (state.content.materialized()) {
+                const auto& record =
+                    state.content;
+
+                if (record.offset >
+                        content_bytes.size() ||
+                    record.size >
+                        content_bytes.size() -
+                            record.offset) {
+
+                    return {};
+                }
+
+                return {
+                    content_bytes.data() +
+                        record.offset,
+                    record.size,
+                };
+            }
         }
 
-        record =
-            &baseline_overlays[
-                overlay].content;
-    }
-    else {
-        std::size_t index = 0;
+        std::string_view persisted;
 
-        if (!local_index(
+        return content_baseline.read(
                 file,
-                index)) {
-
-            return {};
-        }
-
-        record =
-            &content_files[index];
+                persisted)
+            ? persisted
+            : std::string_view{};
     }
 
-    if (record->offset >
+    std::size_t index = 0;
+
+    if (!local_index(
+            file,
+            index)) {
+
+        return {};
+    }
+
+    const auto& record =
+        content_files[index];
+
+    if (record.offset >
             content_bytes.size() ||
-        record->size >
+        record.size >
             content_bytes.size() -
-                record->offset) {
+                record.offset) {
 
         return {};
     }
 
     return {
         content_bytes.data() +
-            record->offset,
-        record->size,
+            record.offset,
+        record.size,
     };
 }
 
