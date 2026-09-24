@@ -42,10 +42,15 @@ REBUILD
     -> G
 ```
 
-There is no `SAVE` lifecycle stage. Persistence is part of BUILD/REBUILD
-themselves. REBUILD writes its final artifact paths directly and removes the
-complete four-file set on failure. BUILD has a different failure contract:
-a failed BUILD preserves the previously persisted BUILD state.
+There is no `SAVE` lifecycle stage. `compiled.bin` is the critical semantic
+persistence output of REBUILD and is the mmap-native compiled Project consumed
+by LOAD/resident Project publication. `project.manifest`, `source.bin`, and
+`database.bin` are BUILD-acceleration outputs. After construction reaches its
+final immutable state, the four direct-mmap persistence branches are scheduled
+in parallel. Failure of a BUILD-acceleration branch does not invalidate the new
+G; it is reported as a warning and becomes a problem for the next BUILD. BUILD
+has a different failure contract: a failed BUILD preserves the previously
+persisted BUILD state.
 
 ## Lifecycle
 
@@ -688,23 +693,35 @@ current inputs
     -> Parser/Semantic
     -> G
     -> finalized dependency topology
-    -> exact project.manifest/source.bin/database.bin/compiled.bin layouts
-    -> direct final-path writable mappings
-    -> encode + cold validation
-    -> flush all four artifacts
-    -> close construction mappings
-    -> reopen compiled.bin read-only
-    -> resident Project owns compiled mapping/view
+    -> parallel direct-mmap persistence
+         compiled.bin
+             -> exact layout
+             -> encode + cold validation + flush
+             -> reopen read-only
+             -> resident Project owns compiled mapping/view
+
+         source.bin
+         database.bin
+         project.manifest
+             -> independent BUILD-acceleration persistence
+             -> prepare/encode/validate/flush where applicable
 ```
 
-The production REBUILD paths do not allocate full-size serialized
-`std::vector<std::byte>` images and do not create `.tmp` artifacts. BUILD-only
-File Context, lexical, SourceSave, and database construction state does not enter
-the resident Project.
+The persistence fan-out uses the existing fixed construction execution lanes;
+the owner thread handles the compiled branch while other lanes process
+independent acceleration outputs. There is no work queue, mutex, per-artifact
+task allocation, or full-size serialized `std::vector<std::byte>` image.
 
-A failure before or during resident publication is still a REBUILD failure. The
-operation scope destroys all mappings first, then the existing REBUILD cleanup
-removes `project.manifest`, `source.bin`, `database.bin`, and `compiled.bin`.
+`compiled.bin` is the only persistence branch whose failure fails REBUILD.
+Failures in `project.manifest`, `source.bin`, or `database.bin` are warnings.
+Because REBUILD clears the previous artifact set before starting a fresh lineage,
+a failed acceleration branch leaves missing/invalid state rather than a stale
+previous baseline. The next BUILD must reject missing/invalid required
+acceleration state and require REBUILD.
+
+A failure of G construction, `compiled.bin` persistence, or resident publication
+is still a REBUILD failure. The operation scope destroys mappings first, then
+the existing REBUILD cleanup removes the artifact set.
 
 The remaining Phase-1 lifecycle work is BUILD persisted-state reconstruction and
 sparse affected rebuild to G. Runtime and SHM remain Phase 2.
@@ -1030,10 +1047,15 @@ database.bin
 compiled.bin
 ```
 
+This pre-clean prevents a failed best-effort acceleration write from exposing a
+stale previous baseline as if it belonged to the new G.
+
 REBUILD writes final artifact names directly; there is no `.tmp`, selector,
-active/inactive slot, A/B generation, rollback artifact, or SAVE stage. Any
-REBUILD failure removes all four files again. Only a successful REBUILD may
-leave the new persisted artifact set present.
+active/inactive slot, A/B generation, rollback artifact, or SAVE stage.
+`compiled.bin` is mandatory. The three BUILD-acceleration outputs are
+best-effort: their persistence failure is a warning and does not fail an
+otherwise valid REBUILD. If the REBUILD operation itself fails, the existing
+cleanup removes the artifact set again.
 
 ### Current implementation boundary
 
@@ -1588,18 +1610,26 @@ REBUILD is the fresh-lineage boundary:
 
 ```text
 REBUILD start
-    -> delete project.manifest
-    -> delete source.bin
-    -> delete database.bin
-    -> delete compiled.bin
+    -> delete previous artifact set
     -> construct fresh lineage + G
-    -> write final artifact paths directly
+    -> finalize construction state
+    -> parallel persistence
+         compiled.bin      REQUIRED
+         source.bin        BUILD acceleration
+         database.bin      BUILD acceleration
+         project.manifest  BUILD acceleration
 ```
 
 There is no inactive slot, `.tmp` artifact, A/B generation, selector, rollback
-artifact, or coordinated persistence generation. Any REBUILD failure closes its
-operation-local artifact mappings and removes all four files again. If the
-filesystem refuses any cleanup deletion, REBUILD reports
+artifact, or coordinated persistence generation. `compiled.bin` is the
+mmap-native semantic result and is required for REBUILD success and resident
+publication. A failure to persist one of the other three files is emitted as a
+warning; the new G remains valid, and the next BUILD is responsible for rejecting
+missing/invalid acceleration state.
+
+If G construction, `compiled.bin`, or resident publication fails, REBUILD closes
+its operation-local mappings and removes the artifact set again. If the
+filesystem refuses required cleanup deletion, REBUILD reports
 `project.rebuild_cleanup_failed`, returns `io_error`, and remains `UNLOADED`.
 
 BUILD continues an existing lineage. A failed BUILD discards only its temporary
@@ -1628,7 +1658,7 @@ contract.
 15. Configuration composition is root-first declaration-order DFS and is never sorted.
 16. Change tokens are proof optimizations, never identity.
 17. Per-file SHA-256 identifies exact bytes.
-18. REBUILD writes final artifact paths directly; any REBUILD failure removes the complete four-file artifact set.
+18. REBUILD writes final artifact paths directly; compiled.bin is mandatory, while manifest/source/database persistence is best-effort BUILD acceleration.
 19. Project absolute-path resolution is fail-closed.
 20. `file_id` is the only identity of a file-dependency node.
 21. Forward and reverse file adjacency are first-class persisted BUILD data.

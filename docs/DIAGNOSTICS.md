@@ -281,3 +281,10 @@ required root field order.
 A changed or missing configuration input during BUILD is not itself a corrupt
 manifest. It triggers recomposition. Manifest diagnostics are reserved for the
 persisted manifest artifact itself.
+
+During REBUILD, `compiled.bin` diagnostics retain error severity because that
+artifact is required for resident Project publication. Persistence failures for
+`project.manifest`, `source.bin`, or `database.bin` use their existing stable
+diagnostic IDs with `warning` severity: those files are BUILD acceleration only,
+so the current REBUILD may still succeed while the next BUILD rejects
+missing/invalid acceleration state.

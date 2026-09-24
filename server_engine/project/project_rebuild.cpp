@@ -3,6 +3,7 @@
 #include "project_lifecycle_context.hpp"
 #include "project_configuration_manifest_store.hpp"
 #include "assign/assign_input.hpp"
+#include "construction/execution_lanes.hpp"
 #include "frontend/source_discovery.hpp"
 #include "parser/parser.hpp"
 #include "persistence/compiled_project.hpp"
@@ -15,6 +16,8 @@
 #include "../writable_file_mapping.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 
+#include <array>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -76,6 +79,498 @@ namespace {
     catch (...) {
         return server_status::io_error;
     }
+}
+
+enum class rebuild_persistence_status : std::uint8_t {
+    pending,
+    success,
+    io_failed,
+    invalid,
+};
+
+enum class rebuild_persistence_stage : std::uint8_t {
+    none,
+    prepare,
+    create,
+    encode,
+    validate,
+    flush,
+    dispatch,
+};
+
+struct rebuild_persistence_result final {
+    rebuild_persistence_status status =
+        rebuild_persistence_status::pending;
+
+    rebuild_persistence_stage stage =
+        rebuild_persistence_stage::none;
+};
+
+enum class rebuild_persistence_artifact : std::size_t {
+    compiled,
+    source,
+    database,
+    manifest,
+    count,
+};
+
+inline constexpr std::size_t
+    rebuild_persistence_artifact_count =
+        static_cast<std::size_t>(
+            rebuild_persistence_artifact::count);
+
+[[nodiscard]] constexpr rebuild_persistence_result
+persistence_success() noexcept {
+
+    return {
+        rebuild_persistence_status::success,
+        rebuild_persistence_stage::none,
+    };
+}
+
+[[nodiscard]] constexpr rebuild_persistence_result
+persistence_io_failure(
+    rebuild_persistence_stage stage) noexcept {
+
+    return {
+        rebuild_persistence_status::io_failed,
+        stage,
+    };
+}
+
+[[nodiscard]] constexpr rebuild_persistence_result
+persistence_invalid(
+    rebuild_persistence_stage stage) noexcept {
+
+    return {
+        rebuild_persistence_status::invalid,
+        stage,
+    };
+}
+
+[[nodiscard]] rebuild_persistence_result
+persist_compiled(
+    const project_artifact_layout& paths,
+    const rebuild_context& context) noexcept {
+
+    compiled_project_layout layout;
+
+    const auto prepared =
+        prepare_compiled_project_layout(
+            context.strings,
+            context.identities,
+            context.G,
+            context.assigns,
+            context.files,
+            context.sources,
+            layout);
+
+    if (prepared !=
+        compiled_project_image_result::success) {
+
+        return prepared ==
+                compiled_project_image_result::failed
+            ? persistence_io_failure(
+                rebuild_persistence_stage::prepare)
+            : persistence_invalid(
+                rebuild_persistence_stage::prepare);
+    }
+
+    writable_file_mapping mapping;
+
+    if (mapping.create(
+            paths.compiled,
+            layout.size()) !=
+        writable_file_mapping_result::success) {
+
+        return persistence_io_failure(
+            rebuild_persistence_stage::create);
+    }
+
+    const auto encoded =
+        encode_compiled_project_image(
+            context.strings,
+            context.identities,
+            context.G,
+            context.assigns,
+            context.files,
+            context.sources,
+            layout,
+            mapping.bytes());
+
+    if (encoded !=
+        compiled_project_image_result::success) {
+
+        return encoded ==
+                compiled_project_image_result::failed
+            ? persistence_io_failure(
+                rebuild_persistence_stage::encode)
+            : persistence_invalid(
+                rebuild_persistence_stage::encode);
+    }
+
+    compiled_project_view view;
+
+    if (view.bind(
+            mapping.bytes()) !=
+            compiled_project_image_result::success ||
+        view.verify_contents() !=
+            compiled_project_image_result::success) {
+
+        return persistence_invalid(
+            rebuild_persistence_stage::validate);
+    }
+
+    if (mapping.flush() !=
+        writable_file_mapping_result::success) {
+
+        return persistence_io_failure(
+            rebuild_persistence_stage::flush);
+    }
+
+    return persistence_success();
+}
+
+[[nodiscard]] rebuild_persistence_result
+persist_source_save(
+    const project_artifact_layout& paths,
+    const rebuild_context& context) noexcept {
+
+    source_save_layout layout;
+
+    const source_save_build_options options{
+        context.change_checkpoint};
+
+    const auto prepared =
+        prepare_source_save_layout(
+            context.files,
+            context.sources,
+            options,
+            layout);
+
+    if (prepared !=
+        source_save_result::success) {
+
+        return prepared ==
+                source_save_result::failed
+            ? persistence_io_failure(
+                rebuild_persistence_stage::prepare)
+            : persistence_invalid(
+                rebuild_persistence_stage::prepare);
+    }
+
+    writable_file_mapping mapping;
+
+    if (mapping.create(
+            paths.source_save,
+            layout.size()) !=
+        writable_file_mapping_result::success) {
+
+        return persistence_io_failure(
+            rebuild_persistence_stage::create);
+    }
+
+    const auto encoded =
+        encode_source_save_image(
+            context.files,
+            context.sources,
+            layout,
+            mapping.bytes());
+
+    if (encoded !=
+        source_save_result::success) {
+
+        return encoded ==
+                source_save_result::failed
+            ? persistence_io_failure(
+                rebuild_persistence_stage::encode)
+            : persistence_invalid(
+                rebuild_persistence_stage::encode);
+    }
+
+    const auto validated =
+        validate_source_save_image(
+            mapping.bytes());
+
+    if (validated !=
+        source_save_result::success) {
+
+        return validated ==
+                source_save_result::failed
+            ? persistence_io_failure(
+                rebuild_persistence_stage::validate)
+            : persistence_invalid(
+                rebuild_persistence_stage::validate);
+    }
+
+    if (mapping.flush() !=
+        writable_file_mapping_result::success) {
+
+        return persistence_io_failure(
+            rebuild_persistence_stage::flush);
+    }
+
+    return persistence_success();
+}
+
+[[nodiscard]] rebuild_persistence_result
+persist_database(
+    const project_artifact_layout& paths,
+    const rebuild_context& context) noexcept {
+
+    database_layout layout;
+
+    const auto prepared =
+        prepare_database_layout(
+            context.files,
+            context.lexical,
+            layout);
+
+    if (prepared !=
+        database_image_result::success) {
+
+        return prepared ==
+                database_image_result::failed
+            ? persistence_io_failure(
+                rebuild_persistence_stage::prepare)
+            : persistence_invalid(
+                rebuild_persistence_stage::prepare);
+    }
+
+    writable_file_mapping mapping;
+
+    if (mapping.create(
+            paths.database,
+            layout.size()) !=
+        writable_file_mapping_result::success) {
+
+        return persistence_io_failure(
+            rebuild_persistence_stage::create);
+    }
+
+    const auto encoded =
+        encode_database_image(
+            context.files,
+            context.lexical,
+            layout,
+            mapping.bytes());
+
+    if (encoded !=
+        database_image_result::success) {
+
+        return encoded ==
+                database_image_result::failed
+            ? persistence_io_failure(
+                rebuild_persistence_stage::encode)
+            : persistence_invalid(
+                rebuild_persistence_stage::encode);
+    }
+
+    const auto validated =
+        verify_database_image(
+            mapping.bytes(),
+            context.files,
+            context.lexical);
+
+    if (validated !=
+        database_image_result::success) {
+
+        return validated ==
+                database_image_result::failed
+            ? persistence_io_failure(
+                rebuild_persistence_stage::validate)
+            : persistence_invalid(
+                rebuild_persistence_stage::validate);
+    }
+
+    if (mapping.flush() !=
+        writable_file_mapping_result::success) {
+
+        return persistence_io_failure(
+            rebuild_persistence_stage::flush);
+    }
+
+    return persistence_success();
+}
+
+[[nodiscard]] rebuild_persistence_result
+persist_manifest(
+    const project_artifact_layout& paths,
+    const rebuild_context& context) noexcept {
+
+    project_configuration_manifest_layout layout;
+
+    const auto prepared =
+        prepare_project_configuration_manifest_layout(
+            context.manifest,
+            layout);
+
+    if (prepared !=
+        project_configuration_manifest_store_result::success) {
+
+        return prepared ==
+                project_configuration_manifest_store_result::io_failed
+            ? persistence_io_failure(
+                rebuild_persistence_stage::prepare)
+            : persistence_invalid(
+                rebuild_persistence_stage::prepare);
+    }
+
+    writable_file_mapping mapping;
+
+    if (mapping.create(
+            paths.manifest,
+            layout.size()) !=
+        writable_file_mapping_result::success) {
+
+        return persistence_io_failure(
+            rebuild_persistence_stage::create);
+    }
+
+    const auto encoded =
+        encode_project_configuration_manifest(
+            context.manifest,
+            layout,
+            mapping.bytes());
+
+    if (encoded !=
+        project_configuration_manifest_store_result::success) {
+
+        return encoded ==
+                project_configuration_manifest_store_result::io_failed
+            ? persistence_io_failure(
+                rebuild_persistence_stage::encode)
+            : persistence_invalid(
+                rebuild_persistence_stage::encode);
+    }
+
+    if (mapping.flush() !=
+        writable_file_mapping_result::success) {
+
+        return persistence_io_failure(
+            rebuild_persistence_stage::flush);
+    }
+
+    return persistence_success();
+}
+
+struct rebuild_persistence_job final {
+    const project_artifact_layout& paths;
+    const rebuild_context& context;
+
+    std::size_t active_lanes = 1;
+
+    std::array<
+        rebuild_persistence_result,
+        rebuild_persistence_artifact_count>
+        results{};
+};
+
+void persist_rebuild_artifacts(
+    void* value,
+    std::size_t lane) noexcept {
+
+    auto& job =
+        *static_cast<rebuild_persistence_job*>(
+            value);
+
+    for (std::size_t index = lane;
+         index < rebuild_persistence_artifact_count;
+         index += job.active_lanes) {
+
+        switch (
+            static_cast<rebuild_persistence_artifact>(
+                index)) {
+
+        case rebuild_persistence_artifact::compiled:
+            job.results[index] =
+                persist_compiled(
+                    job.paths,
+                    job.context);
+            break;
+
+        case rebuild_persistence_artifact::source:
+            job.results[index] =
+                persist_source_save(
+                    job.paths,
+                    job.context);
+            break;
+
+        case rebuild_persistence_artifact::database:
+            job.results[index] =
+                persist_database(
+                    job.paths,
+                    job.context);
+            break;
+
+        case rebuild_persistence_artifact::manifest:
+            job.results[index] =
+                persist_manifest(
+                    job.paths,
+                    job.context);
+            break;
+
+        case rebuild_persistence_artifact::count:
+            break;
+        }
+    }
+}
+
+[[nodiscard]] std::string_view
+persistence_stage_detail(
+    rebuild_persistence_stage stage) noexcept {
+
+    switch (stage) {
+    case rebuild_persistence_stage::prepare:
+        return "BUILD-acceleration artifact layout preparation failed";
+    case rebuild_persistence_stage::create:
+        return "BUILD-acceleration artifact writable mapping creation failed";
+    case rebuild_persistence_stage::encode:
+        return "BUILD-acceleration artifact direct encoding failed";
+    case rebuild_persistence_stage::validate:
+        return "BUILD-acceleration artifact cold validation failed";
+    case rebuild_persistence_stage::flush:
+        return "BUILD-acceleration artifact flush failed";
+    case rebuild_persistence_stage::dispatch:
+        return "BUILD-acceleration artifact parallel persistence dispatch failed";
+    case rebuild_persistence_stage::none:
+        break;
+    }
+
+    return "BUILD-acceleration artifact persistence failed";
+}
+
+void emit_build_cache_warning(
+    const rebuild_persistence_result& result,
+    const std::filesystem::path& path,
+    const diagnostic_descriptor& io_descriptor,
+    const diagnostic_descriptor& invalid_descriptor,
+    operation_id operation,
+    diagnostic_collection& diagnostics) {
+
+    if (result.status ==
+        rebuild_persistence_status::success) {
+
+        return;
+    }
+
+    const auto& descriptor =
+        result.status ==
+                rebuild_persistence_status::invalid
+            ? invalid_descriptor
+            : io_descriptor;
+
+    diagnostics.emit(
+        diagnostic(
+            descriptor,
+            operation)
+            .severity(
+                diagnostic_severity::warning)
+            .file(path)
+            .detail(
+                persistence_stage_detail(
+                    result.stage))
+            .build());
 }
 
 }
@@ -293,97 +788,6 @@ server_status rebuild_project(
         return topology_finalized;
     }
 
-    source_save_layout source_layout;
-
-    const source_save_build_options
-        source_options{
-            context.change_checkpoint};
-
-    const auto source_prepared =
-        prepare_source_save_layout(
-            context.files,
-            context.sources,
-            source_options,
-            source_layout);
-
-    if (source_prepared !=
-        source_save_result::success) {
-
-        diagnostics.emit(
-            diagnostic(
-                source_prepared ==
-                        source_save_result::failed
-                    ? diagnostics::
-                        project_source_save_io_failed
-                    : diagnostics::
-                        project_source_save_invalid,
-                operation)
-                .file(layout.source_save)
-                .detail(
-                    "Cannot prepare the exact source.bin direct-encoding layout")
-                .build());
-
-        return source_prepared ==
-                source_save_result::failed
-            ? server_status::io_error
-            : server_status::
-                project_artifact_invalid;
-    }
-
-    database_layout database_layout_value;
-
-    const auto database_prepared =
-        prepare_database_layout(
-            context.files,
-            context.lexical,
-            database_layout_value);
-
-    if (database_prepared !=
-        database_image_result::success) {
-
-        diagnostics.emit(
-            diagnostic(
-                database_prepared ==
-                        database_image_result::failed
-                    ? diagnostics::
-                        project_database_io_failed
-                    : diagnostics::
-                        project_database_invalid,
-                operation)
-                .file(layout.database)
-                .detail(
-                    "Cannot prepare the exact database.bin direct-encoding layout")
-                .build());
-
-        return database_prepared ==
-                database_image_result::failed
-            ? server_status::io_error
-            : server_status::
-                project_artifact_invalid;
-    }
-
-    compiled_project_layout compiled_layout;
-
-    const auto prepared =
-        prepare_compiled_project_layout(
-            context.strings,
-            context.identities,
-            context.G,
-            context.assigns,
-            context.files,
-            context.sources,
-            compiled_layout);
-
-    if (prepared !=
-        compiled_project_image_result::success) {
-
-        return prepared ==
-                compiled_project_image_result::failed
-            ? server_status::io_error
-            : server_status::
-                project_artifact_invalid;
-    }
-
     if (ensure_project_artifact_directory(
             layout) !=
         project_artifact_io_result::success) {
@@ -400,392 +804,182 @@ server_status rebuild_project(
         return server_status::io_error;
     }
 
-    project_configuration_manifest_layout
-        manifest_layout;
+    rebuild_persistence_job persistence{
+        layout,
+        context};
 
-    const auto manifest_prepared =
-        prepare_project_configuration_manifest_layout(
-            context.manifest,
-            manifest_layout);
+    auto active_lanes =
+        execution_lane_capacity();
 
-    if (manifest_prepared !=
-        project_configuration_manifest_store_result::
-            success) {
-
-        diagnostics.emit(
-            diagnostic(
-                manifest_prepared ==
-                        project_configuration_manifest_store_result::
-                            io_failed
-                    ? diagnostics::
-                        project_manifest_io_failed
-                    : diagnostics::
-                        project_manifest_invalid,
-                operation)
-                .file(layout.manifest)
-                .detail(
-                    "Cannot prepare the exact project.manifest layout")
-                .build());
-
-        return manifest_prepared ==
-                project_configuration_manifest_store_result::
-                    io_failed
-            ? server_status::io_error
-            : server_status::
-                project_artifact_invalid;
+    if (active_lanes == 0) {
+        active_lanes = 1;
     }
 
-    writable_file_mapping manifest_mapping;
+    if (active_lanes >
+        rebuild_persistence_artifact_count) {
 
-    if (manifest_mapping.create(
-            layout.manifest,
-            manifest_layout.size()) !=
-        writable_file_mapping_result::success) {
-
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_manifest_io_failed,
-                operation)
-                .file(layout.manifest)
-                .detail(
-                    "Cannot create and memory-map project.manifest for direct REBUILD encoding")
-                .build());
-
-        return server_status::io_error;
+        active_lanes =
+            rebuild_persistence_artifact_count;
     }
 
-    const auto manifest_encoded =
-        encode_project_configuration_manifest(
-            context.manifest,
-            manifest_layout,
-            manifest_mapping.bytes());
+    persistence.active_lanes =
+        active_lanes;
 
-    if (manifest_encoded !=
-        project_configuration_manifest_store_result::
-            success) {
+    bool parallel_started = false;
+    server_status parallel_status =
+        server_status::success;
 
-        diagnostics.emit(
-            diagnostic(
-                manifest_encoded ==
-                        project_configuration_manifest_store_result::
-                            io_failed
-                    ? diagnostics::
-                        project_manifest_io_failed
-                    : diagnostics::
-                        project_manifest_invalid,
-                operation)
-                .file(layout.manifest)
-                .detail(
-                    "Direct project.manifest encoding failed")
-                .build());
+    {
+        execution_lanes lanes;
 
-        return manifest_encoded ==
-                project_configuration_manifest_store_result::
-                    io_failed
-            ? server_status::io_error
-            : server_status::
-                project_artifact_invalid;
+        const auto started =
+            lanes.start(
+                active_lanes);
+
+        if (succeeded(started)) {
+            parallel_started = true;
+
+            parallel_status =
+                lanes.run(
+                    active_lanes,
+                    persist_rebuild_artifacts,
+                    &persistence);
+        }
     }
 
-    if (manifest_mapping.flush() !=
-        writable_file_mapping_result::success) {
+    if (!parallel_started) {
+        persistence.active_lanes = 1;
 
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_manifest_io_failed,
-                operation)
-                .file(layout.manifest)
-                .detail(
-                    "Cannot flush direct project.manifest mapping")
-                .build());
+        persist_rebuild_artifacts(
+            &persistence,
+            0);
+    }
+    else if (!succeeded(
+                 parallel_status)) {
 
-        return server_status::io_error;
+        const auto compiled_index =
+            static_cast<std::size_t>(
+                rebuild_persistence_artifact::
+                    compiled);
+
+        if (persistence.results[
+                compiled_index].status ==
+            rebuild_persistence_status::
+                pending) {
+
+            persistence.results[
+                compiled_index] =
+                    persist_compiled(
+                        layout,
+                        context);
+        }
+
+        for (std::size_t index = 1;
+             index <
+                rebuild_persistence_artifact_count;
+             ++index) {
+
+            if (persistence.results[
+                    index].status ==
+                rebuild_persistence_status::
+                    pending) {
+
+                persistence.results[
+                    index] = {
+                        rebuild_persistence_status::
+                            io_failed,
+                        rebuild_persistence_stage::
+                            dispatch,
+                    };
+            }
+        }
     }
 
-    writable_file_mapping source_mapping;
+    const auto compiled_index =
+        static_cast<std::size_t>(
+            rebuild_persistence_artifact::
+                compiled);
 
-    if (source_mapping.create(
-            layout.source_save,
-            source_layout.size()) !=
-        writable_file_mapping_result::success) {
+    const auto& compiled_result =
+        persistence.results[
+            compiled_index];
 
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_source_save_io_failed,
-                operation)
-                .file(layout.source_save)
-                .detail(
-                    "Cannot create and memory-map source.bin for direct REBUILD encoding")
-                .build());
+    if (compiled_result.status !=
+        rebuild_persistence_status::success) {
 
-        return server_status::io_error;
-    }
+        const auto& descriptor =
+            compiled_result.status ==
+                    rebuild_persistence_status::
+                        invalid
+                ? diagnostics::
+                    project_compiled_invalid
+                : diagnostics::
+                    project_compiled_io_failed;
 
-    const auto source_encoded =
-        encode_source_save_image(
-            context.files,
-            context.sources,
-            source_layout,
-            source_mapping.bytes());
-
-    if (source_encoded !=
-        source_save_result::success) {
-
-        diagnostics.emit(
-            diagnostic(
-                source_encoded ==
-                        source_save_result::failed
-                    ? diagnostics::
-                        project_source_save_io_failed
-                    : diagnostics::
-                        project_source_save_invalid,
-                operation)
-                .file(layout.source_save)
-                .detail(
-                    "Direct source.bin encoding failed")
-                .build());
-
-        return source_encoded ==
-                source_save_result::failed
-            ? server_status::io_error
-            : server_status::
-                project_artifact_invalid;
-    }
-
-    const auto source_validated =
-        validate_source_save_image(
-            source_mapping.bytes());
-
-    if (source_validated !=
-        source_save_result::success) {
+        const auto detail =
+            compiled_result.stage ==
+                    rebuild_persistence_stage::prepare
+                ? std::string_view{
+                    "Cannot prepare compiled.bin direct-encoding layout"}
+                : compiled_result.stage ==
+                        rebuild_persistence_stage::create
+                    ? std::string_view{
+                        "Cannot create and memory-map compiled.bin for direct REBUILD encoding"}
+                    : compiled_result.stage ==
+                            rebuild_persistence_stage::encode
+                        ? std::string_view{
+                            "Direct compiled.bin encoding failed"}
+                        : compiled_result.stage ==
+                                rebuild_persistence_stage::validate
+                            ? std::string_view{
+                                "Direct compiled.bin image failed structural or cold semantic validation"}
+                            : std::string_view{
+                                "Cannot flush direct compiled.bin mapping"};
 
         diagnostics.emit(
             diagnostic(
-                source_validated ==
-                        source_save_result::failed
-                    ? diagnostics::
-                        project_source_save_io_failed
-                    : diagnostics::
-                        project_source_save_invalid,
-                operation)
-                .file(layout.source_save)
-                .detail(
-                    "Direct source.bin image failed structural or cold semantic validation")
-                .build());
-
-        return source_validated ==
-                source_save_result::failed
-            ? server_status::io_error
-            : server_status::
-                project_artifact_invalid;
-    }
-
-    if (source_mapping.flush() !=
-        writable_file_mapping_result::success) {
-
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_source_save_io_failed,
-                operation)
-                .file(layout.source_save)
-                .detail(
-                    "Cannot flush direct source.bin mapping")
-                .build());
-
-        return server_status::io_error;
-    }
-
-    writable_file_mapping database_mapping;
-
-    if (database_mapping.create(
-            layout.database,
-            database_layout_value.size()) !=
-        writable_file_mapping_result::success) {
-
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_database_io_failed,
-                operation)
-                .file(layout.database)
-                .detail(
-                    "Cannot create and memory-map database.bin for direct REBUILD encoding")
-                .build());
-
-        return server_status::io_error;
-    }
-
-    const auto database_encoded =
-        encode_database_image(
-            context.files,
-            context.lexical,
-            database_layout_value,
-            database_mapping.bytes());
-
-    if (database_encoded !=
-        database_image_result::success) {
-
-        diagnostics.emit(
-            diagnostic(
-                database_encoded ==
-                        database_image_result::failed
-                    ? diagnostics::
-                        project_database_io_failed
-                    : diagnostics::
-                        project_database_invalid,
-                operation)
-                .file(layout.database)
-                .detail(
-                    "Direct database.bin encoding failed")
-                .build());
-
-        return database_encoded ==
-                database_image_result::failed
-            ? server_status::io_error
-            : server_status::
-                project_artifact_invalid;
-    }
-
-    const auto database_validated =
-        verify_database_image(
-            database_mapping.bytes(),
-            context.files,
-            context.lexical);
-
-    if (database_validated !=
-        database_image_result::success) {
-
-        diagnostics.emit(
-            diagnostic(
-                database_validated ==
-                        database_image_result::failed
-                    ? diagnostics::
-                        project_database_io_failed
-                    : diagnostics::
-                        project_database_invalid,
-                operation)
-                .file(layout.database)
-                .detail(
-                    "Direct database.bin image failed structural or cold semantic validation")
-                .build());
-
-        return database_validated ==
-                database_image_result::failed
-            ? server_status::io_error
-            : server_status::
-                project_artifact_invalid;
-    }
-
-    if (database_mapping.flush() !=
-        writable_file_mapping_result::success) {
-
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_database_io_failed,
-                operation)
-                .file(layout.database)
-                .detail(
-                    "Cannot flush direct database.bin mapping")
-                .build());
-
-        return server_status::io_error;
-    }
-
-    writable_file_mapping compiled_mapping;
-
-    if (compiled_mapping.create(
-            layout.compiled,
-            compiled_layout.size()) !=
-        writable_file_mapping_result::success) {
-
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_compiled_io_failed,
+                descriptor,
                 operation)
                 .file(layout.compiled)
-                .detail(
-                    "Cannot create and memory-map compiled.bin for direct REBUILD encoding")
+                .detail(detail)
                 .build());
 
-        return server_status::io_error;
-    }
-
-    const auto compiled =
-        encode_compiled_project_image(
-            context.strings,
-            context.identities,
-            context.G,
-            context.assigns,
-            context.files,
-            context.sources,
-            compiled_layout,
-            compiled_mapping.bytes());
-
-    if (compiled !=
-        compiled_project_image_result::success) {
-
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_compiled_invalid,
-                operation)
-                .file(layout.compiled)
-                .detail(
-                    "Direct compiled.bin encoding failed")
-                .build());
-
-        return compiled ==
-                compiled_project_image_result::failed
+        return compiled_result.status ==
+                rebuild_persistence_status::io_failed
             ? server_status::io_error
             : server_status::
                 project_artifact_invalid;
     }
 
-    compiled_project_view compiled_view;
+    emit_build_cache_warning(
+        persistence.results[
+            static_cast<std::size_t>(
+                rebuild_persistence_artifact::source)],
+        layout.source_save,
+        diagnostics::project_source_save_io_failed,
+        diagnostics::project_source_save_invalid,
+        operation,
+        diagnostics);
 
-    if (compiled_view.bind(
-            compiled_mapping.bytes()) !=
-            compiled_project_image_result::success ||
-        compiled_view.verify_contents() !=
-            compiled_project_image_result::success) {
+    emit_build_cache_warning(
+        persistence.results[
+            static_cast<std::size_t>(
+                rebuild_persistence_artifact::database)],
+        layout.database,
+        diagnostics::project_database_io_failed,
+        diagnostics::project_database_invalid,
+        operation,
+        diagnostics);
 
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_compiled_invalid,
-                operation)
-                .file(layout.compiled)
-                .detail(
-                    "Direct compiled.bin image failed structural or cold semantic validation")
-                .build());
-
-        return server_status::
-            project_artifact_invalid;
-    }
-
-    source_save_view persisted_source;
-    if (persisted_source.bind(source_mapping.bytes()) != source_save_result::success ||
-        verify_source_save_presence(persisted_source, compiled_view) != source_save_result::success)
-        return server_status::project_artifact_invalid;
-
-    if (compiled_mapping.flush() !=
-        writable_file_mapping_result::success) {
-
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_compiled_io_failed,
-                operation)
-                .file(layout.compiled)
-                .detail(
-                    "Cannot flush direct compiled.bin mapping")
-                .build());
-
-        return server_status::io_error;
-    }
-
-    // Durability precedes resident publication. No construction mapping survives
-    // the boundary into the resident Project.
-    manifest_mapping.reset();
-    source_mapping.reset();
-    database_mapping.reset();
-    compiled_mapping.reset();
+    emit_build_cache_warning(
+        persistence.results[
+            static_cast<std::size_t>(
+                rebuild_persistence_artifact::manifest)],
+        layout.manifest,
+        diagnostics::project_manifest_io_failed,
+        diagnostics::project_manifest_invalid,
+        operation,
+        diagnostics);
 
     read_only_file_mapping resident_mapping;
 
@@ -799,7 +993,7 @@ server_status rebuild_project(
                 operation)
                 .file(layout.compiled)
                 .detail(
-                    "Cannot reopen committed compiled.bin for resident publication")
+                    "Cannot reopen final compiled.bin for resident publication")
                 .build());
 
         return server_status::io_error;
@@ -817,7 +1011,7 @@ server_status rebuild_project(
                 operation)
                 .file(layout.compiled)
                 .detail(
-                    "Committed compiled.bin failed resident structural bind")
+                    "Final compiled.bin failed resident structural bind")
                 .build());
 
         return server_status::
@@ -838,7 +1032,7 @@ server_status rebuild_project(
                 operation)
                 .file(layout.compiled)
                 .detail(
-                    "Cannot publish resident Project from committed compiled.bin")
+                    "Cannot publish resident Project from final compiled.bin")
                 .build());
 
         return server_status::io_error;

@@ -572,9 +572,10 @@ G
 ```
 
 Phase 1 includes the persistence required for the three ways of obtaining G.
-REBUILD uses direct final artifact paths and deletes the full artifact set on
-failure. BUILD has a different failure contract and therefore does not inherit
-REBUILD persistence mechanics automatically.
+REBUILD uses direct final artifact paths. `compiled.bin` is its mandatory
+semantic output; project.manifest/source.bin/database.bin are best-effort
+acceleration outputs for the next BUILD. BUILD has a different failure contract
+and therefore does not inherit REBUILD persistence mechanics automatically.
 
 ## Current Project construction boundary
 
@@ -608,17 +609,29 @@ resolution, G mutation, Runtime binding, or file dependency emission.
 REBUILD starts a fresh persisted lineage by removing
 `project.manifest`, `source.bin`, `database.bin`, and `compiled.bin`. It uses
 the final artifact names directly; there are no `.tmp` files, A/B slots,
-selector files, or rollback generations. Any REBUILD failure closes
-operation-local mappings before removing all four artifacts again. Cleanup I/O
-failure is reported explicitly and leaves the Server `UNLOADED`.
+selector files, or rollback generations. The pre-clean prevents a failed
+best-effort acceleration branch from leaving a stale previous BUILD baseline.
 
-After topology finalization, the current REBUILD implementation persists
-`project.manifest`, `source.bin`, `database.bin`, and `compiled.bin` directly to
-their final paths using exact-size writable mappings. source.bin is encoded
-directly from finalized File Context state. database.bin streams exact
-Header/Source snapshot bytes together with retained Lexical Generation records,
-words, and directive anchors into mapped sections; String Table and Identity
-Space lineage are persisted once in compiled.bin.
+After topology finalization, REBUILD freezes construction state and fans out four
+independent direct-mmap persistence branches through the existing fixed
+construction execution lanes:
+
+```text
+final G / construction state
+    +-> compiled.bin      -> validate + flush -> resident mmap Project
+    +-> source.bin        -> BUILD acceleration
+    +-> database.bin      -> BUILD acceleration
+    `-> project.manifest  -> BUILD acceleration
+```
+
+The compiled branch is the only mandatory persistence branch. source.bin,
+database.bin, and project.manifest are best-effort outputs; failures are warnings
+and become a problem for the next BUILD rather than invalidating the new G.
+
+source.bin is encoded directly from finalized File Context/Source Map state.
+database.bin streams exact Header/Source snapshot bytes together with retained
+Lexical Generation records, words, and directive anchors into mapped sections;
+String Table and Identity Space lineage are persisted once in compiled.bin.
 The optional SourceSave USN identity indexes are prepared once and retained only
 as persistence-specific tracking state. None of these production paths creates
 a full-size serialized `std::vector<std::byte>` or `.tmp` artifact. source.bin
@@ -631,11 +644,13 @@ rebuilding Graph/string/identity containers. The mapping and
 `compiled_project_view` are owned by the resident `project`; `verify_contents()`
 remains a separate cold audit and is not part of the normal LOAD hot path.
 
-REBUILD publishes through the same resident representation only after all four
-artifacts are validated, flushed, and their writable construction mappings are
-closed. A publication failure is still a REBUILD failure and removes the full
-artifact set. LOAD and REBUILD therefore complete their Phase-1 `-> G` contract;
-BUILD remains the unfinished Phase-1 lifecycle path before Runtime/SHM work.
+REBUILD publishes through the same resident representation after the mandatory
+compiled branch is valid and durable. The scoped persistence lanes are joined
+before construction state is destroyed, so no detached/background owner is
+introduced. A G/compiled/publication failure is still a REBUILD failure and
+runs the existing artifact cleanup. LOAD and REBUILD therefore complete their
+Phase-1 `-> G` contract; BUILD remains the unfinished Phase-1 lifecycle path
+before Runtime/SHM work.
 
 The implemented BUILD code currently reaches:
 
