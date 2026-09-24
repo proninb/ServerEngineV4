@@ -43,14 +43,15 @@ struct source_replacement_metrics final {
     std::uint64_t active_lanes = 0;
 };
 
-// BUILD-only sparse lexical replacement. semantic_changed must be strictly
-// ascending file_id values from exact SourceSave classification. Header/Source
-// baselines are masked before workers start; present changed files are tokenized
-// from already-acquired File Context bytes, while missing files remain masked.
+// BUILD-only sparse lexical replacement. replacement_files must be strictly
+// ascending file_id values. Existing baseline files are masked before workers
+// start. Appended Project-declared Header/Source roots are materialized here,
+// lexical_generation is extended only by the appended tail, and all present
+// replacement files are tokenized from exact File Context bytes.
 [[nodiscard]] server_status replace_source_lexical_state(
     file_context& files,
     lexical_generation& lexical,
-    std::span<const file_id> semantic_changed,
+    std::span<const file_id> replacement_files,
     source_preparation_failure* failure = nullptr,
     source_replacement_metrics* metrics = nullptr) noexcept;
 

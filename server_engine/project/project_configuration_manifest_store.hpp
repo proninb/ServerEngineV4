@@ -33,6 +33,7 @@ private:
     std::size_t size_value = 0;
     std::uint32_t file_count = 0;
     project_configuration_hash configuration_hash{};
+    project_preprocessor_hash preprocessor_hash{};
 
     friend project_configuration_manifest_store_result
     prepare_project_configuration_manifest_layout(

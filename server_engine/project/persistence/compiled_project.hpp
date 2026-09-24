@@ -23,12 +23,12 @@
 
 namespace cw::server {
 
-inline constexpr std::uint32_t compiled_project_format_version = 4;
+inline constexpr std::uint32_t compiled_project_format_version = 5;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;
 
-inline constexpr std::size_t compiled_project_directory_count = 22;
+inline constexpr std::size_t compiled_project_directory_count = 24;
 
 inline constexpr std::size_t
 compiled_project_directory_entry_size = 32;
@@ -64,6 +64,8 @@ enum class compiled_project_section : std::uint32_t {
     source_files = 20,
     source_file_indices = 21,
     source_paths = 22,
+    derived_index = 23,
+    link_target_index = 24,
 };
 
 enum class compiled_project_image_result : std::uint8_t {
@@ -149,6 +151,27 @@ public:
         return type_count_value;
     }
 
+    [[nodiscard]] std::size_t member_count() const noexcept {
+        return static_cast<std::size_t>(
+            section(
+                compiled_project_section::
+                    members).count);
+    }
+
+    [[nodiscard]] std::size_t derived_type_count() const noexcept {
+        return static_cast<std::size_t>(
+            section(
+                compiled_project_section::
+                    derived_types).count);
+    }
+
+    [[nodiscard]] std::size_t object_construction_count() const noexcept {
+        return static_cast<std::size_t>(
+            section(
+                compiled_project_section::
+                    object_construction).count);
+    }
+
     [[nodiscard]] std::size_t object_count() const noexcept {
         return object_count_value;
     }
@@ -217,6 +240,13 @@ public:
         type_ref type,
         derived_type_record& output) const noexcept;
 
+    // Persisted O(1) canonical lookup used by sparse BUILD. The index is a
+    // read accelerator over derived_types, not another semantic representation.
+    [[nodiscard]] type_ref find_derived(
+        type_ref child,
+        derived_type_kind kind,
+        std::uint64_t payload) const noexcept;
+
     [[nodiscard]] object_handle object_at(
         std::size_t index) const noexcept;
 
@@ -237,6 +267,11 @@ public:
     [[nodiscard]] bool link(
         link_handle handle,
         link_record& output) const noexcept;
+
+    // Persisted O(1) target ownership lookup. Graph link semantics require one
+    // binding per target endpoint, so sparse BUILD must not scan all OLD links.
+    [[nodiscard]] link_handle find_link_target(
+        object_endpoint target) const noexcept;
 
     [[nodiscard]] bool assign(
         std::size_t index,

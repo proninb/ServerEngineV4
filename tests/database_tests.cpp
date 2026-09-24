@@ -590,6 +590,89 @@ void test_direct_database(
         stable_replacement_words[0] ==
             stable_first_word,
         "native lexical descriptor survives arena growth without stale pointer");
+
+    constexpr std::string_view appended_source{
+        "struct C { int value; };\n"};
+
+    lexical_generation appended_lexical;
+
+    if (!tests.expect(
+            succeeded(
+                appended_lexical.bind_baseline(
+                    persisted_view.lexical_baseline(),
+                    1)),
+            "bind lexical baseline for appended BUILD root")) {
+
+        return;
+    }
+
+    file_context appended_files;
+
+    file_id appended_existing_header;
+    file_id appended_existing_project;
+    file_id appended_header;
+
+    if (!tests.expect(
+            write_text(
+                root / "appended.hpp",
+                appended_source) &&
+            succeeded(
+                appended_files.resolve(
+                    root / "types.hpp",
+                    file_kind::header,
+                    appended_existing_header)) &&
+            appended_existing_header ==
+                header &&
+            succeeded(
+                appended_files.resolve(
+                    root / "project.json",
+                    file_kind::project,
+                    appended_existing_project)) &&
+            appended_existing_project ==
+                project &&
+            succeeded(
+                appended_files.resolve(
+                    root / "appended.hpp",
+                    file_kind::header,
+                    appended_header)) &&
+            appended_header ==
+                appended,
+            "resolve appended BUILD semantic root")) {
+
+        return;
+    }
+
+    source_preparation_failure
+        appended_failure;
+
+    source_replacement_metrics
+        appended_metrics;
+
+    const std::array<file_id, 1>
+        appended_replacement{
+            appended_header};
+
+    tests.expect(
+        succeeded(
+            replace_source_lexical_state(
+                appended_files,
+                appended_lexical,
+                appended_replacement,
+                &appended_failure,
+                &appended_metrics)) &&
+        appended_failure.kind ==
+            source_preparation_failure_kind::none &&
+        appended_metrics.masked_files == 0 &&
+        appended_metrics.retokenized_files == 1 &&
+        appended_metrics.missing_files == 0 &&
+        appended_metrics.active_lanes == 1 &&
+        appended_files.content_available(
+            appended_header) &&
+        appended_lexical.size() ==
+            persisted_view.file_count() + 1 &&
+        appended_lexical.contains(
+            appended_header),
+        "BUILD lexical replacement materializes and tokenizes appended semantic root");
 }
 
 }

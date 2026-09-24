@@ -24,15 +24,15 @@ constexpr std::array<std::byte, 8> magic{
     std::byte{'A'},
     std::byte{'N'},
     std::byte{'0'},
-    std::byte{'2'},
+    std::byte{'3'},
 };
 
-constexpr std::uint32_t format_version = 2;
+constexpr std::uint32_t format_version = 3;
 constexpr std::uint32_t change_token_flag = 0x01U;
 constexpr std::uint32_t known_flags =
     change_token_flag;
 
-constexpr std::size_t header_size = 48;
+constexpr std::size_t header_size = 80;
 constexpr std::size_t fixed_entry_size = 72;
 constexpr std::size_t checksum_size = 32;
 
@@ -323,6 +323,8 @@ prepare_project_configuration_manifest_layout(
                 value.files.size());
         output.configuration_hash =
             value.configuration_hash;
+        output.preprocessor_hash =
+            value.preprocessor_hash;
 
         return project_configuration_manifest_store_result::
             success;
@@ -347,7 +349,9 @@ encode_project_configuration_manifest(
         value.files.size() !=
             layout.file_count ||
         !(value.configuration_hash ==
-          layout.configuration_hash)) {
+          layout.configuration_hash) ||
+        !(value.preprocessor_hash ==
+          layout.preprocessor_hash)) {
 
         return project_configuration_manifest_store_result::
             invalid;
@@ -373,7 +377,12 @@ encode_project_configuration_manifest(
                 output,
                 offset,
                 value.configuration_hash.bytes.data(),
-                value.configuration_hash.bytes.size())) {
+                value.configuration_hash.bytes.size()) ||
+            !write_bytes(
+                output,
+                offset,
+                value.preprocessor_hash.bytes.data(),
+                value.preprocessor_hash.bytes.size())) {
 
             return project_configuration_manifest_store_result::
                 invalid;
@@ -556,7 +565,10 @@ decode_project_configuration_manifest(
             count == 0 ||
             offset > payload_size ||
             payload_size - offset <
-                output.configuration_hash.bytes.size()) {
+                output.configuration_hash.bytes.size() ||
+            payload_size - offset -
+                    output.configuration_hash.bytes.size() <
+                output.preprocessor_hash.bytes.size()) {
 
             return project_configuration_manifest_store_result::
                 invalid;
@@ -571,6 +583,16 @@ decode_project_configuration_manifest(
 
         offset +=
             output.configuration_hash.bytes.size();
+
+        std::copy_n(
+            image.begin() +
+                static_cast<std::ptrdiff_t>(
+                    offset),
+            output.preprocessor_hash.bytes.size(),
+            output.preprocessor_hash.bytes.begin());
+
+        offset +=
+            output.preprocessor_hash.bytes.size();
 
         output.files.reserve(count);
 

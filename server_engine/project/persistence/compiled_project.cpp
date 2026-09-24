@@ -382,6 +382,53 @@ void write_u64(
         : value;
 }
 
+[[nodiscard]] std::uint64_t derived_hash(
+    type_ref child,
+    derived_type_kind kind,
+    std::uint64_t payload) noexcept {
+
+    std::uint64_t hash =
+        1469598103934665603ull;
+
+    const auto mix =
+        [&hash](std::uint64_t value) noexcept {
+            for (std::size_t index = 0;
+                 index < 8;
+                 ++index) {
+
+                hash ^=
+                    static_cast<std::uint8_t>(
+                        value & 0xffu);
+
+                hash *=
+                    1099511628211ull;
+
+                value >>= 8;
+            }
+        };
+
+    mix(child.value());
+    mix(static_cast<std::uint8_t>(kind));
+    mix(payload);
+
+    return hash == 0
+        ? 1
+        : hash;
+}
+
+[[nodiscard]] std::uint64_t link_target_hash(
+    object_endpoint target) noexcept {
+
+    const auto key =
+        (static_cast<std::uint64_t>(
+             target.object.value()) << 32) |
+        (static_cast<std::uint64_t>(
+             target.member.value()) +
+         1);
+
+    return mix64(key);
+}
+
 [[nodiscard]] std::uint64_t index_capacity(
     std::uint64_t live) noexcept {
 
@@ -507,6 +554,10 @@ void write_u64(
         return 20;
     case compiled_project_section::source_file_indices:
         return 4;
+
+    case compiled_project_section::derived_index:
+    case compiled_project_section::link_target_index:
+        return index_record_size;
     }
 
     return 0;
@@ -922,6 +973,12 @@ compiled_project_view::bind(
                 compiled_project_section::
                     derived_types)];
 
+    const auto& derived_index =
+        candidate[
+            section_index(
+                compiled_project_section::
+                    derived_index)];
+
     const auto& objects =
         candidate[
             section_index(
@@ -945,6 +1002,12 @@ compiled_project_view::bind(
             section_index(
                 compiled_project_section::
                     links)];
+
+    const auto& link_target_index =
+        candidate[
+            section_index(
+                compiled_project_section::
+                    link_target_index)];
 
     const auto& graph_identity =
         candidate[
@@ -974,6 +1037,14 @@ compiled_project_view::bind(
                 ? identity_count - 1
                 : 0);
 
+    const auto expected_derived_index_count =
+        index_capacity(
+            derived_types.count);
+
+    const auto expected_link_target_index_count =
+        index_capacity(
+            links.count);
+
     if (string_count >
             (std::numeric_limits<std::uint32_t>::max)() ||
         identity_count == 0 ||
@@ -997,6 +1068,8 @@ compiled_project_view::bind(
             (std::numeric_limits<std::uint32_t>::max)() ||
         expected_string_index_count == 0 ||
         expected_identity_index_count == 0 ||
+        expected_derived_index_count == 0 ||
+        expected_link_target_index_count == 0 ||
         string_core.count !=
             string_count ||
         string_index.count !=
@@ -1011,6 +1084,8 @@ compiled_project_view::bind(
             type_count ||
         members.count !=
             construction.count ||
+        derived_index.count !=
+            expected_derived_index_count ||
         objects.count !=
             object_count ||
         object_identities.count !=
@@ -1019,6 +1094,8 @@ compiled_project_view::bind(
             graph_object_construction_slot_mask ||
         links.count !=
             link_count ||
+        link_target_index.count !=
+            expected_link_target_index_count ||
         graph_identity.count !=
             identity_count + 1 ||
         assign_records.count !=
@@ -1854,6 +1931,94 @@ bool compiled_project_view::derived(
             3);
 }
 
+
+type_ref compiled_project_view::find_derived(
+    type_ref child,
+    derived_type_kind kind,
+    std::uint64_t payload) const noexcept {
+
+    if (!type_ref_from_raw(
+            child.value()) ||
+        !valid_derived_kind(kind)) {
+
+        return {};
+    }
+
+    const auto& index =
+        section(
+            compiled_project_section::
+                derived_index);
+
+    if (index.count == 0 ||
+        (index.count &
+            (index.count - 1)) != 0) {
+
+        return {};
+    }
+
+    const auto hash =
+        derived_hash(
+            child,
+            kind,
+            payload);
+
+    const auto fingerprint =
+        identity_fingerprint(hash);
+
+    const auto mask =
+        index.count - 1;
+
+    auto position =
+        hash &
+        mask;
+
+    for (std::uint64_t probe = 0;
+         probe < index.count;
+         ++probe) {
+
+        const auto* slot =
+            index.data +
+            static_cast<std::size_t>(
+                position) *
+                index_record_size;
+
+        const auto raw =
+            read_u32(
+                slot + 4);
+
+        if (raw == 0) {
+            return {};
+        }
+
+        if (read_u32(slot) ==
+            fingerprint) {
+
+            const auto candidate =
+                type_ref_from_raw(raw);
+
+            derived_type_record record;
+
+            if (candidate.kind() ==
+                    type_ref_kind::derived &&
+                derived(
+                    candidate,
+                    record) &&
+                record.child == child &&
+                record.kind == kind &&
+                record.payload == payload) {
+
+                return candidate;
+            }
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return {};
+}
+
 object_handle compiled_project_view::object_at(
     std::size_t index) const noexcept {
 
@@ -2067,6 +2232,87 @@ bool compiled_project_view::link(
         output.source.member &&
         output.target.object &&
         output.target.member;
+}
+
+
+link_handle compiled_project_view::find_link_target(
+    object_endpoint target) const noexcept {
+
+    if (!target.object ||
+        !target.member ||
+        target.object.value() >
+            object_count_value) {
+
+        return {};
+    }
+
+    const auto& index =
+        section(
+            compiled_project_section::
+                link_target_index);
+
+    if (index.count == 0 ||
+        (index.count &
+            (index.count - 1)) != 0) {
+
+        return {};
+    }
+
+    const auto hash =
+        link_target_hash(target);
+
+    const auto fingerprint =
+        identity_fingerprint(hash);
+
+    const auto mask =
+        index.count - 1;
+
+    auto position =
+        hash &
+        mask;
+
+    for (std::uint64_t probe = 0;
+         probe < index.count;
+         ++probe) {
+
+        const auto* slot =
+            index.data +
+            static_cast<std::size_t>(
+                position) *
+                index_record_size;
+
+        const auto raw =
+            read_u32(
+                slot + 4);
+
+        if (raw == 0) {
+            return {};
+        }
+
+        if (read_u32(slot) ==
+            fingerprint) {
+
+            const auto candidate =
+                link_from_raw(raw);
+
+            link_record record;
+
+            if (candidate &&
+                link(
+                    candidate,
+                    record) &&
+                record.target == target) {
+
+                return candidate;
+            }
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return {};
 }
 
 bool compiled_project_view::assign(
@@ -2665,6 +2911,16 @@ compiled_project_view::verify_contents() const noexcept {
             return compiled_project_image_result::
                 invalid_image;
         }
+
+        if (find_derived(
+                value.child,
+                value.kind,
+                value.payload) !=
+            type) {
+
+            return compiled_project_image_result::
+                invalid_image;
+        }
     }
 
     std::uint32_t expected_construction_slot = 0;
@@ -2846,34 +3102,8 @@ compiled_project_view::verify_contents() const noexcept {
         }
     }
 
-    // Cold audit keeps target uniqueness linear without a persisted link index.
-    std::vector<std::uint64_t> link_targets;
-
-    if (link_count_value != 0) {
-        const auto capacity =
-            index_capacity(
-                link_count_value);
-
-        if (capacity == 0 ||
-            capacity >
-                (std::numeric_limits<std::size_t>::max)()) {
-
-            return compiled_project_image_result::
-                failed;
-        }
-
-        try {
-            link_targets.assign(
-                static_cast<std::size_t>(
-                    capacity),
-                0);
-        }
-        catch (...) {
-            return compiled_project_image_result::
-                failed;
-        }
-    }
-
+    // Target uniqueness and lookup are validated against the persisted
+    // O(1) link target index; cold audit performs no transient O(L) allocation.
     for (std::size_t index = 0;
          index <
             link_count_value;
@@ -2933,49 +3163,10 @@ compiled_project_view::verify_contents() const noexcept {
                 invalid_image;
         }
 
-        const auto target_key =
-            (static_cast<std::uint64_t>(
-                 value.target.object.value()) << 32) |
-            (static_cast<std::uint64_t>(
-                 value.target.member.value()) +
-             1);
+        if (find_link_target(
+                value.target) !=
+            handle) {
 
-        const auto mask =
-            link_targets.size() - 1;
-
-        auto position =
-            static_cast<std::size_t>(
-                mix64(
-                    target_key)) &
-            mask;
-
-        bool inserted = false;
-
-        for (std::size_t probe = 0;
-             probe <
-                link_targets.size();
-             ++probe) {
-
-            auto& slot =
-                link_targets[position];
-
-            if (slot == 0) {
-                slot = target_key;
-                inserted = true;
-                break;
-            }
-
-            if (slot == target_key) {
-                return compiled_project_image_result::
-                    invalid_image;
-            }
-
-            position =
-                (position + 1) &
-                mask;
-        }
-
-        if (!inserted) {
             return compiled_project_image_result::
                 invalid_image;
         }
@@ -3168,8 +3359,18 @@ prepare_compiled_project_layout(const string_table &strings,
                 ? identity_count - 1
                 : 0);
 
+    const auto derived_index_count =
+        index_capacity(
+            derived_count);
+
+    const auto link_target_index_count =
+        index_capacity(
+            link_count);
+
     if (string_index_count == 0 ||
-        identity_index_count == 0) {
+        identity_index_count == 0 ||
+        derived_index_count == 0 ||
+        link_target_index_count == 0) {
 
         return compiled_project_image_result::
             failed;
@@ -3266,6 +3467,16 @@ prepare_compiled_project_layout(const string_table &strings,
         {compiled_project_section::source_files, 20, files.size()},
         {compiled_project_section::source_file_indices, 4, sources.file_index_entries().size()},
         {compiled_project_section::source_paths, 1, source_path_bytes},
+        {
+            compiled_project_section::derived_index,
+            index_record_size,
+            derived_index_count,
+        },
+        {
+            compiled_project_section::link_target_index,
+            index_record_size,
+            link_target_index_count,
+        },
     }};
 
     std::uint64_t cursor =
@@ -3402,6 +3613,14 @@ encode_compiled_project_image(const string_table &strings,
         compiled_project_section::
             graph_identity_index);
 
+    clear_section(
+        compiled_project_section::
+            derived_index);
+
+    clear_section(
+        compiled_project_section::
+            link_target_index);
+
     const auto count =
         [&](compiled_project_section kind) noexcept {
             return layout[
@@ -3468,6 +3687,16 @@ encode_compiled_project_image(const string_table &strings,
         count(
             compiled_project_section::
                 identity_index);
+
+    const auto derived_index_count =
+        count(
+            compiled_project_section::
+                derived_index);
+
+    const auto link_target_index_count =
+        count(
+            compiled_project_section::
+                link_target_index);
 
     if (string_count !=
             strings.size() ||
@@ -3913,15 +4142,23 @@ encode_compiled_project_image(const string_table &strings,
         }
     }
 
-    // Derived type canonical slots.
+    // Derived type canonical slots + persisted canonical lookup index.
     {
         auto* values =
             section_data(
                 compiled_project_section::
                     derived_types);
 
+        auto* index_out =
+            section_data(
+                compiled_project_section::
+                    derived_index);
+
         const auto derived =
             G.derived_type_entries();
+
+        const auto mask =
+            derived_index_count - 1;
 
         for (std::size_t index = 0;
              index <
@@ -3961,6 +4198,49 @@ encode_compiled_project_image(const string_table &strings,
                 record + 12,
                 static_cast<std::uint32_t>(
                     value.kind));
+
+            const auto type_raw =
+                (static_cast<std::uint32_t>(
+                     type_ref_kind::derived) << 30) |
+                static_cast<std::uint32_t>(
+                    index + 1);
+
+            const auto hash =
+                derived_hash(
+                    value.child,
+                    value.kind,
+                    value.payload);
+
+            auto position =
+                hash &
+                mask;
+
+            for (;;) {
+                auto* slot =
+                    index_out +
+                    static_cast<std::size_t>(
+                        position) *
+                        index_record_size;
+
+                if (read_u32(
+                        slot + 4) == 0) {
+
+                    write_u32(
+                        slot,
+                        identity_fingerprint(
+                            hash));
+
+                    write_u32(
+                        slot + 4,
+                        type_raw);
+
+                    break;
+                }
+
+                position =
+                    (position + 1) &
+                    mask;
+            }
         }
     }
 
@@ -4110,15 +4390,23 @@ encode_compiled_project_image(const string_table &strings,
         }
     }
 
-    // Links preserve object_handle + record-local member_index exactly.
+    // Links preserve handles exactly and publish one persisted target index.
     {
         auto* values =
             section_data(
                 compiled_project_section::
                     links);
 
+        auto* index_out =
+            section_data(
+                compiled_project_section::
+                    link_target_index);
+
         const auto links =
             G.link_entries();
+
+        const auto mask =
+            link_target_index_count - 1;
 
         for (std::size_t index = 0;
              index <
@@ -4148,6 +4436,42 @@ encode_compiled_project_image(const string_table &strings,
             write_u32(
                 record + 12,
                 value.target.member.value());
+
+            const auto hash =
+                link_target_hash(
+                    value.target);
+
+            auto position =
+                hash &
+                mask;
+
+            for (;;) {
+                auto* slot =
+                    index_out +
+                    static_cast<std::size_t>(
+                        position) *
+                        index_record_size;
+
+                if (read_u32(
+                        slot + 4) == 0) {
+
+                    write_u32(
+                        slot,
+                        identity_fingerprint(
+                            hash));
+
+                    write_u32(
+                        slot + 4,
+                        static_cast<std::uint32_t>(
+                            index + 1));
+
+                    break;
+                }
+
+                position =
+                    (position + 1) &
+                    mask;
+            }
         }
     }
 

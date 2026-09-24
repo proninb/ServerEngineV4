@@ -3358,7 +3358,7 @@ public:
         metrics = {};
 
         if (!persisted.valid() ||
-            files.size() !=
+            files.size() <
                 persisted.file_count()) {
 
             return server_status::

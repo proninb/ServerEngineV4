@@ -107,6 +107,49 @@ calculate_configuration_hash_impl(
     return output;
 }
 
+[[nodiscard]] project_preprocessor_hash
+calculate_preprocessor_hash_impl(
+    const preprocessor_configuration& preprocessor) {
+
+    std::string canonical;
+    canonical.append("CWPPH001", 8);
+
+    append_u64(
+        canonical,
+        static_cast<std::uint64_t>(
+            preprocessor.predefines.size()));
+
+    for (const auto& predefine :
+         preprocessor.predefines) {
+
+        append_u64(
+            canonical,
+            static_cast<std::uint64_t>(
+                predefine.name.size()));
+
+        canonical.append(
+            predefine.name.data(),
+            predefine.name.size());
+
+        append_u64(
+            canonical,
+            static_cast<std::uint64_t>(
+                predefine.replacement.size()));
+
+        canonical.append(
+            predefine.replacement.data(),
+            predefine.replacement.size());
+    }
+
+    const auto digest =
+        hash_file_content(
+            canonical);
+
+    project_preprocessor_hash output;
+    output.bytes = digest.bytes;
+    return output;
+}
+
 [[nodiscard]] server_status report_acquisition_failure(
     const std::filesystem::path& path,
     operation_id operation,
@@ -250,14 +293,16 @@ public:
         diagnostic_collection& diagnostics,
         project_configuration_manifest& output,
         file_context* files,
-        preprocessor_configuration& preprocessor)
+        preprocessor_configuration& preprocessor,
+        std::vector<file_id>* semantic_roots)
         : root_project_path(
               root_project_path),
           operation(operation),
           diagnostics(diagnostics),
           output(output),
           files(files),
-          preprocessor(preprocessor) {
+          preprocessor(preprocessor),
+          semantic_roots(semantic_roots) {
 
         visited.reserve(32);
         active.reserve(16);
@@ -268,6 +313,10 @@ public:
     [[nodiscard]] server_status compose() {
         output = {};
         preprocessor.predefines.clear();
+
+        if (semantic_roots != nullptr) {
+            semantic_roots->clear();
+        }
 
         const auto root_result =
             resolve_project_path(
@@ -303,6 +352,11 @@ public:
         if (!succeeded(status)) {
             output = {};
             preprocessor.predefines.clear();
+
+            if (semantic_roots != nullptr) {
+                semantic_roots->clear();
+            }
+
             return status;
         }
 
@@ -310,9 +364,34 @@ public:
             output.configuration_hash =
                 calculate_project_configuration_hash(
                     output.files);
+
+            output.preprocessor_hash =
+                calculate_project_preprocessor_hash(
+                    preprocessor);
+
+            if (semantic_roots != nullptr) {
+                std::sort(
+                    semantic_roots->begin(),
+                    semantic_roots->end(),
+                    [](file_id left, file_id right) noexcept {
+                        return left.value() <
+                            right.value();
+                    });
+
+                semantic_roots->erase(
+                    std::unique(
+                        semantic_roots->begin(),
+                        semantic_roots->end()),
+                    semantic_roots->end());
+            }
         }
         catch (...) {
             output = {};
+
+            if (semantic_roots != nullptr) {
+                semantic_roots->clear();
+            }
+
             return server_status::io_error;
         }
 
@@ -575,6 +654,19 @@ private:
 
             visited.insert(key);
 
+            if (files != nullptr &&
+                files->baseline_bound()) {
+
+                const auto begun =
+                    files->begin_dependency_replacement(
+                        source_file);
+
+                if (!succeeded(begun)) {
+                    active.erase(key);
+                    return begun;
+                }
+            }
+
             const auto dependency_status =
                 process_dependencies(
                     absolute_path,
@@ -722,6 +814,21 @@ private:
                 if (!succeeded(staged)) {
                     return staged;
                 }
+
+                if (semantic_roots != nullptr &&
+                    (dependency.kind ==
+                            file_kind::header ||
+                     dependency.kind ==
+                            file_kind::source)) {
+
+                    try {
+                        semantic_roots->push_back(
+                            child_file);
+                    }
+                    catch (...) {
+                        return server_status::io_error;
+                    }
+                }
             }
 
             if (dependency.kind !=
@@ -868,6 +975,7 @@ private:
     project_configuration_manifest& output;
     file_context* files = nullptr;
     preprocessor_configuration& preprocessor;
+    std::vector<file_id>* semantic_roots = nullptr;
     std::unordered_set<filesystem_path_key, filesystem_path_key_hash> visited;
     std::unordered_set<filesystem_path_key, filesystem_path_key_hash> active;
     std::unordered_set<filesystem_path_key, filesystem_path_key_hash> unique_inputs;
@@ -887,6 +995,13 @@ project_configuration_hash calculate_project_configuration_hash(
         files);
 }
 
+project_preprocessor_hash calculate_project_preprocessor_hash(
+    const preprocessor_configuration& preprocessor) {
+
+    return calculate_preprocessor_hash_impl(
+        preprocessor);
+}
+
 server_status compose_project_configuration_manifest(
     const std::filesystem::path& root_project_path,
     operation_id operation,
@@ -900,7 +1015,8 @@ server_status compose_project_configuration_manifest(
         diagnostics,
         output,
         nullptr,
-        preprocessor};
+        preprocessor,
+        nullptr};
 
     return composer.compose();
 }
@@ -911,7 +1027,8 @@ server_status compose_project_configuration(
     diagnostic_collection& diagnostics,
     project_configuration_manifest& manifest,
     file_context& files,
-    preprocessor_configuration& preprocessor) {
+    preprocessor_configuration& preprocessor,
+    std::vector<file_id>* semantic_roots) {
 
     manifest_composer composer{
         root_project_path,
@@ -919,7 +1036,8 @@ server_status compose_project_configuration(
         diagnostics,
         manifest,
         &files,
-        preprocessor};
+        preprocessor,
+        semantic_roots};
 
     return composer.compose();
 }

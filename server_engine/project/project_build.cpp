@@ -1,6 +1,8 @@
 #include "project_build.hpp"
 
 #include "project_lifecycle_context.hpp"
+#include "project_path.hpp"
+#include "project_configuration_loader.hpp"
 #include "construction/execution_lanes.hpp"
 #include "frontend/source_discovery.hpp"
 #include "project_configuration_manifest_store.hpp"
@@ -8,8 +10,10 @@
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 
+#include <algorithm>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace cw::server {
@@ -160,6 +164,292 @@ namespace {
     return server_status::project_artifact_invalid;
 }
 
+[[nodiscard]] constexpr bool file_id_less(
+    file_id left,
+    file_id right) noexcept {
+
+    return left.value() <
+        right.value();
+}
+
+void normalize_file_ids(
+    std::vector<file_id>& values) {
+
+    std::sort(
+        values.begin(),
+        values.end(),
+        file_id_less);
+
+    values.erase(
+        std::unique(
+            values.begin(),
+            values.end()),
+        values.end());
+}
+
+[[nodiscard]] bool contains_file_id(
+    const std::vector<file_id>& values,
+    file_id value) noexcept {
+
+    return std::binary_search(
+        values.begin(),
+        values.end(),
+        value,
+        file_id_less);
+}
+
+void append_file_id_difference(
+    const std::vector<file_id>& left,
+    const std::vector<file_id>& right,
+    std::vector<file_id>& output) {
+
+    std::size_t left_index = 0;
+    std::size_t right_index = 0;
+
+    while (left_index < left.size()) {
+        while (right_index < right.size() &&
+               right[right_index].value() <
+                   left[left_index].value()) {
+
+            ++right_index;
+        }
+
+        if (right_index >= right.size() ||
+            left[left_index] !=
+                right[right_index]) {
+
+            output.push_back(
+                left[left_index]);
+        }
+
+        ++left_index;
+    }
+}
+
+[[nodiscard]] server_status collect_persisted_configuration_roots(
+    const std::filesystem::path& root_project_path,
+    const project_configuration_manifest& manifest,
+    const source_save_view& source,
+    std::vector<file_id>& roots) noexcept {
+
+    roots.clear();
+
+    if (!source.valid() ||
+        manifest.files.empty()) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    std::filesystem::path root;
+
+    if (resolve_project_path(
+            root_project_path,
+            root) !=
+        project_path_result::success) {
+
+        return server_status::io_error;
+    }
+
+    try {
+        std::vector<std::filesystem::path>
+            resolved_paths;
+
+        resolved_paths.reserve(
+            manifest.files.size());
+
+        for (std::size_t index = 0;
+             index < manifest.files.size();
+             ++index) {
+
+            const auto& proof =
+                manifest.files[index];
+
+            std::filesystem::path path;
+
+            if (index == 0) {
+                if (proof.declaring_file !=
+                        invalid_configuration_file ||
+                    proof.path_type !=
+                        project_configuration_path_type::relative ||
+                    proof.path !=
+                        root.filename()) {
+
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                path = root;
+            } else {
+                if (proof.declaring_file >=
+                    index) {
+
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                const auto& parent =
+                    resolved_paths[
+                        proof.declaring_file];
+
+                const auto input =
+                    proof.path_type ==
+                        project_configuration_path_type::absolute
+                    ? proof.path
+                    : parent.parent_path() /
+                        proof.path;
+
+                if (resolve_project_path(
+                        input,
+                        path) !=
+                    project_path_result::success) {
+
+                    return server_status::io_error;
+                }
+            }
+
+            resolved_paths.push_back(
+                path);
+
+            file_id project_file;
+
+            const auto found =
+                source.find_path(
+                    path,
+                    project_file);
+
+            if (!succeeded(found)) {
+                return found;
+            }
+
+            source_save_file_view
+                project_state;
+
+            if (!project_file ||
+                !source.file(
+                    project_file,
+                    project_state) ||
+                !project_state.current_member ||
+                project_state.kind !=
+                    file_kind::project) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            for (const auto dependency :
+                 project_state.dependencies) {
+
+                source_save_file_view
+                    dependency_state;
+
+                if (!source.file(
+                        dependency,
+                        dependency_state) ||
+                    !dependency_state.current_member) {
+
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                if (dependency_state.kind ==
+                        file_kind::header ||
+                    dependency_state.kind ==
+                        file_kind::source) {
+
+                    roots.push_back(
+                        dependency);
+                }
+            }
+        }
+
+        normalize_file_ids(
+            roots);
+
+        return server_status::success;
+    }
+    catch (...) {
+        roots.clear();
+        return server_status::io_error;
+    }
+}
+
+[[nodiscard]] server_status load_root_preprocessor_configuration(
+    const std::filesystem::path& project_path,
+    operation_id operation,
+    diagnostic_collection& diagnostics,
+    preprocessor_configuration& output) {
+
+    output.predefines.clear();
+
+    std::filesystem::path root;
+
+    if (resolve_project_path(
+            project_path,
+            root) !=
+        project_path_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_configuration_read_failed,
+                operation)
+                .file(project_path)
+                .detail(
+                    "Cannot resolve root Project configuration path for BUILD semantic replay")
+                .build());
+
+        return server_status::io_error;
+    }
+
+    file_content_snapshot snapshot;
+
+    const auto acquired =
+        acquire_file_content(
+            root,
+            snapshot);
+
+    if (acquired !=
+        file_content_result::acquired) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_configuration_read_failed,
+                operation)
+                .file(root)
+                .detail(
+                    acquired ==
+                            file_content_result::missing
+                        ? "Root Project configuration is missing during BUILD semantic replay"
+                        : acquired ==
+                                file_content_result::changed_during_read
+                            ? "Root Project configuration changed during BUILD semantic replay acquisition"
+                            : acquired ==
+                                    file_content_result::allocation_failed
+                                ? "Cannot allocate root Project configuration snapshot for BUILD semantic replay"
+                                : "Cannot acquire root Project configuration for BUILD semantic replay")
+                .build());
+
+        return acquired ==
+                file_content_result::allocation_failed
+            ? server_status::io_error
+            : server_status::
+                project_configuration_invalid;
+    }
+
+    std::vector<project_configuration_dependency>
+        dependencies;
+
+    return read_project_configuration(
+        snapshot.bytes,
+        root,
+        operation,
+        diagnostics,
+        dependencies,
+        project_configuration_scope::root,
+        &output);
+}
+
+
 }
 
 server_status build_project(
@@ -247,33 +537,10 @@ server_status build_project(
         return verified;
     }
 
-    if (verification !=
-        project_configuration_manifest_verification::unchanged) {
-
-        const auto committed_hash =
-            context.manifest.configuration_hash;
-
-        const auto composed =
-            compose_project_configuration_manifest(
-                project_path,
-                operation,
-                diagnostics,
-                context.manifest,
-                context.preprocessor);
-
-        if (!succeeded(composed)) {
-            return composed;
-        }
-
-        if (!(context.manifest.configuration_hash ==
-              committed_hash)) {
-
-            return report_build_incomplete(
-                operation,
-                diagnostics,
-                "Project configuration identity changed; current File Context membership/topology must be reconciled before physical dirty analysis can reuse the committed SourceSave");
-        }
-    }
+    const bool configuration_probe_changed =
+        verification !=
+            project_configuration_manifest_verification::
+                unchanged;
 
     const auto source_opened =
         context.source_mapping.open(
@@ -320,6 +587,73 @@ server_status build_project(
                 .build());
 
         return files_bound;
+    }
+
+    project_configuration_manifest
+        committed_manifest;
+
+    std::vector<file_id>
+        old_configuration_roots;
+
+    std::vector<file_id>
+        current_configuration_roots;
+
+    bool configuration_identity_changed = false;
+    bool preprocessor_changed = false;
+    bool preprocessor_loaded = false;
+
+    if (configuration_probe_changed) {
+        committed_manifest =
+            std::move(
+                context.manifest);
+
+        const auto composed =
+            compose_project_configuration(
+                project_path,
+                operation,
+                diagnostics,
+                context.manifest,
+                context.files,
+                context.preprocessor,
+                &current_configuration_roots);
+
+        if (!succeeded(composed)) {
+            return composed;
+        }
+
+        preprocessor_loaded = true;
+
+        configuration_identity_changed =
+            !(context.manifest.configuration_hash ==
+              committed_manifest.configuration_hash);
+
+        if (configuration_identity_changed) {
+            const auto old_roots_collected =
+                collect_persisted_configuration_roots(
+                    project_path,
+                    committed_manifest,
+                    context.source,
+                    old_configuration_roots);
+
+            if (!succeeded(
+                    old_roots_collected)) {
+
+                diagnostics.emit(
+                    diagnostic(
+                        diagnostics::project_source_save_invalid,
+                        operation)
+                        .file(layout.source_save)
+                        .detail(
+                            "Committed Project composition could not recover OLD semantic roots from SourceSave")
+                        .build());
+
+                return old_roots_collected;
+            }
+
+            preprocessor_changed =
+                !(context.manifest.preprocessor_hash ==
+                  committed_manifest.preprocessor_hash);
+        }
     }
 
     std::vector<file_id> candidates;
@@ -399,13 +733,13 @@ server_status build_project(
     }
 
     std::vector<file_id>
-        semantic_roots;
+        affected_semantic_roots;
 
     const auto roots_collected =
         collect_source_save_semantic_roots(
             context.source,
             affected,
-            semantic_roots);
+            affected_semantic_roots);
 
     if (!succeeded(roots_collected)) {
         diagnostics.emit(
@@ -418,6 +752,115 @@ server_status build_project(
                 .build());
 
         return roots_collected;
+    }
+
+    std::vector<file_id>
+        semantic_invalidated_roots;
+
+    std::vector<file_id>
+        semantic_replay_roots;
+
+    try {
+        semantic_invalidated_roots =
+            affected_semantic_roots;
+
+        if (!configuration_identity_changed) {
+            semantic_replay_roots =
+                affected_semantic_roots;
+        } else {
+            semantic_replay_roots.reserve(
+                affected_semantic_roots.size() +
+                current_configuration_roots.size());
+
+            for (const auto root :
+                 affected_semantic_roots) {
+
+                if (contains_file_id(
+                        current_configuration_roots,
+                        root)) {
+
+                    semantic_replay_roots.push_back(
+                        root);
+                }
+            }
+
+            append_file_id_difference(
+                old_configuration_roots,
+                current_configuration_roots,
+                semantic_invalidated_roots);
+
+            append_file_id_difference(
+                current_configuration_roots,
+                old_configuration_roots,
+                semantic_replay_roots);
+
+            if (preprocessor_changed) {
+                semantic_invalidated_roots.insert(
+                    semantic_invalidated_roots.end(),
+                    old_configuration_roots.begin(),
+                    old_configuration_roots.end());
+
+                semantic_replay_roots.insert(
+                    semantic_replay_roots.end(),
+                    current_configuration_roots.begin(),
+                    current_configuration_roots.end());
+            }
+
+            normalize_file_ids(
+                semantic_invalidated_roots);
+
+            normalize_file_ids(
+                semantic_replay_roots);
+        }
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+
+    std::vector<file_id>
+        lexical_replacement_files;
+
+    try {
+        lexical_replacement_files =
+            semantic_changed;
+
+        if (configuration_identity_changed) {
+            for (const auto root :
+                 current_configuration_roots) {
+
+                if (root.value() >
+                    context.source.file_count()) {
+
+                    lexical_replacement_files.push_back(
+                        root);
+                }
+            }
+        }
+
+        normalize_file_ids(
+            lexical_replacement_files);
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+
+    if (!semantic_replay_roots.empty() &&
+        !preprocessor_loaded) {
+
+        const auto preprocessor_loaded_status =
+            load_root_preprocessor_configuration(
+                project_path,
+                operation,
+                diagnostics,
+                context.preprocessor);
+
+        if (!succeeded(
+                preprocessor_loaded_status)) {
+
+            return preprocessor_loaded_status;
+        }
+
+        preprocessor_loaded = true;
     }
 
     const auto compiled_opened =
@@ -475,7 +918,7 @@ server_status build_project(
 
     bool database_bound = false;
 
-    if (!semantic_roots.empty()) {
+    if (!semantic_replay_roots.empty()) {
         const auto database_opened =
             context.database_mapping.open(
                 layout.database);
@@ -553,7 +996,7 @@ server_status build_project(
     source_preparation_failure lexical_failure;
     source_replacement_metrics lexical_metrics;
 
-    if (!semantic_roots.empty()) {
+    if (!semantic_replay_roots.empty()) {
         if (!database_bound) {
             return server_status::project_artifact_invalid;
         }
@@ -561,7 +1004,7 @@ server_status build_project(
         const auto replaced = replace_source_lexical_state(
             context.files,
             context.lexical,
-            semantic_changed,
+            lexical_replacement_files,
             &lexical_failure,
             &lexical_metrics);
 
@@ -631,9 +1074,25 @@ server_status build_project(
             ", affected_slots=" +
             std::to_string(
                 affected_metrics.visited_slots) +
-            ", semantic_roots=" +
+            ", affected_semantic_roots=" +
             std::to_string(
-                semantic_roots.size()) +
+                affected_semantic_roots.size()) +
+            ", configuration_changed=" +
+            std::to_string(
+                configuration_identity_changed
+                    ? 1
+                    : 0) +
+            ", preprocessor_changed=" +
+            std::to_string(
+                preprocessor_changed
+                    ? 1
+                    : 0) +
+            ", semantic_invalidated_roots=" +
+            std::to_string(
+                semantic_invalidated_roots.size()) +
+            ", semantic_replay_roots=" +
+            std::to_string(
+                semantic_replay_roots.size()) +
             ", database_mapped=" +
             std::to_string(
                 database_bound ? 1 : 0) +
@@ -642,6 +1101,9 @@ server_status build_project(
                 context.lexical.baseline_bound()
                     ? context.lexical.size()
                     : 0) +
+            ", lexical_replacement_files=" +
+            std::to_string(
+                lexical_replacement_files.size()) +
             ", lexical_masked=" + std::to_string(lexical_metrics.masked_files) +
             ", lexical_retokenized=" + std::to_string(lexical_metrics.retokenized_files) +
             ", lexical_missing=" + std::to_string(lexical_metrics.missing_files) +

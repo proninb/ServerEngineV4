@@ -745,6 +745,18 @@ void test_round_trip(
         "derived type preservation");
 
     tests.expect(
+        view.find_derived(
+            fixture.integer_type,
+            derived_type_kind::pointer,
+            0) ==
+            fixture.pointer_type &&
+        !view.find_derived(
+            fixture.integer_type,
+            derived_type_kind::lvalue_reference,
+            0),
+        "persisted derived canonical index");
+
+    tests.expect(
         view.find_object(
             fixture.left_identity) ==
             fixture.left &&
@@ -790,6 +802,14 @@ void test_round_trip(
             link_value.target ==
                 source_link.target,
         "link preservation");
+
+    tests.expect(
+        view.find_link_target(
+            source_link.target) ==
+            fixture.link &&
+        !view.find_link_target(
+            source_link.source),
+        "persisted link target index");
 
     std::string_view assign_source;
     std::string_view assign_target;
@@ -1263,6 +1283,255 @@ void test_build_lineage_overlays(
             appended_identity.slot()) ==
             appended_identity,
         "BUILD identity slot view spans baseline and overlay");
+
+    graph G;
+
+    if (!tests.expect(
+            succeeded(
+                G.bind_baseline(
+                    baseline)),
+            "bind sparse Graph baseline")) {
+        return;
+    }
+
+    tests.expect(
+        G.baseline_bound() &&
+        G.type_count() ==
+            baseline.type_count() &&
+        G.live_type_count() ==
+            baseline.type_count() &&
+        G.member_count() ==
+            baseline.member_count() &&
+        G.object_count() ==
+            baseline.object_count() &&
+        G.live_object_count() ==
+            baseline.object_count() &&
+        G.link_count() ==
+            baseline.link_count() &&
+        G.live_link_count() ==
+            baseline.link_count() &&
+        G.derived_type_count() ==
+            baseline.derived_type_count(),
+        "sparse Graph binds baseline without dense reconstruction");
+
+    type_entry baseline_type;
+
+    tests.expect(
+        G.find_type(
+            fixture.type_identity) ==
+            fixture.type &&
+        G.type(
+            fixture.type,
+            baseline_type) &&
+        baseline_type.defined(),
+        "sparse Graph reads unchanged type directly from baseline");
+
+    type_ref repeated_pointer;
+
+    tests.expect(
+        succeeded(
+            G.derive(
+                fixture.integer_type,
+                derived_type_kind::pointer,
+                0,
+                repeated_pointer)) &&
+        repeated_pointer ==
+            fixture.pointer_type,
+        "sparse Graph reuses persisted derived slot");
+
+    if (!tests.expect(
+            succeeded(
+                G.clear_definition(
+                    fixture.type)),
+            "sparse Graph clears baseline type definition")) {
+        return;
+    }
+
+    const std::array<member_record, 2>
+        replacement_members{{
+            {
+                fixture.value_name,
+                fixture.integer_type,
+                graph_member_access::public_access,
+            },
+            {
+                fixture.peer_name,
+                fixture.pointer_type,
+                graph_member_access::private_access,
+            },
+        }};
+
+    const std::array<construction_value, 2>
+        replacement_construction{{
+            construction_value::constant(
+                construction_kind::signed_integer,
+                99),
+            construction_value{},
+        }};
+
+    if (!tests.expect(
+            succeeded(
+                G.define_record(
+                    fixture.type,
+                    graph_record_kind::struct_type,
+                    replacement_members,
+                    replacement_construction)),
+            "sparse Graph replaces baseline type definition")) {
+        return;
+    }
+
+    construction_value replacement_value;
+
+    tests.expect(
+        G.find_type(
+            fixture.type_identity) ==
+            fixture.type &&
+        G.construction(
+            fixture.type,
+            fixture.value_member,
+            replacement_value) &&
+        replacement_value ==
+            construction_value::constant(
+                construction_kind::signed_integer,
+                99),
+        "sparse type replacement preserves type_handle");
+
+    const auto old_live_objects =
+        G.live_object_count();
+
+    if (!tests.expect(
+            succeeded(
+                G.retire(
+                    fixture.right)) &&
+            !G.contains(
+                fixture.right) &&
+            !G.find_object(
+                fixture.right_identity) &&
+            G.live_object_count() + 1 ==
+                old_live_objects,
+            "sparse Graph tombstones baseline object")) {
+        return;
+    }
+
+    object_handle restored_right;
+
+    if (!tests.expect(
+            succeeded(
+                G.add_object(
+                    fixture.right_identity,
+                    fixture.named_type,
+                    restored_right,
+                    graph_object_non_default_initializer,
+                    construction_value::constant(
+                        construction_kind::unsigned_integer,
+                        9))) &&
+            restored_right ==
+                fixture.right,
+            "sparse Graph reuses retired object slot")) {
+        return;
+    }
+
+    construction_value restored_initial;
+
+    object_entry restored_entry;
+
+    tests.expect(
+        G.object(
+            restored_right,
+            restored_entry) &&
+        restored_entry.non_default_initializer() &&
+        restored_entry.construction_slot() >
+            baseline.object_construction_count() &&
+        G.construction(
+            restored_right,
+            restored_initial) &&
+        restored_initial ==
+            construction_value::constant(
+                construction_kind::unsigned_integer,
+                9),
+        "sparse Graph patches object construction without baseline copy");
+
+    const auto old_live_links =
+        G.live_link_count();
+
+    if (!tests.expect(
+            succeeded(
+                G.retire(
+                    fixture.link)) &&
+            !G.contains(
+                fixture.link) &&
+            G.live_link_count() + 1 ==
+                old_live_links,
+            "sparse Graph tombstones baseline link")) {
+        return;
+    }
+
+    link_handle restored_link;
+
+    const link_record old_link =
+        fixture.G.link_entries()[0];
+
+    tests.expect(
+        succeeded(
+            G.add_link(
+                old_link.source,
+                old_link.target,
+                restored_link)) &&
+        restored_link ==
+            fixture.link &&
+        G.live_link_count() ==
+            old_live_links,
+        "sparse Graph reuses retired link target slot");
+
+    object_handle appended_object;
+
+    if (!tests.expect(
+            succeeded(
+                G.add_object(
+                    appended_identity,
+                    fixture.named_type,
+                    appended_object)) &&
+            appended_object.value() ==
+                baseline.object_count() + 1 &&
+            G.find_object(
+                appended_identity) ==
+                appended_object,
+            "sparse Graph appends new object after baseline slots")) {
+        return;
+    }
+
+    type_ref appended_derived;
+
+    tests.expect(
+        succeeded(
+            G.derive(
+                fixture.named_type,
+                derived_type_kind::lvalue_reference,
+                0,
+                appended_derived)) &&
+        appended_derived.kind() ==
+            type_ref_kind::derived &&
+        appended_derived.payload() ==
+            baseline.derived_type_count() + 1,
+        "sparse Graph appends derived type after baseline slots");
+
+    link_handle appended_link;
+
+    tests.expect(
+        succeeded(
+            G.add_link(
+                {
+                    fixture.left,
+                    fixture.peer_member,
+                },
+                {
+                    appended_object,
+                    fixture.value_member,
+                },
+                appended_link)) &&
+        appended_link.value() ==
+            baseline.link_count() + 1,
+        "sparse Graph appends link after baseline slots");
 
     compiled_project_layout merged_layout;
 

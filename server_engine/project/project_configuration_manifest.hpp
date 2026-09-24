@@ -25,6 +25,7 @@
 namespace cw::server {
 
 class file_context;
+class file_id;
 
 inline constexpr std::uint32_t invalid_configuration_file =
     (std::numeric_limits<std::uint32_t>::max)();
@@ -40,6 +41,17 @@ struct project_configuration_hash final {
     friend constexpr bool operator==(
         const project_configuration_hash&,
         const project_configuration_hash&) noexcept = default;
+};
+
+// Separate semantic-context proof. It lets BUILD distinguish Project composition
+// edits from changes to the root preprocessing environment without replaying the
+// entire semantic root set for every project.json byte change.
+struct project_preprocessor_hash final {
+    std::array<std::byte, 32> bytes{};
+
+    friend constexpr bool operator==(
+        const project_preprocessor_hash&,
+        const project_preprocessor_hash&) noexcept = default;
 };
 
 // Root-first declaration-order DFS. Relative locators resolve from declaring_file;
@@ -60,6 +72,7 @@ struct project_configuration_file_proof final {
 struct project_configuration_manifest final {
     std::vector<project_configuration_file_proof> files;
     project_configuration_hash configuration_hash{};
+    project_preprocessor_hash preprocessor_hash{};
 };
 
 enum class project_configuration_manifest_verification : std::uint8_t {
@@ -69,6 +82,9 @@ enum class project_configuration_manifest_verification : std::uint8_t {
 
 [[nodiscard]] project_configuration_hash calculate_project_configuration_hash(
     std::span<const project_configuration_file_proof> files);
+
+[[nodiscard]] project_preprocessor_hash calculate_project_preprocessor_hash(
+    const preprocessor_configuration& preprocessor);
 
 [[nodiscard]] server_status compose_project_configuration_manifest(
     const std::filesystem::path& root_project_path,
@@ -83,7 +99,8 @@ enum class project_configuration_manifest_verification : std::uint8_t {
     diagnostic_collection& diagnostics,
     project_configuration_manifest& manifest,
     file_context& files,
-    preprocessor_configuration& preprocessor);
+    preprocessor_configuration& preprocessor,
+    std::vector<file_id>* semantic_roots = nullptr);
 
 [[nodiscard]] server_status verify_project_configuration_manifest(
     const std::filesystem::path& root_project_path,

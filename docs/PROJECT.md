@@ -1064,15 +1064,31 @@ The current BUILD implementation reaches:
 ```text
 load project.manifest
     -> verify configuration inputs
-    -> recompose when configuration bytes changed
-    -> compare aggregate configuration hash
     -> read-only mmap/bind source.bin
+    -> when configuration bytes changed:
+         -> recompose CURRENT Project into sparse File Context overlays
+         -> collect CURRENT Project-declared Header/Source semantic roots
+         -> recover OLD Project-declared semantic roots from
+            project.manifest + source.bin in O(P + E_project)
+         -> classify root delta:
+              removed root     -> invalidate only
+              new root         -> replay only
+              persistent physically affected root -> invalidate + replay
+         -> if root preprocessor_hash changed:
+              all OLD roots     -> invalidate
+              all CURRENT roots -> replay
+         -> appended CURRENT Header/Source roots enter lexical replacement
+            even though they are absent from OLD SourceSave classification
     -> mmap-native normalized-path -> file_id lookup
     -> physical change-candidate discovery
     -> parallel exact acquire/hash classification
     -> semantic_changed
     -> OLD reverse dependency affected closure
-    -> select affected semantic roots from OLD Project-parent edges
+    -> select physically affected semantic roots from OLD Project-parent edges
+    -> merge physical affected roots with OLD/CURRENT composition delta
+    -> when replay is required and Project composition itself was unchanged:
+         -> read only root project.json to recover current preprocessor_configuration
+         -> do not recompose the whole Project tree
     -> read-only mmap/bind compiled.bin
     -> bind append-only string_id / identity_ref overlays
     -> mmap/bind database.bin only when affected files require frontend reuse
@@ -1088,9 +1104,13 @@ UNLOADED
     -> persisted BUILD artifacts
 ```
 
-Sparse exact File Context mutation, per-file lexical replacement/reuse, and
-affected semantic-root selection are implemented. Selected-root
-Parser/Semantic reconstruction and final G construction are not implemented yet.
+Sparse exact File Context mutation, per-file lexical replacement/reuse,
+OLD/CURRENT Project-composition semantic-root delta, and physical affected-root
+selection are implemented. Project composition does not finalize File Context
+topology early: current Project edges remain staged so later Header include
+replacement can extend the same sparse topology before the single finalization.
+Selected-root Parser/Semantic reconstruction and final G construction are not
+implemented yet.
 The physical mechanism used by a successful BUILD to persist its new state is
 intentionally not frozen yet; it must satisfy the separate BUILD failure
 contract that preserves the previously persisted BUILD state.
@@ -1125,8 +1145,9 @@ The complete composed Project configuration proof is represented by:
 ```text
 project_configuration_manifest
     configuration_hash
+    preprocessor_hash
     files[]
-        normalized root-relative path
+        normalized declared locator
         SHA-256 content hash
         optional file_change_token
 ```
@@ -1222,6 +1243,10 @@ file_content_hash
 
 project_configuration_hash
     SHA-256 of the complete ordered configuration-input manifest
+
+project_preprocessor_hash
+    SHA-256 of the ordered root predefine configuration
+    used to distinguish composition-only edits from semantic-context edits
 
 G
     the compiled semantic result; it is not another Project identity namespace

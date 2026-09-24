@@ -439,11 +439,22 @@ A shared parallel exact-acquisition stage then reads/hashes each candidate once;
 only SHA-256-different or missing files enter sparse File Context overlays.
 Persisted OLD reverse topology expands `semantic_changed`, not raw journal
 events, into the affected physical closure. Project-declaration edges in that
-same OLD DAG identify the affected semantic roots, so BUILD does not need a
-duplicated contribution-to-root persistence index. This also preserves empty
+same OLD DAG identify physically affected semantic roots, so BUILD does not need
+a duplicated contribution-to-root persistence index. This also preserves empty
 semantic roots that had no old Source Map contributions. Reverse-closure
 membership is tracked by a dynamically grown sparse `file_id` set, so closure
 memory is `O(A)` rather than a zeroed `O(F)` marker.
+
+Changed Project composition is reconciled separately from physical reverse
+closure. `project.manifest` identifies the OLD project.json tree; source.bin
+provides each OLD Project node's direct Header/Source edges. CURRENT composition
+is replayed into the sparse File Context overlay and emits the CURRENT semantic
+root set. BUILD computes removed/new/persistent root roles without scanning all
+files. A persisted root-preprocessor hash distinguishes composition-only edits
+from root preprocessing-context edits; the latter invalidates all OLD roots and
+replays all CURRENT roots. Appended CURRENT Header/Source roots are materialized
+and lexed through the sparse lexical replacement path because they cannot appear
+in OLD SourceSave change classification.
 
 `database.bin` is BUILD-only retained frontend state keyed by `file_id`. It
 pairs exact Header/Source snapshot bytes with their lexical words/directive
