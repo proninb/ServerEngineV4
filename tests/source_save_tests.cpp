@@ -271,6 +271,9 @@ void test_direct_source_save(
                         second,
                         source_data_ref::type_definition(
                             identity))) &&
+                succeeded(
+                    sources.add_dependency(
+                        type)) &&
                 succeeded(sources.end_root()),
             "source-save Header root ownership");
     }
@@ -335,6 +338,42 @@ void test_direct_source_save(
     tests.expect(writable_view.type_presence_count() == 1 &&
                      writable_view.type_presence(0) == source_type_presence{2, 2},
                  "presence persisted by root ownership");
+
+    source_dependency_ref first_dependency;
+    source_dependency_ref second_dependency;
+    file_id first_dependent;
+    file_id second_dependent;
+
+    const auto type_dependency =
+        source_dependency_ref::type(
+            type);
+
+    tests.expect(
+        writable_view.semantic_dependency_count(first) == 1 &&
+        writable_view.semantic_dependency_count(second) == 1 &&
+        writable_view.semantic_dependency(
+            first,
+            0,
+            first_dependency) &&
+        writable_view.semantic_dependency(
+            second,
+            0,
+            second_dependency) &&
+        first_dependency == type_dependency &&
+        second_dependency == type_dependency &&
+        writable_view.semantic_dependent_count(
+            type_dependency) == 2 &&
+        writable_view.semantic_dependent(
+            type_dependency,
+            0,
+            first_dependent) &&
+        writable_view.semantic_dependent(
+            type_dependency,
+            1,
+            second_dependent) &&
+        first_dependent == first &&
+        second_dependent == second,
+        "semantic dependency sidecars persist mmap-native root and reverse views");
     tests.expect(
         writable_view.object_presence_count() == 1 &&
         writable_view.link_presence_count() == 1 &&
@@ -358,9 +397,44 @@ void test_direct_source_save(
                      verify_source_save_presence(writable_view, compiled) ==
                          source_save_result::success,
                  "presence matches compiled root ownership");
+
+    const std::array<file_id, 1>
+        semantic_seed{first};
+
+    std::vector<file_id>
+        semantic_closure;
+
+    source_save_semantic_dependency_metrics
+        semantic_metrics;
+
+    tests.expect(
+        succeeded(
+            collect_source_save_semantic_dependency_closure(
+                writable_view,
+                compiled,
+                semantic_seed,
+                semantic_closure,
+                &semantic_metrics)) &&
+        semantic_closure.size() == 2 &&
+        semantic_closure[0] == first &&
+        semantic_closure[1] == second &&
+        semantic_metrics.visited_roots == 2 &&
+        semantic_metrics.semantic_entities == 2 &&
+        semantic_metrics.dependency_edges == 4 &&
+        semantic_metrics.visited_slots >=
+            semantic_metrics.visited_roots,
+        "semantic dependency closure expands invalidated roots sparsely");
     auto altered = std::vector<std::byte>(writable.bytes().begin(), writable.bytes().end());
-    // Presence has one type pair, one zero object and one zero link counter before SHA-256.
-    altered[altered.size() - 32 - 16] = std::byte{1};
+    const auto semantic_sidecar_bytes =
+        sources.root_dependency_entries().size() * 8 +
+        sources.dependency_entries().size() * 4 +
+        sources.dependency_index_entries().size() * 12 +
+        sources.dependent_root_entries().size() * 4;
+    altered[
+        altered.size() -
+        32 -
+        semantic_sidecar_bytes -
+        16] = std::byte{1};
     source_save_view stale;
     tests.expect(stale.bind(altered) == source_save_result::success &&
                      verify_source_save_presence(stale, compiled) ==

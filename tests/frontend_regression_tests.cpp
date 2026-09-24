@@ -677,9 +677,17 @@ void test_header_source_semantic_split(
 
     construction_value value_initial;
 
+    const auto type_handle_value =
+        G.find_type(
+            type_identity);
+
+    const auto source_dependencies =
+        sources.root_dependencies(
+            source_id);
+
     tests.expect(
         type_identity &&
-        G.find_type(type_identity) &&
+        type_handle_value &&
         instance &&
         value &&
         G.construction(
@@ -689,6 +697,13 @@ void test_header_source_semantic_split(
             construction_kind::unsigned_integer &&
         value_initial.bits() == 7,
         "Source consumes completed Header types and retains object initialization");
+
+    tests.expect(
+        source_dependencies.size() == 1 &&
+        source_dependencies[0] ==
+            source_dependency_ref::type(
+                type_handle_value),
+        "Source semantic root records dependency on global Header type");
 }
 
 void test_source_preprocessor_rejected(
@@ -926,6 +941,151 @@ void test_header_static_constructor_binding(
         "Header internal static is not visible as a Source Project object");
 }
 
+
+void test_source_link_semantic_dependencies(
+    test_state& tests) {
+
+    const temporary_source header{
+        "source_link_dependency_header",
+        "struct T { int a; };\n"};
+
+    const temporary_source source{
+        "source_link_dependency_source",
+        "T x;\n"
+        "T y;\n"
+        "x.a = y.a;\n"};
+
+    file_context files;
+    lexical_generation lexical;
+
+    file_id header_id;
+    file_id source_id;
+
+    if (!tests.expect(
+            succeeded(
+                files.resolve(
+                    header.path(),
+                    file_kind::header,
+                    header_id)) &&
+            succeeded(
+                files.resolve(
+                    source.path(),
+                    file_kind::source,
+                    source_id)),
+            "resolve Source link dependency roots")) {
+
+        return;
+    }
+
+    const std::array<file_id, 2> roots{
+        header_id,
+        source_id};
+
+    if (!prepare_all_roots(
+            tests,
+            files,
+            lexical,
+            roots)) {
+
+        return;
+    }
+
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    preprocessor_configuration configuration;
+    parser_failure failure;
+
+    if (!tests.expect(
+            succeeded(
+                parse_semantic_project(
+                    files,
+                    lexical,
+                    roots.size(),
+                    configuration,
+                    strings,
+                    identities,
+                    G,
+                    sources,
+                    &failure)),
+            "parse Source link dependency fixture")) {
+
+        return;
+    }
+
+    const auto type_identity =
+        identities.find(
+            identities.root(),
+            strings.find("T"),
+            identity_kind::type);
+
+    const auto x_identity =
+        identities.find(
+            identities.root(),
+            strings.find("x"),
+            identity_kind::object);
+
+    const auto y_identity =
+        identities.find(
+            identities.root(),
+            strings.find("y"),
+            identity_kind::object);
+
+    const auto type =
+        G.find_type(
+            type_identity);
+
+    const auto x =
+        G.find_object(
+            x_identity);
+
+    const auto y =
+        G.find_object(
+            y_identity);
+
+    const auto dependencies =
+        sources.root_dependencies(
+            source_id);
+
+    const auto type_dependents =
+        sources.dependents(
+            source_dependency_ref::type(
+                type));
+
+    const auto x_dependents =
+        sources.dependents(
+            source_dependency_ref::object(
+                x));
+
+    const auto y_dependents =
+        sources.dependents(
+            source_dependency_ref::object(
+                y));
+
+    tests.expect(
+        type &&
+        x &&
+        y &&
+        dependencies.size() == 3 &&
+        dependencies[0] ==
+            source_dependency_ref::type(
+                type) &&
+        dependencies[1] ==
+            source_dependency_ref::object(
+                x) &&
+        dependencies[2] ==
+            source_dependency_ref::object(
+                y) &&
+        type_dependents.size() == 1 &&
+        type_dependents[0] == source_id &&
+        x_dependents.size() == 1 &&
+        x_dependents[0] == source_id &&
+        y_dependents.size() == 1 &&
+        y_dependents[0] == source_id,
+        "Source link records record-layout and object dependencies");
+}
+
 void test_source_link_failure_provenance(
     test_state& tests) {
 
@@ -1090,6 +1250,9 @@ int main() {
             tests);
 
         test_header_static_constructor_binding(
+            tests);
+
+        test_source_link_semantic_dependencies(
             tests);
 
         test_source_link_failure_provenance(

@@ -897,6 +897,78 @@ server_status build_project(
         return server_status::project_artifact_invalid;
     }
 
+    std::vector<file_id>
+        semantic_dependency_roots;
+
+    source_save_semantic_dependency_metrics
+        semantic_dependency_metrics;
+
+    const auto semantic_dependency_collected =
+        collect_source_save_semantic_dependency_closure(
+            context.source,
+            context.compiled,
+            semantic_invalidated_roots,
+            semantic_dependency_roots,
+            &semantic_dependency_metrics);
+
+    if (!succeeded(
+            semantic_dependency_collected)) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_source_save_invalid,
+                operation)
+                .file(layout.source_save)
+                .detail(
+                    "Persisted semantic dependency topology failed while expanding OLD invalidated roots")
+                .build());
+
+        return semantic_dependency_collected;
+    }
+
+    semantic_invalidated_roots =
+        semantic_dependency_roots;
+
+    try {
+        for (const auto root :
+             semantic_dependency_roots) {
+
+            if (!configuration_identity_changed ||
+                contains_file_id(
+                    current_configuration_roots,
+                    root)) {
+
+                semantic_replay_roots.push_back(
+                    root);
+            }
+        }
+
+        normalize_file_ids(
+            semantic_replay_roots);
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+
+    if (!semantic_replay_roots.empty() &&
+        !preprocessor_loaded) {
+
+        const auto preprocessor_loaded_status =
+            load_root_preprocessor_configuration(
+                project_path,
+                operation,
+                diagnostics,
+                context.preprocessor);
+
+        if (!succeeded(
+                preprocessor_loaded_status)) {
+
+            return preprocessor_loaded_status;
+        }
+
+        preprocessor_loaded = true;
+    }
+
     if (!succeeded(
             context.strings.bind_baseline(
                 context.compiled)) ||
@@ -1093,6 +1165,22 @@ server_status build_project(
             ", semantic_replay_roots=" +
             std::to_string(
                 semantic_replay_roots.size()) +
+            ", semantic_dependency_roots=" +
+            std::to_string(
+                semantic_dependency_metrics.
+                    visited_roots) +
+            ", semantic_dependency_entities=" +
+            std::to_string(
+                semantic_dependency_metrics.
+                    semantic_entities) +
+            ", semantic_dependency_edges=" +
+            std::to_string(
+                semantic_dependency_metrics.
+                    dependency_edges) +
+            ", semantic_dependency_slots=" +
+            std::to_string(
+                semantic_dependency_metrics.
+                    visited_slots) +
             ", database_mapped=" +
             std::to_string(
                 database_bound ? 1 : 0) +

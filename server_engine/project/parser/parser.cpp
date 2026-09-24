@@ -332,6 +332,14 @@ private:
                 "Reference binding names neither a member nor a visible Header static object");
         }
 
+        const auto dependency =
+            sources.add_dependency(
+                object);
+
+        if (!succeeded(dependency)) {
+            return dependency;
+        }
+
         output =
             construction_value::object_binding(
                 object.value());
@@ -827,6 +835,14 @@ private:
                 return fail(
                     parser_failure_kind::semantic,
                     "Named semantic identity has no type in G");
+            }
+
+            const auto dependency =
+                sources.add_dependency(
+                    handle);
+
+            if (!succeeded(dependency)) {
+                return dependency;
             }
 
             output = G.named(handle);
@@ -2469,6 +2485,22 @@ private:
             return fail(
                 parser_failure_kind::semantic,
                 "Link endpoint member is not visible");
+        }
+
+        auto dependency =
+            sources.add_dependency(
+                object);
+
+        if (!succeeded(dependency)) {
+            return dependency;
+        }
+
+        dependency =
+            sources.add_dependency(
+                record);
+
+        if (!succeeded(dependency)) {
+            return dependency;
         }
 
         output = {

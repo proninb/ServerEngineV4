@@ -130,7 +130,11 @@ Members are not duplicated in Source Map. A contributed type definition resolves
 to its members through G.
 
 File dependency topology and semantic source provenance are separate contracts.
-Source Map never introduces semantic dependency edges into the file DAG.
+Parser/Semantic also records root-local semantic dependencies on lineage-stable
+type/object handles. Those dependency observations never enter the physical file
+DAG and are not part of the LOAD/runtime compiled semantic image. REBUILD derives
+their reverse root adjacency and persists it only in `source.bin` as BUILD
+acceleration state.
 
 
 ## One-G construction model
@@ -343,13 +347,27 @@ file ranges + uint32 secondary indices, and UTF-8 file paths/kinds. LOAD queries
 these sections directly; BUILD-only artifacts are not required for provenance
 queries.
 
-BUILD-only aggregate semantic-presence state is separate from the file DAG and
-does not belong in G. Its persisted home is `source.bin` beside the dependency
-topology. `source.bin` v4 stores `{declarations, definitions}` counters per Graph
-type and uint32 counters per object/link. Each root-owned contribution increments
-presence; a definition also increments declarations. Repeated inclusion within
-one root/file pair counts once. Removing one owner subtracts only that ownership,
-preserving data owned by other roots.
+BUILD-only aggregate semantic-presence and semantic-dependency state is separate
+from the physical file DAG and does not belong in G. Its persisted home is
+`source.bin` beside physical dependency topology. `source.bin` v5 stores
+`{declarations, definitions}` counters per Graph type, uint32 counters per
+object/link, root-contiguous semantic dependency observations, and one sparse
+mmap-native reverse hash index:
+
+```text
+semantic root file_id
+    -> referenced type_handle / object_handle
+
+type_handle / object_handle
+    -> dependent semantic roots
+```
+
+The reverse hash index is sized by unique semantic dependency targets `U`,
+while its dependent-root adjacency stores the actual semantic edges `E`.
+Semantic dependency memory is therefore `O(U + E)`, not `O(|G|)`. Each root-owned contribution still increments presence; a definition
+also increments declarations. Repeated inclusion within one root/file pair
+counts once. Removing one owner subtracts only that ownership, preserving data
+owned by other roots.
 
 `source_map::finalize()` resolves semantic slots through the authoritative
 `identity_space` and G dense lookup; it does not construct another semantic
@@ -908,6 +926,28 @@ memory O(A)
 where `A` is the affected physical closure. BUILD does not zero or reconstruct
 `O(F)` state merely to discover the affected set.
 
+Physical reachability is not enough for the global Header/Source semantic model.
+After `compiled.bin` is bound, BUILD expands the OLD invalidated semantic roots
+through the sparse reverse semantic dependency index in `source.bin` and OLD
+compiled Source Map ownership:
+
+```text
+physically/configuration-invalidated semantic roots
+    -> OLD contributed type/object handles
+    -> source.bin reverse semantic adjacency
+    -> dependent semantic roots
+    -> transitive closure
+```
+
+A Header type can therefore invalidate another Header or Source that consumed it
+even when no physical `#include` edge exists. Source link endpoints record both
+the referenced object and the resolved record type, so a record member-layout
+change cannot silently preserve an obsolete persisted `member_index`.
+
+The semantic closure uses a dynamically grown sparse root membership set and the
+persisted O(1)-expected reverse hash index. Its work is proportional to visited
+semantic roots and dependency edges rather than total Graph slot count.
+
 ### Frontend reuse
 
 For an exact `semantic_changed` Header/Source:
@@ -960,10 +1000,11 @@ compiled.bin
 LOAD does not reconstruct `string_table`, `identity_space`, or mutable `graph`.
 The mapped bytes are the read-only compiled Project representation.
 
-V4 `compiled.bin` v4 uses a 256-byte header, a fixed 22-entry section directory,
+V4 `compiled.bin` v5 uses a 256-byte header, a fixed 24-entry section directory,
 64-byte aligned sections, canonical little-endian integers, per-section CRC64,
-directory CRC64, and header CRC64. The v4 object-construction section is a
-format break from v3; existing v3 artifacts fail closed and require REBUILD.
+directory CRC64, and header CRC64. The v5 format adds persisted O(1)-expected
+derived-type and link-target read indexes required by sparse BUILD; older v4
+artifacts fail closed and require REBUILD.
 
 Sections are:
 
@@ -990,6 +1031,8 @@ source_roots
 source_files
 source_file_indices
 source_paths
+derived_index
+link_target_index
 ```
 
 Numeric `string_id`, `identity_ref`, `type_handle`, `object_handle`,

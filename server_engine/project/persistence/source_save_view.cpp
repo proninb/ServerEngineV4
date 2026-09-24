@@ -105,6 +105,347 @@ struct path_index_slot final {
 
 }
 
+
+namespace {
+
+[[nodiscard]] bool semantic_range(
+    std::span<const std::byte> bytes,
+    std::size_t base,
+    std::size_t slot,
+    std::uint32_t total,
+    source_map_range& output) noexcept {
+
+    output = {};
+
+    std::size_t offset =
+        base +
+        slot * 8;
+
+    if (!read_u32(
+            bytes,
+            offset,
+            output.begin) ||
+        !read_u32(
+            bytes,
+            offset,
+            output.count) ||
+        output.begin > total ||
+        output.count >
+            total - output.begin) {
+
+        output = {};
+        return false;
+    }
+
+    return true;
+}
+
+}
+
+bool source_save_view::semantic_dependencies(
+    file_id root,
+    std::size_t& count) const noexcept {
+
+    count = 0;
+
+    if (!contains(root)) {
+        return false;
+    }
+
+    source_map_range range;
+
+    if (!semantic_range(
+            bytes,
+            semantic_root_ranges_offset,
+            root.value() - 1,
+            semantic_dependency_count_value,
+            range)) {
+
+        return false;
+    }
+
+    count =
+        range.count;
+
+    return true;
+}
+
+std::size_t source_save_view::semantic_dependency_count(
+    file_id root) const noexcept {
+
+    std::size_t count = 0;
+
+    return semantic_dependencies(
+        root,
+        count)
+        ? count
+        : 0;
+}
+
+bool source_save_view::semantic_dependency(
+    file_id root,
+    std::size_t index,
+    source_dependency_ref& output) const noexcept {
+
+    output = {};
+
+    if (!contains(root)) {
+        return false;
+    }
+
+    source_map_range range;
+
+    if (!semantic_range(
+            bytes,
+            semantic_root_ranges_offset,
+            root.value() - 1,
+            semantic_dependency_count_value,
+            range) ||
+        index >= range.count) {
+
+        return false;
+    }
+
+    auto offset =
+        semantic_dependencies_offset +
+        (static_cast<std::size_t>(
+             range.begin) +
+         index) *
+            4;
+
+    std::uint32_t raw = 0;
+
+    if (!read_u32(
+            bytes,
+            offset,
+            raw)) {
+
+        return false;
+    }
+
+    output =
+        source_dependency_ref::from_raw(
+            raw);
+
+    return static_cast<bool>(
+        output);
+}
+
+bool source_save_view::semantic_dependents(
+    source_dependency_ref dependency,
+    std::size_t& count) const noexcept {
+
+    count = 0;
+
+    if (!valid() ||
+        !dependency) {
+
+        return false;
+    }
+
+    if (semantic_reverse_index_count_value == 0) {
+        return semantic_dependency_count_value == 0;
+    }
+
+    const auto mask =
+        static_cast<std::size_t>(
+            semantic_reverse_index_count_value -
+            1);
+
+    auto position =
+        static_cast<std::size_t>(
+            source_dependency_hash(
+                dependency)) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe <
+            semantic_reverse_index_count_value;
+         ++probe) {
+
+        std::size_t offset =
+            semantic_reverse_index_offset +
+            position * 12;
+
+        std::uint32_t raw = 0;
+        source_map_range range;
+
+        if (!read_u32(
+                bytes,
+                offset,
+                raw) ||
+            !read_u32(
+                bytes,
+                offset,
+                range.begin) ||
+            !read_u32(
+                bytes,
+                offset,
+                range.count)) {
+
+            return false;
+        }
+
+        if (raw == 0) {
+            return range.begin == 0 &&
+                range.count == 0;
+        }
+
+        const auto candidate =
+            source_dependency_ref::from_raw(
+                raw);
+
+        if (!candidate ||
+            range.count == 0 ||
+            range.begin >
+                semantic_dependency_count_value ||
+            range.count >
+                semantic_dependency_count_value -
+                    range.begin) {
+
+            return false;
+        }
+
+        if (candidate ==
+            dependency) {
+
+            count =
+                range.count;
+
+            return true;
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return false;
+}
+
+std::size_t source_save_view::semantic_dependent_count(
+    source_dependency_ref dependency) const noexcept {
+
+    std::size_t count = 0;
+
+    return semantic_dependents(
+        dependency,
+        count)
+        ? count
+        : 0;
+}
+
+bool source_save_view::semantic_dependent(
+    source_dependency_ref dependency,
+    std::size_t index,
+    file_id& output) const noexcept {
+
+    output = {};
+
+    if (!valid() ||
+        !dependency ||
+        semantic_reverse_index_count_value == 0) {
+
+        return false;
+    }
+
+    const auto mask =
+        static_cast<std::size_t>(
+            semantic_reverse_index_count_value -
+            1);
+
+    auto position =
+        static_cast<std::size_t>(
+            source_dependency_hash(
+                dependency)) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe <
+            semantic_reverse_index_count_value;
+         ++probe) {
+
+        std::size_t offset =
+            semantic_reverse_index_offset +
+            position * 12;
+
+        std::uint32_t raw = 0;
+        source_map_range range;
+
+        if (!read_u32(
+                bytes,
+                offset,
+                raw) ||
+            !read_u32(
+                bytes,
+                offset,
+                range.begin) ||
+            !read_u32(
+                bytes,
+                offset,
+                range.count)) {
+
+            return false;
+        }
+
+        if (raw == 0) {
+            return false;
+        }
+
+        const auto candidate =
+            source_dependency_ref::from_raw(
+                raw);
+
+        if (!candidate ||
+            range.count == 0 ||
+            range.begin >
+                semantic_dependency_count_value ||
+            range.count >
+                semantic_dependency_count_value -
+                    range.begin) {
+
+            return false;
+        }
+
+        if (candidate ==
+            dependency) {
+
+            if (index >=
+                range.count) {
+
+                return false;
+            }
+
+            auto root_offset =
+                semantic_dependent_roots_offset +
+                (static_cast<std::size_t>(
+                     range.begin) +
+                 index) *
+                    4;
+
+            std::uint32_t raw_root = 0;
+
+            if (!read_u32(
+                    bytes,
+                    root_offset,
+                    raw_root)) {
+
+                return false;
+            }
+
+            output = file_id{raw_root};
+
+            return contains(output);
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return false;
+}
+
 bool source_save_view::contains(
     file_id file) const noexcept {
 

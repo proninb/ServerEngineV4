@@ -2,8 +2,9 @@
  * Persisted SourceSave BUILD state.
  *
  * source.bin stores file_id lineage, physical paths, an mmap-native path lookup
- * index, SHA-256 byte identity, direct forward/reverse topology, and optional
- * Windows USN journal acceleration state. It never stores Project source bytes.
+ * index, SHA-256 byte identity, direct physical forward/reverse topology,
+ * BUILD-only semantic presence/dependency sidecars, and optional Windows USN
+ * journal acceleration state. It never stores Project source bytes.
  */
 #pragma once
 
@@ -62,9 +63,15 @@ private:
         reverse_offset = 0;
         file_index_offset = 0;
         directory_index_offset = 0;
-        checksum_offset = 0;
         presence_offset = 0;
+        semantic_root_ranges_offset = 0;
+        semantic_dependencies_offset = 0;
+        semantic_reverse_index_offset = 0;
+        semantic_dependent_roots_offset = 0;
+        checksum_offset = 0;
         type_count = object_count = link_count = 0;
+        semantic_dependency_count = 0;
+        semantic_reverse_index_count = 0;
 
         file_count = 0;
         path_bytes = 0;
@@ -89,9 +96,16 @@ private:
     std::size_t reverse_offset = 0;
     std::size_t file_index_offset = 0;
     std::size_t directory_index_offset = 0;
-    std::size_t checksum_offset = 0;
     std::size_t presence_offset = 0;
+    std::size_t semantic_root_ranges_offset = 0;
+    std::size_t semantic_dependencies_offset = 0;
+    std::size_t semantic_reverse_index_offset = 0;
+    std::size_t semantic_dependent_roots_offset = 0;
+    std::size_t checksum_offset = 0;
+
     std::uint32_t type_count = 0, object_count = 0, link_count = 0;
+    std::uint32_t semantic_dependency_count = 0;
+    std::uint32_t semantic_reverse_index_count = 0;
 
     std::uint32_t file_count = 0;
     std::uint32_t path_bytes = 0;
@@ -182,11 +196,41 @@ public:
     [[nodiscard]] std::size_t link_presence_count() const noexcept {
         return link_count;
     }
-    [[nodiscard]] source_type_presence type_presence(std::size_t index) const noexcept;
-    [[nodiscard]] std::uint32_t object_presence(std::size_t index) const noexcept;
-    [[nodiscard]] std::uint32_t link_presence(std::size_t index) const noexcept;
 
-  private:
+    [[nodiscard]] source_type_presence type_presence(
+        std::size_t index) const noexcept;
+
+    [[nodiscard]] std::uint32_t object_presence(
+        std::size_t index) const noexcept;
+
+    [[nodiscard]] std::uint32_t link_presence(
+        std::size_t index) const noexcept;
+
+    [[nodiscard]] bool semantic_dependencies(
+        file_id root,
+        std::size_t& count) const noexcept;
+
+    [[nodiscard]] std::size_t semantic_dependency_count(
+        file_id root) const noexcept;
+
+    [[nodiscard]] bool semantic_dependency(
+        file_id root,
+        std::size_t index,
+        source_dependency_ref& output) const noexcept;
+
+    [[nodiscard]] bool semantic_dependents(
+        source_dependency_ref dependency,
+        std::size_t& count) const noexcept;
+
+    [[nodiscard]] std::size_t semantic_dependent_count(
+        source_dependency_ref dependency) const noexcept;
+
+    [[nodiscard]] bool semantic_dependent(
+        source_dependency_ref dependency,
+        std::size_t index,
+        file_id& output) const noexcept;
+
+private:
     friend source_save_result validate_source_save_image(
         std::span<const std::byte>) noexcept;
 
@@ -200,6 +244,10 @@ public:
     std::size_t reverse_offset = 0;
     std::size_t file_index_offset = 0;
     std::size_t directory_index_offset = 0;
+    std::size_t semantic_root_ranges_offset = 0;
+    std::size_t semantic_dependencies_offset = 0;
+    std::size_t semantic_reverse_index_offset = 0;
+    std::size_t semantic_dependent_roots_offset = 0;
 
     std::uint32_t file_count_value = 0;
     std::uint32_t path_bytes_value = 0;
@@ -208,6 +256,8 @@ public:
     std::uint32_t reverse_count_value = 0;
     std::uint32_t file_index_count_value = 0;
     std::uint32_t directory_index_count_value = 0;
+    std::uint32_t semantic_dependency_count_value = 0;
+    std::uint32_t semantic_reverse_index_count_value = 0;
 
     file_change_checkpoint checkpoint;
 };
@@ -236,6 +286,13 @@ struct source_save_change_classification_metrics final {
 
 struct source_save_affected_metrics final {
     std::uint64_t visited_files = 0;
+    std::uint64_t dependency_edges = 0;
+    std::uint64_t visited_slots = 0;
+};
+
+struct source_save_semantic_dependency_metrics final {
+    std::uint64_t visited_roots = 0;
+    std::uint64_t semantic_entities = 0;
     std::uint64_t dependency_edges = 0;
     std::uint64_t visited_slots = 0;
 };
@@ -303,6 +360,18 @@ prepare_source_save_layout(const file_context &files,
     std::vector<file_id>& roots) noexcept;
 
 class compiled_project_view;
+
+// Expands OLD invalidated semantic roots through persisted semantic dependency
+// observations. The traversal is sparse in root count and semantic edges; it
+// never allocates a file_count-sized visited marker.
+[[nodiscard]] server_status
+collect_source_save_semantic_dependency_closure(
+    const source_save_view& persisted,
+    const compiled_project_view& compiled,
+    std::span<const file_id> initial_roots,
+    std::vector<file_id>& roots,
+    source_save_semantic_dependency_metrics* metrics = nullptr) noexcept;
+
 // Cold cross-artifact audit: presence is derived from root -> contribution ownership.
 [[nodiscard]] source_save_result
 verify_source_save_presence(const source_save_view &source,

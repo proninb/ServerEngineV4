@@ -974,13 +974,32 @@ in Source Map.
 
 Parser records provenance only after successful G operations and calls
 `sources.finalize(files.size(), identities, G)` after active include discovery.
-Finalization validates Graph references and computes BUILD semantic presence from
-the root-owned contributions. `compiled.bin` v3 persists contributions, root
-ranges, the physical secondary index, and file paths/kinds; `source.bin` v4 stores
-only type/object/link presence counters beside the existing file DAG.
+Finalization validates Graph references, computes BUILD semantic presence, and
+freezes root-local semantic dependency observations.
 
-The file dependency DAG remains direct `file_id -> file_id` topology only.
-Semantic provenance does not create DAG edges.
+The final `compiled.bin` Source Map still persists only semantic provenance:
+contributions, root ranges, the physical secondary index, and file paths/kinds.
+`source.bin` v5 separately persists BUILD-only type/object/link presence plus:
+
+```text
+semantic root
+    -> referenced type/object handles
+
+referenced type/object handle
+    -> dependent semantic roots
+```
+
+The reverse side is one sparse mmap-native open-addressed index sized by unique
+referenced semantic targets `U`; dependent-root adjacency stores the actual
+semantic edges `E`, so memory is `O(U + E)`, not `O(Graph slots)`. Named-type resolution records a
+type dependency; Header constructor binding to an internal-static object records
+an object dependency; Source link endpoints record both object and record-type
+dependencies so a changed record layout invalidates persisted `member_index`
+consumers.
+
+The physical file dependency DAG remains direct `file_id -> file_id` topology
+only. Semantic dependencies never create file-DAG edges and are never consumed
+by LOAD/runtime.
 
 
 ## Persisted BUILD Path Lookup

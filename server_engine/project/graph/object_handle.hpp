@@ -47,6 +47,7 @@ private:
 
     friend class graph;
     friend class compiled_project_view;
+    friend class source_map;
 };
 
 static_assert(sizeof(object_handle) == 4);

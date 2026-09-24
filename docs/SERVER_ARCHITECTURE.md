@@ -417,12 +417,15 @@ continue and REBUILD is required.
 There is no selector file or active/inactive persistence slot.
 
 `source.bin` has a versioned/checksummed image contract for finalized File
-Context state plus BUILD-only semantic presence sidecars. BUILD memory-maps it
-read-only directly.
-`source_save_view::bind()` is O(1) and allocation-free. `source.bin` v4 also
-contains an mmap-native normalized-path lookup index used by sparse BUILD. The
-index is encoded directly into the final mapping with no full transient index
-copy; BUILD does not rebuild an O(F) path hash table before include discovery.
+Context state plus BUILD-only semantic presence and semantic dependency sidecars.
+BUILD memory-maps it read-only directly.
+`source_save_view::bind()` is O(1) and allocation-free. `source.bin` v5 contains
+the normalized-path lookup index plus root-contiguous semantic dependency
+observations and one sparse mmap-native reverse dependency hash index. The
+semantic reverse hash index is sized by unique referenced targets `U`, while
+its dependent-root adjacency stores semantic edges `E`; memory is `O(U + E)`,
+not `O(Graph slots)`. BUILD does not rebuild an O(F) path hash table or an
+O(|G|) semantic range table before incremental discovery.
 
 BUILD change discovery is journal-first. Before dirty detection, BUILD captures
 the checkpoint for the `source.bin` that may be produced by that BUILD. Dirty
@@ -444,6 +447,24 @@ a duplicated contribution-to-root persistence index. This also preserves empty
 semantic roots that had no old Source Map contributions. Reverse-closure
 membership is tracked by a dynamically grown sparse `file_id` set, so closure
 memory is `O(A)` rather than a zeroed `O(F)` marker.
+
+Physical closure is followed by a separate semantic closure. Parser/Semantic
+records, per semantic root, the lineage-stable type/object handles whose current
+definition or storage identity was consumed. `source.bin` persists those
+root-local observations together with an exact sparse reverse hash index:
+
+```text
+invalidated semantic root
+    -> OLD compiled Source Map contributions
+    -> contributed type/object handles
+    -> source.bin reverse semantic dependency lookup
+    -> dependent semantic roots
+    -> transitive closure
+```
+
+This covers dependencies that have no physical include edge in the global Header
+domain. Source link endpoints record both object and record-type dependencies, so
+a changed member layout forces replay before an old `member_index` can be reused.
 
 Changed Project composition is reconciled separately from physical reverse
 closure. `project.manifest` identifies the OLD project.json tree; source.bin

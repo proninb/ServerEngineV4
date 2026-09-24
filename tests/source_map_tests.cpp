@@ -72,11 +72,15 @@ void test_root_ownership_and_file_projection(test_state &tests) {
         !tests.expect(succeeded(map.add(file_id{3}, definition)),
                       "root 1 definition dominates declaration") ||
         !tests.expect(succeeded(map.add(file_id{2}, object)), "root 1 object") ||
+        !tests.expect(succeeded(map.add_dependency(type)), "root 1 type dependency") ||
+        !tests.expect(succeeded(map.add_dependency(type)), "root 1 duplicate type dependency") ||
         !tests.expect(succeeded(map.end_root()), "end root 1") ||
         !tests.expect(succeeded(map.begin_root(file_id{2})), "begin root 2") ||
         !tests.expect(succeeded(map.add(file_id{3}, definition)),
                       "root 2 same physical definition") ||
         !tests.expect(succeeded(map.add(file_id{3}, link)), "root 2 link") ||
+        !tests.expect(succeeded(map.add_dependency(type)), "root 2 type dependency") ||
+        !tests.expect(succeeded(map.add_dependency(obj)), "root 2 object dependency") ||
         !tests.expect(succeeded(map.end_root()), "end root 2") ||
         !tests.expect(succeeded(map.finalize(3, identities, G)), "finalize")) {
 
@@ -136,6 +140,37 @@ void test_root_ownership_and_file_projection(test_state &tests) {
                  "root-owned contributions are canonical storage");
     tests.expect(map.type_presence_entries()[0] == source_type_presence{2, 2},
                  "presence counts owners, not unique payloads");
+
+    const auto root1_dependencies =
+        map.root_dependencies(
+            file_id{1});
+
+    const auto root2_dependencies =
+        map.root_dependencies(
+            file_id{2});
+
+    const auto type_dependents =
+        map.dependents(
+            source_dependency_ref::type(
+                type));
+
+    const auto object_dependents =
+        map.dependents(
+            source_dependency_ref::object(
+                obj));
+
+    tests.expect(
+        root1_dependencies.size() == 1 &&
+        root1_dependencies[0] ==
+            source_dependency_ref::type(type) &&
+        root2_dependencies.size() == 2 &&
+        type_dependents.size() == 2 &&
+        type_dependents[0] == file_id{1} &&
+        type_dependents[1] == file_id{2} &&
+        object_dependents.size() == 1 &&
+        object_dependents[0] == file_id{2},
+        "semantic dependencies are root-deduped and reverse-indexed");
+
     source_map many;
     for (std::uint32_t r = 1; r <= 300; ++r) {
         tests.expect(succeeded(many.begin_root(file_id{r})), "many roots begin");
