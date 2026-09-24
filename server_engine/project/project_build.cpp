@@ -897,6 +897,23 @@ server_status build_project(
         return server_status::project_artifact_invalid;
     }
 
+    const auto graph_bound =
+        context.graph_changes.bind_baseline(
+            context.compiled);
+
+    if (!succeeded(graph_bound)) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_compiled_invalid,
+                operation)
+                .file(layout.compiled)
+                .detail(
+                    "Committed compiled.bin could not initialize BUILD-local sparse graph_delta")
+                .build());
+
+        return graph_bound;
+    }
+
     std::vector<file_id>
         semantic_dependency_roots;
 

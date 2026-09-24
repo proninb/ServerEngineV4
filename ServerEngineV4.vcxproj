@@ -94,6 +94,7 @@
     <ClCompile Include="server_engine\project\string\string_table.cpp" />
     <ClCompile Include="server_engine\project\semantic\identity.cpp" />
     <ClCompile Include="server_engine\project\graph\graph.cpp" />
+    <ClCompile Include="server_engine\project\graph\graph_delta.cpp" />
     <ClCompile Include="server_engine\project\source\source_map.cpp" />
     <ClCompile Include="server_engine\project\parser\parser.cpp" />
     <ClCompile Include="server_engine\project\preprocessor\preprocessor.cpp" />
@@ -175,6 +176,7 @@
     <ClInclude Include="server_engine\project\string\string_table.hpp" />
     <ClInclude Include="server_engine\project\semantic\identity.hpp" />
     <ClInclude Include="server_engine\project\graph\graph.hpp" />
+    <ClInclude Include="server_engine\project\graph\graph_delta.hpp" />
     <ClInclude Include="server_engine\project\graph\construction_value.hpp" />
     <ClInclude Include="server_engine\project\parser\parser.hpp" />
     <ClInclude Include="server_engine\project\graph\type_handle.hpp" />

@@ -11,6 +11,7 @@
 namespace cw::server {
 
 class graph;
+class graph_delta;
 class compiled_project_view;
 
 class link_handle final {
@@ -45,6 +46,7 @@ private:
     std::uint32_t slot = 0;
 
     friend class graph;
+    friend class graph_delta;
     friend class compiled_project_view;
 };
 

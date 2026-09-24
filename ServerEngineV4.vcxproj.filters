@@ -126,6 +126,9 @@
     <ClCompile Include="server_engine\project\graph\graph.cpp">
       <Filter>server_engine\project\graph</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\project\graph\graph_delta.cpp">
+      <Filter>server_engine\project\graph</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\project\parser\parser.cpp">
       <Filter>server_engine\project\parser</Filter>
     </ClCompile>
@@ -366,6 +369,9 @@
       <Filter>server_engine\project\semantic</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\graph\graph.hpp">
+      <Filter>server_engine\project\graph</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\graph\graph_delta.hpp">
       <Filter>server_engine\project\graph</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\graph\construction_value.hpp">

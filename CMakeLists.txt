@@ -32,6 +32,7 @@ add_executable(ServerEngineV4
     server_engine/project/string/string_table.cpp
     server_engine/project/semantic/identity.cpp
     server_engine/project/graph/graph.cpp
+    server_engine/project/graph/graph_delta.cpp
     server_engine/project/source/source_map.cpp
     server_engine/project/parser/parser.cpp
     server_engine/project/preprocessor/preprocessor.cpp
@@ -100,6 +101,7 @@ if(BUILD_TESTING)
         server_engine/project/string/string_table.cpp
         server_engine/project/semantic/identity.cpp
         server_engine/project/graph/graph.cpp
+        server_engine/project/graph/graph_delta.cpp
         server_engine/project/assign/assign_table.cpp
         server_engine/project/file/file_identity.cpp
         server_engine/project/persistence/project_artifact.cpp

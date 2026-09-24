@@ -14,6 +14,7 @@
 namespace cw::server {
 
 class graph;
+class graph_delta;
 class compiled_project_view;
 
 enum class intrinsic_type : std::uint8_t {
@@ -117,6 +118,7 @@ private:
     std::uint32_t packed = 0;
 
     friend class graph;
+    friend class graph_delta;
     friend class compiled_project_view;
 };
 

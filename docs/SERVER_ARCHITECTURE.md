@@ -113,13 +113,14 @@ BUILD
     build_context
         Server settings
         persisted BUILD-state views
+        graph_delta sparse semantic changes
         temporary BUILD reuse/change state
 
-REBUILD
+PUBLISH / REBUILD
     root Project path
-    rebuild_context
+    full_construction_context
         Server settings
-        fresh construction state
+        fresh dense G construction state
 ```
 
 There is no universal `builder_context`.
@@ -893,7 +894,11 @@ cannot be known without examining the previous adjacency of a replaced source.
 
 There is no generation-specific dependency-node identity and no Graph-generation
 model. BUILD may reuse persisted storage internally, but the architectural
-result of LOAD, BUILD, or REBUILD is always one `G`.
+result of LOAD, PUBLISH, BUILD, or REBUILD is always one `G`.
+
+The `graph` class is dense final-G state only. BUILD never binds `compiled.bin`
+into `graph`; it reads OLD semantic state directly from `compiled_project_view`
+and records changed semantics in BUILD-local `graph_delta`.
 
 
 ## Semantic Source Map

@@ -14,6 +14,7 @@
 #include "file/file_context.hpp"
 #include "frontend/lexical_generation.hpp"
 #include "graph/graph.hpp"
+#include "graph/graph_delta.hpp"
 #include "persistence/compiled_project.hpp"
 #include "persistence/database.hpp"
 #include "persistence/source_save.hpp"
@@ -59,6 +60,7 @@ public:
 
     string_table strings;
     identity_space identities;
+    graph_delta graph_changes;
 
     preprocessor_configuration preprocessor;
 };

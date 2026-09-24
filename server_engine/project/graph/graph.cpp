@@ -1,5 +1,4 @@
 #include "graph.hpp"
-#include "../persistence/compiled_project.hpp"
 
 #include <limits>
 #include <utility>
@@ -75,18 +74,6 @@ namespace {
         kind <= derived_type_kind::unbounded_array;
 }
 
-[[nodiscard]] std::uint32_t mix32(
-    std::uint32_t value) noexcept {
-
-    value ^= value >> 16;
-    value *= 0x7feb352du;
-    value ^= value >> 15;
-    value *= 0x846ca68bu;
-    value ^= value >> 16;
-
-    return value;
-}
-
 [[nodiscard]] std::uint64_t mix64(
     std::uint64_t value) noexcept {
 
@@ -95,170 +82,9 @@ namespace {
     value ^= value >> 27;
     value *= 0x94d049bb133111ebULL;
     value ^= value >> 31;
-
     return value;
 }
 
-}
-
-std::uint32_t graph::sparse_index::find(
-    std::uint32_t key) const noexcept {
-
-    if (key == 0 ||
-        slots.empty()) {
-
-        return 0;
-    }
-
-    const auto mask =
-        slots.size() - 1;
-
-    auto position =
-        static_cast<std::size_t>(
-            mix32(key)) &
-        mask;
-
-    for (std::size_t probe = 0;
-         probe < slots.size();
-         ++probe) {
-
-        const auto& slot =
-            slots[position];
-
-        if (slot.key == 0) {
-            return 0;
-        }
-
-        if (slot.key == key) {
-            return slot.value;
-        }
-
-        position =
-            (position + 1) &
-            mask;
-    }
-
-    return 0;
-}
-
-server_status graph::sparse_index::ensure_capacity(
-    std::size_t additional) noexcept {
-
-    if (additional >
-        (std::numeric_limits<std::size_t>::max)() -
-            count) {
-
-        return server_status::io_error;
-    }
-
-    const auto required =
-        count + additional;
-
-    if (!slots.empty() &&
-        required <=
-            slots.size() / 2) {
-
-        return server_status::success;
-    }
-
-    const auto capacity =
-        next_index_capacity(
-            required);
-
-    if (capacity == 0) {
-        return server_status::io_error;
-    }
-
-    try {
-        std::vector<sparse_index_slot>
-            candidate(capacity);
-
-        const auto mask =
-            candidate.size() - 1;
-
-        for (const auto& value :
-             slots) {
-
-            if (value.key == 0) {
-                continue;
-            }
-
-            auto position =
-                static_cast<std::size_t>(
-                    mix32(
-                        value.key)) &
-                mask;
-
-            while (candidate[position].key != 0) {
-                position =
-                    (position + 1) &
-                    mask;
-            }
-
-            candidate[position] =
-                value;
-        }
-
-        slots =
-            std::move(candidate);
-
-        return server_status::success;
-    }
-    catch (...) {
-        return server_status::io_error;
-    }
-}
-
-server_status graph::sparse_index::insert(
-    std::uint32_t key,
-    std::uint32_t value) noexcept {
-
-    if (key == 0 ||
-        value == 0) {
-
-        return server_status::
-            project_configuration_invalid;
-    }
-
-    if (const auto existing =
-            find(key);
-        existing != 0) {
-
-        return existing == value
-            ? server_status::success
-            : server_status::
-                project_configuration_invalid;
-    }
-
-    const auto prepared =
-        ensure_capacity(1);
-
-    if (!succeeded(prepared)) {
-        return prepared;
-    }
-
-    const auto mask =
-        slots.size() - 1;
-
-    auto position =
-        static_cast<std::size_t>(
-            mix32(key)) &
-        mask;
-
-    while (slots[position].key != 0) {
-        position =
-            (position + 1) &
-            mask;
-    }
-
-    slots[position] = {
-        key,
-        value,
-    };
-
-    ++count;
-
-    return server_status::success;
 }
 
 std::uint32_t graph::encode_location(
@@ -291,62 +117,6 @@ std::uint32_t graph::decode_location_slot(
         type_ref::maximum_payload;
 }
 
-server_status graph::bind_baseline(
-    const compiled_project_view& value) noexcept {
-
-    if (baseline != nullptr ||
-        !value.valid() ||
-        !identity_locations.empty() ||
-        !identity_overlay.empty() ||
-        !type_patches.empty() ||
-        !object_patches.empty() ||
-        !link_patches.empty() ||
-        !types.empty() ||
-        !type_identities.empty() ||
-        !member_records.empty() ||
-        !member_construction.empty() ||
-        !objects.empty() ||
-        !object_identities.empty() ||
-        !object_construction.empty() ||
-        !links.empty() ||
-        !derived_types.empty()) {
-
-        return server_status::
-            project_configuration_invalid;
-    }
-
-    baseline = &value;
-
-    baseline_type_count =
-        value.type_count();
-
-    baseline_member_count =
-        value.member_count();
-
-    baseline_object_count =
-        value.object_count();
-
-    baseline_object_construction_count =
-        value.object_construction_count();
-
-    baseline_link_count =
-        value.link_count();
-
-    baseline_derived_count =
-        value.derived_type_count();
-
-    live_type_count_value =
-        baseline_type_count;
-
-    live_object_count_value =
-        baseline_object_count;
-
-    live_link_count_value =
-        baseline_link_count;
-
-    return server_status::success;
-}
-
 server_status graph::ensure_identity_slot(
     identity_ref identity) noexcept {
 
@@ -359,9 +129,7 @@ server_status graph::ensure_identity_slot(
         static_cast<std::size_t>(
             identity.slot());
 
-    if (slot <
-        identity_locations.size()) {
-
+    if (slot < identity_locations.size()) {
         return server_status::success;
     }
 
@@ -376,833 +144,105 @@ server_status graph::ensure_identity_slot(
     }
 }
 
-server_status graph::publish_identity_location(
-    identity_ref identity,
-    location_kind kind,
-    std::uint32_t slot) noexcept {
-
-    const auto location =
-        encode_location(
-            kind,
-            slot);
-
-    if (!identity ||
-        location == 0) {
-
-        return server_status::
-            project_configuration_invalid;
-    }
-
-    if (baseline != nullptr) {
-        return identity_overlay.insert(
-            identity.value(),
-            location);
-    }
-
-    const auto prepared =
-        ensure_identity_slot(
-            identity);
-
-    if (!succeeded(prepared)) {
-        return prepared;
-    }
-
-    auto& target =
-        identity_locations[
-            identity.slot()];
-
-    if (target != 0) {
-        return target == location
-            ? server_status::success
-            : server_status::
-                project_configuration_invalid;
-    }
-
-    target = location;
-
-    return server_status::success;
-}
-
-std::uint32_t graph::lineage_location(
-    identity_ref identity) const noexcept {
-
-    if (!identity) {
-        return 0;
-    }
-
-    if (baseline != nullptr) {
-        if (const auto local =
-                identity_overlay.find(
-                    identity.value());
-            local != 0) {
-
-            return local;
-        }
-
-        if (identity.kind() ==
-            identity_kind::type) {
-
-            const auto type =
-                baseline->find_type(
-                    identity);
-
-            return type
-                ? encode_location(
-                    location_kind::type,
-                    type.value())
-                : 0;
-        }
-
-        if (identity.kind() ==
-            identity_kind::object) {
-
-            const auto object =
-                baseline->find_object(
-                    identity);
-
-            return object
-                ? encode_location(
-                    location_kind::object,
-                    object.value())
-                : 0;
-        }
-
-        return 0;
-    }
-
-    return identity.slot() <
-        identity_locations.size()
-        ? identity_locations[
-            identity.slot()]
-        : 0;
-}
-
-type_handle graph::lineage_type(
-    identity_ref identity) const noexcept {
-
-    const auto location =
-        lineage_location(
-            identity);
-
-    return decode_location_kind(
-        location) ==
-        location_kind::type
-        ? type_handle{
-            decode_location_slot(
-                location)}
-        : type_handle{};
-}
-
-object_handle graph::lineage_object(
-    identity_ref identity) const noexcept {
-
-    const auto location =
-        lineage_location(
-            identity);
-
-    return decode_location_kind(
-        location) ==
-        location_kind::object
-        ? object_handle{
-            decode_location_slot(
-                location)}
-        : object_handle{};
-}
-
-const graph::type_patch* graph::find_type_patch(
-    std::uint32_t slot) const noexcept {
-
-    const auto position =
-        type_patch_index.find(
-            slot);
-
-    return position != 0 &&
-        position <= type_patches.size()
-        ? &type_patches[
-            position - 1]
-        : nullptr;
-}
-
-graph::type_patch* graph::find_type_patch(
-    std::uint32_t slot) noexcept {
-
-    const auto position =
-        type_patch_index.find(
-            slot);
-
-    return position != 0 &&
-        position <= type_patches.size()
-        ? &type_patches[
-            position - 1]
-        : nullptr;
-}
-
-server_status graph::ensure_type_patch(
-    type_handle type_value,
-    type_patch*& output) noexcept {
-
-    output = nullptr;
-
-    if (baseline == nullptr ||
-        !type_value ||
-        type_value.value() >
-            baseline_type_count) {
-
-        return server_status::
-            project_configuration_invalid;
-    }
-
-    if (auto* existing =
-            find_type_patch(
-                type_value.value());
-        existing != nullptr) {
-
-        output = existing;
-        return server_status::success;
-    }
-
-    type_entry value;
-
-    if (!baseline->type(
-            type_value,
-            value)) {
-
-        return server_status::
-            project_artifact_invalid;
-    }
-
-    try {
-        type_patches.push_back({
-            type_value.value(),
-            value,
-            true,
-        });
-    }
-    catch (...) {
-        return server_status::io_error;
-    }
-
-    const auto inserted =
-        type_patch_index.insert(
-            type_value.value(),
-            static_cast<std::uint32_t>(
-                type_patches.size()));
-
-    if (!succeeded(inserted)) {
-        type_patches.pop_back();
-        return inserted;
-    }
-
-    output =
-        &type_patches.back();
-
-    return server_status::success;
-}
-
-const graph::object_patch* graph::find_object_patch(
-    std::uint32_t slot) const noexcept {
-
-    const auto position =
-        object_patch_index.find(
-            slot);
-
-    return position != 0 &&
-        position <= object_patches.size()
-        ? &object_patches[
-            position - 1]
-        : nullptr;
-}
-
-graph::object_patch* graph::find_object_patch(
-    std::uint32_t slot) noexcept {
-
-    const auto position =
-        object_patch_index.find(
-            slot);
-
-    return position != 0 &&
-        position <= object_patches.size()
-        ? &object_patches[
-            position - 1]
-        : nullptr;
-}
-
-server_status graph::ensure_object_patch(
-    object_handle object_value,
-    object_patch*& output) noexcept {
-
-    output = nullptr;
-
-    if (baseline == nullptr ||
-        !object_value ||
-        object_value.value() >
-            baseline_object_count) {
-
-        return server_status::
-            project_configuration_invalid;
-    }
-
-    if (auto* existing =
-            find_object_patch(
-                object_value.value());
-        existing != nullptr) {
-
-        output = existing;
-        return server_status::success;
-    }
-
-    object_entry value;
-    construction_value construction;
-
-    if (!baseline->object(
-            object_value,
-            value) ||
-        !baseline->construction(
-            object_value,
-            construction)) {
-
-        return server_status::
-            project_artifact_invalid;
-    }
-
-    try {
-        object_patches.push_back({
-            object_value.value(),
-            value,
-            construction,
-            true,
-        });
-    }
-    catch (...) {
-        return server_status::io_error;
-    }
-
-    const auto inserted =
-        object_patch_index.insert(
-            object_value.value(),
-            static_cast<std::uint32_t>(
-                object_patches.size()));
-
-    if (!succeeded(inserted)) {
-        object_patches.pop_back();
-        return inserted;
-    }
-
-    output =
-        &object_patches.back();
-
-    return server_status::success;
-}
-
-const graph::link_patch* graph::find_link_patch(
-    std::uint32_t slot) const noexcept {
-
-    const auto position =
-        link_patch_index.find(
-            slot);
-
-    return position != 0 &&
-        position <= link_patches.size()
-        ? &link_patches[
-            position - 1]
-        : nullptr;
-}
-
-graph::link_patch* graph::find_link_patch(
-    std::uint32_t slot) noexcept {
-
-    const auto position =
-        link_patch_index.find(
-            slot);
-
-    return position != 0 &&
-        position <= link_patches.size()
-        ? &link_patches[
-            position - 1]
-        : nullptr;
-}
-
-server_status graph::ensure_link_patch(
-    link_handle link_value,
-    link_patch*& output) noexcept {
-
-    output = nullptr;
-
-    if (baseline == nullptr ||
-        !link_value ||
-        link_value.value() >
-            baseline_link_count) {
-
-        return server_status::
-            project_configuration_invalid;
-    }
-
-    if (auto* existing =
-            find_link_patch(
-                link_value.value());
-        existing != nullptr) {
-
-        output = existing;
-        return server_status::success;
-    }
-
-    link_record value;
-
-    if (!baseline->link(
-            link_value,
-            value)) {
-
-        return server_status::
-            project_artifact_invalid;
-    }
-
-    try {
-        link_patches.push_back({
-            link_value.value(),
-            value,
-            true,
-        });
-    }
-    catch (...) {
-        return server_status::io_error;
-    }
-
-    const auto inserted =
-        link_patch_index.insert(
-            link_value.value(),
-            static_cast<std::uint32_t>(
-                link_patches.size()));
-
-    if (!succeeded(inserted)) {
-        link_patches.pop_back();
-        return inserted;
-    }
-
-    output =
-        &link_patches.back();
-
-    return server_status::success;
-}
-
-bool graph::slot_exists(
-    type_handle type_value) const noexcept {
-
-    return type_value &&
-        type_value.value() <=
-            type_count();
-}
-
-bool graph::slot_exists(
-    object_handle object_value) const noexcept {
-
-    return object_value &&
-        object_value.value() <=
-            object_count();
-}
-
-bool graph::slot_exists(
-    link_handle link_value) const noexcept {
-
-    return link_value &&
-        link_value.value() <=
-            link_count();
+bool graph::contains(
+    type_handle type) const noexcept {
+
+    return type &&
+        type.value() <= types.size();
 }
 
 bool graph::contains(
-    type_handle type_value) const noexcept {
+    object_handle object) const noexcept {
 
-    if (!slot_exists(type_value)) {
-        return false;
-    }
-
-    if (type_value.value() <=
-        baseline_type_count) {
-
-        const auto* patch =
-            find_type_patch(
-                type_value.value());
-
-        return patch == nullptr ||
-            patch->live;
-    }
-
-    const auto index =
-        static_cast<std::size_t>(
-            type_value.value() -
-            baseline_type_count -
-            1);
-
-    return index <
-            type_live.size() &&
-        type_live[index] != 0;
+    return object &&
+        object.value() <= objects.size();
 }
 
 bool graph::contains(
-    object_handle object_value) const noexcept {
+    link_handle link) const noexcept {
 
-    if (!slot_exists(object_value)) {
-        return false;
-    }
-
-    if (object_value.value() <=
-        baseline_object_count) {
-
-        const auto* patch =
-            find_object_patch(
-                object_value.value());
-
-        return patch == nullptr ||
-            patch->live;
-    }
-
-    const auto index =
-        static_cast<std::size_t>(
-            object_value.value() -
-            baseline_object_count -
-            1);
-
-    return index <
-            object_live.size() &&
-        object_live[index] != 0;
+    return link &&
+        link.value() <= links.size();
 }
 
 bool graph::contains(
-    link_handle link_value) const noexcept {
+    type_ref type) const noexcept {
 
-    if (!slot_exists(link_value)) {
+    if (!type) {
         return false;
     }
 
-    if (link_value.value() <=
-        baseline_link_count) {
+    switch (type.kind()) {
+    case type_ref_kind::intrinsic:
+        return
+            type.payload() <=
+                static_cast<std::uint32_t>(
+                    intrinsic_type::nullptr_type);
 
-        const auto* patch =
-            find_link_patch(
-                link_value.value());
+    case type_ref_kind::named:
+        return
+            type.payload() <=
+                types.size();
 
-        return patch == nullptr ||
-            patch->live;
-    }
+    case type_ref_kind::derived:
+        return
+            type.payload() <=
+                derived_types.size();
 
-    const auto index =
-        static_cast<std::size_t>(
-            link_value.value() -
-            baseline_link_count -
-            1);
-
-    return index <
-            link_live.size() &&
-        link_live[index] != 0;
-}
-
-bool graph::contains(
-    type_ref type_value) const noexcept {
-
-    if (!type_value) {
-        return false;
-    }
-
-    if (type_value.kind() ==
-        type_ref_kind::intrinsic) {
-
-        return type_value.payload() <=
-            static_cast<std::uint32_t>(
-                intrinsic_type::nullptr_type);
-    }
-
-    if (type_value.kind() ==
-        type_ref_kind::named) {
-
-        return contains(
-            type_handle{
-                type_value.payload()});
-    }
-
-    if (type_value.kind() !=
-        type_ref_kind::derived) {
-
-        return false;
-    }
-
-    auto current =
-        type_value;
-
-    for (std::size_t depth = 0;
-         depth <=
-            derived_type_count();
-         ++depth) {
-
-        derived_type_record record;
-
-        if (!derived(
-                current,
-                record)) {
-
-            return false;
-        }
-
-        if (record.child.kind() ==
-            type_ref_kind::derived) {
-
-            current =
-                record.child;
-
-            continue;
-        }
-
-        return contains(
-            record.child);
+    case type_ref_kind::invalid:
+        break;
     }
 
     return false;
 }
 
-bool graph::type(
-    type_handle type_value,
-    type_entry& output) const noexcept {
-
-    output = {};
-
-    if (!contains(type_value)) {
-        return false;
-    }
-
-    if (type_value.value() <=
-        baseline_type_count) {
-
-        if (const auto* patch =
-                find_type_patch(
-                    type_value.value());
-            patch != nullptr) {
-
-            output =
-                patch->value;
-
-            return patch->live;
-        }
-
-        return baseline != nullptr &&
-            baseline->type(
-                type_value,
-                output);
-    }
-
-    const auto index =
-        static_cast<std::size_t>(
-            type_value.value() -
-            baseline_type_count -
-            1);
-
-    if (index >=
-        types.size()) {
-
-        return false;
-    }
-
-    output =
-        types[index];
-
-    return true;
-}
-
-bool graph::object(
-    object_handle object_value,
-    object_entry& output) const noexcept {
-
-    output = {};
-
-    if (!contains(object_value)) {
-        return false;
-    }
-
-    if (object_value.value() <=
-        baseline_object_count) {
-
-        if (const auto* patch =
-                find_object_patch(
-                    object_value.value());
-            patch != nullptr) {
-
-            output =
-                patch->value;
-
-            return patch->live;
-        }
-
-        return baseline != nullptr &&
-            baseline->object(
-                object_value,
-                output);
-    }
-
-    const auto index =
-        static_cast<std::size_t>(
-            object_value.value() -
-            baseline_object_count -
-            1);
-
-    if (index >=
-        objects.size()) {
-
-        return false;
-    }
-
-    output =
-        objects[index];
-
-    return true;
-}
-
-bool graph::link(
-    link_handle link_value,
-    link_record& output) const noexcept {
-
-    output = {};
-
-    if (!contains(link_value)) {
-        return false;
-    }
-
-    if (link_value.value() <=
-        baseline_link_count) {
-
-        if (const auto* patch =
-                find_link_patch(
-                    link_value.value());
-            patch != nullptr) {
-
-            output =
-                patch->value;
-
-            return patch->live;
-        }
-
-        return baseline != nullptr &&
-            baseline->link(
-                link_value,
-                output);
-    }
-
-    const auto index =
-        static_cast<std::size_t>(
-            link_value.value() -
-            baseline_link_count -
-            1);
-
-    if (index >=
-        links.size()) {
-
-        return false;
-    }
-
-    output =
-        links[index];
-
-    return true;
-}
-
 const type_entry* graph::find(
-    type_handle type_value) const noexcept {
+    type_handle type) const noexcept {
 
-    if (!contains(type_value)) {
-        return nullptr;
-    }
-
-    if (type_value.value() <=
-        baseline_type_count) {
-
-        const auto* patch =
-            find_type_patch(
-                type_value.value());
-
-        return patch != nullptr &&
-            patch->live
-            ? &patch->value
-            : nullptr;
-    }
-
-    const auto index =
-        static_cast<std::size_t>(
-            type_value.value() -
-            baseline_type_count -
-            1);
-
-    return index <
-        types.size()
-        ? &types[index]
+    return contains(type)
+        ? &types[type.value() - 1]
         : nullptr;
 }
 
 const object_entry* graph::find(
-    object_handle object_value) const noexcept {
+    object_handle object) const noexcept {
 
-    if (!contains(object_value)) {
-        return nullptr;
-    }
-
-    if (object_value.value() <=
-        baseline_object_count) {
-
-        const auto* patch =
-            find_object_patch(
-                object_value.value());
-
-        return patch != nullptr &&
-            patch->live
-            ? &patch->value
-            : nullptr;
-    }
-
-    const auto index =
-        static_cast<std::size_t>(
-            object_value.value() -
-            baseline_object_count -
-            1);
-
-    return index <
-        objects.size()
-        ? &objects[index]
+    return contains(object)
+        ? &objects[object.value() - 1]
         : nullptr;
 }
 
 const link_record* graph::find(
-    link_handle link_value) const noexcept {
+    link_handle link) const noexcept {
 
-    if (!contains(link_value)) {
-        return nullptr;
-    }
-
-    if (link_value.value() <=
-        baseline_link_count) {
-
-        const auto* patch =
-            find_link_patch(
-                link_value.value());
-
-        return patch != nullptr &&
-            patch->live
-            ? &patch->value
-            : nullptr;
-    }
-
-    const auto index =
-        static_cast<std::size_t>(
-            link_value.value() -
-            baseline_link_count -
-            1);
-
-    return index <
-        links.size()
-        ? &links[index]
+    return contains(link)
+        ? &links[link.value() - 1]
         : nullptr;
 }
 
 type_handle graph::find_type(
-    identity_ref identity_value) const noexcept {
+    identity_ref identity) const noexcept {
 
-    const auto output =
-        lineage_type(
-            identity_value);
+    if (!identity ||
+        identity.slot() >=
+            identity_locations.size()) {
+
+        return {};
+    }
+
+    const auto location =
+        identity_locations[
+            identity.slot()];
+
+    if (decode_location_kind(location) !=
+        location_kind::type) {
+
+        return {};
+    }
+
+    const type_handle output{
+        decode_location_slot(
+            location)};
 
     return contains(output)
         ? output
@@ -1210,11 +250,28 @@ type_handle graph::find_type(
 }
 
 object_handle graph::find_object(
-    identity_ref identity_value) const noexcept {
+    identity_ref identity) const noexcept {
 
-    const auto output =
-        lineage_object(
-            identity_value);
+    if (!identity ||
+        identity.slot() >=
+            identity_locations.size()) {
+
+        return {};
+    }
+
+    const auto location =
+        identity_locations[
+            identity.slot()];
+
+    if (decode_location_kind(location) !=
+        location_kind::object) {
+
+        return {};
+    }
+
+    const object_handle output{
+        decode_location_slot(
+            location)};
 
     return contains(output)
         ? output
@@ -1222,71 +279,30 @@ object_handle graph::find_object(
 }
 
 identity_ref graph::identity(
-    type_handle type_value) const noexcept {
+    type_handle type) const noexcept {
 
-    if (!contains(type_value)) {
-        return {};
-    }
-
-    if (type_value.value() <=
-        baseline_type_count) {
-
-        return baseline != nullptr
-            ? baseline->identity(
-                type_value)
-            : identity_ref{};
-    }
-
-    const auto index =
-        static_cast<std::size_t>(
-            type_value.value() -
-            baseline_type_count -
-            1);
-
-    return index <
-        type_identities.size()
-        ? type_identities[index]
+    return contains(type)
+        ? type_identities[type.value() - 1]
         : identity_ref{};
 }
 
 identity_ref graph::identity(
-    object_handle object_value) const noexcept {
+    object_handle object) const noexcept {
 
-    if (!contains(object_value)) {
-        return {};
-    }
-
-    if (object_value.value() <=
-        baseline_object_count) {
-
-        return baseline != nullptr
-            ? baseline->identity(
-                object_value)
-            : identity_ref{};
-    }
-
-    const auto index =
-        static_cast<std::size_t>(
-            object_value.value() -
-            baseline_object_count -
-            1);
-
-    return index <
-        object_identities.size()
-        ? object_identities[index]
+    return contains(object)
+        ? object_identities[object.value() - 1]
         : identity_ref{};
 }
 
 server_status graph::declare_record(
-    identity_ref identity_value,
+    identity_ref identity,
     graph_record_kind kind,
     type_handle& output) noexcept {
 
     output = {};
 
-    if (!identity_value ||
-        identity_value.kind() !=
-            identity_kind::type ||
+    if (!identity ||
+        identity.kind() != identity_kind::type ||
         !valid_record_kind(kind)) {
 
         return server_status::
@@ -1294,92 +310,55 @@ server_status graph::declare_record(
     }
 
     if (const auto existing =
-            lineage_type(
-                identity_value);
+            find_type(identity);
         existing) {
 
-        if (contains(existing)) {
-            type_entry entry;
+        const auto* entry =
+            find(existing);
 
-            if (!type(
-                    existing,
-                    entry) ||
-                entry.kind !=
-                    graph_type_kind::record ||
-                !compatible_record_kind(
-                    entry.record_kind,
-                    kind)) {
+        if (entry == nullptr ||
+            entry->kind !=
+                graph_type_kind::record ||
+            !compatible_record_kind(
+                entry->record_kind,
+                kind)) {
 
-                return server_status::
-                    project_configuration_invalid;
-            }
-
-            output = existing;
-            return server_status::success;
+            return server_status::
+                project_configuration_invalid;
         }
-
-        if (existing.value() <=
-            baseline_type_count) {
-
-            type_patch* patch = nullptr;
-
-            const auto prepared =
-                ensure_type_patch(
-                    existing,
-                    patch);
-
-            if (!succeeded(prepared) ||
-                patch == nullptr) {
-
-                return succeeded(prepared)
-                    ? server_status::
-                        project_artifact_invalid
-                    : prepared;
-            }
-
-            patch->value = {
-                {},
-                graph_type_kind::record,
-                kind,
-                0,
-            };
-
-            patch->live = true;
-        }
-        else {
-            const auto index =
-                static_cast<std::size_t>(
-                    existing.value() -
-                    baseline_type_count -
-                    1);
-
-            if (index >= types.size() ||
-                index >= type_live.size()) {
-
-                return server_status::
-                    project_artifact_invalid;
-            }
-
-            types[index] = {
-                {},
-                graph_type_kind::record,
-                kind,
-                0,
-            };
-
-            type_live[index] = 1;
-        }
-
-        ++live_type_count_value;
 
         output = existing;
         return server_status::success;
     }
 
-    if (type_count() >=
+    if (types.size() >=
         type_handle::maximum_slot) {
 
         return server_status::io_error;
+    }
+
+    const auto old_location_count =
+        identity_locations.size();
+
+    const auto prepared =
+        ensure_identity_slot(identity);
+
+    if (!succeeded(prepared)) {
+        return prepared;
+    }
+
+    if (identity_locations[
+            identity.slot()] != 0) {
+
+        if (identity_locations.size() >
+            old_location_count) {
+
+            identity_locations.resize(
+                old_location_count);
+        }
+
+        return server_status::
+            project_configuration_invalid;
     }
 
     const auto old_type_count =
@@ -1387,9 +366,6 @@ server_status graph::declare_record(
 
     const auto old_identity_count =
         type_identities.size();
-
-    const auto old_live_count =
-        type_live.size();
 
     try {
         types.push_back({
@@ -1400,9 +376,19 @@ server_status graph::declare_record(
         });
 
         type_identities.push_back(
-            identity_value);
+            identity);
 
-        type_live.push_back(1);
+        output = type_handle{
+            static_cast<std::uint32_t>(
+                types.size())};
+
+        identity_locations[
+            identity.slot()] =
+                encode_location(
+                    location_kind::type,
+                    output.value());
+
+        return server_status::success;
     }
     catch (...) {
         types.resize(
@@ -1411,181 +397,39 @@ server_status graph::declare_record(
         type_identities.resize(
             old_identity_count);
 
-        type_live.resize(
-            old_live_count);
+        if (identity_locations.size() >
+            old_location_count) {
 
-        return server_status::io_error;
-    }
-
-    output = type_handle{
-        static_cast<std::uint32_t>(
-            type_count())};
-
-    const auto published =
-        publish_identity_location(
-            identity_value,
-            location_kind::type,
-            output.value());
-
-    if (!succeeded(published)) {
-        types.resize(
-            old_type_count);
-
-        type_identities.resize(
-            old_identity_count);
-
-        type_live.resize(
-            old_live_count);
+            identity_locations.resize(
+                old_location_count);
+        }
 
         output = {};
-        return published;
+        return server_status::io_error;
     }
-
-    ++live_type_count_value;
-
-    return server_status::success;
-}
-
-server_status graph::clear_definition(
-    type_handle type_value) noexcept {
-
-    type_entry entry;
-
-    if (!type(
-            type_value,
-            entry)) {
-
-        return server_status::
-            project_configuration_invalid;
-    }
-
-    if (!entry.defined()) {
-        return server_status::success;
-    }
-
-    entry.members = {};
-    entry.flags &=
-        static_cast<std::uint16_t>(
-            ~graph_type_defined);
-
-    if (type_value.value() <=
-        baseline_type_count) {
-
-        type_patch* patch = nullptr;
-
-        const auto prepared =
-            ensure_type_patch(
-                type_value,
-                patch);
-
-        if (!succeeded(prepared) ||
-            patch == nullptr) {
-
-            return succeeded(prepared)
-                ? server_status::
-                    project_artifact_invalid
-                : prepared;
-        }
-
-        patch->value =
-            entry;
-
-        return server_status::success;
-    }
-
-    const auto index =
-        static_cast<std::size_t>(
-            type_value.value() -
-            baseline_type_count -
-            1);
-
-    if (index >=
-        types.size()) {
-
-        return server_status::
-            project_artifact_invalid;
-    }
-
-    types[index] =
-        entry;
-
-    return server_status::success;
-}
-
-server_status graph::retire(
-    type_handle type_value) noexcept {
-
-    if (!contains(type_value)) {
-        return server_status::
-            project_configuration_invalid;
-    }
-
-    if (type_value.value() <=
-        baseline_type_count) {
-
-        type_patch* patch = nullptr;
-
-        const auto prepared =
-            ensure_type_patch(
-                type_value,
-                patch);
-
-        if (!succeeded(prepared) ||
-            patch == nullptr) {
-
-            return succeeded(prepared)
-                ? server_status::
-                    project_artifact_invalid
-                : prepared;
-        }
-
-        patch->live = false;
-    }
-    else {
-        const auto index =
-            static_cast<std::size_t>(
-                type_value.value() -
-                baseline_type_count -
-                1);
-
-        if (index >=
-            type_live.size()) {
-
-            return server_status::
-                project_artifact_invalid;
-        }
-
-        type_live[index] = 0;
-    }
-
-    --live_type_count_value;
-
-    return server_status::success;
 }
 
 server_status graph::define_record(
-    type_handle type_value,
+    type_handle type,
     graph_record_kind kind,
     std::span<const member_record> definition,
     std::span<const construction_value> construction_values) noexcept {
 
-    type_entry entry;
+    auto* entry =
+        contains(type)
+        ? &types[type.value() - 1]
+        : nullptr;
 
-    if (!type(
-            type_value,
-            entry) ||
-        entry.kind !=
-            graph_type_kind::record ||
+    if (entry == nullptr ||
+        entry->kind != graph_type_kind::record ||
         !valid_record_kind(kind) ||
         !compatible_record_kind(
-            entry.record_kind,
+            entry->record_kind,
             kind) ||
         (!construction_values.empty() &&
-         construction_values.size() !=
-            definition.size())) {
+         construction_values.size() != definition.size())) {
 
-        return server_status::
-            project_configuration_invalid;
+        return server_status::project_configuration_invalid;
     }
 
     for (std::size_t index = 0;
@@ -1593,11 +437,9 @@ server_status graph::define_record(
          ++index) {
 
         if (!definition[index].name ||
-            !contains(
-                definition[index].type)) {
+            !contains(definition[index].type)) {
 
-            return server_status::
-                project_configuration_invalid;
+            return server_status::project_configuration_invalid;
         }
 
         const auto construction =
@@ -1605,80 +447,55 @@ server_status graph::define_record(
             ? construction_value{}
             : construction_values[index];
 
-        if (!valid_construction(
-                construction)) {
-
-            return server_status::
-                project_configuration_invalid;
+        if (!valid_construction(construction)) {
+            return server_status::project_configuration_invalid;
         }
 
         if (construction.kind ==
-                construction_kind::
-                    member_binding &&
+                construction_kind::member_binding &&
             construction.operand >
                 definition.size()) {
 
-            return server_status::
-                project_configuration_invalid;
+            return server_status::project_configuration_invalid;
         }
 
         if (construction.kind ==
-            construction_kind::
-                object_binding) {
+            construction_kind::object_binding) {
 
-            object_entry object_value;
-
-            if (!object(
+            const auto* object =
+                find(
                     object_handle{
-                        construction.operand},
-                    object_value) ||
-                !object_value.
-                    internal_static()) {
+                        construction.operand});
 
-                return server_status::
-                    project_configuration_invalid;
+            if (object == nullptr ||
+                !object->internal_static()) {
+
+                return server_status::project_configuration_invalid;
             }
         }
     }
 
-    if (entry.defined()) {
-        if (entry.record_kind !=
-            kind ||
-            entry.members.count !=
-                definition.size()) {
+    if (entry->defined()) {
+        if (entry->record_kind != kind) {
+            return server_status::project_configuration_invalid;
+        }
 
-            return server_status::
-                project_configuration_invalid;
+        const auto existing =
+            members(type);
+
+        if (existing.size() != definition.size()) {
+            return server_status::project_configuration_invalid;
         }
 
         for (std::size_t index = 0;
-             index < definition.size();
+             index < existing.size();
              ++index) {
 
-            const member_index member_value{
-                static_cast<std::uint32_t>(
-                    index)};
+            if (existing[index].name != definition[index].name ||
+                existing[index].type != definition[index].type ||
+                existing[index].access != definition[index].access) {
 
-            member_record existing;
-            construction_value existing_construction;
-
-            if (!member(
-                    type_value,
-                    member_value,
-                    existing) ||
-                !construction(
-                    type_value,
-                    member_value,
-                    existing_construction) ||
-                existing.name !=
-                    definition[index].name ||
-                existing.type !=
-                    definition[index].type ||
-                existing.access !=
-                    definition[index].access) {
-
-                return server_status::
-                    project_configuration_invalid;
+                return server_status::project_configuration_invalid;
             }
 
             const auto expected =
@@ -1686,11 +503,15 @@ server_status graph::define_record(
                 ? construction_value{}
                 : construction_values[index];
 
-            if (existing_construction !=
-                expected) {
+            const auto position =
+                static_cast<std::size_t>(
+                    entry->members.begin) +
+                index;
 
-                return server_status::
-                    project_configuration_invalid;
+            if (position >= member_construction.size() ||
+                member_construction[position] != expected) {
+
+                return server_status::project_configuration_invalid;
             }
         }
 
@@ -1699,16 +520,12 @@ server_status graph::define_record(
 
     const auto maximum =
         static_cast<std::size_t>(
-            (std::numeric_limits<
-                std::uint32_t>::max)());
+            (std::numeric_limits<std::uint32_t>::max)());
 
-    const auto logical_begin =
-        member_count();
-
-    if (logical_begin > maximum ||
+    if (member_records.size() > maximum ||
         definition.size() > maximum ||
         definition.size() >
-            maximum - logical_begin) {
+            maximum - member_records.size()) {
 
         return server_status::io_error;
     }
@@ -1734,537 +551,108 @@ server_status graph::define_record(
         }
     }
     catch (...) {
-        member_records.resize(
-            old_count);
-
-        member_construction.resize(
-            old_count);
-
+        member_records.resize(old_count);
+        member_construction.resize(old_count);
         return server_status::io_error;
     }
 
-    entry.members = {
-        static_cast<std::uint32_t>(
-            logical_begin),
-        static_cast<std::uint32_t>(
-            definition.size()),
+    entry->members = {
+        static_cast<std::uint32_t>(old_count),
+        static_cast<std::uint32_t>(definition.size()),
     };
 
-    entry.record_kind =
-        kind;
-
-    entry.flags |=
-        graph_type_defined;
-
-    if (type_value.value() <=
-        baseline_type_count) {
-
-        type_patch* patch = nullptr;
-
-        const auto prepared =
-            ensure_type_patch(
-                type_value,
-                patch);
-
-        if (!succeeded(prepared) ||
-            patch == nullptr) {
-
-            member_records.resize(
-                old_count);
-
-            member_construction.resize(
-                old_count);
-
-            return succeeded(prepared)
-                ? server_status::
-                    project_artifact_invalid
-                : prepared;
-        }
-
-        patch->value =
-            entry;
-
-        return server_status::success;
-    }
-
-    const auto index =
-        static_cast<std::size_t>(
-            type_value.value() -
-            baseline_type_count -
-            1);
-
-    if (index >=
-        types.size()) {
-
-        member_records.resize(
-            old_count);
-
-        member_construction.resize(
-            old_count);
-
-        return server_status::
-            project_artifact_invalid;
-    }
-
-    types[index] =
-        entry;
+    entry->record_kind = kind;
+    entry->flags |= graph_type_defined;
 
     return server_status::success;
 }
 
-std::span<const member_record> graph::members(
-    type_handle type_value) const noexcept {
-
-    const auto* entry =
-        find(type_value);
-
-    if (entry == nullptr ||
-        !entry->defined() ||
-        entry->members.count == 0) {
-
-        return {};
-    }
-
-    const auto logical_begin =
-        static_cast<std::size_t>(
-            entry->members.begin);
-
-    if (logical_begin <
-        baseline_member_count) {
-
-        return {};
-    }
-
-    const auto begin =
-        logical_begin -
-        baseline_member_count;
-
-    const auto count =
-        static_cast<std::size_t>(
-            entry->members.count);
-
-    if (begin >
-            member_records.size() ||
-        count >
-            member_records.size() -
-                begin) {
-
-        return {};
-    }
-
-    return {
-        member_records.data() + begin,
-        count,
-    };
-}
-
-member_index graph::find_member(
-    type_handle type_value,
-    string_id name) const noexcept {
-
-    if (!name) {
-        return {};
-    }
-
-    type_entry entry;
-
-    if (!type(
-            type_value,
-            entry) ||
-        !entry.defined()) {
-
-        return {};
-    }
-
-    for (std::uint32_t index = 0;
-         index <
-            entry.members.count;
-         ++index) {
-
-        member_record value;
-
-        const member_index member_value{
-            index};
-
-        if (member(
-                type_value,
-                member_value,
-                value) &&
-            value.name == name) {
-
-            return member_value;
-        }
-    }
-
-    return {};
-}
-
-const member_record* graph::member(
-    type_handle type_value,
-    member_index member_value) const noexcept {
-
-    if (!member_value) {
-        return nullptr;
-    }
-
-    const auto values =
-        members(
-            type_value);
-
-    return member_value.value() <
-        values.size()
-        ? &values[
-            member_value.value()]
-        : nullptr;
-}
-
-bool graph::member(
-    type_handle type_value,
-    member_index member_value,
-    member_record& output) const noexcept {
-
-    output = {};
-
-    type_entry entry;
-
-    if (!type(
-            type_value,
-            entry) ||
-        !entry.defined() ||
-        !member_value ||
-        member_value.value() >=
-            entry.members.count) {
-
-        return false;
-    }
-
-    if (type_value.value() <=
-            baseline_type_count &&
-        find_type_patch(
-            type_value.value()) ==
-            nullptr) {
-
-        return baseline != nullptr &&
-            baseline->member(
-                type_value,
-                member_value,
-                output);
-    }
-
-    const auto logical =
-        static_cast<std::size_t>(
-            entry.members.begin) +
-        member_value.value();
-
-    if (logical <
-        baseline_member_count) {
-
-        return false;
-    }
-
-    const auto index =
-        logical -
-        baseline_member_count;
-
-    if (index >=
-        member_records.size()) {
-
-        return false;
-    }
-
-    output =
-        member_records[index];
-
-    return true;
-}
-
-const construction_value* graph::construction(
-    type_handle type_value,
-    member_index member_value) const noexcept {
-
-    const auto* entry =
-        find(type_value);
-
-    if (entry == nullptr ||
-        !entry->defined() ||
-        !member_value ||
-        member_value.value() >=
-            entry->members.count) {
-
-        return nullptr;
-    }
-
-    const auto logical =
-        static_cast<std::size_t>(
-            entry->members.begin) +
-        member_value.value();
-
-    if (logical <
-        baseline_member_count) {
-
-        return nullptr;
-    }
-
-    const auto index =
-        logical -
-        baseline_member_count;
-
-    return index <
-        member_construction.size()
-        ? &member_construction[index]
-        : nullptr;
-}
-
-bool graph::construction(
-    type_handle type_value,
-    member_index member_value,
-    construction_value& output) const noexcept {
-
-    output = {};
-
-    type_entry entry;
-
-    if (!type(
-            type_value,
-            entry) ||
-        !entry.defined() ||
-        !member_value ||
-        member_value.value() >=
-            entry.members.count) {
-
-        return false;
-    }
-
-    if (type_value.value() <=
-            baseline_type_count &&
-        find_type_patch(
-            type_value.value()) ==
-            nullptr) {
-
-        return baseline != nullptr &&
-            baseline->construction(
-                type_value,
-                member_value,
-                output);
-    }
-
-    const auto logical =
-        static_cast<std::size_t>(
-            entry.members.begin) +
-        member_value.value();
-
-    if (logical <
-        baseline_member_count) {
-
-        return false;
-    }
-
-    const auto index =
-        logical -
-        baseline_member_count;
-
-    if (index >=
-        member_construction.size()) {
-
-        return false;
-    }
-
-    output =
-        member_construction[index];
-
-    return true;
-}
-
 server_status graph::add_object(
-    identity_ref identity_value,
-    type_ref type_value,
+    identity_ref identity,
+    type_ref type,
     object_handle& output,
     std::uint32_t flags,
     construction_value initial) noexcept {
 
     output = {};
 
-    if (!identity_value ||
-        identity_value.kind() !=
-            identity_kind::object ||
-        !contains(type_value) ||
-        (flags &
-            ~graph_object_flag_mask) !=
-            0 ||
+    if (!identity ||
+        identity.kind() != identity_kind::object ||
+        !contains(type) ||
+        (flags & ~graph_object_flag_mask) != 0 ||
         !valid_construction(initial) ||
         (!(flags &
             graph_object_non_default_initializer) &&
          initial != construction_value{}) ||
         initial.kind ==
-            construction_kind::
-                member_binding ||
+            construction_kind::member_binding ||
         initial.kind ==
-            construction_kind::
-                object_binding) {
+            construction_kind::object_binding) {
 
-        return server_status::
-            project_configuration_invalid;
+        return server_status::project_configuration_invalid;
     }
 
     if (const auto existing =
-            lineage_object(
-                identity_value);
+            find_object(identity);
         existing) {
 
-        if (contains(existing)) {
-            object_entry entry;
-            construction_value existing_initial;
+        const auto* entry =
+            find(existing);
 
-            if (!object(
-                    existing,
-                    entry) ||
-                !construction(
-                    existing,
-                    existing_initial) ||
-                entry.type != type_value ||
-                (entry.state &
-                    graph_object_flag_mask) !=
-                    flags ||
-                existing_initial !=
-                    initial) {
+        construction_value existing_initial;
 
-                return server_status::
-                    project_configuration_invalid;
-            }
+        if (entry == nullptr ||
+            !construction(
+                existing,
+                existing_initial) ||
+            entry->type != type ||
+            (entry->state &
+                graph_object_flag_mask) != flags ||
+            existing_initial != initial) {
 
-            output = existing;
-            return server_status::success;
+            return server_status::project_configuration_invalid;
         }
-
-        if (existing.value() <=
-            baseline_object_count) {
-
-            object_patch* patch = nullptr;
-
-            const auto prepared =
-                ensure_object_patch(
-                    existing,
-                    patch);
-
-            if (!succeeded(prepared) ||
-                patch == nullptr) {
-
-                return succeeded(prepared)
-                    ? server_status::
-                        project_artifact_invalid
-                    : prepared;
-            }
-
-            std::uint32_t construction_slot = 0;
-
-            if ((flags &
-                graph_object_non_default_initializer) !=
-                0) {
-
-                const auto logical_construction_count =
-                    baseline_object_construction_count +
-                    object_construction.size();
-
-                if (logical_construction_count >=
-                    graph_object_construction_slot_mask) {
-
-                    return server_status::
-                        io_error;
-                }
-
-                try {
-                    object_construction.push_back(
-                        initial);
-                }
-                catch (...) {
-                    return server_status::
-                        io_error;
-                }
-
-                construction_slot =
-                    static_cast<std::uint32_t>(
-                        baseline_object_construction_count +
-                        object_construction.size());
-            }
-
-            patch->value = {
-                type_value,
-                flags |
-                    construction_slot,
-            };
-
-            patch->construction =
-                initial;
-
-            patch->live = true;
-        }
-        else {
-            const auto index =
-                static_cast<std::size_t>(
-                    existing.value() -
-                    baseline_object_count -
-                    1);
-
-            if (index >=
-                    objects.size() ||
-                index >=
-                    object_live.size()) {
-
-                return server_status::
-                    project_artifact_invalid;
-            }
-
-            std::uint32_t construction_slot = 0;
-
-            if ((flags &
-                graph_object_non_default_initializer) !=
-                0) {
-
-                const auto logical_construction_count =
-                    baseline_object_construction_count +
-                    object_construction.size();
-
-                if (logical_construction_count >=
-                    graph_object_construction_slot_mask) {
-
-                    return server_status::
-                        io_error;
-                }
-
-                try {
-                    object_construction.push_back(
-                        initial);
-                }
-                catch (...) {
-                    return server_status::
-                        io_error;
-                }
-
-                construction_slot =
-                    static_cast<std::uint32_t>(
-                        baseline_object_construction_count +
-                        object_construction.size());
-            }
-
-            objects[index] = {
-                type_value,
-                flags |
-                    construction_slot,
-            };
-
-            object_live[index] = 1;
-        }
-
-        ++live_object_count_value;
 
         output = existing;
         return server_status::success;
     }
 
-    if (object_count() >=
+    if (objects.size() >=
         object_handle::maximum_slot) {
 
         return server_status::io_error;
+    }
+
+    const auto has_initial =
+        (flags &
+            graph_object_non_default_initializer) != 0;
+
+    if (has_initial &&
+        object_construction.size() >=
+            graph_object_construction_slot_mask) {
+
+        return server_status::io_error;
+    }
+
+    const auto old_location_count =
+        identity_locations.size();
+
+    const auto prepared =
+        ensure_identity_slot(identity);
+
+    if (!succeeded(prepared)) {
+        return prepared;
+    }
+
+    if (identity_locations[identity.slot()] != 0) {
+        if (identity_locations.size() >
+            old_location_count) {
+
+            identity_locations.resize(
+                old_location_count);
+        }
+
+        return server_status::project_configuration_invalid;
     }
 
     const auto old_object_count =
@@ -2273,48 +661,40 @@ server_status graph::add_object(
     const auto old_identity_count =
         object_identities.size();
 
-    const auto old_live_count =
-        object_live.size();
-
     const auto old_construction_count =
         object_construction.size();
 
     try {
         std::uint32_t construction_slot = 0;
 
-        if ((flags &
-            graph_object_non_default_initializer) !=
-            0) {
-
-            const auto logical_construction_count =
-                baseline_object_construction_count +
-                object_construction.size();
-
-            if (logical_construction_count >=
-                graph_object_construction_slot_mask) {
-
-                return server_status::io_error;
-            }
-
+        if (has_initial) {
             object_construction.push_back(
                 initial);
 
             construction_slot =
                 static_cast<std::uint32_t>(
-                    baseline_object_construction_count +
                     object_construction.size());
         }
 
         objects.push_back({
-            type_value,
+            type,
             flags |
                 construction_slot,
         });
 
         object_identities.push_back(
-            identity_value);
+            identity);
 
-        object_live.push_back(1);
+        output = object_handle{
+            static_cast<std::uint32_t>(
+                objects.size())};
+
+        identity_locations[identity.slot()] =
+            encode_location(
+                location_kind::object,
+                output.value());
+
+        return server_status::success;
     }
     catch (...) {
         objects.resize(
@@ -2323,195 +703,39 @@ server_status graph::add_object(
         object_identities.resize(
             old_identity_count);
 
-        object_live.resize(
-            old_live_count);
-
         object_construction.resize(
             old_construction_count);
 
-        return server_status::io_error;
-    }
+        if (identity_locations.size() >
+            old_location_count) {
 
-    output = object_handle{
-        static_cast<std::uint32_t>(
-            object_count())};
-
-    const auto published =
-        publish_identity_location(
-            identity_value,
-            location_kind::object,
-            output.value());
-
-    if (!succeeded(published)) {
-        objects.resize(
-            old_object_count);
-
-        object_identities.resize(
-            old_identity_count);
-
-        object_live.resize(
-            old_live_count);
-
-        object_construction.resize(
-            old_construction_count);
+            identity_locations.resize(
+                old_location_count);
+        }
 
         output = {};
-        return published;
+        return server_status::io_error;
     }
-
-    ++live_object_count_value;
-
-    return server_status::success;
-}
-
-server_status graph::retire(
-    object_handle object_value) noexcept {
-
-    if (!contains(object_value)) {
-        return server_status::
-            project_configuration_invalid;
-    }
-
-    if (object_value.value() <=
-        baseline_object_count) {
-
-        object_patch* patch = nullptr;
-
-        const auto prepared =
-            ensure_object_patch(
-                object_value,
-                patch);
-
-        if (!succeeded(prepared) ||
-            patch == nullptr) {
-
-            return succeeded(prepared)
-                ? server_status::
-                    project_artifact_invalid
-                : prepared;
-        }
-
-        patch->live = false;
-    }
-    else {
-        const auto index =
-            static_cast<std::size_t>(
-                object_value.value() -
-                baseline_object_count -
-                1);
-
-        if (index >=
-            object_live.size()) {
-
-            return server_status::
-                project_artifact_invalid;
-        }
-
-        object_live[index] = 0;
-    }
-
-    --live_object_count_value;
-
-    return server_status::success;
-}
-
-bool graph::construction(
-    object_handle object_value,
-    construction_value& output) const noexcept {
-
-    output = {};
-
-    if (!contains(object_value)) {
-        return false;
-    }
-
-    if (object_value.value() <=
-        baseline_object_count) {
-
-        if (const auto* patch =
-                find_object_patch(
-                    object_value.value());
-            patch != nullptr) {
-
-            if (!patch->live) {
-                return false;
-            }
-
-            output =
-                patch->construction;
-
-            return true;
-        }
-
-        return baseline != nullptr &&
-            baseline->construction(
-                object_value,
-                output);
-    }
-
-    const auto index =
-        static_cast<std::size_t>(
-            object_value.value() -
-            baseline_object_count -
-            1);
-
-    if (index >=
-        objects.size()) {
-
-        return false;
-    }
-
-    const auto& entry =
-        objects[index];
-
-    if (!entry.
-        non_default_initializer()) {
-
-        return entry.
-            construction_slot() == 0;
-    }
-
-    const auto slot =
-        static_cast<std::size_t>(
-            entry.construction_slot());
-
-    if (slot <=
-            baseline_object_construction_count ||
-        slot >
-            baseline_object_construction_count +
-                object_construction.size()) {
-
-        return false;
-    }
-
-    output =
-        object_construction[
-            slot -
-            baseline_object_construction_count -
-            1];
-
-    return true;
 }
 
 type_ref graph::intrinsic(
-    intrinsic_type type_value) const noexcept {
+    intrinsic_type type) const noexcept {
 
-    return valid_intrinsic(
-        type_value)
+    return valid_intrinsic(type)
         ? type_ref::make(
             type_ref_kind::intrinsic,
             static_cast<std::uint32_t>(
-                type_value))
+                type))
         : type_ref{};
 }
 
 type_ref graph::named(
-    type_handle type_value) const noexcept {
+    type_handle type) const noexcept {
 
-    return contains(type_value)
+    return contains(type)
         ? type_ref::make(
             type_ref_kind::named,
-            type_value.value())
+            type.value())
         : type_ref{};
 }
 
@@ -2523,7 +747,7 @@ std::uint64_t graph::hash_derived(
     std::uint64_t hash =
         1469598103934665603ull;
 
-    const auto mix =
+    auto mix =
         [&hash](std::uint64_t value) noexcept {
             for (std::size_t index = 0;
                  index < 8;
@@ -2541,9 +765,7 @@ std::uint64_t graph::hash_derived(
         };
 
     mix(child.value());
-    mix(
-        static_cast<std::uint8_t>(
-            kind));
+    mix(static_cast<std::uint8_t>(kind));
     mix(payload);
 
     return hash == 0
@@ -2598,30 +820,18 @@ type_ref graph::find_derived(
                 fingerprint_value &&
             slot.type.kind() ==
                 type_ref_kind::derived &&
-            slot.type.payload() >
-                baseline_derived_count &&
             slot.type.payload() <=
-                derived_type_count()) {
-
-            const auto index =
-                static_cast<std::size_t>(
-                    slot.type.payload() -
-                    baseline_derived_count -
-                    1);
-
-            if (index <
                 derived_types.size()) {
 
-                const auto& record =
-                    derived_types[index];
+            const auto& record =
+                derived_types[
+                    slot.type.payload() - 1];
 
-                if (record.child == child &&
-                    record.kind == kind &&
-                    record.payload ==
-                        payload) {
+            if (record.child == child &&
+                record.kind == kind &&
+                record.payload == payload) {
 
-                    return slot.type;
-                }
+                return slot.type;
             }
         }
 
@@ -2635,7 +845,7 @@ type_ref graph::find_derived(
 
 void graph::insert_derived_index(
     std::vector<derived_index_slot>& target,
-    type_ref type_value,
+    type_ref type,
     std::uint64_t hash,
     std::uint32_t fingerprint_value) const noexcept {
 
@@ -2655,7 +865,7 @@ void graph::insert_derived_index(
 
     target[position] = {
         fingerprint_value,
-        type_value,
+        type,
     };
 }
 
@@ -2663,8 +873,7 @@ server_status graph::ensure_derived_index_capacity(
     std::size_t additional) noexcept {
 
     if (additional >
-        (std::numeric_limits<
-            std::size_t>::max)() -
+        (std::numeric_limits<std::size_t>::max)() -
             derived_types.size()) {
 
         return server_status::io_error;
@@ -2694,17 +903,14 @@ server_status graph::ensure_derived_index_capacity(
             candidate(capacity);
 
         for (std::size_t index = 0;
-             index <
-                derived_types.size();
+             index < derived_types.size();
              ++index) {
 
-            const auto type_value =
+            const auto type =
                 type_ref::make(
                     type_ref_kind::derived,
                     static_cast<std::uint32_t>(
-                        baseline_derived_count +
-                        index +
-                        1));
+                        index + 1));
 
             const auto& record =
                 derived_types[index];
@@ -2717,7 +923,7 @@ server_status graph::ensure_derived_index_capacity(
 
             insert_derived_index(
                 candidate,
-                type_value,
+                type,
                 hash,
                 fingerprint(hash));
         }
@@ -2769,20 +975,7 @@ server_status graph::derive(
         return server_status::success;
     }
 
-    if (baseline != nullptr) {
-        const auto existing =
-            baseline->find_derived(
-                child,
-                kind,
-                payload);
-
-        if (existing) {
-            output = existing;
-            return server_status::success;
-        }
-    }
-
-    if (derived_type_count() >=
+    if (derived_types.size() >=
         type_ref::maximum_payload) {
 
         return server_status::io_error;
@@ -2810,7 +1003,7 @@ server_status graph::derive(
             type_ref::make(
                 type_ref_kind::derived,
                 static_cast<std::uint32_t>(
-                    derived_type_count()));
+                    derived_types.size()));
 
         insert_derived_index(
             derived_index,
@@ -2829,15 +1022,150 @@ server_status graph::derive(
     }
 }
 
+std::span<const member_record> graph::members(
+    type_handle type) const noexcept {
+
+    const auto* entry =
+        find(type);
+
+    if (entry == nullptr ||
+        !entry->defined() ||
+        entry->members.count == 0) {
+
+        return {};
+    }
+
+    const auto begin =
+        static_cast<std::size_t>(
+            entry->members.begin);
+
+    const auto count =
+        static_cast<std::size_t>(
+            entry->members.count);
+
+    if (begin > member_records.size() ||
+        count >
+            member_records.size() - begin) {
+
+        return {};
+    }
+
+    return {
+        member_records.data() + begin,
+        count,
+    };
+}
+
+member_index graph::find_member(
+    type_handle type,
+    string_id name) const noexcept {
+
+    if (!name) {
+        return {};
+    }
+
+    const auto values =
+        members(type);
+
+    for (std::size_t index = 0;
+         index < values.size();
+         ++index) {
+
+        if (values[index].name == name) {
+            return member_index{
+                static_cast<std::uint32_t>(
+                    index)};
+        }
+    }
+
+    return {};
+}
+
+const member_record* graph::member(
+    type_handle type,
+    member_index member_value) const noexcept {
+
+    if (!member_value) {
+        return nullptr;
+    }
+
+    const auto values =
+        members(type);
+
+    return member_value.value() <
+        values.size()
+        ? &values[
+            member_value.value()]
+        : nullptr;
+}
+
+const construction_value* graph::construction(
+    type_handle type,
+    member_index member_value) const noexcept {
+
+    const auto* entry =
+        find(type);
+
+    if (entry == nullptr ||
+        !entry->defined() ||
+        !member_value ||
+        member_value.value() >= entry->members.count) {
+
+        return nullptr;
+    }
+
+    const auto position =
+        static_cast<std::size_t>(
+            entry->members.begin) +
+        member_value.value();
+
+    return position < member_construction.size()
+        ? &member_construction[position]
+        : nullptr;
+}
+
+bool graph::construction(
+    object_handle object,
+    construction_value& output) const noexcept {
+
+    output = {};
+
+    const auto* entry =
+        find(object);
+
+    if (entry == nullptr) {
+        return false;
+    }
+
+    if (!entry->non_default_initializer()) {
+        return entry->construction_slot() == 0;
+    }
+
+    const auto slot =
+        entry->construction_slot();
+
+    if (slot == 0 ||
+        slot > object_construction.size()) {
+
+        return false;
+    }
+
+    output =
+        object_construction[slot - 1];
+
+    return true;
+}
+
+
 bool graph::intrinsic(
-    type_ref type_value,
+    type_ref type,
     intrinsic_type& output) const noexcept {
 
     output =
         intrinsic_type::none;
 
-    if (!contains(type_value) ||
-        type_value.kind() !=
+    if (!contains(type) ||
+        type.kind() !=
             type_ref_kind::intrinsic) {
 
         return false;
@@ -2845,20 +1173,19 @@ bool graph::intrinsic(
 
     output =
         static_cast<intrinsic_type>(
-            type_value.payload());
+            type.payload());
 
-    return valid_intrinsic(
-        output);
+    return valid_intrinsic(output);
 }
 
 bool graph::named(
-    type_ref type_value,
+    type_ref type,
     type_handle& output) const noexcept {
 
     output = {};
 
-    if (!contains(type_value) ||
-        type_value.kind() !=
+    if (!contains(type) ||
+        type.kind() !=
             type_ref_kind::named) {
 
         return false;
@@ -2866,50 +1193,27 @@ bool graph::named(
 
     output =
         type_handle{
-            type_value.payload()};
+            type.payload()};
 
     return contains(output);
 }
 
 bool graph::derived(
-    type_ref type_value,
+    type_ref type,
     derived_type_record& output) const noexcept {
 
     output = {};
 
-    if (!type_value ||
-        type_value.kind() !=
-            type_ref_kind::derived ||
-        type_value.payload() == 0 ||
-        type_value.payload() >
-            derived_type_count()) {
-
-        return false;
-    }
-
-    if (type_value.payload() <=
-        baseline_derived_count) {
-
-        return baseline != nullptr &&
-            baseline->derived(
-                type_value,
-                output);
-    }
-
-    const auto index =
-        static_cast<std::size_t>(
-            type_value.payload() -
-            baseline_derived_count -
-            1);
-
-    if (index >=
-        derived_types.size()) {
+    if (!contains(type) ||
+        type.kind() !=
+            type_ref_kind::derived) {
 
         return false;
     }
 
     output =
-        derived_types[index];
+        derived_types[
+            type.payload() - 1];
 
     return true;
 }
@@ -2917,75 +1221,34 @@ bool graph::derived(
 std::uint64_t graph::link_target_key(
     object_endpoint target) noexcept {
 
-    if (!target.object ||
-        !target.member) {
-
-        return 0;
-    }
-
-    return
-        (static_cast<std::uint64_t>(
-             target.object.value()) << 32) |
-        (static_cast<std::uint64_t>(
-             target.member.value()) +
-         1);
+    if (!target.object || !target.member) return 0;
+    return (static_cast<std::uint64_t>(target.object.value()) << 32) |
+        (static_cast<std::uint64_t>(target.member.value()) + 1);
 }
 
 server_status graph::ensure_link_target_index_capacity(
     std::size_t additional) noexcept {
 
-    if (additional >
-        (std::numeric_limits<
-            std::size_t>::max)() -
-            link_target_index_count) {
-
+    if (additional > (std::numeric_limits<std::size_t>::max)() - link_target_index_count)
         return server_status::io_error;
-    }
 
-    const auto required =
-        link_target_index_count +
-        additional;
-
-    if (!link_target_index.empty() &&
-        required <=
-            link_target_index.size() / 2) {
-
+    const auto required = link_target_index_count + additional;
+    if (!link_target_index.empty() && required <= link_target_index.size() / 2)
         return server_status::success;
-    }
 
-    const auto capacity =
-        next_index_capacity(
-            required);
-
-    if (capacity == 0) {
-        return server_status::io_error;
-    }
+    const auto capacity = next_index_capacity(required);
+    if (capacity == 0) return server_status::io_error;
 
     try {
-        std::vector<link_target_index_slot>
-            candidate(capacity);
-
-        for (const auto& value :
-             link_target_index) {
-
-            if (value.key == 0) {
-                continue;
-            }
-
-            insert_link_target_index(
-                candidate,
-                value.key,
-                value.link);
+        std::vector<link_target_index_slot> candidate(capacity);
+        for (const auto& value : link_target_index) {
+            if (value.key != 0)
+                insert_link_target_index(candidate, value.key, value.link);
         }
-
-        link_target_index =
-            std::move(candidate);
-
+        link_target_index = std::move(candidate);
         return server_status::success;
     }
-    catch (...) {
-        return server_status::io_error;
-    }
+    catch (...) { return server_status::io_error; }
 }
 
 void graph::insert_link_target_index(
@@ -2993,117 +1256,53 @@ void graph::insert_link_target_index(
     std::uint64_t key,
     link_handle link_value) const noexcept {
 
-    const auto mask =
-        target.size() - 1;
-
-    auto position =
-        static_cast<std::size_t>(
-            mix64(key)) &
-        mask;
-
-    while (target[position].key != 0) {
-        position =
-            (position + 1) &
-            mask;
-    }
-
-    target[position] = {
-        key,
-        link_value,
-    };
+    const auto mask = target.size() - 1;
+    auto position = static_cast<std::size_t>(mix64(key)) & mask;
+    while (target[position].key != 0) position = (position + 1) & mask;
+    target[position] = {key, link_value};
 }
 
-link_handle graph::find_local_link_target(
+link_handle graph::find_link_target(
     object_endpoint target) const noexcept {
 
-    const auto key =
-        link_target_key(
-            target);
+    const auto key = link_target_key(target);
+    if (key == 0 || link_target_index.empty()) return {};
 
-    if (key == 0 ||
-        link_target_index.empty()) {
-
-        return {};
+    const auto mask = link_target_index.size() - 1;
+    auto position = static_cast<std::size_t>(mix64(key)) & mask;
+    for (std::size_t probe = 0; probe < link_target_index.size(); ++probe) {
+        const auto& slot = link_target_index[position];
+        if (slot.key == 0) return {};
+        if (slot.key == key) return slot.link;
+        position = (position + 1) & mask;
     }
-
-    const auto mask =
-        link_target_index.size() - 1;
-
-    auto position =
-        static_cast<std::size_t>(
-            mix64(key)) &
-        mask;
-
-    for (std::size_t probe = 0;
-         probe <
-            link_target_index.size();
-         ++probe) {
-
-        const auto& slot =
-            link_target_index[
-                position];
-
-        if (slot.key == 0) {
-            return {};
-        }
-
-        if (slot.key == key) {
-            return slot.link;
-        }
-
-        position =
-            (position + 1) &
-            mask;
-    }
-
     return {};
-}
-
-link_handle graph::lineage_link_target(
-    object_endpoint target) const noexcept {
-
-    if (const auto local =
-            find_local_link_target(
-                target);
-        local) {
-
-        return local;
-    }
-
-    return baseline != nullptr
-        ? baseline->find_link_target(
-            target)
-        : link_handle{};
 }
 
 bool graph::endpoint_valid(
     object_endpoint endpoint) const noexcept {
 
-    object_entry object_value;
+    const auto* object =
+        find(endpoint.object);
 
-    if (!object(
-            endpoint.object,
-            object_value) ||
+    if (object == nullptr ||
         !endpoint.member) {
 
         return false;
     }
 
-    type_handle type_value;
+    type_handle type;
 
     if (!named(
-            object_value.type,
-            type_value)) {
+            object->type,
+            type)) {
 
         return false;
     }
 
-    member_record value;
-
     return member(
-        type_value,
-        endpoint.member,
-        value);
+        type,
+        endpoint.member) != nullptr;
 }
 
 server_status graph::add_link(
@@ -3112,212 +1311,33 @@ server_status graph::add_link(
     link_handle& output) noexcept {
 
     output = {};
+    if (!endpoint_valid(source) || !endpoint_valid(target))
+        return server_status::project_configuration_invalid;
 
-    if (!endpoint_valid(source) ||
-        !endpoint_valid(target)) {
-
-        return server_status::
-            project_configuration_invalid;
-    }
-
-    if (const auto existing =
-            lineage_link_target(
-                target);
-        existing) {
-
-        if (contains(existing)) {
-            link_record value;
-
-            if (!link(
-                    existing,
-                    value) ||
-                value.target !=
-                    target ||
-                value.source !=
-                    source) {
-
-                return server_status::
-                    project_configuration_invalid;
-            }
-
-            output = existing;
-            return server_status::success;
-        }
-
-        if (existing.value() <=
-            baseline_link_count) {
-
-            link_patch* patch = nullptr;
-
-            const auto prepared =
-                ensure_link_patch(
-                    existing,
-                    patch);
-
-            if (!succeeded(prepared) ||
-                patch == nullptr) {
-
-                return succeeded(prepared)
-                    ? server_status::
-                        project_artifact_invalid
-                    : prepared;
-            }
-
-            patch->value = {
-                source,
-                target,
-            };
-
-            patch->live = true;
-        }
-        else {
-            const auto index =
-                static_cast<std::size_t>(
-                    existing.value() -
-                    baseline_link_count -
-                    1);
-
-            if (index >=
-                    links.size() ||
-                index >=
-                    link_live.size()) {
-
-                return server_status::
-                    project_artifact_invalid;
-            }
-
-            links[index] = {
-                source,
-                target,
-            };
-
-            link_live[index] = 1;
-        }
-
-        ++live_link_count_value;
-
+    if (const auto existing = find_link_target(target); existing) {
+        const auto* value = find(existing);
+        if (value == nullptr || value->target != target || value->source != source)
+            return server_status::project_configuration_invalid;
         output = existing;
         return server_status::success;
     }
 
-    if (link_count() >=
-        static_cast<std::size_t>(
-            link_handle::maximum_slot)) {
-
+    if (links.size() >= static_cast<std::size_t>(link_handle::maximum_slot))
         return server_status::io_error;
-    }
 
-    const auto prepared =
-        ensure_link_target_index_capacity(1);
+    const auto prepared = ensure_link_target_index_capacity(1);
+    if (!succeeded(prepared)) return prepared;
 
-    if (!succeeded(prepared)) {
-        return prepared;
-    }
+    const auto old_count = links.size();
+    try { links.push_back({source, target}); }
+    catch (...) { return server_status::io_error; }
 
-    const auto old_link_count =
-        links.size();
+    output = link_handle{static_cast<std::uint32_t>(links.size())};
+    const auto key = link_target_key(target);
+    if (key == 0) { links.resize(old_count); output = {}; return server_status::project_configuration_invalid; }
 
-    const auto old_live_count =
-        link_live.size();
-
-    try {
-        links.push_back({
-            source,
-            target,
-        });
-
-        link_live.push_back(1);
-    }
-    catch (...) {
-        links.resize(
-            old_link_count);
-
-        link_live.resize(
-            old_live_count);
-
-        return server_status::io_error;
-    }
-
-    output = link_handle{
-        static_cast<std::uint32_t>(
-            link_count())};
-
-    const auto key =
-        link_target_key(
-            target);
-
-    if (key == 0) {
-        links.resize(
-            old_link_count);
-
-        link_live.resize(
-            old_live_count);
-
-        output = {};
-
-        return server_status::
-            project_configuration_invalid;
-    }
-
-    insert_link_target_index(
-        link_target_index,
-        key,
-        output);
-
+    insert_link_target_index(link_target_index, key, output);
     ++link_target_index_count;
-    ++live_link_count_value;
-
-    return server_status::success;
-}
-
-server_status graph::retire(
-    link_handle link_value) noexcept {
-
-    if (!contains(link_value)) {
-        return server_status::
-            project_configuration_invalid;
-    }
-
-    if (link_value.value() <=
-        baseline_link_count) {
-
-        link_patch* patch = nullptr;
-
-        const auto prepared =
-            ensure_link_patch(
-                link_value,
-                patch);
-
-        if (!succeeded(prepared) ||
-            patch == nullptr) {
-
-            return succeeded(prepared)
-                ? server_status::
-                    project_artifact_invalid
-                : prepared;
-        }
-
-        patch->live = false;
-    }
-    else {
-        const auto index =
-            static_cast<std::size_t>(
-                link_value.value() -
-                baseline_link_count -
-                1);
-
-        if (index >=
-            link_live.size()) {
-
-            return server_status::
-                project_artifact_invalid;
-        }
-
-        link_live[index] = 0;
-    }
-
-    --live_link_count_value;
-
     return server_status::success;
 }
 

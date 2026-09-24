@@ -766,13 +766,12 @@ server_status source_map::finalize(
                         identity)
                     : type_handle{};
 
-                type_entry entry;
+                const auto* entry =
+                    type
+                    ? G.find(type)
+                    : nullptr;
 
-                if (!type ||
-                    !G.type(
-                        type,
-                        entry)) {
-
+                if (entry == nullptr) {
                     return server_status::
                         project_artifact_invalid;
                 }
@@ -791,7 +790,7 @@ server_status source_map::finalize(
                     source_data_kind::
                         type_definition) {
 
-                    if (!entry.defined()) {
+                    if (!entry->defined()) {
                         return server_status::
                             project_artifact_invalid;
                     }

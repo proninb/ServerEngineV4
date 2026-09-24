@@ -13,6 +13,7 @@
 namespace cw::server {
 
 class graph;
+class graph_delta;
 class compiled_project_view;
 
 class member_index final {
@@ -47,6 +48,7 @@ private:
     std::uint32_t index = invalid_value;
 
     friend class graph;
+    friend class graph_delta;
     friend class compiled_project_view;
 };
 

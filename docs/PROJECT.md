@@ -271,7 +271,26 @@ record type and is never a global identity.
 There is no facts layer, Semantic DB, Builder, candidate Graph, prepared Graph,
 or Graph-generation object between Parser/Semantic and G.
 
-PUBLISH/REBUILD shared full-construction state owns one temporary `G`;
+`graph` is the complete dense final-G construction model. It contains no
+compiled baseline pointer, BUILD patches, tombstones, live-slot masks, or
+invalidation state.
+
+Incremental BUILD keeps those concerns outside G:
+
+```text
+compiled.bin read-only mmap
+    -> compiled_project_view OLD G
+
+graph_delta
+    -> sparse changed OLD slots
+    -> sparse retired/replayed state
+    -> append-only new semantic slots
+```
+
+`graph_delta` is BUILD operation state only. It is never resident Project state
+and never becomes a second architectural G.
+
+PUBLISH/REBUILD shared full-construction state owns one temporary dense `G`;
 Parser/Semantic writes directly into it.
 
 

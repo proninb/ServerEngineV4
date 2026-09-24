@@ -2,6 +2,7 @@
 #include "project/persistence/compiled_project.hpp"
 #include "project/persistence/crc64_ecma.hpp"
 #include "project/file/file_context.hpp"
+#include "project/graph/graph_delta.hpp"
 #include "project/source/source_map.hpp"
 #include "read_only_file_mapping.hpp"
 #include "writable_file_mapping.hpp"
@@ -1284,13 +1285,13 @@ void test_build_lineage_overlays(
             appended_identity,
         "BUILD identity slot view spans baseline and overlay");
 
-    graph G;
+    graph_delta G;
 
     if (!tests.expect(
             succeeded(
                 G.bind_baseline(
                     baseline)),
-            "bind sparse Graph baseline")) {
+            "bind BUILD graph_delta baseline")) {
         return;
     }
 
@@ -1312,7 +1313,7 @@ void test_build_lineage_overlays(
             baseline.link_count() &&
         G.derived_type_count() ==
             baseline.derived_type_count(),
-        "sparse Graph binds baseline without dense reconstruction");
+        "BUILD graph_delta binds baseline without dense reconstruction");
 
     type_entry baseline_type;
 
@@ -1324,7 +1325,7 @@ void test_build_lineage_overlays(
             fixture.type,
             baseline_type) &&
         baseline_type.defined(),
-        "sparse Graph reads unchanged type directly from baseline");
+        "BUILD graph_delta reads unchanged type directly from baseline");
 
     type_ref repeated_pointer;
 
@@ -1337,13 +1338,13 @@ void test_build_lineage_overlays(
                 repeated_pointer)) &&
         repeated_pointer ==
             fixture.pointer_type,
-        "sparse Graph reuses persisted derived slot");
+        "BUILD graph_delta reuses persisted derived slot");
 
     if (!tests.expect(
             succeeded(
                 G.clear_definition(
                     fixture.type)),
-            "sparse Graph clears baseline type definition")) {
+            "BUILD graph_delta clears baseline type definition")) {
         return;
     }
 
@@ -1376,7 +1377,7 @@ void test_build_lineage_overlays(
                     graph_record_kind::struct_type,
                     replacement_members,
                     replacement_construction)),
-            "sparse Graph replaces baseline type definition")) {
+            "BUILD graph_delta replaces baseline type definition")) {
         return;
     }
 
@@ -1394,7 +1395,7 @@ void test_build_lineage_overlays(
             construction_value::constant(
                 construction_kind::signed_integer,
                 99),
-        "sparse type replacement preserves type_handle");
+        "graph_delta type replacement preserves type_handle");
 
     const auto old_live_objects =
         G.live_object_count();
@@ -1409,7 +1410,7 @@ void test_build_lineage_overlays(
                 fixture.right_identity) &&
             G.live_object_count() + 1 ==
                 old_live_objects,
-            "sparse Graph tombstones baseline object")) {
+            "BUILD graph_delta tombstones baseline object")) {
         return;
     }
 
@@ -1427,7 +1428,7 @@ void test_build_lineage_overlays(
                         9))) &&
             restored_right ==
                 fixture.right,
-            "sparse Graph reuses retired object slot")) {
+            "BUILD graph_delta reuses retired object slot")) {
         return;
     }
 
@@ -1449,7 +1450,7 @@ void test_build_lineage_overlays(
             construction_value::constant(
                 construction_kind::unsigned_integer,
                 9),
-        "sparse Graph patches object construction without baseline copy");
+        "BUILD graph_delta patches object construction without baseline copy");
 
     const auto old_live_links =
         G.live_link_count();
@@ -1462,7 +1463,7 @@ void test_build_lineage_overlays(
                 fixture.link) &&
             G.live_link_count() + 1 ==
                 old_live_links,
-            "sparse Graph tombstones baseline link")) {
+            "BUILD graph_delta tombstones baseline link")) {
         return;
     }
 
@@ -1481,7 +1482,7 @@ void test_build_lineage_overlays(
             fixture.link &&
         G.live_link_count() ==
             old_live_links,
-        "sparse Graph reuses retired link target slot");
+        "BUILD graph_delta reuses retired link target slot");
 
     object_handle appended_object;
 
@@ -1496,7 +1497,7 @@ void test_build_lineage_overlays(
             G.find_object(
                 appended_identity) ==
                 appended_object,
-            "sparse Graph appends new object after baseline slots")) {
+            "BUILD graph_delta appends new object after baseline slots")) {
         return;
     }
 
@@ -1513,7 +1514,7 @@ void test_build_lineage_overlays(
             type_ref_kind::derived &&
         appended_derived.payload() ==
             baseline.derived_type_count() + 1,
-        "sparse Graph appends derived type after baseline slots");
+        "BUILD graph_delta appends derived type after baseline slots");
 
     link_handle appended_link;
 
@@ -1531,7 +1532,7 @@ void test_build_lineage_overlays(
                 appended_link)) &&
         appended_link.value() ==
             baseline.link_count() + 1,
-        "sparse Graph appends link after baseline slots");
+        "BUILD graph_delta appends link after baseline slots");
 
     compiled_project_layout merged_layout;
 
