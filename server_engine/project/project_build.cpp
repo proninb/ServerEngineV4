@@ -375,11 +375,15 @@ server_status build_project(
 
     std::vector<file_id> affected;
 
+    source_save_affected_metrics
+        affected_metrics;
+
     const auto collected =
         collect_source_save_affected(
             context.source,
             semantic_changed,
-            affected);
+            affected,
+            &affected_metrics);
 
     if (!succeeded(collected)) {
         diagnostics.emit(
@@ -621,6 +625,12 @@ server_status build_project(
             ", affected=" +
             std::to_string(
                 affected.size()) +
+            ", affected_edges=" +
+            std::to_string(
+                affected_metrics.dependency_edges) +
+            ", affected_slots=" +
+            std::to_string(
+                affected_metrics.visited_slots) +
             ", semantic_roots=" +
             std::to_string(
                 semantic_roots.size()) +

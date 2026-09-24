@@ -441,7 +441,9 @@ Persisted OLD reverse topology expands `semantic_changed`, not raw journal
 events, into the affected physical closure. Project-declaration edges in that
 same OLD DAG identify the affected semantic roots, so BUILD does not need a
 duplicated contribution-to-root persistence index. This also preserves empty
-semantic roots that had no old Source Map contributions.
+semantic roots that had no old Source Map contributions. Reverse-closure
+membership is tracked by a dynamically grown sparse `file_id` set, so closure
+memory is `O(A)` rather than a zeroed `O(F)` marker.
 
 `database.bin` is BUILD-only retained frontend state keyed by `file_id`. It
 pairs exact Header/Source snapshot bytes with their lexical words/directive

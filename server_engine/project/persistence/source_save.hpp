@@ -234,6 +234,12 @@ struct source_save_change_classification_metrics final {
     std::uint64_t active_lanes = 0;
 };
 
+struct source_save_affected_metrics final {
+    std::uint64_t visited_files = 0;
+    std::uint64_t dependency_edges = 0;
+    std::uint64_t visited_slots = 0;
+};
+
 // Checkpoint for source.bin produced by this BUILD. It is captured before
 // dirty detection begins. Filesystem changes after that point remain visible to
 // the next BUILD. Portable fallback clears it because journal identity
@@ -285,7 +291,8 @@ prepare_source_save_layout(const file_context &files,
 [[nodiscard]] server_status collect_source_save_affected(
     const source_save_view& persisted,
     std::span<const file_id> semantic_changed,
-    std::vector<file_id>& affected) noexcept;
+    std::vector<file_id>& affected,
+    source_save_affected_metrics* metrics = nullptr) noexcept;
 
 // Selects Project-declared Header/Source semantic roots from an OLD physical
 // affected closure. Project configuration edges are authoritative root markers:

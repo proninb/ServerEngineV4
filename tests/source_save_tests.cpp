@@ -675,8 +675,50 @@ void test_affected_semantic_roots(
             acquire(
                 files,
                 child),
-            "acquire affected-root fixture") ||
-        !tests.expect(
+            "acquire affected-root fixture")) {
+
+        return;
+    }
+
+    constexpr std::size_t unrelated_count = 64;
+
+    for (std::size_t index = 0;
+         index < unrelated_count;
+         ++index) {
+
+        const auto path =
+            root /
+            ("roots_unrelated_" +
+             std::to_string(index) +
+             ".hpp");
+
+        if (!tests.expect(
+                write_text(
+                    path,
+                    "\n"),
+                "write unrelated affected-root fixture")) {
+
+            return;
+        }
+
+        file_id unrelated;
+
+        if (!tests.expect(
+                succeeded(
+                    files.resolve(
+                        path,
+                        file_kind::header,
+                        unrelated)) &&
+            acquire(
+                files,
+                unrelated),
+            "materialize unrelated affected-root fixture")) {
+
+            return;
+        }
+    }
+
+    if (!tests.expect(
             succeeded(
                 files.add_dependency(
                     project,
@@ -760,13 +802,23 @@ void test_affected_semantic_roots(
 
     std::vector<file_id> affected;
 
+    source_save_affected_metrics
+        affected_metrics;
+
     if (!tests.expect(
             succeeded(
                 collect_source_save_affected(
                     persisted,
                     semantic_changed,
-                    affected)),
-            "collect affected physical closure")) {
+                    affected,
+                    &affected_metrics)) &&
+            affected_metrics.visited_files ==
+                affected.size() &&
+            affected_metrics.visited_files == 3 &&
+            affected_metrics.dependency_edges == 2 &&
+            affected_metrics.visited_slots <
+                persisted.file_count(),
+            "collect sparse affected physical closure without file_count marker")) {
 
         return;
     }

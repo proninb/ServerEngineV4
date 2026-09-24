@@ -825,8 +825,17 @@ index in compiled.bin.
 
 This is why direct reverse adjacency is first-class persisted construction data.
 
-BUILD must not rebuild the complete `O(F + E)` topology merely to discover the
-affected set.
+The reverse walk uses a dynamically grown open-addressed `file_id` membership
+set sized by the visited closure, not a dense `file_count` marker. Therefore a
+small incremental BUILD has:
+
+```text
+time   O(A + E_old(A))
+memory O(A)
+```
+
+where `A` is the affected physical closure. BUILD does not zero or reconstruct
+`O(F)` state merely to discover the affected set.
 
 ### Frontend reuse
 

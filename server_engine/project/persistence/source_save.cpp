@@ -316,6 +316,182 @@ struct directory_index_slot final {
     return capacity;
 }
 
+enum class sparse_file_insert_result : std::uint8_t {
+    inserted,
+    existing,
+    failed,
+};
+
+[[nodiscard]] bool sparse_file_insert_raw(
+    std::vector<file_id>& slots,
+    file_id file) noexcept {
+
+    if (slots.empty() ||
+        !file) {
+
+        return false;
+    }
+
+    const auto mask =
+        slots.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            mix64(file.value())) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe < slots.size();
+         ++probe) {
+
+        auto& slot =
+            slots[position];
+
+        if (!slot) {
+            slot = file;
+            return true;
+        }
+
+        if (slot == file) {
+            return true;
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return false;
+}
+
+[[nodiscard]] sparse_file_insert_result
+insert_sparse_file(
+    std::vector<file_id>& slots,
+    std::size_t& count,
+    file_id file) noexcept {
+
+    if (!file ||
+        count ==
+            (std::numeric_limits<
+                std::size_t>::max)()) {
+
+        return sparse_file_insert_result::
+            failed;
+    }
+
+    if (!slots.empty()) {
+        const auto mask =
+            slots.size() - 1;
+
+        auto position =
+            static_cast<std::size_t>(
+                mix64(file.value())) &
+            mask;
+
+        for (std::size_t probe = 0;
+             probe < slots.size();
+             ++probe) {
+
+            const auto slot =
+                slots[position];
+
+            if (!slot) {
+                break;
+            }
+
+            if (slot == file) {
+                return sparse_file_insert_result::
+                    existing;
+            }
+
+            position =
+                (position + 1) &
+                mask;
+        }
+    }
+
+    const auto required =
+        count + 1;
+
+    const auto threshold =
+        slots.empty()
+        ? 0
+        : slots.size() -
+            slots.size() / 4;
+
+    if (slots.empty() ||
+        required > threshold) {
+
+        const auto capacity =
+            next_capacity(
+                required);
+
+        if (capacity == 0 ||
+            capacity <= slots.size()) {
+
+            return sparse_file_insert_result::
+                failed;
+        }
+
+        try {
+            std::vector<file_id>
+                candidate(
+                    capacity);
+
+            for (const auto existing :
+                 slots) {
+
+                if (existing &&
+                    !sparse_file_insert_raw(
+                        candidate,
+                        existing)) {
+
+                    return sparse_file_insert_result::
+                        failed;
+                }
+            }
+
+            slots =
+                std::move(candidate);
+        }
+        catch (...) {
+            return sparse_file_insert_result::
+                failed;
+        }
+    }
+
+    const auto mask =
+        slots.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            mix64(file.value())) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe < slots.size();
+         ++probe) {
+
+        auto& slot =
+            slots[position];
+
+        if (!slot) {
+            slot = file;
+            ++count;
+
+            return sparse_file_insert_result::
+                inserted;
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return sparse_file_insert_result::
+        failed;
+}
+
 [[nodiscard]] std::uint32_t persisted_path_fingerprint(
     const filesystem_path_key& key) noexcept {
 
@@ -3579,52 +3755,93 @@ server_status classify_source_save_changes(
 server_status collect_source_save_affected(
     const source_save_view& persisted,
     std::span<const file_id> semantic_changed,
-    std::vector<file_id>& affected) noexcept {
+    std::vector<file_id>& affected,
+    source_save_affected_metrics* metrics) noexcept {
 
     affected.clear();
 
+    source_save_affected_metrics
+        local;
+
     if (!persisted.valid()) {
+        if (metrics != nullptr) {
+            *metrics = {};
+        }
+
         return server_status::
             project_artifact_invalid;
     }
 
     try {
-        std::vector<std::uint8_t>
-            visited(
-                persisted.file_count());
+        std::vector<file_id>
+            visited;
+
+        std::size_t visited_count = 0;
 
         affected.reserve(
             semantic_changed.size());
 
+        const auto stage =
+            [&](file_id file)
+            -> server_status {
+
+                if (!persisted.contains(file)) {
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                const auto inserted =
+                    insert_sparse_file(
+                        visited,
+                        visited_count,
+                        file);
+
+                if (inserted ==
+                    sparse_file_insert_result::
+                        failed) {
+
+                    return server_status::io_error;
+                }
+
+                if (inserted ==
+                    sparse_file_insert_result::
+                        existing) {
+
+                    return server_status::success;
+                }
+
+                source_save_file_view state;
+
+                if (!persisted.file(
+                        file,
+                        state) ||
+                    !state.current_member) {
+
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                affected.push_back(
+                    file);
+
+                return server_status::success;
+            };
+
         for (const auto file :
              semantic_changed) {
 
-            if (!persisted.contains(file)) {
-                return server_status::
-                    project_artifact_invalid;
+            const auto staged =
+                stage(file);
+
+            if (!succeeded(staged)) {
+                affected.clear();
+
+                if (metrics != nullptr) {
+                    *metrics = {};
+                }
+
+                return staged;
             }
-
-            auto& marker =
-                visited[
-                    file.value() - 1];
-
-            if (marker != 0) {
-                continue;
-            }
-
-            source_save_file_view state;
-
-            if (!persisted.file(
-                    file,
-                    state) ||
-                !state.current_member) {
-
-                return server_status::
-                    project_artifact_invalid;
-            }
-
-            marker = 1;
-            affected.push_back(file);
         }
 
         for (std::size_t position = 0;
@@ -3640,56 +3857,69 @@ server_status collect_source_save_affected(
                 !state.current_member) {
 
                 affected.clear();
+
+                if (metrics != nullptr) {
+                    *metrics = {};
+                }
+
                 return server_status::
                     project_artifact_invalid;
             }
 
-            for (std::size_t index = 0;
-                 index <
-                    state.dependents.size();
-                 ++index) {
+            for (const auto dependent :
+                 state.dependents) {
 
-                const auto dependent =
-                    state.dependents[index];
-
-                if (!persisted.contains(dependent)) {
-                    affected.clear();
-                    return server_status::
-                        project_artifact_invalid;
-                }
-
-                auto& marker =
-                    visited[
-                        dependent.value() - 1];
-
-                // Dense marker first: common fan-in nodes are decoded once.
-                if (marker != 0) {
-                    continue;
-                }
-
-                source_save_file_view
-                    dependent_state;
-
-                if (!persisted.file(
-                        dependent,
-                        dependent_state) ||
-                    !dependent_state.
-                        current_member) {
+                if (local.dependency_edges ==
+                    (std::numeric_limits<
+                        std::uint64_t>::max)()) {
 
                     affected.clear();
-                    return server_status::
-                        project_artifact_invalid;
+
+                    if (metrics != nullptr) {
+                        *metrics = {};
+                    }
+
+                    return server_status::io_error;
                 }
 
-                marker = 1;
-                affected.push_back(dependent);
+                ++local.dependency_edges;
+
+                const auto staged =
+                    stage(
+                        dependent);
+
+                if (!succeeded(staged)) {
+                    affected.clear();
+
+                    if (metrics != nullptr) {
+                        *metrics = {};
+                    }
+
+                    return staged;
+                }
             }
+        }
+
+        local.visited_files =
+            visited_count;
+
+        local.visited_slots =
+            visited.size();
+
+        if (metrics != nullptr) {
+            *metrics =
+                local;
         }
 
         return server_status::success;
     }
     catch (...) {
         affected.clear();
+
+        if (metrics != nullptr) {
+            *metrics = {};
+        }
+
         return server_status::io_error;
     }
 }
