@@ -130,6 +130,11 @@ Mode usage:
 LOAD
     compiled
 
+PUBLISH
+    full source construction
+    writes compiled only
+    removes stale BUILD-acceleration artifacts
+
 BUILD
     manifest
     source_save
@@ -137,8 +142,8 @@ BUILD
     compiled
 
 REBUILD
-    constructs fresh state and replaces
-    manifest/source_save/database/compiled
+    same full source construction as PUBLISH
+    writes compiled + fresh manifest/source_save/database
 ```
 
 `compiled` is the only persisted artifact required by LOAD.
@@ -176,6 +181,7 @@ The currently configured startup schema supports:
 
 ```text
 load
+publish
 rebuild
 ```
 
@@ -184,6 +190,9 @@ Both begin from `UNLOADED`.
 ```text
 startup=load
     UNLOADED -> LOAD <path> -> LOADED on success
+
+startup=publish
+    UNLOADED -> PUBLISH <path> -> LOADED on success
 
 startup=rebuild
     UNLOADED -> REBUILD <path> -> LOADED on success
@@ -202,7 +211,12 @@ Relative Project paths are resolved relative to `server.json`.
 ```text
 LOAD <project-path>
     requires UNLOADED
-    restores the last committed final G
+    obtains final G from compiled.bin without Parser/source construction
+
+PUBLISH <project-path>
+    requires UNLOADED
+    full source construction -> final G -> compiled.bin
+    creates no BUILD acceleration state
 
 BUILD <project-path>
     requires UNLOADED
@@ -229,7 +243,15 @@ Target architecture:
 
 ```text
 LOAD
-    committed final G
+    compiled.bin -> final G
+    -> Runtime / SHM
+    -> LOADED
+
+PUBLISH
+    project.json + source inputs
+    -> full compiler
+    -> final G
+    -> compiled.bin
     -> Runtime / SHM
     -> LOADED
 
@@ -256,6 +278,10 @@ Current Phase-1 status:
 ```text
 LOAD
     mmap-native compiled.bin restore implemented
+
+PUBLISH
+    full source construction implemented through compiled.bin persistence
+    creates no project.manifest/source.bin/database.bin
 
 REBUILD
     complete through direct final artifact persistence and resident publication

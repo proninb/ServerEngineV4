@@ -56,8 +56,10 @@ add_executable(ServerEngineV4
     server_engine/project/persistence/source_save_view.cpp
     server_engine/project/file/file_context.cpp
     server_engine/project/project_load.cpp
+    server_engine/project/project_publish.cpp
     server_engine/project/project_build.cpp
     server_engine/project/project_rebuild.cpp
+    server_engine/project/project_full_construction.cpp
     server_engine/project/project_configuration_loader.cpp
 )
 

@@ -3025,7 +3025,7 @@ source_save_result validate_source_save_image(
             };
 
         std::vector<std::uint32_t>
-            reverse_cursor(
+            semantic_reverse_cursor(
                 view.semantic_reverse_index_count_value);
 
         std::vector<std::uint8_t>
@@ -3133,7 +3133,7 @@ source_save_result validate_source_save_image(
                 }
 
                 auto& cursor =
-                    reverse_cursor[
+                    semantic_reverse_cursor[
                         slot_position];
 
                 if (cursor >=
@@ -3207,7 +3207,7 @@ source_save_result validate_source_save_image(
             }
 
             if (!slot.dependency) {
-                if (reverse_cursor[position] != 0) {
+                if (semantic_reverse_cursor[position] != 0) {
                     return source_save_result::
                         invalid_image;
                 }
@@ -3219,7 +3219,7 @@ source_save_result validate_source_save_image(
 
             if (!target_valid(
                     slot.dependency) ||
-                reverse_cursor[position] !=
+                semantic_reverse_cursor[position] !=
                     slot.roots.count) {
 
                 return source_save_result::

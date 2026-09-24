@@ -7,6 +7,9 @@
 It is consumed by:
 
 ```text
+PUBLISH
+    always compose from root
+
 REBUILD
     always compose from root
 

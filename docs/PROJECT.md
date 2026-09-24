@@ -6,6 +6,7 @@ Project lifecycle is mode-oriented:
 
 ```text
 LOAD <project-path>
+PUBLISH <project-path>
 BUILD <project-path>
 REBUILD <project-path>
 UNLOAD
@@ -22,14 +23,22 @@ server_context.project == nullptr
     == UNLOADED
 ```
 
-`LOAD`, `BUILD`, and `REBUILD` are all entered from `UNLOADED`.
+`LOAD`, `PUBLISH`, `BUILD`, and `REBUILD` are all entered from `UNLOADED`.
 
-The distinction is not whether a resident Project exists. The distinction is
-which persisted/construction state the operation is allowed to use:
+The operations differ only in how final G is obtained and whether BUILD
+acceleration is produced:
 
 ```text
 LOAD
-    restore G from the last committed compiled artifact
+    compiled.bin -> G
+    no Parser/source construction
+
+PUBLISH
+    project.json + source inputs
+    -> full source compiler
+    -> G
+    -> compiled.bin
+    no BUILD acceleration output
 
 BUILD
     reuse persisted construction state
@@ -37,10 +46,20 @@ BUILD
     -> G
 
 REBUILD
-    ignore previous BUILD acceleration state
-    construct fresh build lineage state
+    same full source compiler as PUBLISH
     -> G
+    -> compiled.bin
+    + fresh BUILD acceleration state
 ```
+
+After G exists, all modes converge on one architectural tail:
+
+```text
+G -> Runtime -> SHM -> Project
+```
+
+Runtime/SHM remains Phase 2; the current Phase-1 implementation publishes the
+resident mmap-native compiled representation at that convergence boundary.
 
 There is no `SAVE` lifecycle stage. `compiled.bin` is the critical semantic
 persistence output of REBUILD and is the mmap-native compiled Project consumed
@@ -58,6 +77,8 @@ persisted BUILD state.
 UNLOADED
     +-- LOAD <path> success ------> LOADED
     +-- LOAD <path> failure ------> UNLOADED
+    +-- PUBLISH <path> success ---> LOADED
+    +-- PUBLISH <path> failure ---> UNLOADED
     +-- BUILD <path> success -----> LOADED
     +-- BUILD <path> failure -----> UNLOADED
     +-- REBUILD <path> success ---> LOADED
@@ -71,6 +92,7 @@ Preconditions:
 
 ```text
 LOAD     requires UNLOADED
+PUBLISH  requires UNLOADED
 BUILD    requires UNLOADED
 REBUILD  requires UNLOADED
 UNLOAD   requires LOADED
@@ -86,7 +108,12 @@ A failed BUILD discards only its temporary operation state. Persisted BUILD
 artifacts remain available for a later BUILD, but no resident Project is
 published and the Server remains `UNLOADED`.
 
-LOAD, BUILD, and REBUILD never substitute for each other.
+LOAD, PUBLISH, BUILD, and REBUILD never substitute for each other.
+
+`PUBLISH` is the reference full compiler path. `REBUILD` reuses that exact
+compiler path and differs only by additionally persisting BUILD acceleration.
+For identical source/configuration input, PUBLISH and REBUILD must produce the
+same final semantic G.
 
 ## Semantic Source Provenance
 
@@ -156,11 +183,16 @@ current G + next G
 Graph publication generation
 ```
 
-The three lifecycle operations differ only in how `G` is obtained:
+The four G-acquisition operations differ only in how `G` is obtained:
 
 ```text
 LOAD
     compiled.bin
+        -> G
+
+PUBLISH
+    current inputs
+        -> full source compiler
         -> G
 
 BUILD
@@ -171,7 +203,7 @@ BUILD
 
 REBUILD
     current inputs
-        -> fresh construction lineage
+        -> the same full source compiler as PUBLISH
         -> G
 ```
 
@@ -239,8 +271,8 @@ record type and is never a global identity.
 There is no facts layer, Semantic DB, Builder, candidate Graph, prepared Graph,
 or Graph-generation object between Parser/Semantic and G.
 
-REBUILD operation state owns one temporary `G`; Parser/Semantic writes directly
-into it.
+PUBLISH/REBUILD shared full-construction state owns one temporary `G`;
+Parser/Semantic writes directly into it.
 
 
 ## Header / Source semantic boundary
@@ -638,7 +670,7 @@ Development is intentionally split into two boundaries:
 
 ```text
 PHASE 1
-LOAD / BUILD / REBUILD
+LOAD / PUBLISH / BUILD / REBUILD
     -> compiled G
     -> resident Project semantic state
 

@@ -198,6 +198,12 @@
     <ClCompile Include="server_engine\project\project_load.cpp">
       <Filter>server_engine\project</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\project\project_publish.cpp">
+      <Filter>server_engine\project</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\project_full_construction.cpp">
+      <Filter>server_engine\project</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\project\project_build.cpp">
       <Filter>server_engine\project</Filter>
     </ClCompile>
@@ -432,6 +438,12 @@
       <Filter>server_engine\project\file</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\project_load.hpp">
+      <Filter>server_engine\project</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\project_publish.hpp">
+      <Filter>server_engine\project</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\project_full_construction.hpp">
       <Filter>server_engine\project</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\project_build.hpp">

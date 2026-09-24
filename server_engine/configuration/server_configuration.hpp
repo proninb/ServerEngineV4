@@ -55,7 +55,10 @@ enum class project_startup_mode {
     // Restore the committed final Project state without source construction.
     load,
 
-    // Reconstruct the Project from project.json using a fresh lineage.
+    // Compile project.json from source and persist only final compiled.bin.
+    publish,
+
+    // Reconstruct the Project plus fresh BUILD acceleration state.
     rebuild,
 };
 

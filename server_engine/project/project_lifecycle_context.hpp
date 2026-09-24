@@ -1,8 +1,10 @@
 /*
  * Mode-specific temporary Project lifecycle state.
  *
- * LOAD, BUILD, and REBUILD deliberately have separate contexts. There is no
- * universal builder context; each mode owns only the temporary state it needs.
+ * LOAD and BUILD own mode-specific temporary state. PUBLISH and REBUILD share
+ * one full-source construction state because REBUILD is exactly PUBLISH
+ * construction plus BUILD-acceleration persistence. There is no universal
+ * builder context.
  */
 #pragma once
 
@@ -61,9 +63,9 @@ public:
     preprocessor_configuration preprocessor;
 };
 
-class rebuild_context final {
+class full_construction_context final {
 public:
-    explicit rebuild_context(
+    explicit full_construction_context(
         const server_settings_configuration& settings) noexcept
         : settings(settings),
           identities(strings) {

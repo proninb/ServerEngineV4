@@ -1,8 +1,9 @@
 /*
- * Project REBUILD lifecycle entry.
+ * Project PUBLISH pipeline.
  *
- * REBUILD delegates to the shared full source-construction pipeline used by
- * PUBLISH, then additionally persists fresh BUILD-acceleration artifacts.
+ * PUBLISH compiles project.json and its source inputs from scratch, persists only
+ * the final LOAD artifact compiled.bin, and publishes the resulting Project.
+ * It deliberately creates no BUILD acceleration state.
  */
 #pragma once
 
@@ -17,7 +18,7 @@
 
 namespace cw::server {
 
-[[nodiscard]] server_status rebuild_project(
+[[nodiscard]] server_status publish_project(
     const std::filesystem::path& project_path,
     const server_settings_configuration& settings,
     operation_id operation,

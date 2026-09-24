@@ -3,6 +3,7 @@
  *
  * Current commands:
  *   LOAD <project-path>
+ *   PUBLISH <project-path>
  *   BUILD <project-path>
  *   UNLOAD
  *   REBUILD <project-path>
@@ -92,6 +93,16 @@ void server_console::run() {
             }
 
             publish({server_command_kind::load, std::move(path)});
+        } else if (verb == "PUBLISH") {
+            std::string path;
+            std::getline(stream >> std::ws, path);
+
+            if (path.empty()) {
+                std::cout << "PUBLISH requires a project path\n";
+                continue;
+            }
+
+            publish({server_command_kind::publish, std::move(path)});
         } else if (verb == "BUILD") {
             std::string path;
             std::getline(stream >> std::ws, path);

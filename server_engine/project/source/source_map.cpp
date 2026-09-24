@@ -221,9 +221,17 @@ server_status source_map::add_dependency(
     source_dependency_ref dependency) noexcept {
 
     if (!active_root ||
-        finalized_value ||
-        !dependency) {
+        finalized_value) {
 
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    if (!capture_build_acceleration) {
+        return server_status::success;
+    }
+
+    if (!dependency) {
         return server_status::
             project_configuration_invalid;
     }
@@ -320,17 +328,26 @@ server_status source_map::finalize(
             file_count,
             {});
 
-        type_presence.assign(
-            G.type_count(),
-            {});
+        if (capture_build_acceleration) {
+            type_presence.assign(
+                G.type_count(),
+                {});
 
-        object_presence.assign(
-            G.object_count(),
-            0);
+            object_presence.assign(
+                G.object_count(),
+                0);
 
-        link_presence.assign(
-            G.link_count(),
-            0);
+            link_presence.assign(
+                G.link_count(),
+                0);
+        }
+        else {
+            type_presence.clear();
+            object_presence.clear();
+            link_presence.clear();
+            dependency_index.clear();
+            dependent_roots.clear();
+        }
 
         const auto increment =
             [](std::uint32_t& value) noexcept {
@@ -729,6 +746,10 @@ server_status source_map::finalize(
                     file_range.count)) {
 
                 return server_status::io_error;
+            }
+
+            if (!capture_build_acceleration) {
+                continue;
             }
 
             if (is_type(

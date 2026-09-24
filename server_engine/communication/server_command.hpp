@@ -15,13 +15,16 @@ enum class server_command_kind {
     // Restore one persisted Project while the Server is UNLOADED.
     load,
 
+    // Compile one Project from source and persist only the final compiled artifact.
+    publish,
+
     // Incrementally construct one Project from persisted BUILD state while UNLOADED.
     build,
 
     // Destroy the currently active Project and return to UNLOADED.
     unload,
 
-    // Construct a new G0 while the Server is UNLOADED.
+    // Full source construction plus fresh BUILD acceleration while UNLOADED.
     rebuild,
 
     // Stop communication, release Project ownership, and exit server.run().
@@ -33,7 +36,7 @@ struct server_command {
     // Operation selected by the external command.
     server_command_kind kind = server_command_kind::shutdown;
 
-    // Project entry path used by LOAD/BUILD/REBUILD; empty for UNLOAD/SHUTDOWN.
+    // Project entry path used by LOAD/PUBLISH/BUILD/REBUILD; empty for UNLOAD/SHUTDOWN.
     std::filesystem::path path;
 };
 

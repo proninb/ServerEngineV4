@@ -37,6 +37,12 @@ public:
         operation_id operation,
         diagnostic_collection& diagnostics);
 
+    // Full source construction. Persists compiled.bin only.
+    [[nodiscard]] server_status publish(
+        const std::filesystem::path& project_path,
+        operation_id operation,
+        diagnostic_collection& diagnostics);
+
     // Incremental construction from persisted BUILD state.
     [[nodiscard]] server_status build(
         const std::filesystem::path& project_path,

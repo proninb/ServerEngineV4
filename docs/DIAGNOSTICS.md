@@ -169,7 +169,7 @@ Unsupported schema versions report the expected current version explicitly.
 
 ## Lifecycle diagnostic boundary
 
-LOAD, BUILD, and REBUILD all start from `UNLOADED`, receive a Project path, and
+LOAD, PUBLISH, BUILD, and REBUILD all start from `UNLOADED`, receive a Project path, and
 may use different persisted/construction subsystems.
 
 One external operation still owns exactly:
@@ -208,6 +208,7 @@ Project construction diagnostics use stable IDs:
 2028 project.compiled_io_failed
 2029 project.database_invalid
 2030 project.database_io_failed
+2031 project.publish_cleanup_failed
 ```
 
 The retired root-only `project.identity` artifact no longer exists. Diagnostic
@@ -219,7 +220,7 @@ Lifecycle use of the existing state diagnostics changes with the BUILD contract:
 
 ```text
 project.already_loaded
-    LOAD / BUILD / REBUILD requested while a resident Project is active
+    LOAD / PUBLISH / BUILD / REBUILD requested while a resident Project is active
 
 project.not_loaded
     operation requiring resident runtime state (for example UNLOAD)
@@ -282,9 +283,11 @@ A changed or missing configuration input during BUILD is not itself a corrupt
 manifest. It triggers recomposition. Manifest diagnostics are reserved for the
 persisted manifest artifact itself.
 
-During REBUILD, `compiled.bin` diagnostics retain error severity because that
-artifact is required for resident Project publication. Persistence failures for
+During PUBLISH and REBUILD, `compiled.bin` diagnostics retain error severity
+because that artifact is required for resident Project publication. PUBLISH does
+not create BUILD-acceleration artifacts. During REBUILD, persistence failures for
 `project.manifest`, `source.bin`, or `database.bin` use their existing stable
 diagnostic IDs with `warning` severity: those files are BUILD acceleration only,
 so the current REBUILD may still succeed while the next BUILD rejects
-missing/invalid acceleration state.
+missing/invalid acceleration state. `project.publish_cleanup_failed` reports a
+PUBLISH pre-clean/failure-cleanup error that could leave artifact state ambiguous.

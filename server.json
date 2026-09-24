@@ -32,7 +32,7 @@
   // Optional startup Project:
   // "project": {
   //   "path": "project.json",
-  //   "startup": "load"
+  //   "startup": "load" // load | publish | rebuild
   // },
 
   "logging": {
@@ -48,6 +48,7 @@
       "communication",
       "project",
       "load",
+      "publish",
       "build",
       "rebuild",
       "unload",

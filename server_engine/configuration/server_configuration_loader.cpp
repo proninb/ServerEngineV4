@@ -1058,6 +1058,12 @@ private:
                 return;
             }
 
+            if (startup == "publish") {
+                configuration.project->startup =
+                    project_startup_mode::publish;
+                return;
+            }
+
             if (startup == "rebuild") {
                 configuration.project->startup =
                     project_startup_mode::rebuild;
@@ -1066,7 +1072,7 @@ private:
 
             fail(
                 schema_failure::invalid_value,
-                "project.startup must be load or rebuild");
+                "project.startup must be load, publish, or rebuild");
             return;
         }
 

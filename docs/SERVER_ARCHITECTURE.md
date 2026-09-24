@@ -365,6 +365,43 @@ FRONTEND_ARCHITECTURE.md
 
 Server architecture owns process lifecycle and resident Project publication.
 
+## G acquisition modes
+
+The Server has four paths to the same final G:
+
+```text
+LOAD
+    compiled.bin -> G
+
+PUBLISH
+    project.json/source -> full compiler -> G
+    -> compiled.bin only
+
+REBUILD
+    project.json/source -> the same full compiler -> G
+    -> compiled.bin + fresh BUILD acceleration
+
+BUILD
+    mmap persisted BUILD baselines + sparse changed work -> G
+    -> compiled.bin + refreshed BUILD acceleration
+```
+
+After G exists, every mode uses the same architectural tail:
+
+```text
+G -> Runtime -> SHM -> Project
+```
+
+Runtime/SHM is Phase 2. The current Phase-1 resident Project owns the mmap-native
+compiled artifact at this convergence boundary.
+
+`PUBLISH` deliberately does not create `project.manifest`, `source.bin`, or
+`database.bin`. It removes the previous artifact set before full construction so
+stale BUILD acceleration can never be paired with the newly published
+`compiled.bin`. PUBLISH also disables BUILD-only semantic dependency/presence
+capture while parsing; only compiled provenance required by `compiled.bin` is
+retained.
+
 ## Persisted Project artifacts
 
 The Project artifact root is:
@@ -391,6 +428,9 @@ Artifact roles are intentionally asymmetric:
 LOAD
     compiled.bin
 
+PUBLISH
+    output: compiled.bin only
+
 BUILD
     project.manifest
     source.bin
@@ -398,8 +438,8 @@ BUILD
     compiled.bin
 
 REBUILD
-    constructs fresh state
-    replaces the produced artifacts
+    same full compiler as PUBLISH
+    output: compiled.bin + fresh BUILD acceleration artifacts
 ```
 
 `compiled.bin` contains the one compiled Project result used by LOAD to obtain
@@ -551,6 +591,8 @@ the physical topology in `source.bin`.
 UNLOADED
     +-- LOAD <path> success ------> LOADED
     +-- LOAD <path> failure ------> UNLOADED
+    +-- PUBLISH <path> success ---> LOADED
+    +-- PUBLISH <path> failure ---> UNLOADED
     +-- BUILD <path> success -----> LOADED
     +-- BUILD <path> failure -----> UNLOADED
     +-- REBUILD <path> success ---> LOADED
@@ -560,7 +602,7 @@ LOADED
     `-- UNLOAD -------------------> UNLOADED
 ```
 
-LOAD, BUILD, and REBUILD each receive a Project path.
+LOAD, PUBLISH, BUILD, and REBUILD each receive a Project path.
 
 BUILD opens the persisted BUILD artifacts for that Project path. It
 does not consume `server_context.project`.
@@ -593,7 +635,7 @@ Current implementation work is deliberately ordered as:
 
 ```text
 PHASE 1
-LOAD / BUILD / REBUILD
+LOAD / PUBLISH / BUILD / REBUILD
     -> G
 
 PHASE 2
@@ -603,15 +645,16 @@ G
     -> resident Project
 ```
 
-Phase 1 includes the persistence required for the three ways of obtaining G.
-REBUILD uses direct final artifact paths. `compiled.bin` is its mandatory
-semantic output; project.manifest/source.bin/database.bin are best-effort
-acceleration outputs for the next BUILD. BUILD has a different failure contract
-and therefore does not inherit REBUILD persistence mechanics automatically.
+Phase 1 includes persistence for the four ways of obtaining G. PUBLISH and
+REBUILD share one full source-construction implementation. `compiled.bin` is
+mandatory in both modes; only REBUILD enables the project.manifest/source.bin/
+database.bin BUILD-acceleration branches. BUILD has a different failure contract
+and therefore does not inherit full-construction persistence mechanics
+automatically.
 
 ## Current Project construction boundary
 
-The implemented REBUILD path is organized as:
+The implemented shared PUBLISH/REBUILD full-construction path is organized as:
 
 ```text
 recursive project.json composition
@@ -638,8 +681,10 @@ recursive project.json composition
 Assign is Studio-facing user data only. It performs no semantic variable
 resolution, G mutation, Runtime binding, or file dependency emission.
 
-REBUILD starts a fresh persisted lineage by removing
-`project.manifest`, `source.bin`, `database.bin`, and `compiled.bin`. It uses
+PUBLISH and REBUILD both pre-clean `project.manifest`, `source.bin`,
+`database.bin`, and `compiled.bin` before full source construction so no stale
+BUILD lineage can survive beside a new final G. PUBLISH then persists only
+`compiled.bin`; REBUILD additionally creates fresh BUILD acceleration. REBUILD uses
 the final artifact names directly; there are no `.tmp` files, A/B slots,
 selector files, or rollback generations. The pre-clean prevents a failed
 best-effort acceleration branch from leaving a stale previous BUILD baseline.

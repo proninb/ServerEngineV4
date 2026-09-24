@@ -1,10 +1,10 @@
-#include "project_rebuild.hpp"
+#include "project_publish.hpp"
 
 #include "project_full_construction.hpp"
 
 namespace cw::server {
 
-server_status rebuild_project(
+server_status publish_project(
     const std::filesystem::path& project_path,
     const server_settings_configuration& settings,
     operation_id operation,
@@ -14,7 +14,7 @@ server_status rebuild_project(
     return construct_full_project(
         project_path,
         settings,
-        full_construction_mode::rebuild,
+        full_construction_mode::publish,
         operation,
         diagnostics,
         output);

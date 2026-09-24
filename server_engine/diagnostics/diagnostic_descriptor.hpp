@@ -95,7 +95,7 @@ inline constexpr diagnostic_descriptor communication_unsupported_transport{
     "Communication transport is not implemented",
 };
 
-// LOAD, BUILD, or REBUILD was requested while another Project is already active.
+// LOAD, PUBLISH, BUILD, or REBUILD was requested while another Project is already active.
 inline constexpr diagnostic_descriptor project_already_loaded{
     diagnostic_id{2001},
     diagnostic_domain::project,
@@ -252,6 +252,14 @@ inline constexpr diagnostic_descriptor project_rebuild_cleanup_failed{
     diagnostic_severity::error,
     "project.rebuild_cleanup_failed",
     "REBUILD artifact cleanup failed",
+};
+
+inline constexpr diagnostic_descriptor project_publish_cleanup_failed{
+    diagnostic_id{2031},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.publish_cleanup_failed",
+    "PUBLISH artifact cleanup failed",
 };
 
 inline constexpr diagnostic_descriptor project_semantic_error{

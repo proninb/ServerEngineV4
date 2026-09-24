@@ -11,6 +11,7 @@
 #include "diagnostics/diagnostic_descriptor.hpp"
 #include "project/project_build.hpp"
 #include "project/project_load.hpp"
+#include "project/project_publish.hpp"
 #include "project/project_rebuild.hpp"
 
 #include <memory>
@@ -103,6 +104,13 @@ server_status server::start(
                 diagnostics);
             break;
 
+        case project_startup_mode::publish:
+            status = publish(
+                startup.path,
+                operation,
+                diagnostics);
+            break;
+
         case project_startup_mode::rebuild:
             status = rebuild(
                 startup.path,
@@ -150,6 +158,14 @@ server_command_result server::execute(
     case server_command_kind::load:
         result.status =
             load(
+                command.path,
+                result.operation,
+                result.diagnostics);
+        break;
+
+    case server_command_kind::publish:
+        result.status =
+            publish(
                 command.path,
                 result.operation,
                 result.diagnostics);
@@ -215,6 +231,48 @@ server_status server::load(
 
     const auto status =
         load_project(
+            path,
+            context.configuration.settings,
+            operation,
+            diagnostics,
+            candidate);
+
+    if (!succeeded(status)) {
+        context.project.reset();
+        return status;
+    }
+
+    context.project =
+        std::move(candidate);
+
+    return server_status::success;
+}
+
+server_status server::publish(
+    const std::filesystem::path& project_path,
+    operation_id operation,
+    diagnostic_collection& diagnostics) {
+
+    if (context.project) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_already_loaded,
+                operation)
+                .detail("UNLOAD the active Project before PUBLISH")
+                .build());
+
+        return server_status::project_already_loaded;
+    }
+
+    const auto path =
+        resolve(
+            context.configuration_directory,
+            project_path);
+
+    std::unique_ptr<project> candidate;
+
+    const auto status =
+        publish_project(
             path,
             context.configuration.settings,
             operation,

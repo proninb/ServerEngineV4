@@ -320,6 +320,11 @@ static_assert(sizeof(source_type_presence) == 8);
 // dependency hash index sized by unique dependency targets; root adjacency is O(edges).
 class source_map final {
 public:
+    void set_build_acceleration_capture(
+        bool enabled) noexcept {
+        capture_build_acceleration = enabled;
+    }
+
     [[nodiscard]] server_status reset(
         std::size_t file_count = 0) noexcept;
 
@@ -440,6 +445,7 @@ private:
     file_id active_root{};
     std::uint32_t active_root_begin = 0;
     std::uint32_t active_dependency_begin = 0;
+    bool capture_build_acceleration = true;
     bool finalized_value = false;
 };
 
