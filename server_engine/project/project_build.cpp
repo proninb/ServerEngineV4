@@ -394,6 +394,28 @@ server_status build_project(
         return collected;
     }
 
+    std::vector<file_id>
+        semantic_roots;
+
+    const auto roots_collected =
+        collect_source_save_semantic_roots(
+            context.source,
+            affected,
+            semantic_roots);
+
+    if (!succeeded(roots_collected)) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_source_save_invalid,
+                operation)
+                .file(layout.source_save)
+                .detail(
+                    "OLD physical dependency topology failed while selecting affected semantic roots")
+                .build());
+
+        return roots_collected;
+    }
+
     const auto compiled_opened =
         context.compiled_mapping.open(
             layout.compiled);
@@ -449,7 +471,7 @@ server_status build_project(
 
     bool database_bound = false;
 
-    if (!affected.empty()) {
+    if (!semantic_roots.empty()) {
         const auto database_opened =
             context.database_mapping.open(
                 layout.database);
@@ -527,7 +549,7 @@ server_status build_project(
     source_preparation_failure lexical_failure;
     source_replacement_metrics lexical_metrics;
 
-    if (!semantic_changed.empty()) {
+    if (!semantic_roots.empty()) {
         if (!database_bound) {
             return server_status::project_artifact_invalid;
         }
@@ -599,6 +621,9 @@ server_status build_project(
             ", affected=" +
             std::to_string(
                 affected.size()) +
+            ", semantic_roots=" +
+            std::to_string(
+                semantic_roots.size()) +
             ", database_mapped=" +
             std::to_string(
                 database_bound ? 1 : 0) +
@@ -617,7 +642,7 @@ server_status build_project(
             ", baseline_identities=" +
             std::to_string(
                 context.compiled.identity_count()) +
-            "; affected Parser/Semantic reconstruction and final G construction are not implemented yet";
+            "; selected semantic-root Parser/Semantic replay and final G construction are not implemented yet";
     }
     catch (...) {
         return server_status::io_error;

@@ -810,8 +810,18 @@ affected dependency relations are recomputed:
 ```text
 semantic_changed file_id set
     -> walk persisted dependents
-    -> affected closure
+    -> affected physical closure
+
+affected Header/Source
+    -> has OLD Project parent?
+    -> affected semantic root
 ```
+
+The physical DAG already contains both Project-declaration edges and active
+include edges. Therefore reverse closure reaches every semantic root that used a
+changed physical input, including roots that previously produced zero semantic
+contributions. Root selection does not require a duplicated contribution->root
+index in compiled.bin.
 
 This is why direct reverse adjacency is first-class persisted construction data.
 
@@ -972,6 +982,7 @@ load project.manifest
     -> parallel exact acquire/hash classification
     -> semantic_changed
     -> OLD reverse dependency affected closure
+    -> select affected semantic roots from OLD Project-parent edges
     -> read-only mmap/bind compiled.bin
     -> bind append-only string_id / identity_ref overlays
     -> mmap/bind database.bin only when affected files require frontend reuse
@@ -987,12 +998,12 @@ UNLOADED
     -> persisted BUILD artifacts
 ```
 
-Sparse exact File Context mutation and per-file lexical replacement/reuse are
-implemented. Affected frontend/Parser/Semantic reconstruction and final G
-construction are not implemented yet. The physical mechanism used by a
-successful BUILD to persist its new state is intentionally not frozen yet; it
-must satisfy the separate BUILD failure contract that preserves the previously
-persisted BUILD state.
+Sparse exact File Context mutation, per-file lexical replacement/reuse, and
+affected semantic-root selection are implemented. Selected-root
+Parser/Semantic reconstruction and final G construction are not implemented yet.
+The physical mechanism used by a successful BUILD to persist its new state is
+intentionally not frozen yet; it must satisfy the separate BUILD failure
+contract that preserves the previously persisted BUILD state.
 
 ## LOAD Implementation Boundary
 

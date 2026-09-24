@@ -3694,6 +3694,97 @@ server_status collect_source_save_affected(
     }
 }
 
+server_status collect_source_save_semantic_roots(
+    const source_save_view& persisted,
+    std::span<const file_id> affected,
+    std::vector<file_id>& roots) noexcept {
+
+    roots.clear();
+
+    if (!persisted.valid()) {
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    try {
+        roots.reserve(
+            affected.size());
+
+        for (const auto file :
+             affected) {
+
+            source_save_file_view state;
+
+            if (!persisted.file(
+                    file,
+                    state) ||
+                !state.current_member) {
+
+                roots.clear();
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            if (state.kind != file_kind::header &&
+                state.kind != file_kind::source) {
+
+                continue;
+            }
+
+            bool semantic_root = false;
+
+            for (const auto dependent :
+                 state.dependents) {
+
+                source_save_file_view
+                    parent;
+
+                if (!persisted.file(
+                        dependent,
+                        parent) ||
+                    !parent.current_member) {
+
+                    roots.clear();
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                if (parent.kind ==
+                    file_kind::project) {
+
+                    semantic_root = true;
+                    break;
+                }
+            }
+
+            if (semantic_root) {
+                roots.push_back(
+                    file);
+            }
+        }
+
+        std::sort(
+            roots.begin(),
+            roots.end(),
+            [](file_id left, file_id right) noexcept {
+                return left.value() <
+                    right.value();
+            });
+
+        roots.erase(
+            std::unique(
+                roots.begin(),
+                roots.end()),
+            roots.end());
+
+        return server_status::success;
+    }
+    catch (...) {
+        roots.clear();
+        return server_status::io_error;
+    }
+}
+
 source_type_presence source_save_view::type_presence(std::size_t index) const noexcept {
     source_type_presence result;
     if (!valid() || index >= type_count)

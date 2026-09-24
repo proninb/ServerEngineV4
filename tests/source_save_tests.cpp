@@ -7,6 +7,7 @@
 #include "project/source/source_map.hpp"
 #include "project/persistence/compiled_project.hpp"
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -612,6 +613,177 @@ void test_direct_source_save(
         "persisted path index survives read-only reopen");
 }
 
+
+void test_affected_semantic_roots(
+    test_state& tests,
+    const std::filesystem::path& root) {
+
+    const auto project_path =
+        root / "roots_project.json";
+
+    const auto root_path =
+        root / "roots_root.hpp";
+
+    const auto child_path =
+        root / "roots_child.hpp";
+
+    if (!tests.expect(
+            write_text(
+                project_path,
+                "{}\n") &&
+            write_text(
+                root_path,
+                "#include \"roots_child.hpp\"\n") &&
+            write_text(
+                child_path,
+                "\n"),
+            "write affected-root fixture files")) {
+
+        return;
+    }
+
+    file_context files;
+
+    file_id project;
+    file_id semantic_root;
+    file_id child;
+
+    if (!tests.expect(
+            succeeded(
+                files.resolve(
+                    project_path,
+                    file_kind::project,
+                    project)) &&
+            succeeded(
+                files.resolve(
+                    root_path,
+                    file_kind::header,
+                    semantic_root)) &&
+            succeeded(
+                files.resolve(
+                    child_path,
+                    file_kind::header,
+                    child)),
+            "resolve affected-root fixture") ||
+        !tests.expect(
+            acquire(
+                files,
+                project) &&
+            acquire(
+                files,
+                semantic_root) &&
+            acquire(
+                files,
+                child),
+            "acquire affected-root fixture") ||
+        !tests.expect(
+            succeeded(
+                files.add_dependency(
+                    project,
+                    semantic_root)) &&
+            succeeded(
+                files.add_dependency(
+                    semantic_root,
+                    child)) &&
+            succeeded(
+                files.finalize_dependency_topology()),
+            "finalize affected-root physical topology")) {
+
+        return;
+    }
+
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+
+    if (!tests.expect(
+            succeeded(
+                sources.reset(
+                    files.size())) &&
+            succeeded(
+                sources.begin_root(
+                    semantic_root)) &&
+            succeeded(
+                sources.end_root()) &&
+            succeeded(
+                sources.finalize(
+                    files.size(),
+                    identities,
+                    G)),
+            "finalize zero-contribution semantic root")) {
+
+        return;
+    }
+
+    source_save_layout layout;
+
+    if (!tests.expect(
+            prepare_source_save_layout(
+                files,
+                sources,
+                layout) ==
+                    source_save_result::success,
+            "prepare affected-root SourceSave")) {
+
+        return;
+    }
+
+    std::vector<std::byte>
+        image(layout.size());
+
+    if (!tests.expect(
+            encode_source_save_image(
+                files,
+                sources,
+                layout,
+                image) ==
+                    source_save_result::success,
+            "encode affected-root SourceSave")) {
+
+        return;
+    }
+
+    source_save_view persisted;
+
+    if (!tests.expect(
+            persisted.bind(image) ==
+                source_save_result::success,
+            "bind affected-root SourceSave")) {
+
+        return;
+    }
+
+    const std::array<file_id, 1>
+        semantic_changed{
+            child};
+
+    std::vector<file_id> affected;
+
+    if (!tests.expect(
+            succeeded(
+                collect_source_save_affected(
+                    persisted,
+                    semantic_changed,
+                    affected)),
+            "collect affected physical closure")) {
+
+        return;
+    }
+
+    std::vector<file_id> roots;
+
+    tests.expect(
+        succeeded(
+            collect_source_save_semantic_roots(
+                persisted,
+                affected,
+                roots)) &&
+        roots.size() == 1 &&
+        roots[0] == semantic_root,
+        "OLD physical closure selects zero-contribution semantic root");
+}
+
 }
 
 int main() {
@@ -627,6 +799,10 @@ int main() {
         }
 
         test_direct_source_save(
+            tests,
+            tree.root);
+
+        test_affected_semantic_roots(
             tests,
             tree.root);
 

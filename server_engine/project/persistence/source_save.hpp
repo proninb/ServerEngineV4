@@ -287,6 +287,14 @@ prepare_source_save_layout(const file_context &files,
     std::span<const file_id> semantic_changed,
     std::vector<file_id>& affected) noexcept;
 
+// Selects Project-declared Header/Source semantic roots from an OLD physical
+// affected closure. Project configuration edges are authoritative root markers:
+// project -> Header/Source. Output is unique and ascending by file_id.
+[[nodiscard]] server_status collect_source_save_semantic_roots(
+    const source_save_view& persisted,
+    std::span<const file_id> affected,
+    std::vector<file_id>& roots) noexcept;
+
 class compiled_project_view;
 // Cold cross-artifact audit: presence is derived from root -> contribution ownership.
 [[nodiscard]] source_save_result
