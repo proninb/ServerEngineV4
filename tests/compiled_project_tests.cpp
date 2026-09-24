@@ -273,7 +273,10 @@ struct compiled_fixture final {
                 fixture.right_identity,
                 fixture.named_type,
                 fixture.right,
-                graph_object_non_default_initializer),
+                graph_object_non_default_initializer,
+                construction_value::constant(
+                    construction_kind::unsigned_integer,
+                    7)),
             "add right object") ||
         !success(
             tests,
@@ -304,32 +307,103 @@ struct compiled_fixture final {
         return false;
     }
 
-    const auto directory = std::filesystem::temp_directory_path();
-    for (const char *name : {"source_root.hpp", "shared.hpp", "other_root.hpp"}) {
+    const auto directory =
+        std::filesystem::temp_directory_path();
+
+    for (const auto& entry :
+         std::array{
+             std::pair{
+                 "header_root.hpp",
+                 file_kind::header},
+             std::pair{
+                 "shared.hpp",
+                 file_kind::header},
+             std::pair{
+                 "other_header_root.hpp",
+                 file_kind::header},
+             std::pair{
+                 "objects.source",
+                 file_kind::source}}) {
+
         file_id file;
-        if (!success(tests,
-                     fixture.files.resolve(directory / name, file_kind::header, file),
-                     "resolve source map file"))
+
+        if (!success(
+                tests,
+                fixture.files.resolve(
+                    directory / entry.first,
+                    entry.second,
+                    file),
+                "resolve source map file")) {
+
             return false;
+        }
     }
-    for (auto root : {file_id{1}, file_id{3}}) {
-        if (!success(tests, fixture.sources.begin_root(root), "begin persisted root") ||
-            !success(tests,
-                     fixture.sources.add(file_id{2},
-                                         source_data_ref::type_definition(fixture.type_identity)),
-                     "shared persisted definition") ||
+
+    for (const auto root :
+         {file_id{1},
+          file_id{3}}) {
+
+        if (!success(
+                tests,
+                fixture.sources.begin_root(root),
+                "begin persisted Header root") ||
             !success(
                 tests,
-                fixture.sources.add(file_id{2}, source_data_ref::object(fixture.left_identity)),
-                "shared persisted object") ||
-            !success(tests,
-                     fixture.sources.add(file_id{2}, source_data_ref::link(fixture.link)),
-                     "shared persisted link") ||
-            !success(tests, fixture.sources.end_root(), "end persisted root"))
+                fixture.sources.add(
+                    file_id{2},
+                    source_data_ref::type_definition(
+                        fixture.type_identity)),
+                "shared persisted Header definition") ||
+            !success(
+                tests,
+                fixture.sources.end_root(),
+                "end persisted Header root")) {
+
             return false;
+        }
     }
-    return tests.expect(succeeded(fixture.sources.finalize(fixture.files.size(), fixture.identities, fixture.G)),
-                        "finalize empty Source Map fixture");
+
+    if (!success(
+            tests,
+            fixture.sources.begin_root(
+                file_id{4}),
+            "begin persisted Source root") ||
+        !success(
+            tests,
+            fixture.sources.add(
+                file_id{4},
+                source_data_ref::object(
+                    fixture.left_identity)),
+            "persist left Source object") ||
+        !success(
+            tests,
+            fixture.sources.add(
+                file_id{4},
+                source_data_ref::object(
+                    fixture.right_identity)),
+            "persist right Source object") ||
+        !success(
+            tests,
+            fixture.sources.add(
+                file_id{4},
+                source_data_ref::link(
+                    fixture.link)),
+            "persist Source link") ||
+        !success(
+            tests,
+            fixture.sources.end_root(),
+            "end persisted Source root")) {
+
+        return false;
+    }
+
+    return tests.expect(
+        succeeded(
+            fixture.sources.finalize(
+                fixture.files.size(),
+                fixture.identities,
+                fixture.G)),
+        "finalize persisted Source Map fixture");
 }
 
 [[nodiscard]] std::uint32_t read_u32(
@@ -689,6 +763,18 @@ void test_round_trip(
                 fixture.named_type &&
             right_object.non_default_initializer(),
         "object record preservation");
+
+    construction_value object_initial;
+
+    tests.expect(
+        view.construction(
+            fixture.right,
+            object_initial) &&
+        object_initial ==
+            construction_value::constant(
+                construction_kind::unsigned_integer,
+                7),
+        "object construction preservation");
 
     link_record link_value;
 
@@ -1262,12 +1348,34 @@ void test_persisted_sources(test_state &tests, const compiled_test_image &image)
     source_map_range root, file_range;
     std::string_view path;
     file_kind kind;
-    tests.expect(view.source_file_count() == 3 && view.source_contribution_count() == 6 &&
-                     view.source_root(file_id{1}, root) && root.count == 3 &&
-                     view.source_file(file_id{2}, path, kind, file_range) &&
-                     file_range.count == 6 && path.ends_with("shared.hpp") &&
-                     kind == file_kind::header,
-                 "mapped provenance and paths without reconstruction");
+    tests.expect(
+        view.source_file_count() == 4 &&
+        view.source_contribution_count() == 5 &&
+        view.source_root(
+            file_id{1},
+            root) &&
+        root.count == 1 &&
+        view.source_file(
+            file_id{2},
+            path,
+            kind,
+            file_range) &&
+        file_range.count == 2 &&
+        path.ends_with("shared.hpp") &&
+        kind == file_kind::header &&
+        view.source_root(
+            file_id{4},
+            root) &&
+        root.count == 3 &&
+        view.source_file(
+            file_id{4},
+            path,
+            kind,
+            file_range) &&
+        file_range.count == 3 &&
+        path.ends_with("objects.source") &&
+        kind == file_kind::source,
+        "mapped Header/Source provenance without reconstruction");
     const auto corrupt = [&](compiled_project_section section,
                              std::size_t offset,
                              std::uint32_t value,
@@ -1297,6 +1405,24 @@ void test_persisted_sources(test_state &tests, const compiled_test_image &image)
             24,
             UINT32_MAX,
             "reject invalid persisted path offset");
+    corrupt(
+        compiled_project_section::source_files,
+        0,
+        static_cast<std::uint32_t>(
+            file_kind::source),
+        "reject Header-owned semantics under a Source root");
+    corrupt(
+        compiled_project_section::source_files,
+        20,
+        static_cast<std::uint32_t>(
+            file_kind::source),
+        "reject Header semantic contribution from a Source file");
+    corrupt(
+        compiled_project_section::source_files,
+        60,
+        static_cast<std::uint32_t>(
+            file_kind::header),
+        "reject Source semantic contribution from a Header file");
     corrupt(compiled_project_section::source_contributions,
             4,
             source_data_ref::from_raw(0xffffffffu).raw(),

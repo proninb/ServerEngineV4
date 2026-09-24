@@ -187,8 +187,14 @@ type:"assign"  -> file_kind::assign
 Each File Context node has one immutable `file_kind`. The same physical path
 cannot be classified as two syntax domains inside one construction lineage.
 
-A common dependency graph does not imply common syntax: Project, Header, and
-Source and Assign dependencies are discovered by their own language rules.
+A common File Context does not imply common syntax. Header and Source are
+different semantic domains:
+
+```text
+header -> C++ preprocessing/include + Type semantics
+source -> Project object/link/initialization semantics; no C++ preprocessing
+assign -> raw Studio-facing table
+```
 
 Cross-file cardinality is part of Project composition semantics:
 
@@ -253,10 +259,11 @@ edge identity is implicit in (source file_id, target file_id)
 ```
 
 Project composition stages the explicit Project-declared edges in the shared
-File Context dependency arena. Header and Source preprocessing append resolved
-direct include dependencies during frontend execution. Assign appends no extra
-dependency edge. The compact forward/reverse topology is finalized only after
-all dependency discovery reaches closure.
+File Context dependency arena. Only Header C++ preprocessing appends resolved
+direct include dependencies during semantic execution. Source has no
+`#include`/preprocessor dependency semantics. Assign appends no extra dependency
+edge. The compact forward/reverse topology is finalized only after Header
+include discovery reaches closure.
 
 ## Path Resolution
 

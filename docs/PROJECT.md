@@ -205,11 +205,20 @@ G owns compact arrays for:
 types
 type identities
 members
+member construction
 objects
 object identities
+object construction
 links
 derived type expressions
 ```
+
+`object_entry` remains the hot eight-byte object record. Its 32-bit state packs
+one optional 30-bit one-based construction slot plus the `non_default` and
+`internal_static` flags. Only objects with non-default initialization allocate a
+16-byte entry in the sparse cold `object_construction` arena. Header
+internal-linkage static objects and Source Project objects use the same object
+handle space; storage semantics distinguish their roles.
 
 The `identity_ref -> Graph location` map is dense by `identity_ref.slot()` and
 stores one four-byte locator per semantic identity slot. This gives deterministic
@@ -224,6 +233,51 @@ or Graph-generation object between Parser/Semantic and G.
 REBUILD operation state owns one temporary `G`; Parser/Semantic writes directly
 into it.
 
+
+## Header / Source semantic boundary
+
+Phase 1 has two semantic lines over one final G:
+
+```text
+Header
+    C++ preprocessing / active quoted include
+    -> Type domain
+    -> record members / managed constructors
+    -> namespace-scope internal-linkage static objects needed by type construction
+
+semantic barrier
+
+Source
+    no C++ preprocessing / no include
+    -> consumes completed Type domain
+    -> Project objects
+    -> object initialization
+    -> links
+```
+
+The barrier is independent of `project.json` declaration order. A Source file
+may appear before a Header in Project composition and still resolves against the
+completed Header Type domain.
+
+A Header namespace-scope `static` object is not a Source Project object. It uses
+the existing Graph object handle/storage but has semantic-root-local internal
+linkage. Example:
+
+```cpp
+static int a = 5;
+
+struct A {
+    int& b;
+    A() : b(a) {}
+};
+```
+
+`a` is retained as an internal-static Graph object with construction value `5`;
+`A::b` retains an `object_binding` to that object handle. The packed
+`identity_ref` format/key is unchanged: no linkage bit or new identity kind is
+added. Construction creates a root-local semantic execution scope under the
+current namespace only to distinguish internal-linkage WHO values belonging to
+different Header roots.
 
 ## Source Provenance Map
 
@@ -889,9 +943,10 @@ compiled.bin
 LOAD does not reconstruct `string_table`, `identity_space`, or mutable `graph`.
 The mapped bytes are the read-only compiled Project representation.
 
-V4 `compiled.bin` v3 uses a 256-byte header, a fixed 21-entry section directory,
+V4 `compiled.bin` v4 uses a 256-byte header, a fixed 22-entry section directory,
 64-byte aligned sections, canonical little-endian integers, per-section CRC64,
-directory CRC64, and header CRC64.
+directory CRC64, and header CRC64. The v4 object-construction section is a
+format break from v3; existing v3 artifacts fail closed and require REBUILD.
 
 Sections are:
 
@@ -908,6 +963,7 @@ member_construction
 derived_types
 objects
 object_identities
+object_construction
 links
 graph_identity_index
 assign_records
@@ -921,6 +977,9 @@ source_paths
 
 Numeric `string_id`, `identity_ref`, `type_handle`, `object_handle`,
 `link_handle`, `member_index`, and `type_ref` slots are preserved exactly.
+Object construction is persisted as a compact cold arena addressed by the
+construction slot stored in each object record; default-constructed objects do
+not allocate an arena entry.
 There is no ID remap and no mutable-container reconstruction on LOAD.
 
 `string_index`, `identity_index`, and `graph_identity_index` are persisted read

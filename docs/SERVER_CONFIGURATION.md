@@ -251,20 +251,25 @@ REBUILD
     -> LOADED
 ```
 
-Current implementation status:
+Current Phase-1 status:
 
 ```text
 LOAD
-    final-G restore is still scaffolded
+    mmap-native compiled.bin restore implemented
 
 REBUILD
-    implemented through deterministic source closure
-    and Assign byte materialization
+    complete through direct final artifact persistence and resident publication
 
 BUILD
-    BUILD <project-path> enters only from UNLOADED
-    configuration-manifest verification/recomposition implemented
-    SourceSave/DB incremental construction not implemented
+    enters only from UNLOADED
+    configuration verification/recomposition implemented
+    source.bin mmap baseline implemented
+    exact physical dirty classification implemented
+    sparse OLD reverse affected closure implemented
+    database.bin exact source/lexical baseline implemented
+    sparse lexical replacement implemented
+    affected semantic-root selection implemented
+    sparse Parser/Semantic -> final G construction still remains
 ```
 
 ## Communication

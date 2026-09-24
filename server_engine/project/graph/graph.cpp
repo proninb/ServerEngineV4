@@ -438,6 +438,29 @@ server_status graph::define_record(
         if (!valid_construction(construction)) {
             return server_status::project_configuration_invalid;
         }
+
+        if (construction.kind ==
+                construction_kind::member_binding &&
+            construction.operand >
+                definition.size()) {
+
+            return server_status::project_configuration_invalid;
+        }
+
+        if (construction.kind ==
+            construction_kind::object_binding) {
+
+            const auto* object =
+                find(
+                    object_handle{
+                        construction.operand});
+
+            if (object == nullptr ||
+                !object->internal_static()) {
+
+                return server_status::project_configuration_invalid;
+            }
+        }
     }
 
     if (entry->defined()) {
@@ -536,14 +559,23 @@ server_status graph::add_object(
     identity_ref identity,
     type_ref type,
     object_handle& output,
-    std::uint32_t flags) noexcept {
+    std::uint32_t flags,
+    construction_value initial) noexcept {
 
     output = {};
 
     if (!identity ||
         identity.kind() != identity_kind::object ||
         !contains(type) ||
-        (flags & ~graph_object_non_default_initializer) != 0) {
+        (flags & ~graph_object_flag_mask) != 0 ||
+        !valid_construction(initial) ||
+        (!(flags &
+            graph_object_non_default_initializer) &&
+         initial != construction_value{}) ||
+        initial.kind ==
+            construction_kind::member_binding ||
+        initial.kind ==
+            construction_kind::object_binding) {
 
         return server_status::project_configuration_invalid;
     }
@@ -555,9 +587,16 @@ server_status graph::add_object(
         const auto* entry =
             find(existing);
 
+        construction_value existing_initial;
+
         if (entry == nullptr ||
+            !construction(
+                existing,
+                existing_initial) ||
             entry->type != type ||
-            entry->flags != flags) {
+            (entry->state &
+                graph_object_flag_mask) != flags ||
+            existing_initial != initial) {
 
             return server_status::project_configuration_invalid;
         }
@@ -568,6 +607,17 @@ server_status graph::add_object(
 
     if (objects.size() >=
         object_handle::maximum_slot) {
+
+        return server_status::io_error;
+    }
+
+    const auto has_initial =
+        (flags &
+            graph_object_non_default_initializer) != 0;
+
+    if (has_initial &&
+        object_construction.size() >=
+            graph_object_construction_slot_mask) {
 
         return server_status::io_error;
     }
@@ -599,10 +649,25 @@ server_status graph::add_object(
     const auto old_identity_count =
         object_identities.size();
 
+    const auto old_construction_count =
+        object_construction.size();
+
     try {
+        std::uint32_t construction_slot = 0;
+
+        if (has_initial) {
+            object_construction.push_back(
+                initial);
+
+            construction_slot =
+                static_cast<std::uint32_t>(
+                    object_construction.size());
+        }
+
         objects.push_back({
             type,
-            flags,
+            flags |
+                construction_slot,
         });
 
         object_identities.push_back(
@@ -625,6 +690,9 @@ server_status graph::add_object(
 
         object_identities.resize(
             old_identity_count);
+
+        object_construction.resize(
+            old_construction_count);
 
         if (identity_locations.size() >
             old_location_count) {
@@ -1042,6 +1110,38 @@ const construction_value* graph::construction(
     return position < member_construction.size()
         ? &member_construction[position]
         : nullptr;
+}
+
+bool graph::construction(
+    object_handle object,
+    construction_value& output) const noexcept {
+
+    output = {};
+
+    const auto* entry =
+        find(object);
+
+    if (entry == nullptr) {
+        return false;
+    }
+
+    if (!entry->non_default_initializer()) {
+        return entry->construction_slot() == 0;
+    }
+
+    const auto slot =
+        entry->construction_slot();
+
+    if (slot == 0 ||
+        slot > object_construction.size()) {
+
+        return false;
+    }
+
+    output =
+        object_construction[slot - 1];
+
+    return true;
 }
 
 

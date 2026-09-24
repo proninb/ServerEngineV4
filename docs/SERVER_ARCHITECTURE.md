@@ -578,7 +578,7 @@ REBUILD persistence mechanics automatically.
 
 ## Current Project construction boundary
 
-The implemented REBUILD path currently reaches:
+The implemented REBUILD path is organized as:
 
 ```text
 recursive project.json composition
@@ -590,9 +590,15 @@ recursive project.json composition
     -> sparse directive anchors
     -> Assign exact-byte materialization
     -> ordered Assign user-table construction
-    -> one Parser/Semantic preprocessing execution
-         -> active quoted-include discovery
-         -> direct G construction
+    -> Header semantic line
+         -> C++ preprocessing / active quoted-include discovery
+         -> complete Type domain
+         -> Header internal-static construction state
+    -> semantic barrier
+    -> Source semantic line
+         -> no C++ preprocessing/include
+         -> Project objects / initialization / links
+    -> one final G
     -> terminal dependency-topology finalization
 ```
 

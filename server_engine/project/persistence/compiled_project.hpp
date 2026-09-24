@@ -23,12 +23,12 @@
 
 namespace cw::server {
 
-inline constexpr std::uint32_t compiled_project_format_version = 3;
+inline constexpr std::uint32_t compiled_project_format_version = 4;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;
 
-inline constexpr std::size_t compiled_project_directory_count = 21;
+inline constexpr std::size_t compiled_project_directory_count = 22;
 
 inline constexpr std::size_t
 compiled_project_directory_entry_size = 32;
@@ -54,15 +54,16 @@ enum class compiled_project_section : std::uint32_t {
     derived_types = 10,
     objects = 11,
     object_identities = 12,
-    links = 13,
-    graph_identity_index = 14,
-    assign_records = 15,
-    assign_bytes = 16,
-    source_contributions = 17,
-    source_roots = 18,
-    source_files = 19,
-    source_file_indices = 20,
-    source_paths = 21,
+    object_construction = 13,
+    links = 14,
+    graph_identity_index = 15,
+    assign_records = 16,
+    assign_bytes = 17,
+    source_contributions = 18,
+    source_roots = 19,
+    source_files = 20,
+    source_file_indices = 21,
+    source_paths = 22,
 };
 
 enum class compiled_project_image_result : std::uint8_t {
@@ -228,6 +229,10 @@ public:
 
     [[nodiscard]] object_handle find_object(
         identity_ref identity) const noexcept;
+
+    [[nodiscard]] bool construction(
+        object_handle object,
+        construction_value& output) const noexcept;
 
     [[nodiscard]] bool link(
         link_handle handle,

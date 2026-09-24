@@ -1,9 +1,9 @@
 /*
- * Active semantic token stream.
+ * Semantic token stream shared by the two frontend syntax domains.
  *
- * semantic_input replays preprocessing over retained physical lexical state and
- * yields only active C++ tokens to Parser/Semantic. Includes synchronously enter
- * the already-discovered Header while preserving the caller's semantic scope.
+ * Header mode replays C++ preprocessing/includes over retained lexical state.
+ * Source mode exposes retained lexical tokens without C++ preprocessing;
+ * preprocessing directives fail closed in the Source domain.
  */
 #pragma once
 
@@ -21,6 +21,11 @@
 #include <string_view>
 
 namespace cw::server {
+
+enum class semantic_input_mode : std::uint8_t {
+    header,
+    source,
+};
 
 struct semantic_token final {
     file_id file{};
@@ -63,7 +68,8 @@ public:
     semantic_input& operator=(const semantic_input&) = delete;
 
     [[nodiscard]] server_status start(
-        file_id root) noexcept;
+        file_id root,
+        semantic_input_mode mode) noexcept;
 
     [[nodiscard]] server_status next(
         semantic_token& output) noexcept;
@@ -97,6 +103,10 @@ private:
     [[nodiscard]] server_status materialize_and_lex(
         file_id file) noexcept;
 
+    [[nodiscard]] server_status physical_identifier(
+        const frontend_token& token,
+        string_id& output) noexcept;
+
     [[nodiscard]] server_status effective_identifier(
         const frontend_token& token,
         string_id& output,
@@ -114,6 +124,8 @@ private:
     lexical_stream include_stream;
 
     semantic_input_failure failure_value;
+    semantic_input_mode mode_value =
+        semantic_input_mode::header;
     bool started = false;
     bool finished_value = false;
 };

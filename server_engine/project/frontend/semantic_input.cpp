@@ -108,27 +108,49 @@ server_status semantic_input::fail(
 }
 
 server_status semantic_input::start(
-    file_id root) noexcept {
+    file_id root,
+    semantic_input_mode mode) noexcept {
 
     failure_value = {};
+    mode_value = mode;
     started = false;
     finished_value = false;
 
+    const auto expected_kind =
+        mode == semantic_input_mode::header
+        ? file_kind::header
+        : file_kind::source;
+
     if (!root ||
         !files.contains(root) ||
-        (files.kind(root) != file_kind::header &&
-         files.kind(root) != file_kind::source) ||
+        files.kind(root) != expected_kind ||
         !lexical.contains(root)) {
 
         return fail(
             root,
             {},
-            "Semantic frontend root is invalid",
+            "Semantic frontend root does not match its syntax domain",
             server_status::project_configuration_invalid);
     }
 
     preprocessing.reset();
     executor.reset();
+
+    const auto opened =
+        input.start(root);
+
+    if (!succeeded(opened)) {
+        return fail(
+            root,
+            {},
+            "Semantic lexical input could not start",
+            opened);
+    }
+
+    if (mode == semantic_input_mode::source) {
+        started = true;
+        return server_status::success;
+    }
 
     const auto initialized =
         initialize_preprocessor(
@@ -142,17 +164,6 @@ server_status semantic_input::start(
             {},
             "Root preprocessor configuration could not be initialized",
             initialized);
-    }
-
-    const auto opened =
-        input.start(root);
-
-    if (!succeeded(opened)) {
-        return fail(
-            root,
-            {},
-            "Semantic lexical input could not start",
-            opened);
     }
 
     const auto execution_entered =
@@ -562,13 +573,11 @@ server_status semantic_input::consume_directive(
     return server_status::success;
 }
 
-server_status semantic_input::effective_identifier(
+server_status semantic_input::physical_identifier(
     const frontend_token& token,
-    string_id& output,
-    bool& empty) noexcept {
+    string_id& output) noexcept {
 
     output = {};
-    empty = false;
 
     std::string_view spelling;
 
@@ -590,11 +599,24 @@ server_status semantic_input::effective_identifier(
             server_status::project_configuration_invalid);
     }
 
+    return strings.intern(
+        spelling,
+        output);
+}
+
+server_status semantic_input::effective_identifier(
+    const frontend_token& token,
+    string_id& output,
+    bool& empty) noexcept {
+
+    output = {};
+    empty = false;
+
     string_id physical;
 
     const auto interned =
-        strings.intern(
-            spelling,
+        physical_identifier(
+            token,
             physical);
 
     if (!succeeded(interned)) {
@@ -644,19 +666,23 @@ server_status semantic_input::next(
             const auto file =
                 input.current_file();
 
-            directive_execution_error error;
+            if (mode_value ==
+                semantic_input_mode::header) {
 
-            const auto finished =
-                executor.finish_file(
-                    file,
-                    &error);
+                directive_execution_error error;
 
-            if (!succeeded(finished)) {
-                return fail(
-                    error.file,
-                    error.source,
-                    "Conditional preprocessing group is not closed",
-                    finished);
+                const auto finished =
+                    executor.finish_file(
+                        file,
+                        &error);
+
+                if (!succeeded(finished)) {
+                    return fail(
+                        error.file,
+                        error.source,
+                        "Conditional preprocessing group is not closed",
+                        finished);
+                }
             }
 
             const auto left =
@@ -701,6 +727,19 @@ server_status semantic_input::next(
         if (directive_start(
                 physical.kind)) {
 
+            if (mode_value ==
+                semantic_input_mode::source) {
+
+                return fail(
+                    physical.file,
+                    {
+                        physical.source_offset,
+                        physical.source_length,
+                    },
+                    "C++ preprocessing directives are not supported in Source inputs",
+                    server_status::project_configuration_invalid);
+            }
+
             const auto consumed =
                 consume_directive(
                     word_offset,
@@ -713,7 +752,10 @@ server_status semantic_input::next(
             continue;
         }
 
-        if (!executor.active()) {
+        if (mode_value ==
+                semantic_input_mode::header &&
+            !executor.active()) {
+
             continue;
         }
 
@@ -732,26 +774,41 @@ server_status semantic_input::next(
         if (physical.kind ==
             token_kind::identifier) {
 
-            bool empty = false;
+            if (mode_value ==
+                semantic_input_mode::source) {
 
-            const auto effective =
-                effective_identifier(
-                    physical,
-                    output.identifier,
-                    empty);
+                const auto interned =
+                    physical_identifier(
+                        physical,
+                        output.identifier);
 
-            if (!succeeded(effective)) {
-                return effective;
+                if (!succeeded(interned)) {
+                    return interned;
+                }
             }
+            else {
+                bool empty = false;
 
-            if (empty) {
-                output = {};
-                continue;
+                const auto effective =
+                    effective_identifier(
+                        physical,
+                        output.identifier,
+                        empty);
+
+                if (!succeeded(effective)) {
+                    return effective;
+                }
+
+                if (empty) {
+                    output = {};
+                    continue;
+                }
             }
         }
 
         return server_status::success;
     }
 }
+
 
 }

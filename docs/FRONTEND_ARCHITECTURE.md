@@ -780,10 +780,35 @@ preprocessor states without re-lexing its bytes.
 Only active includes extend the physical dependency topology. Inactive includes
 do not resolve paths, do not allocate `file_id`, and do not add edges.
 
-Header and Source are composition/routing roles, not bans on declaration kinds.
-Either may contribute declarations/objects when supported by Parser/Semantic;
-linkage/storage-duration semantics such as namespace-scope `static` remain a
-separate semantic contract.
+Header and Source are separate frontend syntax domains. They may reuse the
+same low-level lexical word encoding/storage primitives, but they do not share
+one grammar or preprocessing contract.
+
+```text
+Header
+    C++ preprocessing / active quoted #include
+    -> C++ type semantics
+    -> record declarations/definitions
+    -> members / managed construction
+    -> namespace-scope internal-linkage static objects required by type construction
+
+Source
+    no C++ preprocessing
+    no #include
+    -> consumes the completed Header Type domain
+    -> Project object declarations
+    -> Project object initialization
+    -> static Project links
+```
+
+A Source input never becomes a C++ translation unit merely because the shared
+lexer recognizes preprocessing tokens. Any preprocessing directive in a Source
+input fails closed.
+
+Namespace-scope Header `static` objects are part of Header/C++ construction
+semantics, not Project Source objects. Internal linkage is semantic-root local:
+the same spelling in two Header semantic roots denotes two distinct semantic
+objects.
 
 Topology remains staged through Parser/Semantic include discovery. Assign input
 does not emit dependency relations. After Parser/Semantic reaches closure, the
@@ -813,42 +838,63 @@ no `string_id`, `identity_ref`, Graph handle, lookup/hash table, or sort.
 Assign parsing performs no variable existence/type validation, no G mutation,
 and no dependency-topology emission.
 
-### Stage 3: Parser / Semantic -> G and Topology Finalization
+### Stage 3: Header Semantic -> Source Semantic -> G
 
 Parser/Semantic consumes retained lexical state without lexing source bytes
-again and writes the compiled semantic result directly into `G`. There is no
-intermediate facts layer, Semantic DB, SourceContribution layer, or Builder
-stage.
+again and writes the compiled semantic result directly into one `G`. There is
+no intermediate facts layer, Semantic DB, SourceContribution layer, Builder
+stage, candidate Graph, or Graph-generation object.
 
-The first direct Parser slice implements namespace scopes, record
-declarations/definitions, record members, namespace objects, intrinsic/named
-types, and const/volatile/pointer/reference modifiers. Unsupported declarations
-fail closed.
+Semantic construction has one mandatory ordering barrier independent of
+`project.json` declaration order:
 
-`semantic_input` performs the one preprocessing execution over retained lexical
-words. It yields only active C++ tokens, expands the supported object-like
-identifier macros, and resolves/registers active quoted includes synchronously.
-An include-discovered Header is materialized and lexed once if it has not yet
-entered the construction file universe, then entered under the same mutable
-preprocessor state and semantic scope. `semantic_input` stores no semantic token
-arena.
+```text
+all Project-declared Header roots
+    -> Header C++ semantic execution
+    -> complete Type domain
 
-Parser/Semantic writes normalized record-member construction values directly
-into G. Scalar member defaults and local reference-member bindings become
-source-independent `construction_value` records; source spans do not survive
-this boundary.
+semantic barrier
 
-Managed constructor syntax is folded before `G.define_record()`: member defaults,
-constructor initializer-list operations, and constructor-body field assignments
-become one final `construction_value` per member. No constructor representation
+all Project-declared Source roots
+    -> Source declaration semantic execution
+    -> objects / object initialization / links
+
+-> one final G
+```
+
+Header execution uses `semantic_input` preprocessing. It yields only active C++
+tokens, expands the supported object-like identifier macros, and
+resolves/registers active quoted includes synchronously. An include-discovered
+Header is materialized and lexed once if it has not yet entered the construction
+file universe, then entered under the same mutable preprocessor state and
+semantic scope.
+
+Source execution reuses retained lexical words and canonical string/identity/G
+state but does not initialize or execute the C++ preprocessor. Source
+preprocessing directives, including `#include`, fail closed.
+
+Parser/Semantic writes normalized construction values directly into G.
+Member defaults, constructor initializer-list operations, constructor-body field
+assignments, and supported object initializers survive only as compact
+`construction_value` records; source spans do not survive this boundary.
+
+Managed constructor syntax is folded before `G.define_record()`. A reference
+member may bind either to another member of the same record or to a visible
+namespace-scope Header `static` object. The latter is stored as an
+`object_binding` to the existing `object_handle`. No constructor representation
 or executable constructor program survives in G.
 
-Project object initialization is represented by compact object capability flags,
-not an object `construction_value`. Namespace-scope `static`/`inline` do not
-alter `identity_ref`.
+Namespace-scope Header `static` objects use the normal Graph object storage but
+carry internal-static storage semantics and their own persisted object
+construction value. They are root-local internal-linkage entities and are not
+visible through the Source object namespace.
 
-Static Project links are resolved immediately to `object_endpoint` pairs and
-stored directly in G.
+Source Project objects also retain their supported initialization value in the
+sparse cold object-construction arena. `object_entry` remains the compact hot
+type/state record.
+
+Static Project links belong only to the Source semantic line. They are resolved
+to `object_endpoint` pairs and stored directly in G.
 
 Parser integration must preserve one effective preprocessing execution per
 semantic root: ordinary active tokens flow to Parser/Semantic, while active

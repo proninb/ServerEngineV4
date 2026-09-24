@@ -1,9 +1,9 @@
 /*
- * Direct C++ declaration Parser/Semantic.
+ * Direct Header/Source Parser/Semantic.
  *
- * Parser consumes active semantic_input tokens, resolves string_id/identity_ref,
- * and writes final semantic state directly into G. No facts, Semantic DB, or
- * Builder representation exists between Parser and graph.
+ * Header execution builds the C++ Type domain with preprocessing/includes;
+ * Source execution consumes that completed domain for objects, initialization,
+ * and links. Both write directly into one G with no facts/Builder layer.
  */
 #pragma once
 

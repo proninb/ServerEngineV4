@@ -1,8 +1,8 @@
 /*
- * Graph-local object handle.
+ * Graph-local semantic object handle.
  *
- * object_handle identifies one static Project object inside one G. Semantic
- * identity remains identity_ref.
+ * object_handle identifies either Header internal-static storage or a Source
+ * Project object inside one G. Semantic WHO remains identity_ref.
  */
 #pragma once
 

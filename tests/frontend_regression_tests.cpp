@@ -14,7 +14,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <array>
 #include <iostream>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -106,7 +108,8 @@ private:
     const std::filesystem::path& path,
     file_context& files,
     lexical_generation& lexical,
-    file_id& root) {
+    file_id& root,
+    file_kind kind = file_kind::header) {
 
     root = {};
 
@@ -114,7 +117,7 @@ private:
             succeeded(
                 files.resolve(
                     path,
-                    file_kind::header,
+                    kind,
                     root)) &&
                 root,
             "resolve frontend root")) {
@@ -186,6 +189,79 @@ private:
                 0,
                 stream)),
         "publish frontend root lexical state");
+}
+
+[[nodiscard]] bool prepare_all_roots(
+    test_state& tests,
+    file_context& files,
+    lexical_generation& lexical,
+    std::span<const file_id> roots) {
+
+    if (!tests.expect(
+            succeeded(
+                lexical.reset(
+                    files.size(),
+                    1)),
+            "reset multi-root lexical generation")) {
+
+        return false;
+    }
+
+    for (const auto root : roots) {
+        file_acquire_job job;
+
+        if (!tests.expect(
+                succeeded(
+                    files.prepare_acquire(
+                        root,
+                        job)),
+                "prepare multi-root acquisition")) {
+
+            return false;
+        }
+
+        file_acquire_result result;
+        file_context::execute_acquire(
+            job,
+            result);
+
+        bool changed = false;
+
+        if (!tests.expect(
+                result.kind ==
+                    file_acquire_result_kind::present &&
+                succeeded(
+                    files.apply_acquire(
+                        result,
+                        changed)) &&
+                files.content_available(root),
+                "materialize multi-root input")) {
+
+            return false;
+        }
+
+        lexical_stream stream;
+        lexical_error error;
+
+        if (!tests.expect(
+                succeeded(
+                    lexer::tokenize(
+                        root,
+                        files.content(root),
+                        stream,
+                        &error)) &&
+                succeeded(
+                    lexical.publish(
+                        root,
+                        0,
+                        stream)),
+                "publish multi-root lexical state")) {
+
+            return false;
+        }
+    }
+
+    return true;
 }
 
 [[nodiscard]] server_status parse_file(
@@ -491,6 +567,449 @@ void test_parser_scope_limit(
     }
 }
 
+void test_header_source_semantic_split(
+    test_state& tests) {
+
+    const temporary_source source{
+        "source_before_header",
+        "A instance;\n"
+        "int value = 7;\n"};
+
+    const temporary_source header{
+        "header_after_source",
+        "struct A { int field; };\n"};
+
+    file_context files;
+    lexical_generation lexical;
+
+    file_id source_id;
+    file_id header_id;
+
+    if (!tests.expect(
+            succeeded(
+                files.resolve(
+                    source.path(),
+                    file_kind::source,
+                    source_id)) &&
+            succeeded(
+                files.resolve(
+                    header.path(),
+                    file_kind::header,
+                    header_id)) &&
+            source_id.value() == 1 &&
+            header_id.value() == 2,
+            "Source may precede Header in Project order")) {
+
+        return;
+    }
+
+    const std::array<file_id, 2> roots{
+        source_id,
+        header_id};
+
+    if (!prepare_all_roots(
+            tests,
+            files,
+            lexical,
+            roots)) {
+
+        return;
+    }
+
+    preprocessor_configuration configuration;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    parser_failure failure;
+
+    if (!tests.expect(
+            succeeded(
+                parse_semantic_project(
+                    files,
+                    lexical,
+                    roots.size(),
+                    configuration,
+                    strings,
+                    identities,
+                    G,
+                    sources,
+                    &failure)),
+            "Header semantic pass precedes Source regardless of file_id order")) {
+
+        return;
+    }
+
+    const auto type_name =
+        strings.find("A");
+
+    const auto instance_name =
+        strings.find("instance");
+
+    const auto value_name =
+        strings.find("value");
+
+    const auto type_identity =
+        identities.find(
+            identities.root(),
+            type_name,
+            identity_kind::type);
+
+    const auto instance_identity =
+        identities.find(
+            identities.root(),
+            instance_name,
+            identity_kind::object);
+
+    const auto value_identity =
+        identities.find(
+            identities.root(),
+            value_name,
+            identity_kind::object);
+
+    const auto instance =
+        G.find_object(
+            instance_identity);
+
+    const auto value =
+        G.find_object(
+            value_identity);
+
+    construction_value value_initial;
+
+    tests.expect(
+        type_identity &&
+        G.find_type(type_identity) &&
+        instance &&
+        value &&
+        G.construction(
+            value,
+            value_initial) &&
+        value_initial.kind ==
+            construction_kind::unsigned_integer &&
+        value_initial.bits() == 7,
+        "Source consumes completed Header types and retains object initialization");
+}
+
+void test_source_preprocessor_rejected(
+    test_state& tests) {
+
+    const temporary_source source{
+        "source_preprocessor_rejected",
+        "#define X int\n"
+        "X value;\n"};
+
+    file_context files;
+    lexical_generation lexical;
+    file_id root;
+
+    if (!prepare_root(
+            tests,
+            source.path(),
+            files,
+            lexical,
+            root,
+            file_kind::source)) {
+
+        return;
+    }
+
+    preprocessor_configuration configuration;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    parser_failure failure;
+
+    const auto status =
+        parse_semantic_project(
+            files,
+            lexical,
+            1,
+            configuration,
+            strings,
+            identities,
+            G,
+            sources,
+            &failure);
+
+    tests.expect(
+        status ==
+            server_status::project_configuration_invalid &&
+        failure.kind ==
+            parser_failure_kind::preprocessing &&
+        failure.detail ==
+            "C++ preprocessing directives are not supported in Source inputs",
+        "Source rejects C++ preprocessing");
+}
+
+void test_header_static_constructor_binding(
+    test_state& tests) {
+
+    const temporary_source first{
+        "header_static_a",
+        "static int a = 5;\n"
+        "struct A {\n"
+        "    int& b;\n"
+        "    A() : b(a) {}\n"
+        "};\n"};
+
+    const temporary_source second{
+        "header_static_b",
+        "static int a = 7;\n"
+        "struct B {\n"
+        "    int& b;\n"
+        "    B() : b(a) {}\n"
+        "};\n"};
+
+    file_context files;
+    lexical_generation lexical;
+
+    file_id first_id;
+    file_id second_id;
+
+    if (!tests.expect(
+            succeeded(
+                files.resolve(
+                    first.path(),
+                    file_kind::header,
+                    first_id)) &&
+            succeeded(
+                files.resolve(
+                    second.path(),
+                    file_kind::header,
+                    second_id)),
+            "resolve Header static roots")) {
+
+        return;
+    }
+
+    const std::array<file_id, 2> roots{
+        first_id,
+        second_id};
+
+    if (!prepare_all_roots(
+            tests,
+            files,
+            lexical,
+            roots)) {
+
+        return;
+    }
+
+    preprocessor_configuration configuration;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    parser_failure failure;
+
+    if (!tests.expect(
+            succeeded(
+                parse_semantic_project(
+                    files,
+                    lexical,
+                    roots.size(),
+                    configuration,
+                    strings,
+                    identities,
+                    G,
+                    sources,
+                    &failure)),
+            "parse Header static constructor bindings")) {
+
+        return;
+    }
+
+    tests.expect(
+        G.object_count() == 2,
+        "internal static object is distinct per semantic root");
+
+    const auto first_static =
+        G.object_at(0);
+
+    const auto second_static =
+        G.object_at(1);
+
+    const auto* first_object =
+        G.find(first_static);
+
+    const auto* second_object =
+        G.find(second_static);
+
+    construction_value first_initial;
+    construction_value second_initial;
+
+    tests.expect(
+        first_object != nullptr &&
+        second_object != nullptr &&
+        first_object->internal_static() &&
+        second_object->internal_static() &&
+        G.construction(
+            first_static,
+            first_initial) &&
+        G.construction(
+            second_static,
+            second_initial) &&
+        first_initial.kind ==
+            construction_kind::unsigned_integer &&
+        second_initial.kind ==
+            construction_kind::unsigned_integer &&
+        first_initial.bits() == 5 &&
+        second_initial.bits() == 7,
+        "Header static storage and initialization retained in G");
+
+    const auto a_name =
+        strings.find("A");
+
+    const auto b_name =
+        strings.find("B");
+
+    const auto member_name =
+        strings.find("b");
+
+    const auto a_type =
+        G.find_type(
+            identities.find(
+                identities.root(),
+                a_name,
+                identity_kind::type));
+
+    const auto b_type =
+        G.find_type(
+            identities.find(
+                identities.root(),
+                b_name,
+                identity_kind::type));
+
+    const auto a_member =
+        G.find_member(
+            a_type,
+            member_name);
+
+    const auto b_member =
+        G.find_member(
+            b_type,
+            member_name);
+
+    const auto* a_initial =
+        G.construction(
+            a_type,
+            a_member);
+
+    const auto* b_initial =
+        G.construction(
+            b_type,
+            b_member);
+
+    tests.expect(
+        a_initial != nullptr &&
+        b_initial != nullptr &&
+        a_initial->kind ==
+            construction_kind::object_binding &&
+        b_initial->kind ==
+            construction_kind::object_binding &&
+        a_initial->operand ==
+            first_static.value() &&
+        b_initial->operand ==
+            second_static.value(),
+        "constructor reference binds to root-local Header static object");
+
+    const auto static_name =
+        strings.find("a");
+
+    tests.expect(
+        !identities.find(
+            identities.root(),
+            static_name,
+            identity_kind::object),
+        "Header internal static is not visible as a Source Project object");
+}
+
+void test_source_link_failure_provenance(
+    test_state& tests) {
+
+    const temporary_source header{
+        "source_link_failure_header",
+        "struct T { int a; int b; };\n"};
+
+    const temporary_source source{
+        "source_link_failure_source",
+        "T x;\n"
+        "T y;\n"
+        "x.a = y.a;\n"
+        "x.a = y.b;\n"};
+
+    file_context files;
+    lexical_generation lexical;
+
+    file_id header_id;
+    file_id source_id;
+
+    if (!tests.expect(
+            succeeded(
+                files.resolve(
+                    header.path(),
+                    file_kind::header,
+                    header_id)) &&
+            succeeded(
+                files.resolve(
+                    source.path(),
+                    file_kind::source,
+                    source_id)),
+            "resolve Source link provenance roots")) {
+
+        return;
+    }
+
+    const std::array<file_id, 2> roots{
+        header_id,
+        source_id};
+
+    if (!prepare_all_roots(
+            tests,
+            files,
+            lexical,
+            roots)) {
+
+        return;
+    }
+
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map provenance;
+    preprocessor_configuration configuration;
+    parser_failure failure;
+
+    tests.expect(
+        !succeeded(
+            parse_semantic_project(
+                files,
+                lexical,
+                roots.size(),
+                configuration,
+                strings,
+                identities,
+                G,
+                provenance,
+                &failure)),
+        "reject conflicting Source link");
+
+    const auto contributions =
+        provenance.contribution_entries();
+
+    tests.expect(
+        !provenance.finalized() &&
+        G.link_count() == 1 &&
+        contributions.size() == 4 &&
+        contributions[0].file == header_id &&
+        contributions[1].file == source_id &&
+        contributions[2].file == source_id &&
+        contributions[3].file == source_id,
+        "failed Source link operation adds no provenance");
+}
+
 void test_parser_provenance(test_state &tests) {
     const temporary_source common{"common_provenance", "struct Shared { int field; };"};
     const auto include = "#include \"" + common.path().filename().string() + "\"\n";
@@ -553,8 +1072,7 @@ void test_parser_provenance(test_state &tests) {
                      "failed G operation adds no child provenance");
     };
     rejected("struct T { int a; };", "struct T { double a; };", 1);
-    rejected("int value;", "double value;", 1);
-    rejected("struct T { int a; int b; }; T x; T y; x.a = y.a;", "x.a = y.b;", 4);
+    rejected("static int value;", "static double value;", 1);
 }
 }
 }
@@ -564,6 +1082,18 @@ int main() {
 
     try {
         test_state tests;
+
+        test_header_source_semantic_split(
+            tests);
+
+        test_source_preprocessor_rejected(
+            tests);
+
+        test_header_static_constructor_binding(
+            tests);
+
+        test_source_link_failure_provenance(
+            tests);
 
         test_parser_provenance(tests);
 

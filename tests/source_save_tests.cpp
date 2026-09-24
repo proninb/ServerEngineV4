@@ -266,11 +266,13 @@ void test_direct_source_save(
     for (auto owner : {first, second}) {
         tests.expect(
             succeeded(sources.begin_root(owner)) &&
-                succeeded(sources.add(second, source_data_ref::type_definition(identity))) &&
-                succeeded(sources.add(second, source_data_ref::object(object_identity))) &&
-                succeeded(sources.add(second, source_data_ref::link(link))) &&
+                succeeded(
+                    sources.add(
+                        second,
+                        source_data_ref::type_definition(
+                            identity))) &&
                 succeeded(sources.end_root()),
-            "source-save root ownership");
+            "source-save Header root ownership");
     }
 
     if (!tests.expect(succeeded(sources.finalize(files.size(), identities, G)),
@@ -333,8 +335,12 @@ void test_direct_source_save(
     tests.expect(writable_view.type_presence_count() == 1 &&
                      writable_view.type_presence(0) == source_type_presence{2, 2},
                  "presence persisted by root ownership");
-    tests.expect(writable_view.object_presence_count()==1 && writable_view.link_presence_count()==1 &&
-        writable_view.object_presence(0)==2 && writable_view.link_presence(0)==2,"object and link presence persisted");
+    tests.expect(
+        writable_view.object_presence_count() == 1 &&
+        writable_view.link_presence_count() == 1 &&
+        writable_view.object_presence(0) == 0 &&
+        writable_view.link_presence(0) == 0,
+        "unowned object and link slots persist zero presence");
     assign_table assigns;
     compiled_project_layout compiled_layout;
     tests.expect(prepare_compiled_project_layout(
@@ -353,7 +359,7 @@ void test_direct_source_save(
                          source_save_result::success,
                  "presence matches compiled root ownership");
     auto altered = std::vector<std::byte>(writable.bytes().begin(), writable.bytes().end());
-    // Presence has one type pair, one object and one link counter before SHA-256.
+    // Presence has one type pair, one zero object and one zero link counter before SHA-256.
     altered[altered.size() - 32 - 16] = std::byte{1};
     source_save_view stale;
     tests.expect(stale.bind(altered) == source_save_result::success &&

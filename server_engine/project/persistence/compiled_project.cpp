@@ -485,6 +485,9 @@ void write_u64(
     case compiled_project_section::object_identities:
         return object_identity_size;
 
+    case compiled_project_section::object_construction:
+        return construction_record_size;
+
     case compiled_project_section::links:
         return link_record_size;
 
@@ -931,6 +934,12 @@ compiled_project_view::bind(
                 compiled_project_section::
                     object_identities)];
 
+    const auto& object_construction =
+        candidate[
+            section_index(
+                compiled_project_section::
+                    object_construction)];
+
     const auto& links =
         candidate[
             section_index(
@@ -1006,6 +1015,8 @@ compiled_project_view::bind(
             object_count ||
         object_identities.count !=
             object_count ||
+        object_construction.count >
+            graph_object_construction_slot_mask ||
         links.count !=
             link_count ||
         graph_identity.count !=
@@ -1882,7 +1893,7 @@ bool compiled_project_view::object(
         type_ref_from_raw(
             read_u32(record));
 
-    output.flags =
+    output.state =
         read_u32(
             record + 4);
 
@@ -1949,6 +1960,64 @@ object_handle compiled_project_view::find_object(
     return object_from_raw(
         graph_location_slot(
             location));
+}
+
+bool compiled_project_view::construction(
+    object_handle object_value,
+    construction_value& output) const noexcept {
+
+    output = {};
+
+    object_entry entry;
+
+    if (!object(
+            object_value,
+            entry)) {
+
+        return false;
+    }
+
+    if (!entry.non_default_initializer()) {
+        return entry.construction_slot() == 0;
+    }
+
+    const auto slot =
+        entry.construction_slot();
+
+    const auto& values =
+        section(
+            compiled_project_section::
+                object_construction);
+
+    if (slot == 0 ||
+        slot > values.count) {
+
+        return false;
+    }
+
+    const auto* record =
+        values.data +
+        static_cast<std::size_t>(
+            slot - 1) *
+            construction_record_size;
+
+    output.low =
+        read_u32(record);
+
+    output.high =
+        read_u32(
+            record + 4);
+
+    output.operand =
+        read_u32(
+            record + 8);
+
+    output.kind =
+        static_cast<construction_kind>(
+            read_u32(
+                record + 12));
+
+    return valid_construction(output);
 }
 
 bool compiled_project_view::link(
@@ -2528,6 +2597,22 @@ compiled_project_view::verify_contents() const noexcept {
                 return compiled_project_image_result::
                     invalid_image;
             }
+
+            if (construction_value_value.kind ==
+                construction_kind::object_binding) {
+
+                object_entry bound;
+
+                if (!object(
+                        object_from_raw(
+                            construction_value_value.operand),
+                        bound) ||
+                    !bound.internal_static()) {
+
+                    return compiled_project_image_result::
+                        invalid_image;
+                }
+            }
         }
     }
 
@@ -2582,6 +2667,8 @@ compiled_project_view::verify_contents() const noexcept {
         }
     }
 
+    std::uint32_t expected_construction_slot = 0;
+
     for (std::size_t index = 0;
          index <
             object_count_value;
@@ -2591,6 +2678,7 @@ compiled_project_view::verify_contents() const noexcept {
             object_at(index);
 
         object_entry value;
+        construction_value initial;
 
         const auto identity_value =
             identity(handle);
@@ -2598,9 +2686,10 @@ compiled_project_view::verify_contents() const noexcept {
         if (!object(
                 handle,
                 value) ||
+            !construction(
+                handle,
+                initial) ||
             !value.type ||
-            (value.flags &
-                ~graph_object_non_default_initializer) != 0 ||
             !identity_value ||
             identity_value.kind() !=
                 identity_kind::object ||
@@ -2610,6 +2699,43 @@ compiled_project_view::verify_contents() const noexcept {
             return compiled_project_image_result::
                 invalid_image;
         }
+
+        if (value.non_default_initializer()) {
+            if (expected_construction_slot ==
+                graph_object_construction_slot_mask) {
+
+                return compiled_project_image_result::
+                    invalid_image;
+            }
+
+            ++expected_construction_slot;
+
+            if (value.construction_slot() !=
+                    expected_construction_slot ||
+                initial.kind ==
+                    construction_kind::member_binding ||
+                initial.kind ==
+                    construction_kind::object_binding) {
+
+                return compiled_project_image_result::
+                    invalid_image;
+            }
+        }
+        else if (value.construction_slot() != 0 ||
+                 initial != construction_value{}) {
+
+            return compiled_project_image_result::
+                invalid_image;
+        }
+    }
+
+    if (expected_construction_slot !=
+        section(
+            compiled_project_section::
+                object_construction).count) {
+
+        return compiled_project_image_result::
+            invalid_image;
     }
 
     const auto& graph_identity =
@@ -3111,6 +3237,11 @@ prepare_compiled_project_layout(const string_table &strings,
             object_count,
         },
         {
+            compiled_project_section::object_construction,
+            construction_record_size,
+            G.object_construction_entries().size(),
+        },
+        {
             compiled_project_section::links,
             link_record_size,
             link_count,
@@ -3352,6 +3483,10 @@ encode_compiled_project_image(const string_table &strings,
             G.derived_type_count() ||
         object_count !=
             G.object_count() ||
+        count(
+            compiled_project_section::
+                object_construction) !=
+            G.object_construction_entries().size() ||
         link_count !=
             G.link_count() ||
         assign_count !=
@@ -3858,10 +3993,26 @@ encode_compiled_project_image(const string_table &strings,
             const auto identity =
                 object_identities[index];
 
-            if (!G.contains(
+            construction_value initial;
+
+            const auto handle =
+                G.object_at(index);
+
+            if (!handle ||
+                !G.contains(
                     value.type) ||
-                (value.flags &
-                    ~graph_object_non_default_initializer) != 0 ||
+                !G.construction(
+                    handle,
+                    initial) ||
+                (value.non_default_initializer() &&
+                 (value.construction_slot() == 0 ||
+                  initial.kind ==
+                    construction_kind::member_binding ||
+                  initial.kind ==
+                    construction_kind::object_binding)) ||
+                (!value.non_default_initializer() &&
+                 (value.construction_slot() != 0 ||
+                  initial != construction_value{})) ||
                 !identities.contains(identity) ||
                 identity.kind() !=
                     identity_kind::object) {
@@ -3881,7 +4032,7 @@ encode_compiled_project_image(const string_table &strings,
 
             write_u32(
                 record + 4,
-                value.flags);
+                value.state);
 
             write_u32(
                 identities_out +
@@ -3906,6 +4057,56 @@ encode_compiled_project_image(const string_table &strings,
                     2,
                     static_cast<std::uint32_t>(
                         index + 1)));
+        }
+    }
+
+    {
+        auto* values =
+            section_data(
+                compiled_project_section::
+                    object_construction);
+
+        const auto construction =
+            G.object_construction_entries();
+
+        for (std::size_t index = 0;
+             index < construction.size();
+             ++index) {
+
+            const auto& initial =
+                construction[index];
+
+            if (!valid_construction(initial) ||
+                initial.kind ==
+                    construction_kind::member_binding ||
+                initial.kind ==
+                    construction_kind::object_binding) {
+
+                return compiled_project_image_result::
+                    invalid_state;
+            }
+
+            auto* record =
+                values +
+                index *
+                    construction_record_size;
+
+            write_u32(
+                record,
+                initial.low);
+
+            write_u32(
+                record + 4,
+                initial.high);
+
+            write_u32(
+                record + 8,
+                initial.operand);
+
+            write_u32(
+                record + 12,
+                static_cast<std::uint32_t>(
+                    initial.kind));
         }
     }
 
@@ -4326,6 +4527,9 @@ compiled_project_image_result compiled_project_view::verify_sources() const noex
 
         std::vector<bool> owned(contribution_count);
         std::vector<bool> physical(contribution_count);
+        std::vector<file_kind> semantic_domains(
+            contribution_count,
+            file_kind::project);
 
         for (std::size_t index = 0;
              index < contribution_count;
@@ -4340,43 +4544,89 @@ compiled_project_image_result compiled_project_view::verify_sources() const noex
                 return invalid;
             }
 
-            if (contribution.data.kind() == source_data_kind::link) {
+            file_kind semantic_domain =
+                file_kind::project;
+
+            if (contribution.data.kind() ==
+                source_data_kind::link) {
+
                 link_record entry;
 
                 if (!link(
-                        link_from_raw(contribution.data.slot()),
+                        link_from_raw(
+                            contribution.data.slot()),
                         entry)) {
 
                     return invalid;
                 }
 
-                continue;
+                semantic_domain =
+                    file_kind::source;
             }
+            else {
+                const auto identity =
+                    identity_at_slot(
+                        contribution.data.slot());
 
-            const auto identity =
-                identity_at_slot(contribution.data.slot());
+                if (contribution.data.kind() ==
+                    source_data_kind::object) {
 
-            if (contribution.data.kind() == source_data_kind::object) {
-                if (!identity ||
-                    identity.kind() != identity_kind::object ||
-                    !find_object(identity)) {
+                    object_entry entry;
 
-                    return invalid;
+                    if (!identity ||
+                        identity.kind() !=
+                            identity_kind::object ||
+                        !object(
+                            find_object(identity),
+                            entry)) {
+
+                        return invalid;
+                    }
+
+                    semantic_domain =
+                        entry.internal_static()
+                        ? file_kind::header
+                        : file_kind::source;
                 }
+                else {
+                    type_entry entry;
 
-                continue;
+                    if (!identity ||
+                        identity.kind() !=
+                            identity_kind::type ||
+                        !type(
+                            find_type(identity),
+                            entry) ||
+                        (contribution.data.kind() ==
+                                source_data_kind::
+                                    type_definition &&
+                         !entry.defined())) {
+
+                        return invalid;
+                    }
+
+                    semantic_domain =
+                        file_kind::header;
+                }
             }
 
-            type_entry entry;
+            std::string_view physical_path;
+            file_kind physical_kind;
+            source_map_range physical_range;
 
-            if (!identity ||
-                identity.kind() != identity_kind::type ||
-                !type(find_type(identity), entry) ||
-                (contribution.data.kind() == source_data_kind::type_definition &&
-                 !entry.defined())) {
+            if (!source_file(
+                    contribution.file,
+                    physical_path,
+                    physical_kind,
+                    physical_range) ||
+                physical_kind !=
+                    semantic_domain) {
 
                 return invalid;
             }
+
+            semantic_domains[index] =
+                semantic_domain;
         }
 
         std::uint64_t path_cursor = 0;
@@ -4442,7 +4692,12 @@ compiled_project_image_result compiled_project_view::verify_sources() const noex
 
                 if (contribution_index >= contribution_count ||
                     owned[contribution_index] ||
-                    !source_contribution(contribution_index, contribution)) {
+                    !source_contribution(
+                        contribution_index,
+                        contribution) ||
+                    semantic_domains[
+                        contribution_index] !=
+                        kind) {
 
                     return invalid;
                 }

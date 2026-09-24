@@ -18,6 +18,7 @@ enum class construction_kind : std::uint32_t {
     unsigned_integer,
     real,
     member_binding,
+    object_binding,
     unsupported,
 };
 
@@ -64,6 +65,24 @@ struct construction_value final {
             };
     }
 
+    [[nodiscard]] static constexpr construction_value object_binding(
+        std::uint32_t object) noexcept {
+
+        return object != 0
+            ? construction_value{
+                0,
+                0,
+                object,
+                construction_kind::object_binding,
+            }
+            : construction_value{
+                0,
+                0,
+                0,
+                construction_kind::unsupported,
+            };
+    }
+
     friend constexpr bool operator==(
         const construction_value&,
         const construction_value&) noexcept = default;
@@ -83,6 +102,7 @@ static_assert(std::is_standard_layout_v<construction_value>);
             value.operand == 0;
 
     case construction_kind::member_binding:
+    case construction_kind::object_binding:
         return value.bits() == 0 &&
             value.operand != 0;
 

@@ -78,15 +78,33 @@ struct member_record final {
 static_assert(sizeof(member_record) == 12);
 static_assert(std::is_trivially_copyable_v<member_record>);
 
+inline constexpr std::uint32_t graph_object_construction_slot_mask =
+    0x3fffffffu;
+
 inline constexpr std::uint32_t graph_object_non_default_initializer =
-    0x00000001u;
+    0x40000000u;
+
+inline constexpr std::uint32_t graph_object_internal_static =
+    0x80000000u;
+
+inline constexpr std::uint32_t graph_object_flag_mask =
+    graph_object_non_default_initializer |
+    graph_object_internal_static;
 
 struct object_entry final {
     type_ref type{};
-    std::uint32_t flags = 0;
+    std::uint32_t state = 0;
 
     [[nodiscard]] constexpr bool non_default_initializer() const noexcept {
-        return (flags & graph_object_non_default_initializer) != 0;
+        return (state & graph_object_non_default_initializer) != 0;
+    }
+
+    [[nodiscard]] constexpr bool internal_static() const noexcept {
+        return (state & graph_object_internal_static) != 0;
+    }
+
+    [[nodiscard]] constexpr std::uint32_t construction_slot() const noexcept {
+        return state & graph_object_construction_slot_mask;
     }
 };
 
@@ -112,8 +130,8 @@ struct link_record final {
 static_assert(sizeof(link_record) == 16);
 static_assert(std::is_trivially_copyable_v<link_record>);
 
-// Owns one complete semantic G. Member construction remains in a parallel cold
-// array; Project object initialization capability is carried by object flags.
+// Owns one complete semantic G. Member construction is dense per member; object
+// construction is sparse cold storage addressed from the compact object state.
 class graph final {
 public:
     graph() = default;
@@ -139,7 +157,8 @@ public:
         identity_ref identity,
         type_ref type,
         object_handle& output,
-        std::uint32_t flags = 0) noexcept;
+        std::uint32_t flags = 0,
+        construction_value construction = {}) noexcept;
 
     [[nodiscard]] server_status add_link(
         object_endpoint source,
@@ -206,6 +225,19 @@ public:
         type_handle type,
         member_index member) const noexcept;
 
+    [[nodiscard]] bool construction(
+        object_handle object,
+        construction_value& output) const noexcept;
+
+    [[nodiscard]] object_handle object_at(
+        std::size_t index) const noexcept {
+
+        return index < objects.size()
+            ? object_handle{
+                static_cast<std::uint32_t>(
+                    index + 1)}
+            : object_handle{};
+    }
 
     [[nodiscard]] bool intrinsic(
         type_ref type,
@@ -269,6 +301,10 @@ public:
         return object_identities;
     }
 
+    [[nodiscard]] std::span<const construction_value>
+    object_construction_entries() const noexcept {
+        return object_construction;
+    }
 
     [[nodiscard]] std::span<const link_record>
     link_entries() const noexcept {
@@ -343,6 +379,7 @@ private:
 
     std::vector<object_entry> objects;
     std::vector<identity_ref> object_identities;
+    std::vector<construction_value> object_construction;
 
     std::vector<link_record> links;
 

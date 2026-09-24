@@ -2,6 +2,7 @@
 
 #include "../frontend/semantic_input.hpp"
 
+#include <array>
 #include <bit>
 #include <charconv>
 #include <cstdint>
@@ -59,6 +60,11 @@ namespace {
         : graph_member_access::public_access;
 }
 
+enum class semantic_domain : std::uint8_t {
+    header,
+    source,
+};
+
 enum class pending_construction_kind : std::uint8_t {
     value,
     member_name,
@@ -93,6 +99,7 @@ public:
               lexical,
               configuration,
               strings),
+          strings(strings),
           identities(identities),
           G(G),
           sources(sources),
@@ -100,11 +107,19 @@ public:
     }
 
     [[nodiscard]] server_status parse(
-        file_id root) noexcept {
+        file_id root,
+        semantic_domain domain_value) noexcept {
 
         if (failure != nullptr) {
             *failure = {};
         }
+
+        domain = domain_value;
+        semantic_root = root;
+        internal_static_scope_name = {};
+        current = {};
+        buffered = {};
+        has_buffered = false;
 
         const auto provenance_started =
             sources.begin_root(root);
@@ -114,7 +129,11 @@ public:
         }
 
         const auto started =
-            input.start(root);
+            input.start(
+                root,
+                domain == semantic_domain::header
+                    ? semantic_input_mode::header
+                    : semantic_input_mode::source);
 
         if (!succeeded(started)) {
             return input_failure(started);
@@ -141,6 +160,185 @@ public:
     }
 
 private:
+    [[nodiscard]] server_status ensure_internal_static_scope_name() noexcept {
+
+        if (internal_static_scope_name) {
+            return server_status::success;
+        }
+
+        constexpr std::string_view prefix{
+            "<static-root:"};
+
+        std::array<char, 32> buffer{};
+        std::size_t cursor = 0;
+
+        for (const auto value : prefix) {
+            buffer[cursor++] = value;
+        }
+
+        const auto converted =
+            std::to_chars(
+                buffer.data() + cursor,
+                buffer.data() + buffer.size() - 1,
+                semantic_root.value());
+
+        if (converted.ec != std::errc{}) {
+            return server_status::io_error;
+        }
+
+        *converted.ptr = '>';
+
+        return strings.intern(
+            std::string_view{
+                buffer.data(),
+                static_cast<std::size_t>(
+                    converted.ptr -
+                    buffer.data() + 1)},
+            internal_static_scope_name);
+    }
+
+    [[nodiscard]] server_status resolve_internal_static_identity(
+        identity_ref scope,
+        string_id name,
+        identity_ref& output) noexcept {
+
+        output = {};
+
+        const auto prepared =
+            ensure_internal_static_scope_name();
+
+        if (!succeeded(prepared)) {
+            return prepared;
+        }
+
+        identity_ref internal_scope;
+
+        const auto scope_resolved =
+            identities.resolve(
+                scope,
+                internal_static_scope_name,
+                identity_kind::namespace_scope,
+                internal_scope);
+
+        if (!succeeded(scope_resolved)) {
+            return scope_resolved;
+        }
+
+        return identities.resolve(
+            internal_scope,
+            name,
+            identity_kind::object,
+            output);
+    }
+
+    [[nodiscard]] object_handle find_internal_static_object(
+        identity_ref scope,
+        string_id name) const noexcept {
+
+        if (!internal_static_scope_name ||
+            !name) {
+
+            return {};
+        }
+
+        auto current_scope = scope;
+
+        while (current_scope) {
+            const auto internal_scope =
+                identities.find(
+                    current_scope,
+                    internal_static_scope_name,
+                    identity_kind::namespace_scope);
+
+            if (internal_scope) {
+                const auto identity =
+                    identities.find(
+                        internal_scope,
+                        name,
+                        identity_kind::object);
+
+                const auto object =
+                    G.find_object(identity);
+
+                const auto* value =
+                    G.find(object);
+
+                if (value != nullptr &&
+                    value->internal_static()) {
+
+                    return object;
+                }
+            }
+
+            if (current_scope ==
+                identities.root()) {
+
+                break;
+            }
+
+            identity_record record;
+
+            if (!identities.record(
+                    current_scope,
+                    record)) {
+
+                break;
+            }
+
+            current_scope =
+                record.parent;
+        }
+
+        return {};
+    }
+
+    [[nodiscard]] server_status resolve_reference_binding(
+        identity_ref scope,
+        const std::vector<member_record>& members,
+        string_id name,
+        construction_value& output) noexcept {
+
+        output = {};
+
+        for (std::size_t index = 0;
+             index < members.size();
+             ++index) {
+
+            if (members[index].name == name) {
+                if (index >=
+                    (std::numeric_limits<
+                        std::uint32_t>::max)()) {
+
+                    return server_status::io_error;
+                }
+
+                output =
+                    construction_value::member_binding(
+                        static_cast<std::uint32_t>(
+                            index + 1));
+
+                return server_status::success;
+            }
+        }
+
+        const auto object =
+            find_internal_static_object(
+                scope,
+                name);
+
+        if (!object) {
+            return fail(
+                parser_failure_kind::semantic,
+                "Reference binding names neither a member nor a visible Header static object");
+        }
+
+        output =
+            construction_value::object_binding(
+                object.value());
+
+        return server_status::success;
+    }
+
     [[nodiscard]] server_status input_failure(
         server_status status) noexcept {
 
@@ -1348,6 +1546,7 @@ private:
     }
 
     [[nodiscard]] server_status normalize_constructor_operations(
+        identity_ref scope,
         const std::vector<member_record>& members,
         const std::vector<constructor_operation>& operations,
         std::vector<construction_value>& construction) noexcept {
@@ -1393,35 +1592,19 @@ private:
 
                     return fail(
                         parser_failure_kind::unsupported,
-                        "Reference constructor operation requires a local member binding");
+                        "Reference constructor operation requires a member or Header static object binding");
                 }
 
-                std::size_t source_index = 0;
+                const auto resolved =
+                    resolve_reference_binding(
+                        scope,
+                        members,
+                        operation.expression.member_name,
+                        value);
 
-                for (;
-                     source_index < members.size();
-                     ++source_index) {
-
-                    if (members[source_index].name ==
-                        operation.expression.member_name) {
-
-                        break;
-                    }
+                if (!succeeded(resolved)) {
+                    return resolved;
                 }
-
-                if (source_index == members.size() ||
-                    source_index >=
-                        (std::numeric_limits<std::uint32_t>::max)()) {
-
-                    return fail(
-                        parser_failure_kind::semantic,
-                        "Constructor reference binding does not name a member of this record");
-                }
-
-                value =
-                    construction_value::member_binding(
-                        static_cast<std::uint32_t>(
-                            source_index + 1));
             }
             else {
                 if (operation.expression.kind !=
@@ -1568,6 +1751,12 @@ private:
 
     [[nodiscard]] server_status parse_record(
         identity_ref scope) noexcept {
+
+        if (domain != semantic_domain::header) {
+            return fail(
+                parser_failure_kind::unsupported,
+                "Type declarations are supported only in Header inputs");
+        }
 
         const auto kind =
             record_kind(current.kind);
@@ -1854,36 +2043,21 @@ private:
                 continue;
             }
 
-            std::size_t target = 0;
+            const auto resolved =
+                resolve_reference_binding(
+                    scope,
+                    members,
+                    pending[index].member_name,
+                    construction[index]);
 
-            for (;
-                 target < members.size();
-                 ++target) {
-
-                if (members[target].name ==
-                    pending[index].member_name) {
-
-                    break;
-                }
+            if (!succeeded(resolved)) {
+                return resolved;
             }
-
-            if (target == members.size() ||
-                target >=
-                    (std::numeric_limits<std::uint32_t>::max)()) {
-
-                return fail(
-                    parser_failure_kind::semantic,
-                    "Reference member initializer does not name a member of this record");
-            }
-
-            construction[index] =
-                construction_value::member_binding(
-                    static_cast<std::uint32_t>(
-                        target + 1));
         }
 
         status =
             normalize_constructor_operations(
+                scope,
                 members,
                 constructor_operations,
                 construction);
@@ -1936,9 +2110,18 @@ private:
     [[nodiscard]] server_status parse_object(
         identity_ref scope) noexcept {
 
-        // Declaration/storage specifiers do not participate in identity_ref.
+        bool static_storage = false;
+        bool inline_storage = false;
+
         while (at(token_kind::kw_static) ||
                at(token_kind::kw_inline)) {
+
+            if (at(token_kind::kw_static)) {
+                static_storage = true;
+            }
+            else {
+                inline_storage = true;
+            }
 
             const auto status =
                 advance();
@@ -1946,6 +2129,23 @@ private:
             if (!succeeded(status)) {
                 return status;
             }
+        }
+
+        if (domain == semantic_domain::header &&
+            !static_storage) {
+
+            return fail(
+                parser_failure_kind::unsupported,
+                "Header namespace-scope objects require internal static storage");
+        }
+
+        if (domain == semantic_domain::source &&
+            (static_storage ||
+             inline_storage)) {
+
+            return fail(
+                parser_failure_kind::unsupported,
+                "Source object declarations do not use C++ storage specifiers");
         }
 
         type_ref type;
@@ -1976,7 +2176,12 @@ private:
         identity_ref identity;
 
         status =
-            identities.resolve(
+            domain == semantic_domain::header
+            ? resolve_internal_static_identity(
+                scope,
+                name,
+                identity)
+            : identities.resolve(
                 scope,
                 name,
                 identity_kind::object,
@@ -1993,7 +2198,12 @@ private:
             return status;
         }
 
-        std::uint32_t construction_flags = 0;
+        std::uint32_t flags =
+            domain == semantic_domain::header
+            ? graph_object_internal_static
+            : 0;
+
+        construction_value initial;
 
         if (at(token_kind::assign)) {
             status =
@@ -2012,19 +2222,22 @@ private:
                 }
 
                 if (!at(token_kind::r_brace)) {
-                    pending_construction ignored;
+                    pending_construction parsed;
 
                     status =
                         parse_construction_atom(
                             type,
                             false,
-                            ignored);
+                            parsed);
 
                     if (!succeeded(status)) {
                         return status;
                     }
 
-                    construction_flags |=
+                    initial =
+                        parsed.value;
+
+                    flags |=
                         graph_object_non_default_initializer;
 
                     status =
@@ -2045,19 +2258,22 @@ private:
                 }
             }
             else {
-                pending_construction ignored;
+                pending_construction parsed;
 
                 status =
                     parse_construction_atom(
                         type,
                         false,
-                        ignored);
+                        parsed);
 
                 if (!succeeded(status)) {
                     return status;
                 }
 
-                construction_flags |=
+                initial =
+                    parsed.value;
+
+                flags |=
                     graph_object_non_default_initializer;
             }
         }
@@ -2070,19 +2286,22 @@ private:
             }
 
             if (!at(token_kind::r_brace)) {
-                pending_construction ignored;
+                pending_construction parsed;
 
                 status =
                     parse_construction_atom(
                         type,
                         false,
-                        ignored);
+                        parsed);
 
                 if (!succeeded(status)) {
                     return status;
                 }
 
-                construction_flags |=
+                initial =
+                    parsed.value;
+
+                flags |=
                     graph_object_non_default_initializer;
 
                 status =
@@ -2119,7 +2338,8 @@ private:
                 identity,
                 type,
                 object,
-                construction_flags);
+                flags,
+                initial);
 
         if (!succeeded(status)) {
             return fail(
@@ -2262,6 +2482,12 @@ private:
     [[nodiscard]] server_status parse_link(
         identity_ref scope) noexcept {
 
+        if (domain != semantic_domain::source) {
+            return fail(
+                parser_failure_kind::unsupported,
+                "Static Project links are supported only in Source inputs");
+        }
+
         const auto link_file =
             current.file;
 
@@ -2390,7 +2616,8 @@ private:
                 continue;
             }
 
-            if (at(token_kind::identifier) &&
+            if (domain == semantic_domain::source &&
+                at(token_kind::identifier) &&
                 current.identifier &&
                 find_object_identity(
                     scope,
@@ -2429,10 +2656,15 @@ private:
 
     file_context& files;
     semantic_input input;
+    string_table& strings;
     identity_space& identities;
     graph& G;
     source_map& sources;
     parser_failure* failure = nullptr;
+    semantic_domain domain =
+        semantic_domain::header;
+    file_id semantic_root{};
+    string_id internal_static_scope_name{};
     semantic_token current;
     semantic_token buffered;
     bool has_buffered = false;
@@ -2479,28 +2711,37 @@ server_status parse_semantic_project(
         sources,
         failure};
 
-    for (std::size_t index = 0;
-         index < frontend_root_count;
-         ++index) {
+    for (const auto domain :
+         {semantic_domain::header,
+          semantic_domain::source}) {
 
-        const file_id root{
-            static_cast<std::uint32_t>(
-                index + 1)};
+        const auto expected_kind =
+            domain == semantic_domain::header
+            ? file_kind::header
+            : file_kind::source;
 
-        const auto kind =
-            files.kind(root);
+        for (std::size_t index = 0;
+             index < frontend_root_count;
+             ++index) {
 
-        if (kind != file_kind::header &&
-            kind != file_kind::source) {
+            const file_id root{
+                static_cast<std::uint32_t>(
+                    index + 1)};
 
-            continue;
-        }
+            if (files.kind(root) !=
+                expected_kind) {
 
-        const auto parsed =
-            parser.parse(root);
+                continue;
+            }
 
-        if (!succeeded(parsed)) {
-            return parsed;
+            const auto parsed =
+                parser.parse(
+                    root,
+                    domain);
+
+            if (!succeeded(parsed)) {
+                return parsed;
+            }
         }
     }
 
