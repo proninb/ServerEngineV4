@@ -15,6 +15,7 @@
 #include "../../server_status.hpp"
 
 #include <cstdint>
+#include <span>
 
 namespace cw::server {
 
@@ -34,5 +35,23 @@ struct source_preparation_failure final {
     file_context& files,
     lexical_generation& lexical,
     source_preparation_failure* failure = nullptr) noexcept;
+
+struct source_replacement_metrics final {
+    std::uint64_t masked_files = 0;
+    std::uint64_t retokenized_files = 0;
+    std::uint64_t missing_files = 0;
+    std::uint64_t active_lanes = 0;
+};
+
+// BUILD-only sparse lexical replacement. semantic_changed must be strictly
+// ascending file_id values from exact SourceSave classification. Header/Source
+// baselines are masked before workers start; present changed files are tokenized
+// from already-acquired File Context bytes, while missing files remain masked.
+[[nodiscard]] server_status replace_source_lexical_state(
+    file_context& files,
+    lexical_generation& lexical,
+    std::span<const file_id> semantic_changed,
+    source_preparation_failure* failure = nullptr,
+    source_replacement_metrics* metrics = nullptr) noexcept;
 
 }

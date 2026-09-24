@@ -2,6 +2,7 @@
 
 #include "project_lifecycle_context.hpp"
 #include "construction/execution_lanes.hpp"
+#include "frontend/source_discovery.hpp"
 #include "project_configuration_manifest_store.hpp"
 #include "persistence/project_artifact.hpp"
 #include "../diagnostics/diagnostic_builder.hpp"
@@ -523,6 +524,40 @@ server_status build_project(
         database_bound = true;
     }
 
+    source_preparation_failure lexical_failure;
+    source_replacement_metrics lexical_metrics;
+
+    if (!semantic_changed.empty()) {
+        if (!database_bound) {
+            return server_status::project_artifact_invalid;
+        }
+
+        const auto replaced = replace_source_lexical_state(
+            context.files,
+            context.lexical,
+            semantic_changed,
+            &lexical_failure,
+            &lexical_metrics);
+
+        if (!succeeded(replaced)) {
+            if (lexical_failure.kind == source_preparation_failure_kind::lexical &&
+                lexical_failure.file && context.files.contains(lexical_failure.file)) {
+                try {
+                    const auto path_view = context.files.path(lexical_failure.file);
+                    diagnostics.emit(
+                        diagnostic(diagnostics::project_lexical_error, operation)
+                            .file(std::filesystem::path{path_view.begin(), path_view.end()})
+                            .detail(lexical_error_message(lexical_failure.lexical.reason))
+                            .build());
+                }
+                catch (...) {
+                    return server_status::io_error;
+                }
+            }
+            return replaced;
+        }
+    }
+
     std::string detail;
 
     try {
@@ -572,13 +607,17 @@ server_status build_project(
                 context.lexical.baseline_bound()
                     ? context.lexical.size()
                     : 0) +
+            ", lexical_masked=" + std::to_string(lexical_metrics.masked_files) +
+            ", lexical_retokenized=" + std::to_string(lexical_metrics.retokenized_files) +
+            ", lexical_missing=" + std::to_string(lexical_metrics.missing_files) +
+            ", lexical_lanes=" + std::to_string(lexical_metrics.active_lanes) +
             ", baseline_strings=" +
             std::to_string(
                 context.compiled.string_count()) +
             ", baseline_identities=" +
             std::to_string(
                 context.compiled.identity_count()) +
-            "; affected lexical replacement, Parser/Semantic reconstruction, and final G construction are not implemented yet";
+            "; affected Parser/Semantic reconstruction and final G construction are not implemented yet";
     }
     catch (...) {
         return server_status::io_error;

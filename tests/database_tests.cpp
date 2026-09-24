@@ -3,9 +3,11 @@
 #include "project/file/file_context.hpp"
 #include "project/frontend/lexer.hpp"
 #include "project/frontend/lexical_generation.hpp"
+#include "project/frontend/source_discovery.hpp"
 #include "project/frontend/lexical_stream.hpp"
 #include "project/persistence/database.hpp"
 
+#include <array>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -421,32 +423,112 @@ void test_direct_database(
         baseline_words[0] == lexical.words(header)[0],
         "BUILD lexical baseline reads persisted words and directives directly");
 
-    tests.expect(
-        succeeded(build_lexical.begin_replacement(header)) &&
-        !build_lexical.contains(header),
-        "BUILD lexical replacement masks stale baseline before publish");
-
     constexpr std::string_view replacement_source{
         "struct B { long value; };\n"};
 
+    file_context replacement_files;
+    file_id replacement_header;
+    file_id replacement_project;
+
+    if (!tests.expect(write_text(root / "types.hpp", replacement_source), "write replacement source") ||
+        !tests.expect(
+            succeeded(replacement_files.resolve(root / "types.hpp", file_kind::header, replacement_header)) &&
+            replacement_header == header &&
+            succeeded(replacement_files.resolve(root / "project.json", file_kind::project, replacement_project)) &&
+            replacement_project == project,
+            "resolve sparse replacement fixture")) {
+        return;
+    }
+
+    file_acquire_job replacement_job;
+    file_acquire_result replacement_acquired;
+    bool replacement_changed = false;
+    if (!tests.expect(succeeded(replacement_files.prepare_acquire(replacement_header, replacement_job)),
+                      "prepare sparse replacement acquisition")) {
+        return;
+    }
+    file_context::execute_acquire(replacement_job, replacement_acquired);
+    if (!tests.expect(
+            succeeded(replacement_files.apply_acquire(replacement_acquired, replacement_changed)) &&
+            replacement_changed && replacement_files.content_available(replacement_header),
+            "materialize sparse replacement bytes")) {
+        return;
+    }
+
+    source_preparation_failure replacement_failure;
+    source_replacement_metrics replacement_metrics;
+    const std::array<file_id, 1> semantic_changed{header};
+
+    tests.expect(
+        succeeded(replace_source_lexical_state(
+            replacement_files, build_lexical, semantic_changed,
+            &replacement_failure, &replacement_metrics)) &&
+        replacement_failure.kind == source_preparation_failure_kind::none &&
+        replacement_metrics.masked_files == 1 &&
+        replacement_metrics.retokenized_files == 1 &&
+        replacement_metrics.missing_files == 0 &&
+        replacement_metrics.active_lanes == 1 &&
+        build_lexical.contains(header),
+        "BUILD sparse lexical replacement masks and retokenizes exact changed source");
+
     lexical_stream replacement_stream;
     lexical_error replacement_error;
+    tests.expect(
+        succeeded(lexer::tokenize(header, replacement_source, replacement_stream, &replacement_error)) &&
+        build_lexical.token_count(header) == replacement_stream.token_count(),
+        "BUILD sparse lexical replacement matches direct lexer result");
+
+    lexical_generation missing_lexical;
+
+    if (!tests.expect(
+            succeeded(
+                missing_lexical.bind_baseline(
+                    persisted_view.lexical_baseline(),
+                    1)),
+            "bind lexical baseline for missing-source replacement")) {
+        return;
+    }
+
+    file_context missing_files;
+    file_id missing_header;
+    file_id missing_project;
+
+    if (!tests.expect(
+            succeeded(
+                missing_files.resolve(
+                    root / "types.hpp",
+                    file_kind::header,
+                    missing_header)) &&
+            missing_header == header &&
+            succeeded(
+                missing_files.resolve(
+                    root / "project.json",
+                    file_kind::project,
+                    missing_project)) &&
+            missing_project == project,
+            "resolve missing-source replacement fixture")) {
+        return;
+    }
+
+    source_preparation_failure missing_failure;
+    source_replacement_metrics missing_metrics;
 
     tests.expect(
         succeeded(
-            lexer::tokenize(
-                header,
-                replacement_source,
-                replacement_stream,
-                &replacement_error)) &&
-        succeeded(
-            build_lexical.publish(
-                header,
-                0,
-                replacement_stream)) &&
-        build_lexical.contains(header) &&
-        build_lexical.token_count(header) == replacement_stream.token_count(),
-        "BUILD lexical replacement publishes sparse native overlay");
+            replace_source_lexical_state(
+                missing_files,
+                missing_lexical,
+                semantic_changed,
+                &missing_failure,
+                &missing_metrics)) &&
+        missing_failure.kind ==
+            source_preparation_failure_kind::none &&
+        missing_metrics.masked_files == 1 &&
+        missing_metrics.retokenized_files == 0 &&
+        missing_metrics.missing_files == 1 &&
+        missing_metrics.active_lanes == 0 &&
+        !missing_lexical.contains(header),
+        "BUILD missing changed Header masks stale lexical baseline without tokenization");
 
     const auto stable_replacement_words =
         build_lexical.words(header);

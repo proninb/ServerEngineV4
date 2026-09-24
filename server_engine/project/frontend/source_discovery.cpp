@@ -42,6 +42,39 @@ namespace {
     return server_status::io_error;
 }
 
+[[nodiscard]] server_status lex_source_file(
+    file_context& files,
+    lexical_generation& lexical,
+    file_id file,
+    std::uint32_t arena,
+    lexical_stream& stream,
+    source_preparation_failure* failure) noexcept {
+
+    if (lexical.contains(file)) {
+        return server_status::success;
+    }
+
+    if (!files.contains(file) ||
+        !lexical_kind(files.kind(file)) ||
+        !files.content_available(file)) {
+        return server_status::project_configuration_invalid;
+    }
+
+    lexical_error error;
+    const auto tokenized = lexer::tokenize(file, files.content(file), stream, &error);
+
+    if (!succeeded(tokenized)) {
+        if (failure != nullptr) {
+            failure->kind = source_preparation_failure_kind::lexical;
+            failure->file = file;
+            failure->lexical = error;
+        }
+        return tokenized;
+    }
+
+    return lexical.publish(file, arena, stream);
+}
+
 struct file_pool final {
     std::size_t begin = 0;
     std::size_t end = 0;
@@ -396,56 +429,6 @@ private:
         return server_status::success;
     }
 
-    [[nodiscard]] server_status lex_file(
-        file_id file,
-        std::uint32_t arena,
-        lexical_stream& stream,
-        source_preparation_failure* local_failure) noexcept {
-
-        if (lexical.contains(file)) {
-            return server_status::success;
-        }
-
-        if (!files.contains(file) ||
-            !lexical_kind(
-                files.kind(file)) ||
-            !files.content_available(file)) {
-
-            return server_status::
-                project_configuration_invalid;
-        }
-
-        lexical_error error;
-
-        const auto tokenized =
-            lexer::tokenize(
-                file,
-                files.content(file),
-                stream,
-                &error);
-
-        if (!succeeded(tokenized)) {
-            if (local_failure != nullptr) {
-                local_failure->kind =
-                    source_preparation_failure_kind::
-                        lexical;
-
-                local_failure->file =
-                    file;
-
-                local_failure->lexical =
-                    error;
-            }
-
-            return tokenized;
-        }
-
-        return lexical.publish(
-            file,
-            arena,
-            stream);
-    }
-
     void run_lexical_lane(
         std::size_t lane) noexcept {
 
@@ -479,7 +462,9 @@ private:
             }
 
             lane_state.status =
-                lex_file(
+                lex_source_file(
+                    files,
+                    lexical,
                     file,
                     arena,
                     lane_state.stream,
@@ -561,6 +546,156 @@ private:
     execution_lanes workers;
 };
 
+
+class source_replacement final {
+public:
+    source_replacement(
+        file_context& files,
+        lexical_generation& lexical,
+        std::span<const file_id> semantic_changed,
+        source_preparation_failure* failure) noexcept
+        : files(files), lexical(lexical), semantic_changed(semantic_changed), failure(failure) {
+    }
+
+    [[nodiscard]] server_status run(source_replacement_metrics& metrics) noexcept {
+        metrics = {};
+        if (failure != nullptr) *failure = {};
+        if (!lexical.baseline_bound()) return server_status::project_artifact_invalid;
+        if (semantic_changed.empty()) return server_status::success;
+
+        std::uint32_t previous = 0;
+        std::size_t lexical_file_count = 0;
+        std::uint64_t lexical_weight = 0;
+
+        for (const auto file : semantic_changed) {
+            if (!file || file.value() <= previous || !files.contains(file))
+                return server_status::project_artifact_invalid;
+            previous = file.value();
+            if (!lexical_kind(files.kind(file))) continue;
+            if (!lexical.contains(file)) return server_status::project_artifact_invalid;
+
+            const auto* physical = files.physical(file);
+            if (physical == nullptr) return server_status::project_artifact_invalid;
+
+            const auto begun = lexical.begin_replacement(file);
+            if (!succeeded(begun) || lexical.contains(file))
+                return succeeded(begun) ? server_status::project_artifact_invalid : begun;
+
+            ++metrics.masked_files;
+            if (!physical->present()) {
+                ++metrics.missing_files;
+                continue;
+            }
+            if (!files.content_available(file)) return server_status::project_artifact_invalid;
+
+            const auto size = files.content(file).size();
+            const auto weight = static_cast<std::uint64_t>(size == 0 ? 1 : size);
+            if (lexical_weight > (std::numeric_limits<std::uint64_t>::max)() - weight)
+                return server_status::io_error;
+            lexical_weight += weight;
+            ++lexical_file_count;
+        }
+
+        if (lexical_file_count == 0) return server_status::success;
+        lane_capacity = (std::min)(lexical_file_count, execution_lane_capacity());
+        if (lane_capacity == 0 || lane_capacity > static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)()))
+            return server_status::io_error;
+
+        pools.reset(new (std::nothrow) file_pool[lane_capacity]);
+        lanes.reset(new (std::nothrow) lexical_lane_state[lane_capacity]);
+        if (!pools || !lanes) return server_status::io_error;
+
+        const auto pooled = build_pools(lexical_file_count, lexical_weight, lane_capacity);
+        if (!succeeded(pooled)) return pooled;
+        const auto started = workers.start(lane_capacity);
+        if (!succeeded(started)) return started;
+        const auto parallel = workers.run(lane_capacity, lane_entry, this);
+        if (!succeeded(parallel)) return parallel;
+
+        for (std::size_t lane=0; lane<lane_capacity; ++lane) {
+            if (!succeeded(lanes[lane].status)) {
+                if (failure != nullptr) *failure = lanes[lane].failure;
+                return lanes[lane].status;
+            }
+        }
+
+        metrics.retokenized_files = lexical_file_count;
+        metrics.active_lanes = lane_capacity;
+        return server_status::success;
+    }
+
+private:
+    static void lane_entry(void* context, std::size_t lane) noexcept {
+        static_cast<source_replacement*>(context)->run_lane(lane);
+    }
+
+    [[nodiscard]] bool work_file(file_id file) const noexcept {
+        if (!lexical_kind(files.kind(file))) return false;
+        const auto* physical = files.physical(file);
+        return physical != nullptr && physical->present();
+    }
+
+    [[nodiscard]] server_status build_pools(
+        std::size_t lexical_file_count,
+        std::uint64_t lexical_weight,
+        std::size_t active_lanes) noexcept {
+
+        if (active_lanes == 0 || active_lanes > lane_capacity ||
+            lexical_file_count < active_lanes ||
+            lexical_weight < static_cast<std::uint64_t>(lexical_file_count))
+            return server_status::project_artifact_invalid;
+
+        std::size_t lane=0, pool_begin=0, remaining_files=lexical_file_count;
+        std::uint64_t assigned_weight=0, pool_weight=0;
+
+        for (std::size_t position=0; position<semantic_changed.size(); ++position) {
+            const auto file=semantic_changed[position];
+            if (!work_file(file)) continue;
+            const auto size=files.content(file).size();
+            const auto weight=static_cast<std::uint64_t>(size == 0 ? 1 : size);
+            pool_weight += weight;
+            --remaining_files;
+            if (lane + 1 >= active_lanes) continue;
+            const auto remaining_lanes=active_lanes-lane;
+            const auto remaining_weight=lexical_weight-assigned_weight;
+            const auto target=remaining_weight/remaining_lanes + static_cast<std::uint64_t>(remaining_weight%remaining_lanes != 0);
+            const auto future_lanes=active_lanes-lane-1;
+            if (pool_weight < target && remaining_files > future_lanes) continue;
+            pools[lane]={pool_begin,position+1};
+            ++lane;
+            pool_begin=position+1;
+            assigned_weight += pool_weight;
+            pool_weight=0;
+        }
+        if (lane + 1 != active_lanes) return server_status::project_artifact_invalid;
+        pools[lane]={pool_begin,semantic_changed.size()};
+        return server_status::success;
+    }
+
+    void run_lane(std::size_t lane) noexcept {
+        auto& state=lanes[lane];
+        state.status=server_status::success;
+        state.failure={};
+        const auto pool=pools[lane];
+        const auto arena=static_cast<std::uint32_t>(lane);
+        for (auto position=pool.begin; position<pool.end; ++position) {
+            const auto file=semantic_changed[position];
+            if (!work_file(file)) continue;
+            state.status=lex_source_file(files,lexical,file,arena,state.stream,&state.failure);
+            if (!succeeded(state.status)) return;
+        }
+    }
+
+    file_context& files;
+    lexical_generation& lexical;
+    std::span<const file_id> semantic_changed;
+    source_preparation_failure* failure=nullptr;
+    std::size_t lane_capacity=0;
+    std::unique_ptr<file_pool[]> pools;
+    std::unique_ptr<lexical_lane_state[]> lanes;
+    execution_lanes workers;
+};
+
 }
 
 server_status prepare_source_lexical_state(
@@ -574,6 +709,20 @@ server_status prepare_source_lexical_state(
         failure};
 
     return preparation.run();
+}
+
+server_status replace_source_lexical_state(
+    file_context& files,
+    lexical_generation& lexical,
+    std::span<const file_id> semantic_changed,
+    source_preparation_failure* failure,
+    source_replacement_metrics* metrics) noexcept {
+
+    source_replacement_metrics local;
+    source_replacement replacement{files, lexical, semantic_changed, failure};
+    const auto result = replacement.run(local);
+    if (metrics != nullptr) *metrics = succeeded(result) ? local : source_replacement_metrics{};
+    return result;
 }
 
 }

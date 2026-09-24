@@ -442,8 +442,11 @@ events, into the affected closure.
 
 `database.bin` is BUILD-only retained frontend state keyed by `file_id`. It
 pairs exact Header/Source snapshot bytes with their lexical words/directive
-anchors. It is not a Semantic DB and does not persist String Table or Identity
-Space state.
+anchors. Exact changed Header/Source records are masked before parallel lexical
+replacement starts; present changed files tokenize from the bytes retained by
+exact classification, while missing files remain masked until affected
+preprocessing decides whether they are still referenced. It is not a Semantic DB
+and does not persist String Table or Identity Space state.
 `compiled.bin` is the sole persisted owner of `string_id` / `identity_ref`
 lineage as well as G.
 

@@ -178,6 +178,7 @@ if(BUILD_TESTING)
         server_engine/project/frontend/lexical_stream.cpp
         server_engine/project/frontend/lexer.cpp
         server_engine/project/frontend/lexical_generation.cpp
+        server_engine/project/frontend/source_discovery.cpp
         server_engine/project/file/file_identity.cpp
         server_engine/project/persistence/source_save_view.cpp
         server_engine/project/file/file_context.cpp
@@ -187,6 +188,17 @@ if(BUILD_TESTING)
     target_include_directories(ServerEngineV4DatabaseTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
     )
+
+    if(WIN32)
+        target_sources(ServerEngineV4DatabaseTests PRIVATE
+            server_engine/project/construction/execution_lanes_windows.cpp
+        )
+    else()
+        target_sources(ServerEngineV4DatabaseTests PRIVATE
+            server_engine/project/construction/execution_lanes_posix.cpp
+        )
+        target_link_libraries(ServerEngineV4DatabaseTests PRIVATE Threads::Threads)
+    endif()
 
     if(MSVC)
         target_compile_options(ServerEngineV4DatabaseTests PRIVATE /W4 /permissive-)

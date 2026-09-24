@@ -820,14 +820,26 @@ affected set.
 
 ### Frontend reuse
 
-For a dirty physical file:
+For an exact `semantic_changed` Header/Source:
 
 ```text
-new exact bytes
-    -> re-lex
-    -> new directive anchors
-    -> affected preprocessing / Parser work
+single-owner begin_replacement(file_id)
+    -> stale database.bin lexical record hidden immediately
+
+present changed file
+    -> already-acquired File Context bytes
+    -> parallel re-lex
+    -> sparse native lexical replacement
+
+missing changed file
+    -> baseline remains masked
+    -> no tokenization
+    -> affected preprocessing decides whether the old include is still required
 ```
+
+Replacement masking is completed before workers start. Parallel workers only
+publish distinct replacement records into lane-local lexical arenas; the
+replacement index is read-only during the parallel phase.
 
 For an unchanged but semantically affected Header/Source:
 
@@ -962,7 +974,9 @@ load project.manifest
     -> OLD reverse dependency affected closure
     -> read-only mmap/bind compiled.bin
     -> bind append-only string_id / identity_ref overlays
-    -> mmap/bind database.bin only when affected files require lexical reuse
+    -> mmap/bind database.bin only when affected files require frontend reuse
+    -> mask semantic_changed Header/Source lexical baselines
+    -> parallel retokenize only present semantic_changed Header/Source files
 ```
 
 The current C++ BUILD entry matches the lifecycle contract:
@@ -973,11 +987,12 @@ UNLOADED
     -> persisted BUILD artifacts
 ```
 
-Sparse File Context mutation, per-file lexical replacement/reuse, affected
-frontend/Parser/Semantic reconstruction, and final G construction are not
-implemented yet. The physical mechanism used by a successful BUILD to persist
-its new state is intentionally not frozen yet; it must satisfy the separate
-BUILD failure contract that preserves the previously persisted BUILD state.
+Sparse exact File Context mutation and per-file lexical replacement/reuse are
+implemented. Affected frontend/Parser/Semantic reconstruction and final G
+construction are not implemented yet. The physical mechanism used by a
+successful BUILD to persist its new state is intentionally not frozen yet; it
+must satisfy the separate BUILD failure contract that preserves the previously
+persisted BUILD state.
 
 ## LOAD Implementation Boundary
 

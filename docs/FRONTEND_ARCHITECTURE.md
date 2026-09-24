@@ -999,7 +999,8 @@ REBUILD
 
 BUILD
     immutable database.bin source + lexical baseline
-    + sparse changed-content / lexical replacement
+    + single-owner masking of semantic_changed Header/Source records
+    + parallel sparse lexical replacement from already-acquired changed bytes
     + append-only records for new file_id values
 ```
 
