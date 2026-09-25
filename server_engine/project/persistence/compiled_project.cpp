@@ -1774,6 +1774,52 @@ bool compiled_project_view::member(
             3);
 }
 
+bool compiled_project_view::member_at(
+    std::size_t index,
+    member_record& output) const noexcept {
+
+    output = {};
+
+    const auto& values =
+        section(
+            compiled_project_section::
+                members);
+
+    if (index >=
+        values.count) {
+
+        return false;
+    }
+
+    const auto* record =
+        values.data +
+        index *
+            member_record_size;
+
+    output.name =
+        string_from_raw(
+            read_u32(record));
+
+    output.type =
+        type_ref_from_raw(
+            read_u32(
+                record + 4));
+
+    output.access =
+        static_cast<graph_member_access>(
+            std::to_integer<std::uint8_t>(
+                record[8]));
+
+    return
+        output.name &&
+        output.type &&
+        valid_member_access(
+            output.access) &&
+        zero_bytes(
+            record + 9,
+            3);
+}
+
 bool compiled_project_view::construction(
     type_handle type_value,
     member_index member_value,

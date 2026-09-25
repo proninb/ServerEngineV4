@@ -227,6 +227,12 @@ public:
         member_index member,
         member_record& output) const noexcept;
 
+    // Direct global member-slot access for dense sequential consumers such as
+    // Runtime ABI layout. This performs no name/hash lookup.
+    [[nodiscard]] bool member_at(
+        std::size_t index,
+        member_record& output) const noexcept;
+
     [[nodiscard]] bool construction(
         type_handle type,
         member_index member,

@@ -91,6 +91,7 @@
     <ClCompile Include="server_engine\communication\console\server_console.cpp" />
     <ClCompile Include="server_engine\project\project.cpp" />
     <ClCompile Include="server_engine\project\abi\abi_layout.cpp" />
+    <ClCompile Include="server_engine\project\runtime\runtime_layout.cpp" />
     <ClCompile Include="server_engine\project\string\string_table.cpp" />
     <ClCompile Include="server_engine\project\semantic\identity.cpp" />
     <ClCompile Include="server_engine\project\graph\graph.cpp" />
@@ -161,6 +162,7 @@
     <ClInclude Include="server_engine\communication\console\server_console.hpp" />
     <ClInclude Include="server_engine\project\project.hpp" />
     <ClInclude Include="server_engine\project\abi\abi_layout.hpp" />
+    <ClInclude Include="server_engine\project\runtime\runtime_layout.hpp" />
     <ClInclude Include="server_engine\project\project_lifecycle_context.hpp" />
     <ClInclude Include="server_engine\project\preprocessor_configuration.hpp" />
     <ClInclude Include="server_engine\project\project_identity.hpp" />
@@ -210,6 +212,7 @@
   <ItemGroup>
     <None Include="server.json" />
     <None Include="tests\compiled_project_tests.cpp" />
+    <None Include="tests\server_configuration_tests.cpp" />
     <None Include="tests\source_save_tests.cpp" />
     <None Include="tests\database_tests.cpp" />
     <None Include="tests\frontend_regression_tests.cpp" />

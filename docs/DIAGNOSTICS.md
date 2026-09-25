@@ -157,15 +157,24 @@ diagnostic ID per field.
 Examples:
 
 ```text
-settings requires abi and files
+settings requires abi, shm, and files
 settings.abi requires target and pack
+settings.shm requires mode
+settings.shm.fixed_direct requires fixed_base_address
+settings.shm.fixed_base_address is valid only for fixed_direct
+settings.shm.mode must be fixed_direct or relocatable_transfer
 settings.files requires manifest, source_save, database, and compiled
 settings.files.manifest must be a single relative file name
-unknown property in settings.files: foo
+unknown property in settings.shm: foo
 duplicate property in settings.abi: pack
 ```
 
-Unsupported schema versions report the expected current version explicitly.
+SHM schema failures continue to use `1103 configuration.invalid`; the precise
+field/rule is carried by source location plus detail text. A separate diagnostic
+ID is not allocated per configuration field.
+
+Unsupported schema versions use `1104 configuration.unsupported_version` and
+report the expected current version explicitly.
 
 ## Lifecycle diagnostic boundary
 

@@ -1,6 +1,6 @@
 {
   // Server configuration schema version.
-  "version": 4,
+  "version": 5,
 
   // Process-wide low-level Server settings.
   "settings": {
@@ -8,6 +8,15 @@
     "abi": {
       "target": "windows-x64",
       "pack": 8
+    },
+
+    // Runtime/SHM materialization policy for this Server process.
+    "shm": {
+      // fixed_direct | relocatable_transfer
+      "mode": "fixed_direct",
+
+      // Required only for fixed_direct.
+      "fixed_base_address": "0x0000010000000000"
     },
 
     // Standard filenames inside each Project artifact directory.

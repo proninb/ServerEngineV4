@@ -13,12 +13,17 @@ The JSON parser supports:
 
 ```jsonc
 {
-  "version": 4,
+  "version": 5,
 
   "settings": {
     "abi": {
       "target": "windows-x64",
       "pack": 8
+    },
+
+    "shm": {
+      "mode": "fixed_direct",
+      "fixed_base_address": "0x0000010000000000"
     },
 
     "files": {
@@ -85,8 +90,60 @@ Supported pack values:
 16
 ```
 
-One Server owns one ABI and one SHM layout contract. `project.json` cannot
-override it.
+One Server owns one ABI and one Runtime/SHM materialization contract.
+`project.json` cannot override either one.
+
+### SHM
+
+`settings.shm` is required process-level policy.
+
+Fixed direct mode:
+
+```jsonc
+"shm": {
+  "mode": "fixed_direct",
+  "fixed_base_address": "0x0000010000000000"
+}
+```
+
+Relocatable transfer mode:
+
+```jsonc
+"shm": {
+  "mode": "relocatable_transfer"
+}
+```
+
+Supported modes:
+
+```text
+fixed_direct
+relocatable_transfer
+```
+
+`fixed_direct` means SHM is the native Runtime storage. Native C++ references
+point directly inside that mapping, so the mapping must be created at the
+configured fixed virtual address.
+
+`relocatable_transfer` means SHM may be mapped at an arbitrary virtual address.
+Native Task Runtime storage is separate and values transfer between SHM and that
+native Runtime. Task execution still uses direct C++ references; SHM relocation
+does not introduce proxies, handles, or offset lookup into the execution hot
+path.
+
+`fixed_base_address` is:
+
+```text
+required for fixed_direct
+forbidden for relocatable_transfer
+a non-zero x64 virtual address encoded as a 0x hexadecimal string
+```
+
+Platform mapping code is responsible for validating whether the configured
+address can actually be reserved/mapped.
+
+SHM size is deliberately not configuration. It is derived from final G + ABI.
+There is no separately configured Runtime size.
 
 ### Files
 
@@ -155,8 +212,9 @@ The configuration parser reports schema failures against their fully qualified
 context, for example:
 
 ```text
-settings requires abi and files
+settings requires abi, shm, and files
 settings.abi requires target and pack
+settings.shm requires mode
 settings.files.manifest must be a single relative file name
 settings.files entries must use distinct file names
 ```
@@ -325,7 +383,7 @@ the current architecture stage. Configuring it fails explicitly.
 ## Configuration Ownership Boundary
 
 `server.json` configures process-level Server behavior, including the single
-ABI used by the Server's one SHM layout.
+ABI and Runtime/SHM materialization policy used by the Server.
 
 Project construction inputs and their persisted manifest do not belong to
 `server_context`.

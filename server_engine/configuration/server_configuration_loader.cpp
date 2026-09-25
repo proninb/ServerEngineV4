@@ -13,6 +13,7 @@
 #include "../json/json_parser.hpp"
 
 #include <array>
+#include <charconv>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -28,6 +29,7 @@ enum class schema_context : std::uint8_t {
     root,
     settings,
     abi,
+    shm,
     files,
     communication,
     endpoints,
@@ -45,6 +47,9 @@ enum class schema_field : std::uint8_t {
     abi,
     target,
     pack,
+    shm,
+    mode,
+    fixed_base_address,
     files,
     manifest,
     source_save,
@@ -122,6 +127,7 @@ struct schema_frame {
     case schema_context::root: return "root";
     case schema_context::settings: return "settings";
     case schema_context::abi: return "settings.abi";
+    case schema_context::shm: return "settings.shm";
     case schema_context::files: return "settings.files";
     case schema_context::communication: return "communication";
     case schema_context::endpoints: return "communication.endpoints";
@@ -205,6 +211,22 @@ public:
 
             stack.push_back({
                 schema_context::abi,
+                schema_field::none,
+                0,
+            });
+            return;
+        }
+
+        if (parent.context ==
+                schema_context::settings &&
+            parent.field ==
+                schema_field::shm) {
+
+            stack.back().field =
+                schema_field::none;
+
+            stack.push_back({
+                schema_context::shm,
                 schema_field::none,
                 0,
             });
@@ -339,11 +361,12 @@ public:
 
         case schema_context::settings:
             if (!seen(frame, schema_field::abi) ||
+                !seen(frame, schema_field::shm) ||
                 !seen(frame, schema_field::files)) {
 
                 fail(
                     schema_failure::missing_required_field,
-                    "settings requires abi and files");
+                    "settings requires abi, shm, and files");
                 return;
             }
             break;
@@ -355,6 +378,38 @@ public:
                 fail(
                     schema_failure::missing_required_field,
                     "settings.abi requires target and pack");
+                return;
+            }
+            break;
+
+        case schema_context::shm:
+            if (!seen(frame, schema_field::mode)) {
+                fail(
+                    schema_failure::missing_required_field,
+                    "settings.shm requires mode");
+                return;
+            }
+
+            if (configuration.settings.shm.mode ==
+                    shm_runtime_mode::fixed_direct) {
+
+                if (!seen(
+                        frame,
+                        schema_field::fixed_base_address)) {
+
+                    fail(
+                        schema_failure::missing_required_field,
+                        "settings.shm.fixed_direct requires fixed_base_address");
+                    return;
+                }
+            }
+            else if (seen(
+                         frame,
+                         schema_field::fixed_base_address)) {
+
+                fail(
+                    schema_failure::invalid_value,
+                    "settings.shm.fixed_base_address is valid only for fixed_direct");
                 return;
             }
             break;
@@ -593,6 +648,10 @@ public:
             read_abi(field, value);
             break;
 
+        case schema_context::shm:
+            read_shm(field, value);
+            break;
+
         case schema_context::files:
             read_files(field, value);
             break;
@@ -684,12 +743,20 @@ private:
 
         case schema_context::settings:
             if (key == "abi") return schema_field::abi;
+            if (key == "shm") return schema_field::shm;
             if (key == "files") return schema_field::files;
             break;
 
         case schema_context::abi:
             if (key == "target") return schema_field::target;
             if (key == "pack") return schema_field::pack;
+            break;
+
+        case schema_context::shm:
+            if (key == "mode") return schema_field::mode;
+            if (key == "fixed_base_address") {
+                return schema_field::fixed_base_address;
+            }
             break;
 
         case schema_context::files:
@@ -755,10 +822,10 @@ private:
             return;
         }
 
-        if (version != 4) {
+        if (version != 5) {
             fail(
                 schema_failure::unsupported_version,
-                "unsupported server configuration version; expected version 4");
+                "unsupported server configuration version; expected version 5");
             return;
         }
 
@@ -820,6 +887,97 @@ private:
         fail(
             schema_failure::invalid_structure,
             "invalid abi scalar field");
+    }
+
+    void read_shm(
+        schema_field field,
+        json_value_view value) {
+
+        if (field == schema_field::mode) {
+            std::string mode;
+
+            if (!value.get(mode)) {
+                fail(
+                    schema_failure::wrong_type,
+                    "settings.shm.mode must be a string");
+                return;
+            }
+
+            if (mode == "fixed_direct") {
+                configuration.settings.shm.mode =
+                    shm_runtime_mode::fixed_direct;
+                return;
+            }
+
+            if (mode == "relocatable_transfer") {
+                configuration.settings.shm.mode =
+                    shm_runtime_mode::relocatable_transfer;
+                return;
+            }
+
+            fail(
+                schema_failure::invalid_value,
+                "settings.shm.mode must be fixed_direct or relocatable_transfer");
+            return;
+        }
+
+        if (field ==
+            schema_field::fixed_base_address) {
+
+            std::string_view text;
+
+            if (!value.get(text)) {
+                fail(
+                    schema_failure::wrong_type,
+                    "settings.shm.fixed_base_address must be a hexadecimal string");
+                return;
+            }
+
+            if (text.size() <= 2 ||
+                text[0] != '0' ||
+                (text[1] != 'x' &&
+                 text[1] != 'X')) {
+
+                fail(
+                    schema_failure::invalid_value,
+                    "settings.shm.fixed_base_address must use 0x hexadecimal notation");
+                return;
+            }
+
+            std::uint64_t address = 0;
+
+            const auto first =
+                text.data() + 2;
+
+            const auto last =
+                text.data() +
+                text.size();
+
+            const auto parsed =
+                std::from_chars(
+                    first,
+                    last,
+                    address,
+                    16);
+
+            if (parsed.ec != std::errc{} ||
+                parsed.ptr != last ||
+                address == 0) {
+
+                fail(
+                    schema_failure::invalid_value,
+                    "settings.shm.fixed_base_address must be a non-zero x64 address");
+                return;
+            }
+
+            configuration.settings.shm.fixed_base_address =
+                address;
+            return;
+        }
+
+        fail(
+            schema_failure::invalid_structure,
+            "invalid shm scalar field");
     }
 
     void read_files(

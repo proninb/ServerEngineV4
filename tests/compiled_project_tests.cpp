@@ -1,6 +1,7 @@
 #include "project/project.hpp"
 #include "project/persistence/compiled_project.hpp"
 #include "project/persistence/crc64_ecma.hpp"
+#include "project/runtime/runtime_layout.hpp"
 #include "project/file/file_context.hpp"
 #include "project/graph/graph_delta.hpp"
 #include "project/source/source_map.hpp"
@@ -1075,6 +1076,147 @@ void test_direct_mmap_encoding(
         "remove direct compiled mmap test file");
 }
 
+
+void test_runtime_layout(
+    test_state& tests,
+    const compiled_fixture& fixture,
+    const compiled_test_image& image) {
+
+    compiled_project_view view;
+
+    if (!tests.expect(
+            view.bind(
+                image.bytes) ==
+                compiled_project_image_result::success,
+            "bind Runtime layout image")) {
+
+        return;
+    }
+
+    runtime_layout native;
+
+    server_abi_configuration abi{
+        abi_target::windows_x64,
+        8,
+    };
+
+    if (!tests.expect(
+            prepare_runtime_layout(
+                view,
+                abi,
+                native) ==
+                runtime_layout_result::success,
+            "derive pack-8 Runtime layout")) {
+
+        return;
+    }
+
+    runtime_value_layout type_layout;
+
+    tests.expect(
+        native.type(
+            fixture.type,
+            type_layout) &&
+        type_layout.size == 16 &&
+        type_layout.alignment == 8,
+        "pack-8 record layout");
+
+    type_entry type;
+
+    if (!tests.expect(
+            view.type(
+                fixture.type,
+                type),
+            "read Runtime layout record")) {
+
+        return;
+    }
+
+    std::uint64_t value_offset = 0;
+    std::uint64_t peer_offset = 0;
+    std::uint64_t left_offset = 0;
+    std::uint64_t right_offset = 0;
+
+    tests.expect(
+        native.member_offset(
+            static_cast<std::size_t>(
+                type.members.begin) +
+                fixture.value_member.value(),
+            value_offset) &&
+        value_offset == 0 &&
+        native.member_offset(
+            static_cast<std::size_t>(
+                type.members.begin) +
+                fixture.peer_member.value(),
+            peer_offset) &&
+        peer_offset == 8,
+        "pack-8 direct member offsets");
+
+    tests.expect(
+        native.object_offset(
+            fixture.left,
+            left_offset) &&
+        left_offset == 0 &&
+        native.object_offset(
+            fixture.right,
+            right_offset) &&
+        right_offset == 16 &&
+        native.size() == 32 &&
+        native.alignment() == 8,
+        "pack-8 dense object layout");
+
+    abi.pack = 4;
+
+    runtime_layout packed;
+
+    if (!tests.expect(
+            prepare_runtime_layout(
+                view,
+                abi,
+                packed) ==
+                runtime_layout_result::success,
+            "derive pack-4 Runtime layout")) {
+
+        return;
+    }
+
+    tests.expect(
+        packed.type(
+            fixture.type,
+            type_layout) &&
+        type_layout.size == 12 &&
+        type_layout.alignment == 4,
+        "pack-4 record layout");
+
+    tests.expect(
+        packed.member_offset(
+            static_cast<std::size_t>(
+                type.members.begin) +
+                fixture.value_member.value(),
+            value_offset) &&
+        value_offset == 0 &&
+        packed.member_offset(
+            static_cast<std::size_t>(
+                type.members.begin) +
+                fixture.peer_member.value(),
+            peer_offset) &&
+        peer_offset == 4,
+        "pack-4 direct member offsets");
+
+    tests.expect(
+        packed.object_offset(
+            fixture.left,
+            left_offset) &&
+        left_offset == 0 &&
+        packed.object_offset(
+            fixture.right,
+            right_offset) &&
+        right_offset == 12 &&
+        packed.size() == 24 &&
+        packed.alignment() == 4,
+        "pack-4 dense object layout");
+}
+
 void test_hot_cold_boundary(
     test_state& tests,
     const compiled_test_image& image) {
@@ -1820,6 +1962,11 @@ int main() {
         test_persisted_sources(tests, first);
 
         test_round_trip(
+            tests,
+            fixture,
+            first);
+
+        test_runtime_layout(
             tests,
             fixture,
             first);

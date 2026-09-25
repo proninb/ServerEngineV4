@@ -46,6 +46,7 @@ add_executable(ServerEngineV4
 
     server_engine/project/project.cpp
     server_engine/project/abi/abi_layout.cpp
+    server_engine/project/runtime/runtime_layout.cpp
     server_engine/project/string/string_table.cpp
     server_engine/project/semantic/identity.cpp
     server_engine/project/graph/graph.cpp
@@ -183,9 +184,46 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME crc64 COMMAND ServerEngineV4Crc64Tests)
 
+    add_executable(ServerEngineV4ServerConfigurationTests
+        tests/server_configuration_tests.cpp
+        server_engine/configuration/server_configuration_loader.cpp
+        server_engine/json/json_parser.cpp
+        server_engine/filesystem_path.cpp
+        server_engine/diagnostics/diagnostic_collection.cpp
+        server_engine/diagnostics/diagnostic_source_cache.cpp
+    )
+
+    target_include_directories(ServerEngineV4ServerConfigurationTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(
+            ServerEngineV4ServerConfigurationTests
+            PRIVATE
+            /W4
+            /permissive-
+        )
+    else()
+        target_compile_options(
+            ServerEngineV4ServerConfigurationTests
+            PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+    endif()
+
+    add_test(
+        NAME server_configuration
+        COMMAND ServerEngineV4ServerConfigurationTests
+    )
+
     add_executable(ServerEngineV4Tests
         tests/compiled_project_tests.cpp
         server_engine/project/project.cpp
+        server_engine/project/runtime/runtime_layout.cpp
+        server_engine/project/abi/abi_layout.cpp
         server_engine/read_only_file_mapping.cpp
         server_engine/writable_file_mapping.cpp
         server_engine/project/string/string_table.cpp

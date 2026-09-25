@@ -52,11 +52,22 @@ REBUILD
     + fresh BUILD acceleration state
 ```
 
-After G exists, all modes converge on one architectural tail:
+After G exists, all modes converge on one Runtime/SHM construction
+boundary:
 
 ```text
-G -> Runtime -> SHM -> Project
+G + Server ABI + SHM policy
+    -> derive physical Runtime/SHM layout once
+    -> FIXED_DIRECT
+         SHM == native Runtime
+       or
+       RELOCATABLE_TRANSFER
+         relocatable SHM + native Task Runtime
+    -> Project
 ```
+
+The mode changes physical materialization only. It does not create another G or
+a second semantic construction stage.
 
 Runtime/SHM remains Phase 2; the current Phase-1 implementation publishes the
 resident mmap-native compiled representation at that convergence boundary.
@@ -599,18 +610,39 @@ ABI originates from `server.json`.
 
 ## ABI-derived Runtime layout
 
-ABI layout is Phase-2 derived state, not part of `G` and not part of the current
-Phase-1 persisted compiled format:
+`compiled.bin` remains ABI-independent final semantic Project state.
 
 ```text
-G
+compiled_project_view
 + server_settings_configuration.abi
-    -> ABI layout
-    -> Runtime / SHM
+    -> temporary runtime_layout
+    -> final Runtime/SHM materialization
 ```
 
-Its exact representation and any future persistence/reuse policy are intentionally
-deferred until Phase 1 is complete.
+Changing only Server ABI therefore does not require rebuilding source or
+`compiled.bin`; it rebuilds only Runtime/SHM.
+
+`runtime_layout` is construction-only derived state. It reads immutable
+`compiled_project_view` by dense Graph slots and uses no string/identity/member
+name lookup, hash table, or sorting. It does not reconstruct or copy G.
+
+The temporary workspace contains only direct slot-indexed physical facts needed
+to materialize final storage:
+
+```text
+used type / derived-type size + alignment
+global member offset
+object offset
+total Runtime size/alignment
+```
+
+Only types reachable from Runtime objects are resolved. A semantic-only Project
+with zero objects allocates no dense Runtime layout workspace.
+
+After final Runtime/SHM materialization, layout workspace is discarded rather
+than entering resident Project state. Persisting ABI layout may be considered
+later only as an optional measured cache; it is not a correctness requirement
+and does not make `compiled.bin` ABI-dependent.
 
 The root `preprocessor_configuration` originates from the root `project.json`
 and is construction input only.

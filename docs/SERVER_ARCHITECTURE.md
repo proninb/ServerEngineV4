@@ -16,6 +16,7 @@ server_engine/
 │   ├── graph/
 │   ├── preprocessor/
 │   ├── persistence/
+│   ├── runtime/
 │   ├── semantic/
 │   ├── string/
 │   ├── project.*
@@ -57,6 +58,7 @@ project
 ├── frontend
 ├── persistence
 ├── preprocessor
+├── runtime
 ├── semantic
 └── string
 ```
@@ -73,7 +75,7 @@ main
       +-- server_context
            |
            +-- server_configuration
-           |    `-- one process-wide ABI
+           |    `-- one process-wide ABI + Runtime/SHM policy
            +-- command_queue
            +-- communication
            |    |
@@ -90,13 +92,35 @@ One Server instance owns one ABI and one SHM layout contract.
 server.json
     -> settings.abi.target
     -> settings.abi.pack
+    -> settings.shm.mode
+    -> settings.shm.fixed_base_address
+         required only for fixed_direct
 
 one Server
     -> one ABI
-    -> one SHM
+    -> one Runtime/SHM materialization policy
+    -> one active Project Runtime/SHM
 ```
 
-ABI is process configuration. `project.json` does not contain or override ABI.
+ABI and SHM policy are process configuration. `project.json` does not contain or
+override either contract.
+
+The supported Runtime/SHM modes are:
+
+```text
+FIXED_DIRECT
+    SHM == native Runtime storage
+    native references point directly inside the fixed mapping
+    no Runtime/SHM transfer
+
+RELOCATABLE_TRANSFER
+    SHM may map at an arbitrary address
+    native Task Runtime storage is separate
+    values transfer between SHM and native Runtime
+    native execution still uses direct C++ references
+```
+
+SHM size is derived from final G + ABI and is not configured independently.
 
 Each mode-specific operation borrows the same process-wide
 `server_settings_configuration`. The explicit root Project path is an operation
@@ -387,11 +411,21 @@ BUILD
     -> compiled.bin + refreshed BUILD acceleration
 ```
 
-After G exists, every mode uses the same architectural tail:
+After G exists, every mode uses the same Runtime/SHM construction boundary:
 
 ```text
-G -> Runtime -> SHM -> Project
+G + ABI + SHM policy
+    -> derive physical Runtime/SHM layout once
+    -> FIXED_DIRECT
+         SHM == native Runtime
+       or
+       RELOCATABLE_TRANSFER
+         relocatable SHM + native Task Runtime
+    -> Project
 ```
+
+The selected mode changes physical materialization, not semantic G. There is no
+second semantic build stage and no second Graph.
 
 Runtime/SHM is Phase 2. The current Phase-1 resident Project owns the mmap-native
 compiled artifact at this convergence boundary.

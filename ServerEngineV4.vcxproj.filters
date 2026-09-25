@@ -55,6 +55,9 @@
     <Filter Include="server_engine\project\persistence">
       <UniqueIdentifier>{F6666666-6666-6666-6666-666666666666}</UniqueIdentifier>
     </Filter>
+    <Filter Include="server_engine\project\runtime">
+      <UniqueIdentifier>{A7777777-7777-7777-7777-777777777777}</UniqueIdentifier>
+    </Filter>
     <Filter Include="tests">
       <UniqueIdentifier>{0F5D5C54-5BD2-4A49-BEEE-5422EE125E37}</UniqueIdentifier>
     </Filter>
@@ -116,6 +119,9 @@
     </ClCompile>
     <ClCompile Include="server_engine\project\abi\abi_layout.cpp">
       <Filter>server_engine\project\abi</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\runtime\runtime_layout.cpp">
+      <Filter>server_engine\project\runtime</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\project\string\string_table.cpp">
       <Filter>server_engine\project\string</Filter>
@@ -326,6 +332,9 @@
     <ClInclude Include="server_engine\project\abi\abi_layout.hpp">
       <Filter>server_engine\project\abi</Filter>
     </ClInclude>
+    <ClInclude Include="server_engine\project\runtime\runtime_layout.hpp">
+      <Filter>server_engine\project\runtime</Filter>
+    </ClInclude>
     <ClInclude Include="server_engine\project\project_lifecycle_context.hpp">
       <Filter>server_engine\project</Filter>
     </ClInclude>
@@ -466,6 +475,9 @@
   <ItemGroup>
     <None Include="server.json" />
     <None Include="tests\compiled_project_tests.cpp">
+      <Filter>tests</Filter>
+    </None>
+    <None Include="tests\server_configuration_tests.cpp">
       <Filter>tests</Filter>
     </None>
     <None Include="tests\source_save_tests.cpp">

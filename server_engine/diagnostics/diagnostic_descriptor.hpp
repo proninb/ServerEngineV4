@@ -59,7 +59,7 @@ inline constexpr diagnostic_descriptor configuration_invalid_json{
     "Server configuration contains invalid JSON",
 };
 
-// server.json is syntactically valid but violates the V4 schema.
+// server.json is syntactically valid but violates the current schema.
 inline constexpr diagnostic_descriptor configuration_invalid{
     diagnostic_id{1103},
     diagnostic_domain::configuration,
