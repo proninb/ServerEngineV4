@@ -452,11 +452,17 @@ server_status graph::define_record(
         }
 
         if (construction.kind ==
-                construction_kind::member_binding &&
-            construction.operand >
-                definition.size()) {
+            construction_kind::member_binding) {
 
-            return server_status::project_configuration_invalid;
+            if (construction.operand >
+                    definition.size() ||
+                !reference_binding_compatible(
+                    definition[index].type,
+                    definition[
+                        construction.operand - 1].type)) {
+
+                return server_status::project_configuration_invalid;
+            }
         }
 
         if (construction.kind ==
@@ -468,7 +474,10 @@ server_status graph::define_record(
                         construction.operand});
 
             if (object == nullptr ||
-                !object->internal_static()) {
+                !object->internal_static() ||
+                !reference_binding_compatible(
+                    definition[index].type,
+                    object->type)) {
 
                 return server_status::project_configuration_invalid;
             }
@@ -1279,8 +1288,45 @@ link_handle graph::find_link_target(
     return {};
 }
 
-bool graph::endpoint_valid(
-    object_endpoint endpoint) const noexcept {
+bool graph::reference_binding_compatible(
+    type_ref target,
+    type_ref source) const noexcept {
+
+    derived_type_record target_type;
+
+    if (!derived(
+            target,
+            target_type) ||
+        (target_type.kind !=
+             derived_type_kind::lvalue_reference &&
+         target_type.kind !=
+             derived_type_kind::rvalue_reference)) {
+
+        return false;
+    }
+
+    derived_type_record source_type;
+
+    if (derived(
+            source,
+            source_type) &&
+        (source_type.kind ==
+             derived_type_kind::lvalue_reference ||
+         source_type.kind ==
+             derived_type_kind::rvalue_reference)) {
+
+        source = source_type.child;
+    }
+
+    return target_type.child ==
+        source;
+}
+
+bool graph::endpoint_type(
+    object_endpoint endpoint,
+    type_ref& output) const noexcept {
+
+    output = {};
 
     const auto* object =
         find(endpoint.object);
@@ -1300,9 +1346,17 @@ bool graph::endpoint_valid(
         return false;
     }
 
-    return member(
-        type,
-        endpoint.member) != nullptr;
+    const auto* value =
+        member(
+            type,
+            endpoint.member);
+
+    if (value == nullptr) {
+        return false;
+    }
+
+    output = value->type;
+    return static_cast<bool>(output);
 }
 
 server_status graph::add_link(
@@ -1311,8 +1365,22 @@ server_status graph::add_link(
     link_handle& output) noexcept {
 
     output = {};
-    if (!endpoint_valid(source) || !endpoint_valid(target))
+
+    type_ref source_type;
+    type_ref target_type;
+
+    if (!endpoint_type(
+            source,
+            source_type) ||
+        !endpoint_type(
+            target,
+            target_type) ||
+        !reference_binding_compatible(
+            target_type,
+            source_type)) {
+
         return server_status::project_configuration_invalid;
+    }
 
     if (const auto existing = find_link_target(target); existing) {
         const auto* value = find(existing);

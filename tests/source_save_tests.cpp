@@ -254,15 +254,96 @@ void test_direct_source_save(
             succeeded(identities.resolve(identities.root(), name, identity_kind::type, identity)) &&
             succeeded(G.declare_record(identity, graph_record_kind::struct_type, type)),
         "presence graph fixture");
-    string_id field_name, object_name; identity_ref object_identity;
-    object_handle object; link_handle link;
-    tests.expect(succeeded(strings.intern("value", field_name)) && succeeded(strings.intern("instance", object_name)) &&
-        succeeded(identities.resolve(identities.root(),object_name,identity_kind::object,object_identity)),"presence member/object identities");
-    const member_record field{field_name,G.intrinsic(intrinsic_type::signed_int),graph_member_access::public_access};
-    tests.expect(succeeded(G.define_record(type,graph_record_kind::struct_type,{&field,1})) &&
-        succeeded(G.add_object(object_identity,G.named(type),object)),"presence object fixture");
-    const object_endpoint endpoint{object,G.find_member(type,field_name)};
-    tests.expect(succeeded(G.add_link(endpoint,endpoint,link)),"presence link fixture");
+    string_id value_name;
+    string_id input_name;
+    string_id object_name;
+
+    identity_ref object_identity;
+
+    object_handle object;
+    link_handle link;
+
+    tests.expect(
+        succeeded(
+            strings.intern(
+                "value",
+                value_name)) &&
+        succeeded(
+            strings.intern(
+                "in",
+                input_name)) &&
+        succeeded(
+            strings.intern(
+                "instance",
+                object_name)) &&
+        succeeded(
+            identities.resolve(
+                identities.root(),
+                object_name,
+                identity_kind::object,
+                object_identity)),
+        "presence member/object identities");
+
+    const auto integer_type =
+        G.intrinsic(
+            intrinsic_type::signed_int);
+
+    type_ref reference_type;
+
+    tests.expect(
+        succeeded(
+            G.derive(
+                integer_type,
+                derived_type_kind::lvalue_reference,
+                0,
+                reference_type)),
+        "presence reference type");
+
+    const std::array<member_record, 2> members{{
+        {
+            value_name,
+            integer_type,
+            graph_member_access::public_access,
+        },
+        {
+            input_name,
+            reference_type,
+            graph_member_access::public_access,
+        },
+    }};
+
+    tests.expect(
+        succeeded(
+            G.define_record(
+                type,
+                graph_record_kind::struct_type,
+                members)) &&
+        succeeded(
+            G.add_object(
+                object_identity,
+                G.named(type),
+                object)),
+        "presence object fixture");
+
+    const object_endpoint source{
+        object,
+        G.find_member(
+            type,
+            value_name)};
+
+    const object_endpoint target{
+        object,
+        G.find_member(
+            type,
+            input_name)};
+
+    tests.expect(
+        succeeded(
+            G.add_link(
+                source,
+                target,
+                link)),
+        "presence link fixture");
     for (auto owner : {first, second}) {
         tests.expect(
             succeeded(sources.begin_root(owner)) &&

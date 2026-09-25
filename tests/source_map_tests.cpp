@@ -1,5 +1,6 @@
 #include "project/source/source_map.hpp"
 
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <string_view>
@@ -48,18 +49,87 @@ void test_root_ownership_and_file_projection(test_state &tests) {
     type_handle type;
     tests.expect(succeeded(G.declare_record(type_identity, graph_record_kind::struct_type, type)),
                  "declare fixture type");
-    string_id member_name;
-    tests.expect(succeeded(strings.intern("value", member_name)), "intern member");
-    const member_record member{
-        member_name, G.intrinsic(intrinsic_type::signed_int), graph_member_access::public_access};
-    tests.expect(succeeded(G.define_record(type, graph_record_kind::struct_type, {&member, 1})),
-                 "define fixture type");
+    string_id value_name;
+    string_id input_name;
+
+    tests.expect(
+        succeeded(
+            strings.intern(
+                "value",
+                value_name)) &&
+        succeeded(
+            strings.intern(
+                "in",
+                input_name)),
+        "intern members");
+
+    const auto integer_type =
+        G.intrinsic(
+            intrinsic_type::signed_int);
+
+    type_ref reference_type;
+
+    tests.expect(
+        succeeded(
+            G.derive(
+                integer_type,
+                derived_type_kind::lvalue_reference,
+                0,
+                reference_type)),
+        "derive fixture reference");
+
+    const std::array<member_record, 2> members{{
+        {
+            value_name,
+            integer_type,
+            graph_member_access::public_access,
+        },
+        {
+            input_name,
+            reference_type,
+            graph_member_access::public_access,
+        },
+    }};
+
+    tests.expect(
+        succeeded(
+            G.define_record(
+                type,
+                graph_record_kind::struct_type,
+                members)),
+        "define fixture type");
+
     object_handle obj;
-    tests.expect(succeeded(G.add_object(object_identity, G.named(type), obj)),
-                 "add fixture object");
+
+    tests.expect(
+        succeeded(
+            G.add_object(
+                object_identity,
+                G.named(type),
+                obj)),
+        "add fixture object");
+
     link_handle edge;
-    const object_endpoint endpoint{obj, G.find_member(type, member_name)};
-    tests.expect(succeeded(G.add_link(endpoint, endpoint, edge)), "add fixture link");
+
+    const object_endpoint source{
+        obj,
+        G.find_member(
+            type,
+            value_name)};
+
+    const object_endpoint target{
+        obj,
+        G.find_member(
+            type,
+            input_name)};
+
+    tests.expect(
+        succeeded(
+            G.add_link(
+                source,
+                target,
+                edge)),
+        "add fixture link");
     source_map map;
     const auto declaration = source_data_ref::type_declaration(type_identity);
     const auto definition = source_data_ref::type_definition(type_identity);

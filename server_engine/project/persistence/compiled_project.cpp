@@ -2475,6 +2475,41 @@ compiled_project_view::verify_contents() const noexcept {
         }
     }
 
+    const auto reference_binding_compatible =
+        [this](
+            type_ref target,
+            type_ref source) noexcept {
+
+            derived_type_record target_type;
+
+            if (!derived(
+                    target,
+                    target_type) ||
+                (target_type.kind !=
+                     derived_type_kind::lvalue_reference &&
+                 target_type.kind !=
+                     derived_type_kind::rvalue_reference)) {
+
+                return false;
+            }
+
+            derived_type_record source_type;
+
+            if (derived(
+                    source,
+                    source_type) &&
+                (source_type.kind ==
+                     derived_type_kind::lvalue_reference ||
+                 source_type.kind ==
+                     derived_type_kind::rvalue_reference)) {
+
+                source = source_type.child;
+            }
+
+            return target_type.child ==
+                source;
+        };
+
     // Strings are dense in V4. Numeric string_id slots are therefore preserved
     // exactly without a remap table.
     const auto& string_core =
@@ -2890,6 +2925,25 @@ compiled_project_view::verify_contents() const noexcept {
             }
 
             if (construction_value_value.kind ==
+                construction_kind::member_binding) {
+
+                member_record bound;
+
+                if (!member(
+                        handle,
+                        member_from_raw(
+                            construction_value_value.operand - 1),
+                        bound) ||
+                    !reference_binding_compatible(
+                        member_record_value.type,
+                        bound.type)) {
+
+                    return compiled_project_image_result::
+                        invalid_image;
+                }
+            }
+
+            if (construction_value_value.kind ==
                 construction_kind::object_binding) {
 
                 object_entry bound;
@@ -2898,7 +2952,10 @@ compiled_project_view::verify_contents() const noexcept {
                         object_from_raw(
                             construction_value_value.operand),
                         bound) ||
-                    !bound.internal_static()) {
+                    !bound.internal_static() ||
+                    !reference_binding_compatible(
+                        member_record_value.type,
+                        bound.type)) {
 
                     return compiled_project_image_result::
                         invalid_image;
@@ -3186,16 +3243,22 @@ compiled_project_view::verify_contents() const noexcept {
                 invalid_image;
         }
 
+        const auto source_handle =
+            type_from_raw(
+                source_object.type.payload());
+
+        const auto target_handle =
+            type_from_raw(
+                target_object.type.payload());
+
         type_entry source_type;
         type_entry target_type;
 
         if (!type(
-                type_from_raw(
-                    source_object.type.payload()),
+                source_handle,
                 source_type) ||
             !type(
-                type_from_raw(
-                    target_object.type.payload()),
+                target_handle,
                 target_type) ||
             !value.source.member ||
             !value.target.member ||
@@ -3203,6 +3266,25 @@ compiled_project_view::verify_contents() const noexcept {
                 source_type.members.count ||
             value.target.member.value() >=
                 target_type.members.count) {
+
+            return compiled_project_image_result::
+                invalid_image;
+        }
+
+        member_record source_member;
+        member_record target_member;
+
+        if (!member(
+                source_handle,
+                value.source.member,
+                source_member) ||
+            !member(
+                target_handle,
+                value.target.member,
+                target_member) ||
+            !reference_binding_compatible(
+                target_member.type,
+                source_member.type)) {
 
             return compiled_project_image_result::
                 invalid_image;

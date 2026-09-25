@@ -1613,13 +1613,19 @@ server_status graph_delta::define_record(
         }
 
         if (construction.kind ==
-                construction_kind::
-                    member_binding &&
-            construction.operand >
-                definition.size()) {
+            construction_kind::
+                member_binding) {
 
-            return server_status::
-                project_configuration_invalid;
+            if (construction.operand >
+                    definition.size() ||
+                !reference_binding_compatible(
+                    definition[index].type,
+                    definition[
+                        construction.operand - 1].type)) {
+
+                return server_status::
+                    project_configuration_invalid;
+            }
         }
 
         if (construction.kind ==
@@ -1633,7 +1639,10 @@ server_status graph_delta::define_record(
                         construction.operand},
                     object_value) ||
                 !object_value.
-                    internal_static()) {
+                    internal_static() ||
+                !reference_binding_compatible(
+                    definition[index].type,
+                    object_value.type)) {
 
                 return server_status::
                     project_configuration_invalid;
@@ -3076,8 +3085,45 @@ link_handle graph_delta::lineage_link_target(
         : link_handle{};
 }
 
-bool graph_delta::endpoint_valid(
-    object_endpoint endpoint) const noexcept {
+bool graph_delta::reference_binding_compatible(
+    type_ref target,
+    type_ref source) const noexcept {
+
+    derived_type_record target_type;
+
+    if (!derived(
+            target,
+            target_type) ||
+        (target_type.kind !=
+             derived_type_kind::lvalue_reference &&
+         target_type.kind !=
+             derived_type_kind::rvalue_reference)) {
+
+        return false;
+    }
+
+    derived_type_record source_type;
+
+    if (derived(
+            source,
+            source_type) &&
+        (source_type.kind ==
+             derived_type_kind::lvalue_reference ||
+         source_type.kind ==
+             derived_type_kind::rvalue_reference)) {
+
+        source = source_type.child;
+    }
+
+    return target_type.child ==
+        source;
+}
+
+bool graph_delta::endpoint_type(
+    object_endpoint endpoint,
+    type_ref& output) const noexcept {
+
+    output = {};
 
     object_entry object_value;
 
@@ -3100,10 +3146,16 @@ bool graph_delta::endpoint_valid(
 
     member_record value;
 
-    return member(
-        type_value,
-        endpoint.member,
-        value);
+    if (!member(
+            type_value,
+            endpoint.member,
+            value)) {
+
+        return false;
+    }
+
+    output = value.type;
+    return static_cast<bool>(output);
 }
 
 server_status graph_delta::add_link(
@@ -3113,8 +3165,18 @@ server_status graph_delta::add_link(
 
     output = {};
 
-    if (!endpoint_valid(source) ||
-        !endpoint_valid(target)) {
+    type_ref source_type;
+    type_ref target_type;
+
+    if (!endpoint_type(
+            source,
+            source_type) ||
+        !endpoint_type(
+            target,
+            target_type) ||
+        !reference_binding_compatible(
+            target_type,
+            source_type)) {
 
         return server_status::
             project_configuration_invalid;

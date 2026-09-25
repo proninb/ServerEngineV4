@@ -442,6 +442,52 @@ lifecycle still returns unsupported and removes incomplete REBUILD artifacts;
 this format change does not claim to complete sparse BUILD or resident Runtime
 publication.
 
+### Parser/Semantic validation boundary
+
+Source-controlled semantic errors are rejected before invalid state enters G.
+
+```text
+SOURCE
+    -> Parser/Semantic
+         +-- resolve names
+         +-- validate declared types
+         +-- validate reference bindings
+         +-- validate link compatibility
+         +-- validate constructors
+         +-- precise diagnostics
+    -> G
+```
+
+Parser/Semantic owns user-facing semantic diagnostics because it still has the
+physical `file_id` and current source range. Diagnostics therefore retain the
+exact file, byte offset/range, line, and column of the failing token.
+
+Typical failures include:
+
+```text
+undeclared type
+invalid or unresolved name
+reference binding type mismatch
+invalid constructor binding
+static-link endpoint/type mismatch
+conflicting target binding
+```
+
+No separate post-parse object/link validation pass is required for these
+source-controlled errors. Checks are performed while the corresponding
+declaration, initializer, constructor operation, or link is already being
+processed.
+
+G remains fail-closed at its public mutation boundary, but Graph validation is a
+defensive invariant rather than the primary user-facing diagnostic layer. After
+successful Parser/Semantic construction, G is considered semantically valid and
+Runtime/SHM materialization does not repeat C++ semantic type checking.
+
+`file_id` remains physical source identity used by File Context, Source Map,
+dependency topology, BUILD state, and construction diagnostics. Exact source
+ranges are operation-local diagnostic state and are not persisted in G or in the
+compiled Source Map.
+
 ### Construction semantics in G
 
 Construction is semantic data, not source identity.

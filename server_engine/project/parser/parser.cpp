@@ -70,16 +70,29 @@ enum class pending_construction_kind : std::uint8_t {
     member_name,
 };
 
+struct semantic_source_location final {
+    file_id file{};
+    source_range source;
+};
+
 struct pending_construction final {
     construction_value value{};
     string_id member_name{};
+    semantic_source_location location;
     pending_construction_kind kind =
         pending_construction_kind::value;
 };
 
 struct constructor_operation final {
     string_id target{};
+    semantic_source_location target_location;
     pending_construction expression;
+};
+
+struct resolved_link_endpoint final {
+    object_endpoint endpoint{};
+    type_ref type{};
+    semantic_source_location location;
 };
 
 class semantic_parser final {
@@ -292,10 +305,87 @@ private:
         return {};
     }
 
+    [[nodiscard]] semantic_source_location
+    current_location() const noexcept {
+
+        return {
+            current.file,
+            {
+                current.source_offset,
+                current.source_length,
+            },
+        };
+    }
+
+    [[nodiscard]] server_status fail_at(
+        parser_failure_kind kind,
+        std::string_view detail,
+        semantic_source_location location) noexcept {
+
+        if (failure != nullptr) {
+            failure->kind = kind;
+            failure->file = location.file;
+            failure->source = location.source;
+            failure->detail = detail;
+        }
+
+        return server_status::project_configuration_invalid;
+    }
+
+    [[nodiscard]] bool reference_referent(
+        type_ref type,
+        type_ref& output) const noexcept {
+
+        output = {};
+
+        derived_type_record derived;
+
+        if (!G.derived(
+                type,
+                derived) ||
+            (derived.kind !=
+                 derived_type_kind::lvalue_reference &&
+             derived.kind !=
+                 derived_type_kind::rvalue_reference)) {
+
+            return false;
+        }
+
+        output = derived.child;
+        return static_cast<bool>(output);
+    }
+
+    [[nodiscard]] type_ref expression_type(
+        type_ref type) const noexcept {
+
+        type_ref referent;
+
+        return reference_referent(
+            type,
+            referent)
+            ? referent
+            : type;
+    }
+
+    [[nodiscard]] bool reference_binding_compatible(
+        type_ref target,
+        type_ref source) const noexcept {
+
+        type_ref referent;
+
+        return reference_referent(
+                   target,
+                   referent) &&
+            referent ==
+                expression_type(source);
+    }
+
     [[nodiscard]] server_status resolve_reference_binding(
         identity_ref scope,
         const std::vector<member_record>& members,
+        type_ref target,
         string_id name,
+        semantic_source_location location,
         construction_value& output) noexcept {
 
         output = {};
@@ -310,6 +400,16 @@ private:
                         std::uint32_t>::max)()) {
 
                     return server_status::io_error;
+                }
+
+                if (!reference_binding_compatible(
+                        target,
+                        members[index].type)) {
+
+                    return fail_at(
+                        parser_failure_kind::semantic,
+                        "Reference binding type does not match bound member type",
+                        location);
                 }
 
                 output =
@@ -327,9 +427,24 @@ private:
                 name);
 
         if (!object) {
-            return fail(
+            return fail_at(
                 parser_failure_kind::semantic,
-                "Reference binding names neither a member nor a visible Header static object");
+                "Reference binding names neither a member nor a visible Header static object",
+                location);
+        }
+
+        const auto* object_value =
+            G.find(object);
+
+        if (object_value == nullptr ||
+            !reference_binding_compatible(
+                target,
+                object_value->type)) {
+
+            return fail_at(
+                parser_failure_kind::semantic,
+                "Reference binding type does not match bound object type",
+                location);
         }
 
         const auto dependency =
@@ -372,17 +487,10 @@ private:
         parser_failure_kind kind,
         std::string_view detail) noexcept {
 
-        if (failure != nullptr) {
-            failure->kind = kind;
-            failure->file = current.file;
-            failure->source = {
-                current.source_offset,
-                current.source_length,
-            };
-            failure->detail = detail;
-        }
-
-        return server_status::project_configuration_invalid;
+        return fail_at(
+            kind,
+            detail,
+            current_location());
     }
 
     [[nodiscard]] server_status advance() noexcept {
@@ -563,21 +671,11 @@ private:
     [[nodiscard]] bool reference_type(
         type_ref type) const noexcept {
 
-        derived_type_record derived;
+        type_ref referent;
 
-        while (G.derived(type, derived)) {
-            if (derived.kind ==
-                    derived_type_kind::lvalue_reference ||
-                derived.kind ==
-                    derived_type_kind::rvalue_reference) {
-
-                return true;
-            }
-
-            type = derived.child;
-        }
-
-        return false;
+        return reference_referent(
+            type,
+            referent);
     }
 
     [[nodiscard]] server_status parse_intrinsic(
@@ -1076,6 +1174,8 @@ private:
                 pending_construction_kind::member_name;
             output.member_name =
                 current.identifier;
+            output.location =
+                current_location();
 
             return advance();
         }
@@ -1209,6 +1309,8 @@ private:
                 pending_construction_kind::member_name;
             output.member_name =
                 current.identifier;
+            output.location =
+                current_location();
 
             return advance();
         }
@@ -1259,6 +1361,7 @@ private:
     [[nodiscard]] server_status append_constructor_operation(
         std::vector<constructor_operation>& operations,
         string_id target,
+        semantic_source_location target_location,
         pending_construction expression) noexcept {
 
         if (!target) {
@@ -1270,6 +1373,7 @@ private:
         try {
             operations.push_back({
                 target,
+                target_location,
                 expression,
             });
 
@@ -1390,6 +1494,9 @@ private:
                 const auto target =
                     current.identifier;
 
+                const auto target_location =
+                    current_location();
+
                 status = advance();
 
                 if (!succeeded(status)) {
@@ -1444,6 +1551,7 @@ private:
                     append_constructor_operation(
                         operations,
                         target,
+                        target_location,
                         expression);
 
                 if (!succeeded(status)) {
@@ -1501,6 +1609,9 @@ private:
             const auto target =
                 current.identifier;
 
+            const auto target_location =
+                current_location();
+
             status = advance();
 
             if (!succeeded(status)) {
@@ -1545,6 +1656,7 @@ private:
                 append_constructor_operation(
                     operations,
                     target,
+                    target_location,
                     expression);
 
             if (!succeeded(status)) {
@@ -1595,9 +1707,10 @@ private:
             }
 
             if (target_index == members.size()) {
-                return fail(
-                    parser_failure_kind::syntax,
-                    "Constructor target is not a field of this record");
+                return fail_at(
+                    parser_failure_kind::semantic,
+                    "Constructor target is not a field of this record",
+                    operation.target_location);
             }
 
             construction_value value;
@@ -1609,16 +1722,19 @@ private:
                         pending_construction_kind::member_name ||
                     !operation.expression.member_name) {
 
-                    return fail(
+                    return fail_at(
                         parser_failure_kind::unsupported,
-                        "Reference constructor operation requires a member or Header static object binding");
+                        "Reference constructor operation requires a member or Header static object binding",
+                        operation.expression.location);
                 }
 
                 const auto resolved =
                     resolve_reference_binding(
                         scope,
                         members,
+                        members[target_index].type,
                         operation.expression.member_name,
+                        operation.expression.location,
                         value);
 
                 if (!succeeded(resolved)) {
@@ -1629,9 +1745,10 @@ private:
                 if (operation.expression.kind !=
                         pending_construction_kind::value) {
 
-                    return fail(
+                    return fail_at(
                         parser_failure_kind::unsupported,
-                        "Value constructor operation requires a scalar constant");
+                        "Value constructor operation requires a scalar constant",
+                        operation.expression.location);
                 }
 
                 value =
@@ -1643,9 +1760,10 @@ private:
                     construction_kind::member_binding &&
                 construction[target_index] != value) {
 
-                return fail(
-                    parser_failure_kind::syntax,
-                    "Conflicting constructor reference bindings");
+                return fail_at(
+                    parser_failure_kind::semantic,
+                    "Conflicting constructor reference bindings",
+                    operation.expression.location);
             }
 
             construction[target_index] =
@@ -2071,7 +2189,9 @@ private:
                 resolve_reference_binding(
                     scope,
                     members,
+                    members[index].type,
                     pending[index].member_name,
+                    pending[index].location,
                     construction[index]);
 
             if (!succeeded(resolved)) {
@@ -2386,7 +2506,7 @@ private:
 
     [[nodiscard]] server_status endpoint(
         identity_ref scope,
-        object_endpoint& output) noexcept {
+        resolved_link_endpoint& output) noexcept {
 
         output = {};
 
@@ -2495,6 +2615,20 @@ private:
                 "Link endpoint member is not visible");
         }
 
+        const auto* member_value =
+            G.member(
+                record,
+                member);
+
+        if (member_value == nullptr) {
+            return fail(
+                parser_failure_kind::semantic,
+                "Link endpoint member is not present in G");
+        }
+
+        const auto member_location =
+            current_location();
+
         auto dependency =
             sources.add_dependency(
                 object);
@@ -2511,10 +2645,16 @@ private:
             return dependency;
         }
 
-        output = {
+        output.endpoint = {
             object,
             member,
         };
+
+        output.type =
+            member_value->type;
+
+        output.location =
+            member_location;
 
         return advance();
     }
@@ -2531,7 +2671,7 @@ private:
         const auto link_file =
             current.file;
 
-        object_endpoint target;
+        resolved_link_endpoint target;
 
         auto status =
             endpoint(
@@ -2556,7 +2696,7 @@ private:
             return status;
         }
 
-        object_endpoint source;
+        resolved_link_endpoint source;
 
         status =
             endpoint(
@@ -2565,6 +2705,28 @@ private:
 
         if (!succeeded(status)) {
             return status;
+        }
+
+        type_ref target_referent;
+
+        if (!reference_referent(
+                target.type,
+                target_referent)) {
+
+            return fail_at(
+                parser_failure_kind::semantic,
+                "Link target member must be a reference",
+                target.location);
+        }
+
+        if (!reference_binding_compatible(
+                target.type,
+                source.type)) {
+
+            return fail_at(
+                parser_failure_kind::semantic,
+                "Link source type does not match target reference type",
+                source.location);
         }
 
         status =
@@ -2580,8 +2742,8 @@ private:
 
         status =
             G.add_link(
-                source,
-                target,
+                source.endpoint,
+                target.endpoint,
                 link);
 
         if (!succeeded(status)) {

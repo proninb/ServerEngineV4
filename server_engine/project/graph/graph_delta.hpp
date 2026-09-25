@@ -442,8 +442,13 @@ private:
     [[nodiscard]] link_handle lineage_link_target(
         object_endpoint target) const noexcept;
 
-    [[nodiscard]] bool endpoint_valid(
-        object_endpoint endpoint) const noexcept;
+    [[nodiscard]] bool reference_binding_compatible(
+        type_ref target,
+        type_ref source) const noexcept;
+
+    [[nodiscard]] bool endpoint_type(
+        object_endpoint endpoint,
+        type_ref& output) const noexcept;
 
     const compiled_project_view* baseline = nullptr;
 

@@ -387,8 +387,13 @@ private:
     [[nodiscard]] link_handle find_link_target(
         object_endpoint target) const noexcept;
 
-    [[nodiscard]] bool endpoint_valid(
-        object_endpoint endpoint) const noexcept;
+    [[nodiscard]] bool reference_binding_compatible(
+        type_ref target,
+        type_ref source) const noexcept;
+
+    [[nodiscard]] bool endpoint_type(
+        object_endpoint endpoint,
+        type_ref& output) const noexcept;
 
     std::vector<std::uint32_t> identity_locations;
 

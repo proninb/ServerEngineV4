@@ -873,10 +873,38 @@ Source execution reuses retained lexical words and canonical string/identity/G
 state but does not initialize or execute the C++ preprocessor. Source
 preprocessing directives, including `#include`, fail closed.
 
+Parser/Semantic is the semantic-validation and source-diagnostic boundary:
+
+```text
+SOURCE
+    -> Parser/Semantic
+         +-- resolve names
+         +-- validate declared types
+         +-- validate reference bindings
+         +-- validate link compatibility
+         +-- validate constructors
+         +-- precise diagnostics
+    -> G
+```
+
+Validation happens while the relevant token is current, so failures retain the
+physical `file_id` plus source offset/range needed for exact file/line/column
+diagnostics. Reference binding and static-link compatibility are therefore
+checked during their existing semantic processing; they do not require a second
+full pass over objects or links.
+
+G mutation remains fail-closed as a defensive invariant. A successfully
+constructed G is already semantically valid, so persistence and Runtime/SHM
+materialization do not repeat source-level C++ semantic validation.
+
 Parser/Semantic writes normalized construction values directly into G.
 Member defaults, constructor initializer-list operations, constructor-body field
 assignments, and supported object initializers survive only as compact
 `construction_value` records; source spans do not survive this boundary.
+
+`file_id` continues into Source Map provenance where required, but exact source
+offset/length remains transient diagnostic state and is not persisted in
+`compiled.bin`.
 
 Managed constructor syntax is folded before `G.define_record()`. A reference
 member may bind either to another member of the same record or to a visible

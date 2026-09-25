@@ -80,7 +80,7 @@ struct compiled_fixture final {
 
     type_handle type{};
     type_ref integer_type{};
-    type_ref pointer_type{};
+    type_ref reference_type{};
     type_ref named_type{};
 
     member_index value_member{};
@@ -99,6 +99,323 @@ struct compiled_fixture final {
     return tests.expect(
         status == server_status::success,
         name);
+}
+
+void test_graph_reference_invariants(
+    test_state& tests) {
+
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+
+    const auto make_identity =
+        [&](std::string_view name,
+            identity_kind kind) {
+
+            string_id text;
+            identity_ref output;
+
+            tests.expect(
+                succeeded(
+                    strings.intern(
+                        name,
+                        text)) &&
+                succeeded(
+                    identities.resolve(
+                        identities.root(),
+                        text,
+                        kind,
+                        output)),
+                "create Graph invariant identity");
+
+            return output;
+        };
+
+    string_id value_name;
+    string_id real_name;
+    string_id input_name;
+
+    if (!tests.expect(
+            succeeded(strings.intern("value", value_name)) &&
+            succeeded(strings.intern("real", real_name)) &&
+            succeeded(strings.intern("in", input_name)),
+            "create Graph invariant member names")) {
+
+        return;
+    }
+
+    const auto integer_type =
+        G.intrinsic(
+            intrinsic_type::signed_int);
+
+    const auto real_type =
+        G.intrinsic(
+            intrinsic_type::double_type);
+
+    type_ref integer_reference;
+    type_ref real_reference;
+
+    if (!tests.expect(
+            succeeded(
+                G.derive(
+                    integer_type,
+                    derived_type_kind::lvalue_reference,
+                    0,
+                    integer_reference)) &&
+            succeeded(
+                G.derive(
+                    real_type,
+                    derived_type_kind::lvalue_reference,
+                    0,
+                    real_reference)),
+            "derive Graph invariant references")) {
+
+        return;
+    }
+
+    object_handle static_integer;
+
+    if (!tests.expect(
+            succeeded(
+                G.add_object(
+                    make_identity(
+                        "static_integer",
+                        identity_kind::object),
+                    integer_type,
+                    static_integer,
+                    graph_object_internal_static)),
+            "add Graph invariant internal static")) {
+
+        return;
+    }
+
+    type_handle bad_member;
+
+    if (!tests.expect(
+            succeeded(
+                G.declare_record(
+                    make_identity(
+                        "BadMember",
+                        identity_kind::type),
+                    graph_record_kind::struct_type,
+                    bad_member)),
+            "declare incompatible member binding record")) {
+
+        return;
+    }
+
+    const std::array<member_record, 2>
+        bad_member_definition{{
+            {
+                value_name,
+                integer_type,
+                graph_member_access::public_access,
+            },
+            {
+                input_name,
+                real_reference,
+                graph_member_access::public_access,
+            },
+        }};
+
+    const std::array<construction_value, 2>
+        bad_member_construction{{
+            construction_value{},
+            construction_value::member_binding(1),
+        }};
+
+    tests.expect(
+        G.define_record(
+            bad_member,
+            graph_record_kind::struct_type,
+            bad_member_definition,
+            bad_member_construction) ==
+                server_status::project_configuration_invalid &&
+        G.find(bad_member) != nullptr &&
+        !G.find(bad_member)->defined(),
+        "Graph rejects incompatible member binding before mutation");
+
+    type_handle bad_object;
+
+    if (!tests.expect(
+            succeeded(
+                G.declare_record(
+                    make_identity(
+                        "BadObject",
+                        identity_kind::type),
+                    graph_record_kind::struct_type,
+                    bad_object)),
+            "declare incompatible object binding record")) {
+
+        return;
+    }
+
+    const std::array<member_record, 1>
+        bad_object_definition{{
+            {
+                input_name,
+                real_reference,
+                graph_member_access::public_access,
+            },
+        }};
+
+    const std::array<construction_value, 1>
+        bad_object_construction{{
+            construction_value::object_binding(
+                static_integer.value()),
+        }};
+
+    tests.expect(
+        G.define_record(
+            bad_object,
+            graph_record_kind::struct_type,
+            bad_object_definition,
+            bad_object_construction) ==
+            server_status::project_configuration_invalid,
+        "Graph rejects incompatible object binding");
+
+    type_handle type;
+
+    if (!tests.expect(
+            succeeded(
+                G.declare_record(
+                    make_identity(
+                        "T",
+                        identity_kind::type),
+                    graph_record_kind::struct_type,
+                    type)),
+            "declare valid Graph invariant record")) {
+
+        return;
+    }
+
+    const std::array<member_record, 3> definition{{
+        {
+            value_name,
+            integer_type,
+            graph_member_access::public_access,
+        },
+        {
+            real_name,
+            real_type,
+            graph_member_access::public_access,
+        },
+        {
+            input_name,
+            integer_reference,
+            graph_member_access::public_access,
+        },
+    }};
+
+    if (!tests.expect(
+            succeeded(
+                G.define_record(
+                    type,
+                    graph_record_kind::struct_type,
+                    definition)),
+            "define valid Graph invariant record")) {
+
+        return;
+    }
+
+    const auto named_type =
+        G.named(type);
+
+    object_handle left;
+    object_handle right;
+
+    if (!tests.expect(
+            succeeded(
+                G.add_object(
+                    make_identity(
+                        "left",
+                        identity_kind::object),
+                    named_type,
+                    left)) &&
+            succeeded(
+                G.add_object(
+                    make_identity(
+                        "right",
+                        identity_kind::object),
+                    named_type,
+                    right)),
+            "add Graph invariant objects")) {
+
+        return;
+    }
+
+    const auto value =
+        G.find_member(
+            type,
+            value_name);
+
+    const auto real =
+        G.find_member(
+            type,
+            real_name);
+
+    const auto input =
+        G.find_member(
+            type,
+            input_name);
+
+    link_handle valid;
+
+    tests.expect(
+        succeeded(
+            G.add_link(
+                {
+                    left,
+                    value,
+                },
+                {
+                    right,
+                    input,
+                },
+                valid)) &&
+        valid,
+        "Graph accepts exact source-to-reference link");
+
+    const auto link_count =
+        G.link_count();
+
+    link_handle invalid_target;
+
+    tests.expect(
+        G.add_link(
+            {
+                left,
+                value,
+            },
+            {
+                right,
+                value,
+            },
+            invalid_target) ==
+                server_status::project_configuration_invalid &&
+        !invalid_target &&
+        G.link_count() ==
+            link_count,
+        "Graph rejects non-reference link target without mutation");
+
+    link_handle invalid_source;
+
+    tests.expect(
+        G.add_link(
+            {
+                left,
+                real,
+            },
+            {
+                left,
+                input,
+            },
+            invalid_source) ==
+                server_status::project_configuration_invalid &&
+        !invalid_source &&
+        G.link_count() ==
+            link_count,
+        "Graph rejects incompatible link source without mutation");
 }
 
 [[nodiscard]] bool build_fixture(
@@ -190,10 +507,10 @@ struct compiled_fixture final {
             tests,
             fixture.G.derive(
                 fixture.integer_type,
-                derived_type_kind::pointer,
+                derived_type_kind::lvalue_reference,
                 0,
-                fixture.pointer_type),
-            "derive pointer type")) {
+                fixture.reference_type),
+            "derive reference type")) {
 
         return false;
     }
@@ -206,7 +523,7 @@ struct compiled_fixture final {
         },
         {
             fixture.peer_name,
-            fixture.pointer_type,
+            fixture.reference_type,
             graph_member_access::private_access,
         },
     }};
@@ -286,11 +603,11 @@ struct compiled_fixture final {
             fixture.G.add_link(
                 {
                     fixture.left,
-                    fixture.peer_member,
+                    fixture.value_member,
                 },
                 {
                     fixture.right,
-                    fixture.value_member,
+                    fixture.peer_member,
                 },
                 fixture.link),
             "add link") ||
@@ -716,7 +1033,7 @@ void test_round_trip(
             member_value.name ==
                 fixture.peer_name &&
             member_value.type ==
-                fixture.pointer_type &&
+                fixture.reference_type &&
             member_value.access ==
                 graph_member_access::private_access,
         "member record preservation");
@@ -738,24 +1055,24 @@ void test_round_trip(
 
     tests.expect(
         view.derived(
-            fixture.pointer_type,
+            fixture.reference_type,
             derived) &&
             derived.child ==
                 fixture.integer_type &&
             derived.kind ==
-                derived_type_kind::pointer &&
+                derived_type_kind::lvalue_reference &&
             derived.payload == 0,
         "derived type preservation");
 
     tests.expect(
         view.find_derived(
             fixture.integer_type,
-            derived_type_kind::pointer,
+            derived_type_kind::lvalue_reference,
             0) ==
-            fixture.pointer_type &&
+            fixture.reference_type &&
         !view.find_derived(
             fixture.integer_type,
-            derived_type_kind::lvalue_reference,
+            derived_type_kind::pointer,
             0),
         "persisted derived canonical index");
 
@@ -1292,6 +1609,54 @@ void test_semantic_corruption(
         view.verify_contents() ==
             compiled_project_image_result::invalid_image,
         "cold audit detects graph identity corruption");
+
+    const auto* type =
+        fixture.G.find(
+            fixture.type);
+
+    if (!tests.expect(
+            type != nullptr,
+            "read fixture type for link semantic corruption")) {
+
+        return;
+    }
+
+    auto invalid_link_type =
+        image.bytes;
+
+    const auto member_slot =
+        static_cast<std::size_t>(
+            type->members.begin) +
+        fixture.peer_member.value();
+
+    const auto member_type_offset =
+        section_offset(
+            invalid_link_type,
+            compiled_project_section::members) +
+        member_slot *
+            sizeof(member_record) +
+        offsetof(
+            member_record,
+            type);
+
+    write_u32(
+        invalid_link_type.data() +
+            member_type_offset,
+        fixture.integer_type.value());
+
+    rewrite_section_crc(
+        invalid_link_type,
+        compiled_project_section::members);
+
+    compiled_project_view semantic_view;
+
+    tests.expect(
+        semantic_view.bind(
+            invalid_link_type) ==
+                compiled_project_image_result::success &&
+        semantic_view.verify_contents() ==
+            compiled_project_image_result::invalid_image,
+        "cold audit detects link target reference-type corruption");
 }
 
 
@@ -1496,17 +1861,17 @@ void test_build_lineage_overlays(
         baseline_type.defined(),
         "BUILD graph_delta reads unchanged type directly from baseline");
 
-    type_ref repeated_pointer;
+    type_ref repeated_reference;
 
     tests.expect(
         succeeded(
             G.derive(
                 fixture.integer_type,
-                derived_type_kind::pointer,
+                derived_type_kind::lvalue_reference,
                 0,
-                repeated_pointer)) &&
-        repeated_pointer ==
-            fixture.pointer_type,
+                repeated_reference)) &&
+        repeated_reference ==
+            fixture.reference_type,
         "BUILD graph_delta reuses persisted derived slot");
 
     if (!tests.expect(
@@ -1526,7 +1891,7 @@ void test_build_lineage_overlays(
             },
             {
                 fixture.peer_name,
-                fixture.pointer_type,
+                fixture.reference_type,
                 graph_member_access::private_access,
             },
         }};
@@ -1692,11 +2057,11 @@ void test_build_lineage_overlays(
             G.add_link(
                 {
                     fixture.left,
-                    fixture.peer_member,
+                    fixture.value_member,
                 },
                 {
                     appended_object,
-                    fixture.value_member,
+                    fixture.peer_member,
                 },
                 appended_link)) &&
         appended_link.value() ==
@@ -1873,7 +2238,9 @@ void test_persisted_sources(test_state &tests, const compiled_test_image &image)
             source_data_ref::from_raw(0xffffffffu).raw(),
             "reject nonexistent graph link");
     auto old = image.bytes;
-    write_u32(old.data() + 8, 2);
+    write_u32(
+        old.data() + 8,
+        compiled_project_format_version - 1);
     rewrite_header_crc(old);
     tests.expect(view.bind(old) == compiled_project_image_result::invalid_image,
                  "reject previous compiled format");
@@ -1925,6 +2292,10 @@ int main() {
 
     try {
         test_state tests;
+
+        test_graph_reference_invariants(
+            tests);
+
         compiled_fixture fixture;
 
         if (!build_fixture(

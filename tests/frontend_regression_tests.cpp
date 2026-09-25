@@ -994,13 +994,13 @@ void test_source_link_semantic_dependencies(
 
     const temporary_source header{
         "source_link_dependency_header",
-        "struct T { int a; };\n"};
+        "struct T { int& in; int out; };\n"};
 
     const temporary_source source{
         "source_link_dependency_source",
         "T x;\n"
         "T y;\n"
-        "x.a = y.a;\n"};
+        "x.in = y.out;\n"};
 
     file_context files;
     lexical_generation lexical;
@@ -1138,14 +1138,14 @@ void test_source_link_failure_provenance(
 
     const temporary_source header{
         "source_link_failure_header",
-        "struct T { int a; int b; };\n"};
+        "struct T { int& in; int a; int b; };\n"};
 
     const temporary_source source{
         "source_link_failure_source",
         "T x;\n"
         "T y;\n"
-        "x.a = y.a;\n"
-        "x.a = y.b;\n"};
+        "x.in = y.a;\n"
+        "x.in = y.b;\n"};
 
     file_context files;
     lexical_generation lexical;
@@ -1215,6 +1215,275 @@ void test_source_link_failure_provenance(
         contributions[2].file == source_id &&
         contributions[3].file == source_id,
         "failed Source link operation adds no provenance");
+}
+
+void test_semantic_type_diagnostics(
+    test_state& tests) {
+
+    {
+        const std::string text{
+            "static Missing value;\n"};
+
+        const temporary_source source{
+            "undeclared_object_type",
+            text};
+
+        parser_failure failure;
+
+        const auto status =
+            parse_file(
+                tests,
+                source.path(),
+                failure);
+
+        tests.expect(
+            status ==
+                server_status::project_configuration_invalid &&
+            failure.kind ==
+                parser_failure_kind::semantic &&
+            failure.file &&
+            failure.source.offset ==
+                text.find("Missing") &&
+            failure.source.length == 7 &&
+            failure.detail ==
+                "Named type is not declared in the visible semantic scope",
+            "undeclared object type keeps precise source range");
+    }
+
+    {
+        const std::string text{
+            "struct A {\n"
+            "    int out;\n"
+            "    double& in = out;\n"
+            "};\n"};
+
+        const temporary_source source{
+            "reference_member_type_mismatch",
+            text};
+
+        parser_failure failure;
+
+        const auto status =
+            parse_file(
+                tests,
+                source.path(),
+                failure);
+
+        tests.expect(
+            status ==
+                server_status::project_configuration_invalid &&
+            failure.kind ==
+                parser_failure_kind::semantic &&
+            failure.file &&
+            failure.source.offset ==
+                text.rfind("out") &&
+            failure.source.length == 3 &&
+            failure.detail ==
+                "Reference binding type does not match bound member type",
+            "reference mismatch reports bound member token");
+    }
+
+    {
+        const std::string text{
+            "static int source;\n"
+            "struct A {\n"
+            "    double& in;\n"
+            "    A() : in(source) {}\n"
+            "};\n"};
+
+        const temporary_source source{
+            "constructor_reference_type_mismatch",
+            text};
+
+        parser_failure failure;
+
+        const auto status =
+            parse_file(
+                tests,
+                source.path(),
+                failure);
+
+        tests.expect(
+            status ==
+                server_status::project_configuration_invalid &&
+            failure.kind ==
+                parser_failure_kind::semantic &&
+            failure.file &&
+            failure.source.offset ==
+                text.rfind("source") &&
+            failure.source.length == 6 &&
+            failure.detail ==
+                "Reference binding type does not match bound object type",
+            "constructor mismatch reports source token");
+    }
+
+    {
+        const std::string header_text{
+            "struct T { double& in; int out; };\n"};
+
+        const std::string source_text{
+            "T x;\n"
+            "T y;\n"
+            "x.in = y.out;\n"};
+
+        const temporary_source header{
+            "link_type_mismatch_header",
+            header_text};
+
+        const temporary_source source{
+            "link_type_mismatch_source",
+            source_text};
+
+        file_context files;
+        lexical_generation lexical;
+        file_id header_id;
+        file_id source_id;
+
+        if (!tests.expect(
+                succeeded(
+                    files.resolve(
+                        header.path(),
+                        file_kind::header,
+                        header_id)) &&
+                succeeded(
+                    files.resolve(
+                        source.path(),
+                        file_kind::source,
+                        source_id)),
+                "resolve link mismatch roots")) {
+
+            return;
+        }
+
+        const std::array<file_id, 2> roots{
+            header_id,
+            source_id};
+
+        if (!prepare_all_roots(
+                tests,
+                files,
+                lexical,
+                roots)) {
+
+            return;
+        }
+
+        preprocessor_configuration configuration;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        parser_failure failure;
+
+        const auto status =
+            parse_semantic_project(
+                files,
+                lexical,
+                roots.size(),
+                configuration,
+                strings,
+                identities,
+                G,
+                sources,
+                &failure);
+
+        tests.expect(
+            status ==
+                server_status::project_configuration_invalid &&
+            failure.kind ==
+                parser_failure_kind::semantic &&
+            failure.file == source_id &&
+            failure.source.offset ==
+                source_text.rfind("out") &&
+            failure.source.length == 3 &&
+            failure.detail ==
+                "Link source type does not match target reference type",
+            "link mismatch reports source member token");
+    }
+
+    {
+        const std::string header_text{
+            "struct T { int value; };\n"};
+
+        const std::string source_text{
+            "T x;\n"
+            "T y;\n"
+            "x.value = y.value;\n"};
+
+        const temporary_source header{
+            "link_target_value_header",
+            header_text};
+
+        const temporary_source source{
+            "link_target_value_source",
+            source_text};
+
+        file_context files;
+        lexical_generation lexical;
+        file_id header_id;
+        file_id source_id;
+
+        if (!tests.expect(
+                succeeded(
+                    files.resolve(
+                        header.path(),
+                        file_kind::header,
+                        header_id)) &&
+                succeeded(
+                    files.resolve(
+                        source.path(),
+                        file_kind::source,
+                        source_id)),
+                "resolve non-reference link roots")) {
+
+            return;
+        }
+
+        const std::array<file_id, 2> roots{
+            header_id,
+            source_id};
+
+        if (!prepare_all_roots(
+                tests,
+                files,
+                lexical,
+                roots)) {
+
+            return;
+        }
+
+        preprocessor_configuration configuration;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        parser_failure failure;
+
+        const auto status =
+            parse_semantic_project(
+                files,
+                lexical,
+                roots.size(),
+                configuration,
+                strings,
+                identities,
+                G,
+                sources,
+                &failure);
+
+        tests.expect(
+            status ==
+                server_status::project_configuration_invalid &&
+            failure.kind ==
+                parser_failure_kind::semantic &&
+            failure.file == source_id &&
+            failure.source.offset ==
+                source_text.find("value") &&
+            failure.source.length == 5 &&
+            failure.detail ==
+                "Link target member must be a reference",
+            "link target must be a native reference");
+    }
 }
 
 void test_parser_provenance(test_state &tests) {
@@ -1305,6 +1574,9 @@ int main() {
             tests);
 
         test_source_link_failure_provenance(
+            tests);
+
+        test_semantic_type_diagnostics(
             tests);
 
         test_parser_provenance(tests);
