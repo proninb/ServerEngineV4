@@ -1,6 +1,7 @@
 #include "parser.hpp"
 
 #include "../frontend/semantic_input.hpp"
+#include "../graph/construction_semantics.hpp"
 
 #include <array>
 #include <bit>
@@ -1133,6 +1134,8 @@ private:
         pending_construction& output) noexcept {
 
         output = {};
+        output.location =
+            current_location();
 
         if (reference_type(target)) {
             if (!allow_member_name) {
@@ -1207,6 +1210,9 @@ private:
             if (!succeeded(advanced)) {
                 return advanced;
             }
+
+            output.location =
+                current_location();
         }
 
         if (at(token_kind::pp_number)) {
@@ -1278,6 +1284,8 @@ private:
         pending_construction& output) noexcept {
 
         output = {};
+        output.location =
+            current_location();
 
         if (at(token_kind::kw_this)) {
             auto status = advance();
@@ -1345,6 +1353,9 @@ private:
             if (!succeeded(status)) {
                 return status;
             }
+
+            output.location =
+                current_location();
         }
 
         if (at(token_kind::pp_number)) {
@@ -1753,6 +1764,17 @@ private:
 
                 value =
                     operation.expression.value;
+
+                if (!construction_compatible(
+                        G,
+                        members[target_index].type,
+                        value)) {
+
+                    return fail_at(
+                        parser_failure_kind::semantic,
+                        "Constructor initializer is not compatible with target type",
+                        operation.expression.location);
+                }
             }
 
             if (assigned[target_index] &&
@@ -2180,6 +2202,17 @@ private:
             if (pending[index].kind ==
                 pending_construction_kind::value) {
 
+                if (!construction_compatible(
+                        G,
+                        members[index].type,
+                        pending[index].value)) {
+
+                    return fail_at(
+                        parser_failure_kind::semantic,
+                        "Initializer is not compatible with target type",
+                        pending[index].location);
+                }
+
                 construction[index] =
                     pending[index].value;
                 continue;
@@ -2348,6 +2381,8 @@ private:
             : 0;
 
         construction_value initial;
+        semantic_source_location
+            initial_location;
 
         if (at(token_kind::assign)) {
             status =
@@ -2380,6 +2415,8 @@ private:
 
                     initial =
                         parsed.value;
+                    initial_location =
+                        parsed.location;
 
                     flags |=
                         graph_object_non_default_initializer;
@@ -2416,6 +2453,8 @@ private:
 
                 initial =
                     parsed.value;
+                initial_location =
+                    parsed.location;
 
                 flags |=
                     graph_object_non_default_initializer;
@@ -2444,6 +2483,8 @@ private:
 
                 initial =
                     parsed.value;
+                initial_location =
+                    parsed.location;
 
                 flags |=
                     graph_object_non_default_initializer;
@@ -2464,6 +2505,20 @@ private:
             if (!succeeded(status)) {
                 return status;
             }
+        }
+
+        if ((flags &
+                graph_object_non_default_initializer) !=
+                    0 &&
+            !construction_compatible(
+                G,
+                type,
+                initial)) {
+
+            return fail_at(
+                parser_failure_kind::semantic,
+                "Object initializer is not compatible with target type",
+                initial_location);
         }
 
         status =

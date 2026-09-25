@@ -1317,6 +1317,67 @@ void test_semantic_type_diagnostics(
             "constructor mismatch reports source token");
     }
 
+{
+    const std::string text{
+        "struct T { int value; };\n"
+        "static T x = 7;\n"};
+
+    const temporary_source source{
+        "record_object_scalar_initializer",
+        text};
+
+    parser_failure failure;
+
+    const auto status =
+        parse_file(
+            tests,
+            source.path(),
+            failure);
+
+    tests.expect(
+        status ==
+            server_status::project_configuration_invalid &&
+        failure.kind ==
+            parser_failure_kind::semantic &&
+        failure.file &&
+        failure.source.offset ==
+            text.rfind("7") &&
+        failure.source.length == 1 &&
+        failure.detail ==
+            "Object initializer is not compatible with target type",
+        "record object rejects scalar initializer at literal");
+}
+
+{
+    const std::string text{
+        "struct T { int value = 1.5; };\n"};
+
+    const temporary_source source{
+        "integral_member_real_initializer",
+        text};
+
+    parser_failure failure;
+
+    const auto status =
+        parse_file(
+            tests,
+            source.path(),
+            failure);
+
+    tests.expect(
+        status ==
+            server_status::project_configuration_invalid &&
+        failure.kind ==
+            parser_failure_kind::semantic &&
+        failure.file &&
+        failure.source.offset ==
+            text.find("1.5") &&
+        failure.source.length == 3 &&
+        failure.detail ==
+            "Initializer is not compatible with target type",
+        "integral member rejects real initializer at literal");
+}
+
     {
         const std::string header_text{
             "struct T { double& in; int out; };\n"};
@@ -1400,6 +1461,102 @@ void test_semantic_type_diagnostics(
                 "Link source type does not match target reference type",
             "link mismatch reports source member token");
     }
+
+{
+    const std::string header_text{
+        "struct T { int out; int& in = out; };\n"};
+
+    const std::string source_text{
+        "T x;\n"
+        "T y;\n"
+        "x.in = y.out;\n"};
+
+    const temporary_source header{
+        "link_default_override_header",
+        header_text};
+
+    const temporary_source source{
+        "link_default_override_source",
+        source_text};
+
+    file_context files;
+    lexical_generation lexical;
+    file_id header_id;
+    file_id source_id;
+
+    if (!tests.expect(
+            succeeded(
+                files.resolve(
+                    header.path(),
+                    file_kind::header,
+                    header_id)) &&
+            succeeded(
+                files.resolve(
+                    source.path(),
+                    file_kind::source,
+                    source_id)),
+            "resolve default-override link roots")) {
+
+        return;
+    }
+
+    const std::array<file_id, 2> roots{
+        header_id,
+        source_id};
+
+    if (!prepare_all_roots(
+            tests,
+            files,
+            lexical,
+            roots)) {
+
+        return;
+    }
+
+    preprocessor_configuration configuration;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    parser_failure failure;
+
+    const auto status =
+        parse_semantic_project(
+            files,
+            lexical,
+            roots.size(),
+            configuration,
+            strings,
+            identities,
+            G,
+            sources,
+            &failure);
+
+    const auto type =
+        G.find_type(
+            identities.find(
+                identities.root(),
+                strings.find("T"),
+                identity_kind::type));
+
+    const auto input =
+        G.find_member(
+            type,
+            strings.find("in"));
+
+    const auto* default_binding =
+        G.construction(
+            type,
+            input);
+
+    tests.expect(
+        succeeded(status) &&
+        G.link_count() == 1 &&
+        default_binding != nullptr &&
+        default_binding->kind ==
+            construction_kind::member_binding,
+        "per-object link preserves and overrides the type-level default binding");
+}
 
     {
         const std::string header_text{

@@ -1,4 +1,5 @@
 #include "graph.hpp"
+#include "construction_semantics.hpp"
 
 #include <limits>
 #include <utility>
@@ -447,7 +448,12 @@ server_status graph::define_record(
             ? construction_value{}
             : construction_values[index];
 
-        if (!valid_construction(construction)) {
+        if (!valid_construction(construction) ||
+            !construction_compatible(
+                *this,
+                definition[index].type,
+                construction)) {
+
             return server_status::project_configuration_invalid;
         }
 
@@ -590,6 +596,10 @@ server_status graph::add_object(
         !contains(type) ||
         (flags & ~graph_object_flag_mask) != 0 ||
         !valid_construction(initial) ||
+        !construction_compatible(
+            *this,
+            type,
+            initial) ||
         (!(flags &
             graph_object_non_default_initializer) &&
          initial != construction_value{}) ||

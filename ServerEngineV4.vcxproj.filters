@@ -407,6 +407,9 @@
     <ClInclude Include="server_engine\project\graph\construction_value.hpp">
       <Filter>server_engine\project\graph</Filter>
     </ClInclude>
+    <ClInclude Include="server_engine\project\graph\construction_semantics.hpp">
+      <Filter>server_engine\project\graph</Filter>
+    </ClInclude>
     <ClInclude Include="server_engine\project\parser\parser.hpp">
       <Filter>server_engine\project\parser</Filter>
     </ClInclude>

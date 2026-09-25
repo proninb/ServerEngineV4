@@ -187,6 +187,7 @@
     <ClInclude Include="server_engine\project\graph\graph.hpp" />
     <ClInclude Include="server_engine\project\graph\graph_delta.hpp" />
     <ClInclude Include="server_engine\project\graph\construction_value.hpp" />
+    <ClInclude Include="server_engine\project\graph\construction_semantics.hpp" />
     <ClInclude Include="server_engine\project\parser\parser.hpp" />
     <ClInclude Include="server_engine\project\graph\type_handle.hpp" />
     <ClInclude Include="server_engine\project\graph\object_handle.hpp" />

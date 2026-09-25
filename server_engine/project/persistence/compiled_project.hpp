@@ -23,7 +23,7 @@
 
 namespace cw::server {
 
-inline constexpr std::uint32_t compiled_project_format_version = 6;
+inline constexpr std::uint32_t compiled_project_format_version = 7;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;

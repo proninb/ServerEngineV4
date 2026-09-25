@@ -73,11 +73,13 @@ struct compiled_fixture final {
     string_id peer_name{};
     string_id left_name{};
     string_id right_name{};
+    string_id scalar_name{};
 
     identity_ref namespace_identity{};
     identity_ref type_identity{};
     identity_ref left_identity{};
     identity_ref right_identity{};
+    identity_ref scalar_identity{};
 
     type_handle type{};
     type_ref integer_type{};
@@ -89,6 +91,7 @@ struct compiled_fixture final {
 
     object_handle left{};
     object_handle right{};
+    object_handle scalar{};
     link_handle link{};
 };
 
@@ -275,6 +278,46 @@ void test_graph_reference_invariants(
             server_status::project_configuration_invalid,
         "Graph rejects incompatible object binding");
 
+type_handle scalar_member_type;
+
+if (!tests.expect(
+        succeeded(
+            G.declare_record(
+                make_identity(
+                    "BadScalarMember",
+                    identity_kind::type),
+                graph_record_kind::struct_type,
+                scalar_member_type)),
+        "declare scalar construction mismatch record")) {
+
+    return;
+}
+
+const std::array<member_record, 1>
+    scalar_member_definition{{
+        {
+            value_name,
+            integer_type,
+            graph_member_access::public_access,
+        },
+    }};
+
+const std::array<construction_value, 1>
+    scalar_member_construction{{
+        construction_value::constant(
+            construction_kind::real,
+            0),
+    }};
+
+tests.expect(
+    G.define_record(
+        scalar_member_type,
+        graph_record_kind::struct_type,
+        scalar_member_definition,
+        scalar_member_construction) ==
+            server_status::project_configuration_invalid,
+    "Graph rejects real construction for integral member");
+
     type_handle type;
 
     if (!tests.expect(
@@ -377,6 +420,118 @@ void test_graph_reference_invariants(
         valid,
         "Graph accepts exact source-to-reference link");
 
+object_handle invalid_named_object;
+
+tests.expect(
+    G.add_object(
+        make_identity(
+            "invalid_named_object",
+            identity_kind::object),
+        named_type,
+        invalid_named_object,
+        graph_object_non_default_initializer,
+        construction_value::constant(
+            construction_kind::unsigned_integer,
+            7)) ==
+            server_status::project_configuration_invalid &&
+    !invalid_named_object,
+    "Graph rejects scalar construction for record object");
+
+type_handle bound_type;
+
+if (!tests.expect(
+        succeeded(
+            G.declare_record(
+                make_identity(
+                    "Bound",
+                    identity_kind::type),
+                graph_record_kind::struct_type,
+                bound_type)),
+        "declare default reference binding record")) {
+
+    return;
+}
+
+const std::array<member_record, 2>
+    bound_definition{{
+        {
+            value_name,
+            integer_type,
+            graph_member_access::public_access,
+        },
+        {
+            input_name,
+            integer_reference,
+            graph_member_access::public_access,
+        },
+    }};
+
+const std::array<construction_value, 2>
+    bound_construction{{
+        {},
+        construction_value::member_binding(1),
+    }};
+
+if (!tests.expect(
+        succeeded(
+            G.define_record(
+                bound_type,
+                graph_record_kind::struct_type,
+                bound_definition,
+                bound_construction)),
+        "define default reference binding record")) {
+
+    return;
+}
+
+const auto bound_named =
+    G.named(
+        bound_type);
+
+object_handle bound_left;
+object_handle bound_right;
+
+if (!tests.expect(
+        succeeded(
+            G.add_object(
+                make_identity(
+                    "bound_left",
+                    identity_kind::object),
+                bound_named,
+                bound_left)) &&
+        succeeded(
+            G.add_object(
+                make_identity(
+                    "bound_right",
+                    identity_kind::object),
+                bound_named,
+                bound_right)),
+        "add default reference binding objects")) {
+
+    return;
+}
+
+link_handle override_link;
+
+tests.expect(
+    succeeded(
+        G.add_link(
+            {
+                bound_left,
+                G.find_member(
+                    bound_type,
+                    value_name),
+            },
+            {
+                bound_right,
+                G.find_member(
+                    bound_type,
+                    input_name),
+            },
+            override_link)) &&
+    override_link,
+    "Graph link overrides type-level default reference binding per object");
+
     const auto link_count =
         G.link_count();
 
@@ -441,7 +596,8 @@ void test_graph_reference_invariants(
         !intern("value", fixture.value_name, "intern value member") ||
         !intern("peer", fixture.peer_name, "intern peer member") ||
         !intern("left", fixture.left_name, "intern left object") ||
-        !intern("right", fixture.right_name, "intern right object")) {
+        !intern("right", fixture.right_name, "intern right object") ||
+        !intern("scalar", fixture.scalar_name, "intern scalar object")) {
 
         return false;
     }
@@ -477,7 +633,15 @@ void test_graph_reference_invariants(
                 fixture.right_name,
                 identity_kind::object,
                 fixture.right_identity),
-            "resolve right object")) {
+            "resolve right object") ||
+        !success(
+            tests,
+            fixture.identities.resolve(
+                fixture.namespace_identity,
+                fixture.scalar_name,
+                identity_kind::object,
+                fixture.scalar_identity),
+            "resolve scalar object")) {
 
         return false;
     }
@@ -593,12 +757,19 @@ void test_graph_reference_invariants(
             fixture.G.add_object(
                 fixture.right_identity,
                 fixture.named_type,
-                fixture.right,
+                fixture.right),
+            "add right object") ||
+        !success(
+            tests,
+            fixture.G.add_object(
+                fixture.scalar_identity,
+                fixture.integer_type,
+                fixture.scalar,
                 graph_object_non_default_initializer,
                 construction_value::constant(
                     construction_kind::unsigned_integer,
                     7)),
-            "add right object") ||
+            "add scalar object") ||
         !success(
             tests,
             fixture.G.add_link(
@@ -703,6 +874,13 @@ void test_graph_reference_invariants(
                 source_data_ref::object(
                     fixture.right_identity)),
             "persist right Source object") ||
+        !success(
+            tests,
+            fixture.sources.add(
+                file_id{4},
+                source_data_ref::object(
+                    fixture.scalar_identity)),
+            "persist scalar Source object") ||
         !success(
             tests,
             fixture.sources.add(
@@ -1083,31 +1261,34 @@ void test_round_trip(
             fixture.left &&
         view.find_object(
             fixture.right_identity) ==
-            fixture.right,
+            fixture.right &&
+        view.find_object(
+            fixture.scalar_identity) ==
+            fixture.scalar,
         "object handle preservation");
 
-    object_entry right_object;
+    object_entry scalar_object;
 
     tests.expect(
         view.object(
-            fixture.right,
-            right_object) &&
-            right_object.type ==
-                fixture.named_type &&
-            right_object.non_default_initializer(),
-        "object record preservation");
+            fixture.scalar,
+            scalar_object) &&
+            scalar_object.type ==
+                fixture.integer_type &&
+            scalar_object.non_default_initializer(),
+        "scalar object record preservation");
 
     construction_value object_initial;
 
     tests.expect(
         view.construction(
-            fixture.right,
+            fixture.scalar,
             object_initial) &&
         object_initial ==
             construction_value::constant(
                 construction_kind::unsigned_integer,
                 7),
-        "object construction preservation");
+        "scalar object construction preservation");
 
     link_record link_value;
 
@@ -1471,7 +1652,7 @@ void test_runtime_layout(
             fixture.right,
             right_offset) &&
         right_offset == 24 &&
-        native.size() == 40 &&
+        native.size() == 48 &&
         native.alignment() == 8,
         "pack-8 canonical sentinel plus dense object layout");
 
@@ -1522,7 +1703,7 @@ void test_runtime_layout(
             fixture.right,
             right_offset) &&
         right_offset == 16 &&
-        packed.size() == 28 &&
+        packed.size() == 32 &&
         packed.alignment() == 4,
         "pack-4 canonical sentinel plus dense object layout");
 
@@ -1673,7 +1854,7 @@ void test_fixed_direct_materializer(
 
     const std::array<construction_value, 2>
         a_construction{{
-            {},
+            construction_value::member_binding(2),
             construction_value::constant(
                 construction_kind::signed_integer,
                 42),
@@ -2021,11 +2202,12 @@ void test_fixed_direct_materializer(
             source_offset +
                 a_in_offset) ==
             base +
-                unconnected_int &&
+                source_offset +
+                a_out_offset &&
         read_int(
             source_offset +
                 a_out_offset) == 42,
-        "ordinary A uses unconnected<int> for A.in and normal member initialization for A.out");
+        "ordinary A uses its type-level A.in -> A.out default binding");
 
     tests.expect(
         read_address(
@@ -2034,7 +2216,7 @@ void test_fixed_direct_materializer(
             base +
                 source_offset +
                 a_out_offset,
-        "Graph link materializes direct native reference to source storage");
+        "Graph link overrides linked.A.in default and materializes source.A.out");
 
     tests.expect(
         read_address(
@@ -2050,12 +2232,14 @@ void test_fixed_direct_materializer(
                 b_out_offset +
                 a_in_offset) ==
             base +
-                unconnected_int &&
+                container_offset +
+                b_out_offset +
+                a_out_offset &&
         read_int(
             container_offset +
                 b_out_offset +
                 a_out_offset) == 42,
-        "B.out is a normal nested A with its own unconnected int reference");
+        "B.out is a normal nested A and keeps A.in -> A.out default binding");
 }
 
 
@@ -2589,32 +2773,32 @@ void test_build_lineage_overlays(
     if (!tests.expect(
             succeeded(
                 G.retire(
-                    fixture.right)) &&
+                    fixture.scalar)) &&
             !G.contains(
-                fixture.right) &&
+                fixture.scalar) &&
             !G.find_object(
-                fixture.right_identity) &&
+                fixture.scalar_identity) &&
             G.live_object_count() + 1 ==
                 old_live_objects,
             "BUILD graph_delta tombstones baseline object")) {
         return;
     }
 
-    object_handle restored_right;
+    object_handle restored_scalar;
 
     if (!tests.expect(
             succeeded(
                 G.add_object(
-                    fixture.right_identity,
-                    fixture.named_type,
-                    restored_right,
+                    fixture.scalar_identity,
+                    fixture.integer_type,
+                    restored_scalar,
                     graph_object_non_default_initializer,
                     construction_value::constant(
                         construction_kind::unsigned_integer,
                         9))) &&
-            restored_right ==
-                fixture.right,
-            "BUILD graph_delta reuses retired object slot")) {
+            restored_scalar ==
+                fixture.scalar,
+            "BUILD graph_delta reuses retired scalar object slot")) {
         return;
     }
 
@@ -2624,19 +2808,19 @@ void test_build_lineage_overlays(
 
     tests.expect(
         G.object(
-            restored_right,
+            restored_scalar,
             restored_entry) &&
         restored_entry.non_default_initializer() &&
         restored_entry.construction_slot() >
             baseline.object_construction_count() &&
         G.construction(
-            restored_right,
+            restored_scalar,
             restored_initial) &&
         restored_initial ==
             construction_value::constant(
                 construction_kind::unsigned_integer,
                 9),
-        "BUILD graph_delta patches object construction without baseline copy");
+        "BUILD graph_delta patches scalar object construction without baseline copy");
 
     const auto old_live_links =
         G.live_link_count();
@@ -2806,7 +2990,7 @@ void test_persisted_sources(test_state &tests, const compiled_test_image &image)
     file_kind kind;
     tests.expect(
         view.source_file_count() == 4 &&
-        view.source_contribution_count() == 5 &&
+        view.source_contribution_count() == 6 &&
         view.source_root(
             file_id{1},
             root) &&
@@ -2822,13 +3006,13 @@ void test_persisted_sources(test_state &tests, const compiled_test_image &image)
         view.source_root(
             file_id{4},
             root) &&
-        root.count == 3 &&
+        root.count == 4 &&
         view.source_file(
             file_id{4},
             path,
             kind,
             file_range) &&
-        file_range.count == 3 &&
+        file_range.count == 4 &&
         path.ends_with("objects.source") &&
         kind == file_kind::source,
         "mapped Header/Source provenance without reconstruction");

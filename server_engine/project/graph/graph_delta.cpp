@@ -1,4 +1,5 @@
 #include "graph_delta.hpp"
+#include "construction_semantics.hpp"
 #include "../persistence/compiled_project.hpp"
 
 #include <limits>
@@ -1606,6 +1607,10 @@ server_status graph_delta::define_record(
             : construction_values[index];
 
         if (!valid_construction(
+                construction) ||
+            !construction_compatible(
+                *this,
+                definition[index].type,
                 construction)) {
 
             return server_status::
@@ -2101,6 +2106,10 @@ server_status graph_delta::add_object(
             ~graph_object_flag_mask) !=
             0 ||
         !valid_construction(initial) ||
+        !construction_compatible(
+            *this,
+            type_value,
+            initial) ||
         (!(flags &
             graph_object_non_default_initializer) &&
          initial != construction_value{}) ||

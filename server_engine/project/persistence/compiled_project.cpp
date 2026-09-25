@@ -1,4 +1,5 @@
 #include "compiled_project.hpp"
+#include "../graph/construction_semantics.hpp"
 #include "../../filesystem_path.hpp"
 #include "crc64_ecma.hpp"
 
@@ -2964,6 +2965,10 @@ compiled_project_view::verify_contents() const noexcept {
                     member_record_value.access) ||
                 !member_record_value.name ||
                 !member_record_value.type ||
+                !construction_compatible(
+                    *this,
+                    member_record_value.type,
+                    construction_value_value) ||
                 (construction_value_value.kind ==
                         construction_kind::
                             member_binding &&
@@ -3120,6 +3125,10 @@ compiled_project_view::verify_contents() const noexcept {
 
             if (value.construction_slot() !=
                     expected_construction_slot ||
+                !construction_compatible(
+                    *this,
+                    value.type,
+                    initial) ||
                 initial.kind ==
                     construction_kind::member_binding ||
                 initial.kind ==

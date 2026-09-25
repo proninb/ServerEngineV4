@@ -1257,13 +1257,6 @@ private:
                         local);
 
                 if (link) {
-                    if (construction.kind !=
-                        construction_kind::zero) {
-
-                        return fixed_direct_materialization_result::
-                            invalid_input;
-                    }
-
                     link_record record;
 
                     if (!project.link(
@@ -1653,7 +1646,6 @@ private:
             }
 
             member_record member;
-            construction_value construction;
             std::uint64_t member_offset = 0;
 
             const auto global =
@@ -1664,12 +1656,6 @@ private:
             if (!project.member_at(
                     global,
                     member) ||
-                !project.construction(
-                    record_type_value,
-                    local,
-                    construction) ||
-                construction.kind !=
-                    construction_kind::zero ||
                 !layout.member_offset(
                     global,
                     member_offset)) {
