@@ -1,5 +1,63 @@
 # PUBLISH performance review
 
+## Pass 3: semantic streaming hot path
+
+This pass starts from `20885736`, with Release IPO enabled. It changes only
+construction-local frontend/Source Map work; persisted format and semantic output
+remain unchanged.
+
+Three hot-path changes are combined:
+
+- Source inputs, directive-free Header inputs, and preprocessed Header inputs use
+  separate token-stream paths. A Header with no configured predefines and no
+  lexical directives bypasses preprocessor/executor checks entirely.
+- Identifier spelling caches the current physical file source view instead of
+  resolving `file_context` storage on every identifier. The cache is invalidated
+  before include materialization can grow source storage.
+- Source Map physical-file contribution counts are accumulated while
+  contributions are accepted. PUBLISH therefore does not rescan every
+  contribution during finalization merely to rebuild those counts. Contribution
+  lookup also reuses one computed owner hash across lookup and insertion.
+
+The baseline executable is the saved `20885736` build. Each workload uses one
+warmup followed by seven measured runs per executable, alternating order in
+separate processes. The baseline executable performs the cold audit after every
+candidate and baseline PUBLISH outside the lifecycle timer; SHA-256 must also
+match for every image.
+
+| Workload | Baseline median | Candidate median | Median reduction | Paired wins |
+|---|---:|---:|---:|---:|
+| 100,000 single-member types | 72.1047 ms | 69.1196 ms | 4.1% | 6 / 7 |
+| 1,000,000 single-member types | 721.632 ms | 657.874 ms | 8.8% | 7 / 7 |
+| Mixed: 10,001 types, 160,001 members, 20,000 objects, 10,000 links | 70.5461 ms | 70.0154 ms | 0.8% | 5 / 7 |
+
+The million-type result is the meaningful gain: the candidate wins every paired
+run and reduces the median by 63.758 ms. The 100K result is smaller but mostly
+consistent. The mixed result is effectively neutral within run variability;
+there is no measured mixed-workload regression from the specialized
+preprocessed path.
+
+Median peak working set is essentially unchanged on the simple workloads:
+39,751,680 -> 39,874,560 bytes at 100K and
+321,224,704 -> 321,417,216 bytes at 1M. The mixed median changes from
+33,259,520 to 33,652,736 bytes.
+
+All measured images within each workload are byte-identical:
+
+- 100K: `2A6810050FE40130A506B865AAA02F3EDC6E24A93C7F0C051E566D815144FB43`
+- 1M: `5DCED4F63D7DC34B783F78C63E3355BC772692DCB66EC930473E3C62384A90E9`
+- mixed: `EA6DB1B028BEDF69358380C35249035B3B7BB95A0974919A88C45B1725DB09E4`
+
+Release build, CTest, and `git diff --check` passed before measurement.
+
+`compare_publish.ps1` now resolves a non-existent relative `ResultPath` through
+the PowerShell provider path, so benchmark output is anchored to the caller's
+PowerShell location rather than the process working directory.
+
+The remaining dominant work on the million-type fixture is serial semantic
+construction plus compiled-image encoding. Further changes should be driven by
+new stage measurements rather than speculative capacity reservation.
+
 ## Pass 2: Release interprocedural optimization
 
 CMake now checks compiler/linker IPO support and enables it for Release and

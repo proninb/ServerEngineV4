@@ -15,7 +15,9 @@ $compareExecutables = @{
 $compareProject = (Resolve-Path -LiteralPath $Project).Path
 $compareArtifact = Join-Path (Split-Path -Parent $compareProject) (
     '.serverengine/' + (Split-Path -Leaf $compareProject) + '/compiled.bin')
-$compareResult = [IO.Path]::GetFullPath($ResultPath)
+$compareResult =
+    $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+        $ResultPath)
 if (Test-Path -LiteralPath $compareResult) { throw "Result file must be new: $compareResult" }
 [IO.Directory]::CreateDirectory((Split-Path -Parent $compareResult)) | Out-Null
 $compareRows = [Collections.Generic.List[object]]::new()
