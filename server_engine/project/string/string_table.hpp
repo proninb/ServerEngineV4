@@ -74,6 +74,10 @@ private:
     [[nodiscard]] static std::uint32_t hash_text(
         std::string_view value) noexcept;
 
+    [[nodiscard]] string_id find_hashed(
+        std::string_view value,
+        std::uint32_t hash) const noexcept;
+
     [[nodiscard]] server_status ensure_index_capacity(
         std::size_t additional) noexcept;
 

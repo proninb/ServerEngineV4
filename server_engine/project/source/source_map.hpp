@@ -17,7 +17,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -424,6 +423,17 @@ private:
     [[nodiscard]] server_status add_dependency(
         source_dependency_ref dependency) noexcept;
 
+    struct contribution_slot final {
+        std::uint64_t key = 0;
+        std::uint32_t position = 0;
+        std::uint32_t generation = 0;
+    };
+
+    static_assert(sizeof(contribution_slot) == 16);
+    [[nodiscard]] std::size_t contribution_position(std::uint64_t key) const noexcept;
+    void grow_contribution_index();
+    void begin_contribution_generation() noexcept;
+
     std::vector<source_map_range> root_ranges;
     std::vector<source_map_range> file_ranges;
     std::vector<source_contribution_record> contributions;
@@ -438,7 +448,9 @@ private:
     std::vector<std::uint32_t> object_presence;
     std::vector<std::uint32_t> link_presence;
 
-    std::unordered_map<std::uint64_t, std::uint32_t> root_seen;
+    // Scratch lookup only: persisted contributions keep their original order.
+    std::vector<contribution_slot> root_seen;
+    std::uint32_t root_seen_generation = 0;
     std::unordered_set<std::uint32_t> root_dependency_seen;
     std::vector<bool> completed_roots;
 

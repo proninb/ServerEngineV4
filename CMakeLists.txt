@@ -156,6 +156,16 @@ endif()
 include(CTest)
 
 if(BUILD_TESTING)
+    add_executable(ServerEngineV4Crc64Tests tests/crc64_tests.cpp)
+    target_include_directories(ServerEngineV4Crc64Tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+    if(MSVC)
+        target_compile_options(ServerEngineV4Crc64Tests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4Crc64Tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME crc64 COMMAND ServerEngineV4Crc64Tests)
+
     add_executable(ServerEngineV4Tests
         tests/compiled_project_tests.cpp
         server_engine/project/project.cpp

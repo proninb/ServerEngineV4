@@ -1,6 +1,7 @@
 #include "source_map.hpp"
 
 #include <limits>
+#include <stdexcept>
 
 namespace cw::server {
 namespace {
@@ -61,6 +62,7 @@ server_status source_map::reset(
         link_presence.clear();
 
         root_seen.clear();
+        root_seen_generation = 0;
         root_dependency_seen.clear();
 
         active_root = {};
@@ -109,7 +111,7 @@ server_status source_map::begin_root(
                 project_configuration_invalid;
         }
 
-        root_seen.clear();
+        begin_contribution_generation();
         root_dependency_seen.clear();
 
         active_root = root;
@@ -126,6 +128,50 @@ server_status source_map::begin_root(
     }
     catch (...) {
         return server_status::io_error;
+    }
+}
+
+void source_map::begin_contribution_generation() noexcept {
+    // Starting a tiny root after a large one must not clear the large table.
+    // Generation tags make root reset O(1); only uint32 wrap clears storage.
+    if (++root_seen_generation == 0) {
+        for (auto& slot : root_seen) {
+            slot = {};
+        }
+        root_seen_generation = 1;
+    }
+}
+
+std::size_t source_map::contribution_position(std::uint64_t owner_key) const noexcept {
+    auto hash = owner_key;
+    hash ^= hash >> 33;
+    hash *= 0xff51afd7ed558ccdULL;
+    hash ^= hash >> 33;
+    hash *= 0xc4ceb9fe1a85ec53ULL;
+    hash ^= hash >> 33;
+    const auto mask = root_seen.size() - 1;
+    auto position = static_cast<std::size_t>(hash) & mask;
+    while (root_seen[position].generation == root_seen_generation &&
+           root_seen[position].key != owner_key) {
+        position = (position + 1) & mask;
+    }
+    return position;
+}
+
+void source_map::grow_contribution_index() {
+    const auto count = contributions.size() - active_root_begin;
+    if (!root_seen.empty() && count < root_seen.size() / 2) {
+        return;
+    }
+    if (root_seen.size() > root_seen.max_size() / 2) {
+        throw std::length_error("Source contribution index capacity exceeded");
+    }
+    std::vector<contribution_slot> previous(root_seen.empty() ? 16 : root_seen.size() * 2);
+    root_seen.swap(previous);
+    for (const auto& slot : previous) {
+        if (slot.generation == root_seen_generation) {
+            root_seen[contribution_position(slot.key)] = slot;
+        }
     }
 }
 
@@ -150,29 +196,17 @@ server_status source_map::add(
                     ? data.slot()
                     : data.raw());
 
-        const auto owner =
-            root_seen.find(
-                owner_key);
-
-        if (owner !=
-            root_seen.end()) {
-
-            auto& existing =
-                contributions[
-                    owner->second].data;
-
-            if (is_type(data) &&
-                existing.kind() ==
-                    source_data_kind::
-                        type_declaration &&
-                data.kind() ==
-                    source_data_kind::
-                        type_definition) {
-
-                existing = data;
+        if (!root_seen.empty()) {
+            const auto& owner = root_seen[contribution_position(owner_key)];
+            if (owner.generation == root_seen_generation) {
+                auto& existing = contributions[owner.position].data;
+                if (is_type(data) &&
+                    existing.kind() == source_data_kind::type_declaration &&
+                    data.kind() == source_data_kind::type_definition) {
+                    existing = data;
+                }
+                return server_status::success;
             }
-
-            return server_status::success;
         }
 
         if (contributions.size() >=
@@ -185,14 +219,15 @@ server_status source_map::add(
             static_cast<std::uint32_t>(
                 contributions.size());
 
+        grow_contribution_index();
+        const auto owner_position = contribution_position(owner_key);
+
         contributions.push_back({
             file,
             data,
         });
 
-        root_seen.emplace(
-            owner_key,
-            position);
+        root_seen[owner_position] = {owner_key, position, root_seen_generation};
 
         return server_status::success;
     }
@@ -294,7 +329,6 @@ server_status source_map::end_root() noexcept {
             true;
 
     active_root = {};
-    root_seen.clear();
     root_dependency_seen.clear();
 
     return server_status::success;
@@ -888,8 +922,8 @@ server_status source_map::finalize(
                     index);
         }
 
-        root_seen.clear();
-        root_seen.rehash(0);
+        std::vector<contribution_slot>{}.swap(root_seen);
+        root_seen_generation = 0;
 
         root_dependency_seen.clear();
         root_dependency_seen.rehash(0);

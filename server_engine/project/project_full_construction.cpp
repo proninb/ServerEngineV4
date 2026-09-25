@@ -209,17 +209,8 @@ persist_compiled(
                 full_persistence_stage::encode);
     }
 
-    compiled_project_view view;
-
-    if (view.bind(
-            mapping.bytes()) !=
-            compiled_project_image_result::success ||
-        view.verify_contents() !=
-            compiled_project_image_result::success) {
-
-        return persistence_invalid(
-            full_persistence_stage::validate);
-    }
+    // Encoding already ends with a structural bind. Full semantic/CRC audit
+    // belongs to explicit artifact verification, not to every fresh publish.
 
     if (mapping.flush() !=
         writable_file_mapping_result::success) {

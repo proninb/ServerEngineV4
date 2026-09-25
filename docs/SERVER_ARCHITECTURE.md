@@ -713,9 +713,12 @@ String Table and Identity Space lineage are persisted once in compiled.bin.
 The optional SourceSave USN identity indexes are prepared once and retained only
 as persistence-specific tracking state. None of these production paths creates
 a full-size serialized `std::vector<std::byte>` or `.tmp` artifact. source.bin
-and database.bin receive cold verification before flush;
-`compiled_project_view::bind()` plus cold `verify_contents()` validates the
-compiled mapped bytes.
+and database.bin receive cold verification before flush. The compiled encoder
+calculates section CRCs and ends with `compiled_project_view::bind()` for
+structural validation, then the compiled branch flushes and reopens read-only.
+PUBLISH/REBUILD do not repeat that bind or call the full `verify_contents()`
+audit on the fresh image. Full CRC/semantic auditing is an explicit diagnostic
+operation and remains covered by persistence tests.
 
 LOAD maps and structurally binds an existing `compiled.bin` read-only without
 rebuilding Graph/string/identity containers. The mapping and

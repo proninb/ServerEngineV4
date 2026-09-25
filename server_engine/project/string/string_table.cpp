@@ -195,10 +195,14 @@ string_id string_table::find(
         return {};
     }
 
-    if (!index.empty()) {
-        const auto hash =
-            hash_text(value);
+    return find_hashed(value, hash_text(value));
+}
 
+string_id string_table::find_hashed(
+    std::string_view value,
+    std::uint32_t hash) const noexcept {
+
+    if (!index.empty()) {
         const auto mask =
             index.size() - 1;
 
@@ -324,7 +328,9 @@ server_status string_table::intern(
             project_configuration_invalid;
     }
 
-    if (const auto existing = find(value);
+    const auto hash = hash_text(value);
+
+    if (const auto existing = find_hashed(value, hash);
         existing) {
 
         output = existing;
@@ -360,9 +366,6 @@ server_status string_table::intern(
 
         return server_status::io_error;
     }
-
-    const auto hash =
-        hash_text(value);
 
     std::string stable_value;
 

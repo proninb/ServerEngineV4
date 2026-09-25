@@ -1,6 +1,66 @@
 # PUBLISH performance review
 
-## Measurement
+## Pass 1: publication, provenance index, and string hashing
+
+The initial allocation work below was committed as `2ebfc4e`. The next series
+uses that implementation as its baseline (`scratch`) and independently saved
+Release executables for each additional change. Five measured runs per variant
+and dataset follow one warmup; ordering alternates forward/reverse. Every image
+receives an explicit full audit and SHA-256 check **outside** PUBLISH timing.
+
+| Cumulative variant | 100,000 types median | 1,000,000 types median |
+|---|---:|---:|
+| Scratch reuse and flat cold-audit deduplication (`2ebfc4e`) | 106.177 ms | 1012.300 ms |
+| Remove cold audit and duplicate structural bind from fresh compiled persistence | 81.151 ms | 826.331 ms |
+| Add reusable open-addressed Source Map contribution index | 78.697 ms | 764.713 ms |
+| Reuse the string hash between lookup and insertion | 74.275 ms | 753.022 ms |
+
+Final time decreases by 30.0% / 25.6% against this series' baseline. For the
+million-type workload, the median differences are 186 ms for publication policy,
+62 ms for the contribution index, and 12 ms for single hashing. These are
+differences of medians, not additive per-stage profiler measurements. The
+single-hashing improvement is small relative to run variability (final range
+730–817 ms), although the 100K dataset also improves. Peak working set remains
+approximately 38 / 307 MiB. All 40 images pass the explicit audit and match the
+SHA-256 values recorded below.
+
+Release validation passes all six CTest suites. On both datasets, REBUILD,
+explicit audit, PUBLISH, and another audit also produce byte-identical compiled
+images; PUBLISH removes the acceleration artifacts produced by REBUILD.
+
+The full cold audit remains available through:
+
+```text
+ServerEngineV4PublishBenchmark audit <project.json> <expected-types>
+```
+
+This mode measures LOAD plus `verify_contents()`. Normal PUBLISH/REBUILD now
+compute section CRCs during encoding, structurally bind, flush, reopen read-only,
+and structurally bind for resident publication. They no longer repeat the full
+section CRC/semantic audit. This is an explicit change of verification policy,
+not merely a faster implementation of the previous publication operation.
+
+The Source Map scratch table has a 50% maximum load factor, preserves the dense
+contribution order, and uses generation tags to reset roots in O(1). Full table
+clearing occurs only on generation wrap. It still merges declaration/definition
+contributions for one physical file within a root and keeps different roots
+independent. Tests exercise growth, reverse-order reinsertion, definition
+promotion, large-to-small roots, and reset after finalization. String tests cover
+growth, duplicate interning, empty/missing names, baseline reuse, and arena-alias
+insertion.
+
+A slicing-by-16 CRC experiment did not provide a stable million-type improvement
+and was discarded. Production retains slicing-by-8; an independent bitwise CRC
+test covers compile-time evaluation, four byte patterns, 16 alignments, short
+tails, and lengths through 64 KiB.
+
+Capacity estimation, CRC fusion, and parallel semantic parsing are deferred.
+The benchmark datasets remain synthetic single-member records, so realistic
+include/object/link workloads must be measured separately.
+
+## Initial allocation optimization (before publication-policy change)
+
+### Measurement
 
 Windows x64, CMake Release, existing `ServerEngineV4PublishBenchmark` target.
 Both variants used the same benchmark driver, compiler settings, source paths,
@@ -37,7 +97,7 @@ All 20 outputs matched their dataset's baseline SHA-256:
 - 100,000: `2A6810050FE40130A506B865AAA02F3EDC6E24A93C7F0C051E566D815144FB43`
 - 1,000,000: `5DCED4F63D7DC34B783F78C63E3355BC772692DCB66EC930473E3C62384A90E9`
 
-## Changes
+### Changes
 
 The non-recursive record parser now reuses member, initializer, constructor,
 and assignment scratch vectors across definitions and roots. Empty constructor
@@ -56,7 +116,7 @@ sized records, empty records, forward declarations and constructors. A
 persisted-image test injects a duplicate semantic contribution and recomputes
 its CRC to ensure semantic validation still rejects it.
 
-## Remaining work
+### Remaining work at that stage
 
 Temporary stage timing on the million-type dataset, before the final A/B run,
 identified these approximate costs:

@@ -1228,6 +1228,12 @@ compiled.bin
 extents, numeric slot bounds, and persisted index capacities. It does not scan
 section payloads. `verify_contents()` remains the separate cold audit.
 
+PUBLISH and REBUILD also keep this cold audit out of the compiled persistence
+hot path. Their encoder computes section CRCs and structurally binds the image,
+then persistence flushes it and reopens it read-only for resident publication.
+Use `ServerEngineV4PublishBenchmark audit <project.json> <expected-types>` for
+an explicit LOAD plus full CRC/semantic audit of the resulting compiled image.
+
 There is no mutable Graph/string/identity reconstruction and therefore no
 allocation proportional to Project semantic size on LOAD. Opening or parsing
 `project.json` is not part of the LOAD proof.

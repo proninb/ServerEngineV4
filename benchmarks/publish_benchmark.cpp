@@ -1,14 +1,16 @@
 /*
- * End-to-end Project PUBLISH/LOAD benchmark entry point.
+ * End-to-end Project PUBLISH/REBUILD/LOAD benchmark and explicit artifact audit.
  *
  * This executable bypasses Server communication and measures exactly one
- * lifecycle function per process. PUBLISH and LOAD therefore have independent
- * timing and peak-working-set measurements.
+ * lifecycle function per process. The audit mode adds full CRC/semantic
+ * verification after LOAD. Each mode has independent timing and process peak
+ * working-set measurements.
  */
 #include "diagnostics/diagnostic_formatter.hpp"
 #include "project/persistence/project_artifact.hpp"
 #include "project/project_load.hpp"
 #include "project/project_publish.hpp"
+#include "project/project_rebuild.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -33,6 +35,8 @@ namespace {
 enum class benchmark_mode {
     publish,
     load,
+    rebuild,
+    audit,
 };
 
 [[nodiscard]] bool parse_mode(
@@ -46,6 +50,15 @@ enum class benchmark_mode {
 
     if (value == "load") {
         output = benchmark_mode::load;
+        return true;
+    }
+
+    if (value == "rebuild") {
+        output = benchmark_mode::rebuild;
+        return true;
+    }
+    if (value == "audit") {
+        output = benchmark_mode::audit;
         return true;
     }
 
@@ -187,7 +200,9 @@ void print_usage() {
     std::cerr
         << "Usage:\n"
         << "  ServerEngineV4PublishBenchmark publish <project.json> <expected-types>\n"
-        << "  ServerEngineV4PublishBenchmark load    <project.json> <expected-types>\n";
+        << "  ServerEngineV4PublishBenchmark load    <project.json> <expected-types>\n"
+        << "  ServerEngineV4PublishBenchmark rebuild <project.json> <expected-types>\n"
+        << "  ServerEngineV4PublishBenchmark audit   <project.json> <expected-types>\n";
 }
 
 }
@@ -281,6 +296,10 @@ int main(
                 diagnostics,
                 project);
     }
+    else if (mode == benchmark_mode::rebuild) {
+        status = cw::server::rebuild_project(
+            project_path, settings, cw::server::operation_id{1}, diagnostics, project);
+    }
     else {
         status =
             cw::server::load_project(
@@ -289,6 +308,14 @@ int main(
                 cw::server::operation_id{1},
                 diagnostics,
                 project);
+    }
+
+    if (mode == benchmark_mode::audit && cw::server::succeeded(status) && project) {
+        if (project->compiled().verify_contents() !=
+            cw::server::compiled_project_image_result::success) {
+            std::cerr << "Compiled artifact audit failed\n";
+            return 3;
+        }
     }
 
     const auto finished =
@@ -359,10 +386,7 @@ int main(
 
     std::cout
         << "mode="
-        << (mode ==
-                benchmark_mode::publish
-            ? "publish"
-            : "load")
+        << argv[1]
         << ",total_ms="
         << elapsed
         << ",peak_ws_bytes="

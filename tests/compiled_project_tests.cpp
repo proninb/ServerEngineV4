@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <iostream>
 #include <span>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -1152,6 +1153,32 @@ void test_semantic_corruption(
 }
 
 
+void test_string_intern_growth_and_aliasing(test_state& tests) {
+    string_table strings;
+    const std::string text(4096, 'x');
+    string_id full, suffix, duplicate;
+    if (!tests.expect(succeeded(strings.intern(text, full)), "intern long spelling")) {
+        return;
+    }
+    tests.expect(succeeded(strings.intern(strings.get(full).substr(1), suffix)) &&
+                 full != suffix && strings.get(full) == text &&
+                 strings.get(suffix) == std::string_view{text}.substr(1),
+                 "single-hash miss preserves an aliased spelling through arena growth");
+    tests.expect(succeeded(strings.intern(text, duplicate)) && duplicate == full,
+                 "single-hash hit preserves canonical string ID");
+    for (unsigned index = 0; index < 1024; ++index) {
+        string_id id;
+        const auto name = "name_" + std::to_string(index);
+        tests.expect(succeeded(strings.intern(name, id)) && strings.find(name) == id,
+                     "lookup and insertion agree through index growth");
+    }
+    tests.expect(strings.find(text) == full && strings.find(std::string_view{text}.substr(1)) == suffix &&
+                 !strings.find("missing") && !strings.find({}),
+                 "existing and absent strings remain correct after rehash");
+    tests.expect(strings.intern({}, duplicate) == server_status::project_configuration_invalid && !duplicate,
+                 "empty intern rejects input and clears output");
+}
+
 void test_build_lineage_overlays(
     test_state& tests,
     const compiled_fixture& fixture,
@@ -1801,6 +1828,8 @@ int main() {
             tests,
             fixture,
             first);
+
+        test_string_intern_growth_and_aliasing(tests);
 
         test_direct_mmap_encoding(
             tests,

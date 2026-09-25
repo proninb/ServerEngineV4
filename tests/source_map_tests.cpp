@@ -185,6 +185,35 @@ void test_root_ownership_and_file_projection(test_state &tests) {
                      many.file_index_entries().size() == 300 &&
                      many.type_presence_entries()[0].definitions == 300,
                  "300 roots own 300 contiguous contributions");
+    source_map many_files;
+    tests.expect(succeeded(many_files.begin_root(file_id{1})), "large root begins");
+    for (std::uint32_t file = 10; file < 1034; ++file) {
+        tests.expect(succeeded(many_files.add(file_id{file}, declaration)),
+                     "distinct physical files grow contribution index");
+    }
+    for (std::uint32_t file = 1033; file >= 10; --file) {
+        tests.expect(succeeded(many_files.add(file_id{file}, file % 2 ? definition : declaration)),
+                     "lookup after growth preserves deduplication and definition upgrades");
+    }
+    tests.expect(succeeded(many_files.end_root()), "large root ends");
+    for (std::uint32_t root = 2; root < 10; ++root) {
+        tests.expect(succeeded(many_files.begin_root(file_id{root})) &&
+                     succeeded(many_files.add(file_id{11}, declaration)) &&
+                     succeeded(many_files.end_root()),
+                     "small roots reuse large scratch table without inheriting ownership");
+    }
+    tests.expect(succeeded(many_files.finalize(1034, identities, G)) &&
+                 many_files.contribution_entries().size() == 1032 &&
+                 many_files.type_presence_entries()[0] == source_type_presence{1032, 512},
+                 "flat contribution index preserves canonical ownership across roots");
+    tests.expect(succeeded(many_files.reset(3)) &&
+                 succeeded(many_files.begin_root(file_id{1})) &&
+                 succeeded(many_files.add(file_id{3}, definition)) &&
+                 succeeded(many_files.end_root()) &&
+                 succeeded(many_files.finalize(3, identities, G)) &&
+                 many_files.contribution_entries().size() == 1,
+                 "reset after finalize starts a fresh contribution generation");
+
     source_map mixed;
     tests.expect(succeeded(mixed.begin_root(file_id{1})) &&
                      succeeded(mixed.add(file_id{3}, declaration)) && succeeded(mixed.end_root()),
