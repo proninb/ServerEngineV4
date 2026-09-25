@@ -92,6 +92,15 @@ private:
         semantic_input_failure_kind kind =
             semantic_input_failure_kind::preprocessing) noexcept;
 
+    [[nodiscard]] server_status next_source(
+        semantic_token& output) noexcept;
+
+    [[nodiscard]] server_status next_passthrough_header(
+        semantic_token& output) noexcept;
+
+    [[nodiscard]] server_status next_preprocessed_header(
+        semantic_token& output) noexcept;
+
     [[nodiscard]] server_status consume_directive(
         std::uint32_t word_offset,
         std::uint32_t source_base) noexcept;
@@ -126,6 +135,11 @@ private:
     semantic_input_failure failure_value;
     semantic_input_mode mode_value =
         semantic_input_mode::header;
+
+    file_id source_cache_file{};
+    std::string_view source_cache;
+
+    bool header_passthrough = false;
     bool started = false;
     bool finished_value = false;
 };

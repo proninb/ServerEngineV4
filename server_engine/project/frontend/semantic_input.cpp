@@ -113,6 +113,9 @@ server_status semantic_input::start(
 
     failure_value = {};
     mode_value = mode;
+    source_cache_file = {};
+    source_cache = {};
+    header_passthrough = false;
     started = false;
     finished_value = false;
 
@@ -152,6 +155,16 @@ server_status semantic_input::start(
         return server_status::success;
     }
 
+    if (configuration.predefines.empty() &&
+        lexical.directives(root).empty()) {
+
+        // A directive-free Header with no configured predefines has no
+        // preprocessing state to execute. Keep it on the direct token path.
+        header_passthrough = true;
+        started = true;
+        return server_status::success;
+    }
+
     const auto initialized =
         initialize_preprocessor(
             configuration,
@@ -183,6 +196,11 @@ server_status semantic_input::start(
 
 server_status semantic_input::materialize_and_lex(
     file_id file) noexcept {
+
+    // Materialization may grow the source byte arena. Reacquire cached source
+    // storage before slicing another identifier.
+    source_cache_file = {};
+    source_cache = {};
 
     if (!files.contains(file) ||
         files.kind(file) != file_kind::header) {
@@ -579,16 +597,57 @@ server_status semantic_input::physical_identifier(
 
     output = {};
 
-    std::string_view spelling;
+    if (source_cache_file != token.file) {
+        if (!files.content_available(
+                token.file)) {
 
-    if (!source_view(
-            files,
+            return fail(
+                token.file,
+                {
+                    token.source_offset,
+                    token.source_length,
+                },
+                "Identifier source spelling is unavailable",
+                server_status::project_configuration_invalid);
+        }
+
+        source_cache =
+            files.content(
+                token.file);
+
+        source_cache_file =
+            token.file;
+    }
+
+    const auto begin =
+        static_cast<std::size_t>(
+            token.source_offset);
+
+    const auto count =
+        static_cast<std::size_t>(
+            token.source_length);
+
+    if (begin > source_cache.size() ||
+        count >
+            source_cache.size() -
+                begin) {
+
+        return fail(
             token.file,
-            token.source_offset,
-            token.source_length,
-            spelling) ||
-        spelling.empty()) {
+            {
+                token.source_offset,
+                token.source_length,
+            },
+            "Identifier source spelling is unavailable",
+            server_status::project_configuration_invalid);
+    }
 
+    const auto spelling =
+        source_cache.substr(
+            begin,
+            count);
+
+    if (spelling.empty()) {
         return fail(
             token.file,
             {
@@ -649,44 +708,128 @@ server_status semantic_input::effective_identifier(
         : server_status::project_configuration_invalid;
 }
 
-server_status semantic_input::next(
+server_status semantic_input::next_source(
     semantic_token& output) noexcept {
 
-    output = {};
+    if (input.finished()) {
+        const auto file = input.current_file();
+        const auto left = input.leave();
 
-    if (!started ||
-        finished_value) {
+        if (!succeeded(left) || !input.empty()) {
+            return fail(
+                file,
+                {},
+                "Semantic lexical input could not leave completed Source",
+                succeeded(left)
+                    ? server_status::project_configuration_invalid
+                    : left);
+        }
 
-        return server_status::
-            project_configuration_invalid;
+        finished_value = true;
+        return server_status::success;
     }
+
+    frontend_token physical;
+    const auto advanced = input.next(physical);
+
+    if (!succeeded(advanced)) {
+        return fail(
+            input.current_file(),
+            {},
+            "Semantic lexical input could not decode next token",
+            advanced);
+    }
+
+    if (directive_start(physical.kind)) {
+        return fail(
+            physical.file,
+            {physical.source_offset, physical.source_length},
+            "C++ preprocessing directives are not supported in Source inputs",
+            server_status::project_configuration_invalid);
+    }
+
+    output.file = physical.file;
+    output.kind = physical.kind;
+    output.source_offset = physical.source_offset;
+    output.source_length = physical.source_length;
+
+    if (physical.kind == token_kind::identifier) {
+        return physical_identifier(
+            physical,
+            output.identifier);
+    }
+
+    return server_status::success;
+}
+
+server_status semantic_input::next_passthrough_header(
+    semantic_token& output) noexcept {
+
+    if (input.finished()) {
+        const auto file = input.current_file();
+        const auto left = input.leave();
+
+        if (!succeeded(left) || !input.empty()) {
+            return fail(
+                file,
+                {},
+                "Semantic lexical input could not leave completed Header",
+                succeeded(left)
+                    ? server_status::project_configuration_invalid
+                    : left);
+        }
+
+        finished_value = true;
+        return server_status::success;
+    }
+
+    frontend_token physical;
+    const auto advanced = input.next(physical);
+
+    if (!succeeded(advanced)) {
+        return fail(
+            input.current_file(),
+            {},
+            "Semantic lexical input could not decode next token",
+            advanced);
+    }
+
+    output.file = physical.file;
+    output.kind = physical.kind;
+    output.source_offset = physical.source_offset;
+    output.source_length = physical.source_length;
+
+    if (physical.kind == token_kind::identifier) {
+        return physical_identifier(
+            physical,
+            output.identifier);
+    }
+
+    return server_status::success;
+}
+
+server_status semantic_input::next_preprocessed_header(
+    semantic_token& output) noexcept {
 
     for (;;) {
         if (input.finished()) {
-            const auto file =
-                input.current_file();
+            const auto file = input.current_file();
+            directive_execution_error error;
 
-            if (mode_value ==
-                semantic_input_mode::header) {
+            const auto finished =
+                executor.finish_file(
+                    file,
+                    &error);
 
-                directive_execution_error error;
-
-                const auto finished =
-                    executor.finish_file(
-                        file,
-                        &error);
-
-                if (!succeeded(finished)) {
-                    return fail(
-                        error.file,
-                        error.source,
-                        "Conditional preprocessing group is not closed",
-                        finished);
-                }
+            if (!succeeded(finished)) {
+                return fail(
+                    error.file,
+                    error.source,
+                    "Conditional preprocessing group is not closed",
+                    finished);
             }
 
-            const auto left =
-                input.leave();
+            const auto left = input.leave();
 
             if (!succeeded(left)) {
                 return fail(
@@ -704,17 +847,11 @@ server_status semantic_input::next(
             continue;
         }
 
-        const auto word_offset =
-            input.word_offset();
-
-        const auto source_base =
-            input.source_offset();
+        const auto word_offset = input.word_offset();
+        const auto source_base = input.source_offset();
 
         frontend_token physical;
-
-        const auto advanced =
-            input.next(
-                physical);
+        const auto advanced = input.next(physical);
 
         if (!succeeded(advanced)) {
             return fail(
@@ -724,22 +861,7 @@ server_status semantic_input::next(
                 advanced);
         }
 
-        if (directive_start(
-                physical.kind)) {
-
-            if (mode_value ==
-                semantic_input_mode::source) {
-
-                return fail(
-                    physical.file,
-                    {
-                        physical.source_offset,
-                        physical.source_length,
-                    },
-                    "C++ preprocessing directives are not supported in Source inputs",
-                    server_status::project_configuration_invalid);
-            }
-
+        if (directive_start(physical.kind)) {
             const auto consumed =
                 consume_directive(
                     word_offset,
@@ -752,62 +874,55 @@ server_status semantic_input::next(
             continue;
         }
 
-        if (mode_value ==
-                semantic_input_mode::header &&
-            !executor.active()) {
-
+        if (!executor.active()) {
             continue;
         }
 
-        output.file =
-            physical.file;
+        output.file = physical.file;
+        output.kind = physical.kind;
+        output.source_offset = physical.source_offset;
+        output.source_length = physical.source_length;
 
-        output.kind =
-            physical.kind;
+        if (physical.kind == token_kind::identifier) {
+            bool empty = false;
 
-        output.source_offset =
-            physical.source_offset;
+            const auto effective =
+                effective_identifier(
+                    physical,
+                    output.identifier,
+                    empty);
 
-        output.source_length =
-            physical.source_length;
-
-        if (physical.kind ==
-            token_kind::identifier) {
-
-            if (mode_value ==
-                semantic_input_mode::source) {
-
-                const auto interned =
-                    physical_identifier(
-                        physical,
-                        output.identifier);
-
-                if (!succeeded(interned)) {
-                    return interned;
-                }
+            if (!succeeded(effective)) {
+                return effective;
             }
-            else {
-                bool empty = false;
 
-                const auto effective =
-                    effective_identifier(
-                        physical,
-                        output.identifier,
-                        empty);
-
-                if (!succeeded(effective)) {
-                    return effective;
-                }
-
-                if (empty) {
-                    output = {};
-                    continue;
-                }
+            if (empty) {
+                output = {};
+                continue;
             }
         }
 
         return server_status::success;
     }
+}
+
+server_status semantic_input::next(
+    semantic_token& output) noexcept {
+
+    output = {};
+
+    if (!started || finished_value) {
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    if (mode_value == semantic_input_mode::source) {
+        return next_source(output);
+    }
+
+    return header_passthrough
+        ? next_passthrough_header(output)
+        : next_preprocessed_header(output);
 }
 
 

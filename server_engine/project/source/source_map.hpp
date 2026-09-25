@@ -430,7 +430,13 @@ private:
     };
 
     static_assert(sizeof(contribution_slot) == 16);
-    [[nodiscard]] std::size_t contribution_position(std::uint64_t key) const noexcept;
+    [[nodiscard]] static std::uint64_t contribution_hash(
+        std::uint64_t key) noexcept;
+
+    [[nodiscard]] std::size_t contribution_position(
+        std::uint64_t key,
+        std::uint64_t hash) const noexcept;
+
     void grow_contribution_index();
     void begin_contribution_generation() noexcept;
 

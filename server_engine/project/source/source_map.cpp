@@ -49,7 +49,10 @@ server_status source_map::reset(
             file_count,
             false);
 
-        file_ranges.clear();
+        file_ranges.assign(
+            file_count,
+            {});
+
         contributions.clear();
         file_indices.clear();
 
@@ -142,19 +145,32 @@ void source_map::begin_contribution_generation() noexcept {
     }
 }
 
-std::size_t source_map::contribution_position(std::uint64_t owner_key) const noexcept {
+std::uint64_t source_map::contribution_hash(
+    std::uint64_t owner_key) noexcept {
+
     auto hash = owner_key;
     hash ^= hash >> 33;
     hash *= 0xff51afd7ed558ccdULL;
     hash ^= hash >> 33;
     hash *= 0xc4ceb9fe1a85ec53ULL;
     hash ^= hash >> 33;
+    return hash;
+}
+
+std::size_t source_map::contribution_position(
+    std::uint64_t owner_key,
+    std::uint64_t hash) const noexcept {
+
     const auto mask = root_seen.size() - 1;
     auto position = static_cast<std::size_t>(hash) & mask;
-    while (root_seen[position].generation == root_seen_generation &&
-           root_seen[position].key != owner_key) {
+
+    while (
+        root_seen[position].generation == root_seen_generation &&
+        root_seen[position].key != owner_key) {
+
         position = (position + 1) & mask;
     }
+
     return position;
 }
 
@@ -170,7 +186,11 @@ void source_map::grow_contribution_index() {
     root_seen.swap(previous);
     for (const auto& slot : previous) {
         if (slot.generation == root_seen_generation) {
-            root_seen[contribution_position(slot.key)] = slot;
+            root_seen[
+                contribution_position(
+                    slot.key,
+                    contribution_hash(
+                        slot.key))] = slot;
         }
     }
 }
@@ -196,22 +216,56 @@ server_status source_map::add(
                     ? data.slot()
                     : data.raw());
 
+        const auto owner_hash =
+            contribution_hash(
+                owner_key);
+
+        std::size_t owner_position = 0;
+
         if (!root_seen.empty()) {
-            const auto& owner = root_seen[contribution_position(owner_key)];
-            if (owner.generation == root_seen_generation) {
-                auto& existing = contributions[owner.position].data;
+            owner_position =
+                contribution_position(
+                    owner_key,
+                    owner_hash);
+
+            const auto& owner =
+                root_seen[
+                    owner_position];
+
+            if (owner.generation ==
+                root_seen_generation) {
+
+                auto& existing =
+                    contributions[
+                        owner.position].data;
+
                 if (is_type(data) &&
-                    existing.kind() == source_data_kind::type_declaration &&
-                    data.kind() == source_data_kind::type_definition) {
+                    existing.kind() ==
+                        source_data_kind::
+                            type_declaration &&
+                    data.kind() ==
+                        source_data_kind::
+                            type_definition) {
+
                     existing = data;
                 }
+
                 return server_status::success;
             }
         }
 
-        if (contributions.size() >=
-            max_index) {
+        if (contributions.size() >= max_index) {
+            return server_status::io_error;
+        }
 
+        if (file.value() > file_ranges.size()) {
+            file_ranges.resize(file.value());
+        }
+
+        auto& file_range =
+            file_ranges[file.value() - 1];
+
+        if (file_range.count == max_index) {
             return server_status::io_error;
         }
 
@@ -219,15 +273,30 @@ server_status source_map::add(
             static_cast<std::uint32_t>(
                 contributions.size());
 
+        const auto previous_capacity =
+            root_seen.size();
+
         grow_contribution_index();
-        const auto owner_position = contribution_position(owner_key);
+
+        if (root_seen.size() != previous_capacity) {
+            owner_position =
+                contribution_position(
+                    owner_key,
+                    owner_hash);
+        }
 
         contributions.push_back({
             file,
             data,
         });
 
-        root_seen[owner_position] = {owner_key, position, root_seen_generation};
+        root_seen[owner_position] = {
+            owner_key,
+            position,
+            root_seen_generation,
+        };
+
+        ++file_range.count;
 
         return server_status::success;
     }
@@ -345,6 +414,8 @@ server_status source_map::finalize(
         root_ranges.size() > file_count ||
         root_dependency_ranges.size() >
             file_count ||
+        file_ranges.size() >
+            file_count ||
         dependencies.size() > max_index) {
 
         return server_status::
@@ -358,9 +429,8 @@ server_status source_map::finalize(
         root_dependency_ranges.resize(
             file_count);
 
-        file_ranges.assign(
-            file_count,
-            {});
+        file_ranges.resize(
+            file_count);
 
         if (capture_build_acceleration) {
             type_presence.assign(
@@ -760,129 +830,117 @@ server_status source_map::finalize(
         // root_index traversal is ascending, so every reverse adjacency range
         // is emitted ascending without a sort.
 
-        for (const auto& contribution :
-             contributions) {
+        if (capture_build_acceleration) {
+            for (const auto& contribution :
+                 contributions) {
 
-            if (!contribution.file ||
-                contribution.file.value() >
-                    file_count) {
+                if (!contribution.file ||
+                    contribution.file.value() >
+                        file_count) {
 
-                return server_status::
-                    project_artifact_invalid;
-            }
-
-            auto& file_range =
-                file_ranges[
-                    contribution.file.value() -
-                    1];
-
-            if (!increment(
-                    file_range.count)) {
-
-                return server_status::io_error;
-            }
-
-            if (!capture_build_acceleration) {
-                continue;
-            }
-
-            if (is_type(
-                    contribution.data)) {
-
-                const auto identity =
-                    identities.at_slot(
-                        contribution.data.slot());
-
-                const auto type =
-                    identity.kind() ==
-                        identity_kind::type
-                    ? G.find_type(
-                        identity)
-                    : type_handle{};
-
-                const auto* entry =
-                    type
-                    ? G.find(type)
-                    : nullptr;
-
-                if (entry == nullptr) {
                     return server_status::
                         project_artifact_invalid;
                 }
 
-                auto& presence =
-                    type_presence[
-                        type.value() - 1];
+                if (is_type(
+                        contribution.data)) {
 
-                if (!increment(
-                        presence.declarations)) {
+                    const auto identity =
+                        identities.at_slot(
+                            contribution.data.slot());
 
-                    return server_status::io_error;
+                    const auto type =
+                        identity.kind() ==
+                            identity_kind::type
+                        ? G.find_type(
+                            identity)
+                        : type_handle{};
+
+                    const auto* entry =
+                        type
+                        ? G.find(type)
+                        : nullptr;
+
+                    if (entry == nullptr) {
+                        return server_status::
+                            project_artifact_invalid;
+                    }
+
+                    auto& presence =
+                        type_presence[
+                            type.value() - 1];
+
+                    if (!increment(
+                            presence.declarations)) {
+
+                        return server_status::io_error;
+                    }
+
+                    if (contribution.data.kind() ==
+                        source_data_kind::
+                            type_definition) {
+
+                        if (!entry->defined()) {
+                            return server_status::
+                                project_artifact_invalid;
+                        }
+
+                        if (!increment(
+                                presence.definitions)) {
+
+                            return server_status::
+                                io_error;
+                        }
+                    }
+
+                    continue;
                 }
 
                 if (contribution.data.kind() ==
-                    source_data_kind::
-                        type_definition) {
+                    source_data_kind::object) {
 
-                    if (!entry->defined()) {
+                    const auto identity =
+                        identities.at_slot(
+                            contribution.data.slot());
+
+                    const auto object =
+                        identity.kind() ==
+                            identity_kind::object
+                        ? G.find_object(
+                            identity)
+                        : object_handle{};
+
+                    if (!object) {
                         return server_status::
                             project_artifact_invalid;
                     }
 
                     if (!increment(
-                            presence.definitions)) {
+                            object_presence[
+                                object.value() - 1])) {
 
-                        return server_status::
-                            io_error;
+                        return server_status::io_error;
                     }
+
+                    continue;
                 }
 
-                continue;
-            }
+                if (contribution.data.slot() >
+                    link_presence.size()) {
 
-            if (contribution.data.kind() ==
-                source_data_kind::object) {
-
-                const auto identity =
-                    identities.at_slot(
-                        contribution.data.slot());
-
-                const auto object =
-                    identity.kind() ==
-                        identity_kind::object
-                    ? G.find_object(
-                        identity)
-                    : object_handle{};
-
-                if (!object) {
                     return server_status::
                         project_artifact_invalid;
                 }
 
                 if (!increment(
-                        object_presence[
-                            object.value() - 1])) {
+                        link_presence[
+                            contribution.data.slot() -
+                            1])) {
 
                     return server_status::io_error;
                 }
-
-                continue;
             }
 
-            if (contribution.data.slot() >
-                link_presence.size()) {
-
-                return server_status::
-                    project_artifact_invalid;
-            }
-
-            if (!increment(
-                    link_presence[
-                        contribution.data.slot() -
-                        1])) {
-
-                return server_status::io_error;
-            }
         }
 
         std::uint32_t cursor = 0;
@@ -890,8 +948,23 @@ server_status source_map::finalize(
         for (auto& range :
              file_ranges) {
 
+            if (range.count >
+                max_index -
+                    cursor) {
+
+                return server_status::io_error;
+            }
+
             range.begin = cursor;
             cursor += range.count;
+        }
+
+        if (static_cast<std::size_t>(
+                cursor) !=
+            contributions.size()) {
+
+            return server_status::
+                project_artifact_invalid;
         }
 
         file_indices.resize(
