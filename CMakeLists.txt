@@ -32,6 +32,7 @@ add_executable(ServerEngineV4
     server_engine/filesystem_path.cpp
     server_engine/read_only_file_mapping.cpp
     server_engine/writable_file_mapping.cpp
+    server_engine/fixed_shared_memory.cpp
     server_engine/diagnostics/diagnostic_collection.cpp
     server_engine/diagnostics/diagnostic_formatter.cpp
     server_engine/diagnostics/diagnostic_source_cache.cpp
@@ -96,6 +97,10 @@ else()
     )
 
     target_link_libraries(ServerEngineV4 PRIVATE Threads::Threads)
+
+    if(NOT APPLE)
+        target_link_libraries(ServerEngineV4 PRIVATE rt)
+    endif()
 endif()
 
 target_include_directories(ServerEngineV4 PRIVATE
@@ -151,6 +156,14 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
             PRIVATE
             Threads::Threads
         )
+
+        if(NOT APPLE)
+            target_link_libraries(
+                ServerEngineV4PublishBenchmark
+                PRIVATE
+                rt
+            )
+        endif()
     endif()
 
     if(MSVC)
@@ -183,6 +196,45 @@ if(BUILD_TESTING)
         target_compile_options(ServerEngineV4Crc64Tests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME crc64 COMMAND ServerEngineV4Crc64Tests)
+
+    add_executable(ServerEngineV4FixedSharedMemoryTests
+        tests/fixed_shared_memory_tests.cpp
+        server_engine/fixed_shared_memory.cpp
+    )
+
+    target_include_directories(ServerEngineV4FixedSharedMemoryTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(
+            ServerEngineV4FixedSharedMemoryTests
+            PRIVATE
+            /W4
+            /permissive-
+        )
+    else()
+        target_compile_options(
+            ServerEngineV4FixedSharedMemoryTests
+            PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+
+        if(NOT APPLE)
+            target_link_libraries(
+                ServerEngineV4FixedSharedMemoryTests
+                PRIVATE
+                rt
+            )
+        endif()
+    endif()
+
+    add_test(
+        NAME fixed_shared_memory
+        COMMAND ServerEngineV4FixedSharedMemoryTests
+    )
 
     add_executable(ServerEngineV4ServerConfigurationTests
         tests/server_configuration_tests.cpp

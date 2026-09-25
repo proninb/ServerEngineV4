@@ -9,6 +9,7 @@
 
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../filesystem_path.hpp"
+#include "../shared_memory_name.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 #include "../json/json_parser.hpp"
 
@@ -383,10 +384,12 @@ public:
             break;
 
         case schema_context::shm:
-            if (!seen(frame, schema_field::mode)) {
+            if (!seen(frame, schema_field::mode) ||
+                !seen(frame, schema_field::name)) {
+
                 fail(
                     schema_failure::missing_required_field,
-                    "settings.shm requires mode");
+                    "settings.shm requires mode and name");
                 return;
             }
 
@@ -754,6 +757,7 @@ private:
 
         case schema_context::shm:
             if (key == "mode") return schema_field::mode;
+            if (key == "name") return schema_field::name;
             if (key == "fixed_base_address") {
                 return schema_field::fixed_base_address;
             }
@@ -822,10 +826,10 @@ private:
             return;
         }
 
-        if (version != 5) {
+        if (version != 6) {
             fail(
                 schema_failure::unsupported_version,
-                "unsupported server configuration version; expected version 5");
+                "unsupported server configuration version; expected version 6");
             return;
         }
 
@@ -918,6 +922,33 @@ private:
             fail(
                 schema_failure::invalid_value,
                 "settings.shm.mode must be fixed_direct or relocatable_transfer");
+            return;
+        }
+
+        if (field ==
+            schema_field::name) {
+
+            std::string name;
+
+            if (!value.get(name)) {
+                fail(
+                    schema_failure::wrong_type,
+                    "settings.shm.name must be a string");
+                return;
+            }
+
+            if (!valid_shared_memory_name(
+                    name)) {
+
+                fail(
+                    schema_failure::invalid_value,
+                    "settings.shm.name must contain 1-128 characters from A-Z, a-z, 0-9, '.', '_', or '-'");
+                return;
+            }
+
+            configuration.settings.shm.name =
+                std::move(name);
+
             return;
         }
 

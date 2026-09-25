@@ -1,6 +1,6 @@
 {
   // Server configuration schema version.
-  "version": 5,
+  "version": 6,
 
   // Process-wide low-level Server settings.
   "settings": {
@@ -14,6 +14,9 @@
     "shm": {
       // fixed_direct | relocatable_transfer
       "mode": "fixed_direct",
+
+      // Stable logical name of the one Project SHM.
+      "name": "CW.ServerEngineV4.Project",
 
       // Required only for fixed_direct.
       "fixed_base_address": "0x0000010000000000"

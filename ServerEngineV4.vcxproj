@@ -80,6 +80,7 @@
     <ClCompile Include="server_engine\filesystem_path.cpp" />
     <ClCompile Include="server_engine\read_only_file_mapping.cpp" />
     <ClCompile Include="server_engine\writable_file_mapping.cpp" />
+    <ClCompile Include="server_engine\fixed_shared_memory.cpp" />
     <ClCompile Include="server_engine\diagnostics\diagnostic_collection.cpp" />
     <ClCompile Include="server_engine\diagnostics\diagnostic_formatter.cpp" />
     <ClCompile Include="server_engine\diagnostics\diagnostic_source_cache.cpp" />
@@ -132,6 +133,8 @@
     <ClInclude Include="server_engine\filesystem_path.hpp" />
     <ClInclude Include="server_engine\read_only_file_mapping.hpp" />
     <ClInclude Include="server_engine\writable_file_mapping.hpp" />
+    <ClInclude Include="server_engine\fixed_shared_memory.hpp" />
+    <ClInclude Include="server_engine\shared_memory_name.hpp" />
     <ClInclude Include="server_engine\server_context.hpp" />
     <ClInclude Include="server_engine\server_status.hpp" />
     <ClInclude Include="server_engine\string_id.hpp" />
@@ -212,6 +215,7 @@
   <ItemGroup>
     <None Include="server.json" />
     <None Include="tests\compiled_project_tests.cpp" />
+    <None Include="tests\fixed_shared_memory_tests.cpp" />
     <None Include="tests\server_configuration_tests.cpp" />
     <None Include="tests\source_save_tests.cpp" />
     <None Include="tests\database_tests.cpp" />

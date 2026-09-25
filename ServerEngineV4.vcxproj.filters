@@ -82,6 +82,9 @@
     <ClCompile Include="server_engine\writable_file_mapping.cpp">
       <Filter>server_engine</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\fixed_shared_memory.cpp">
+      <Filter>server_engine</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\diagnostics\diagnostic_collection.cpp">
       <Filter>server_engine\diagnostics</Filter>
     </ClCompile>
@@ -235,6 +238,12 @@
       <Filter>server_engine</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\writable_file_mapping.hpp">
+      <Filter>server_engine</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\fixed_shared_memory.hpp">
+      <Filter>server_engine</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\shared_memory_name.hpp">
       <Filter>server_engine</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\server_context.hpp">

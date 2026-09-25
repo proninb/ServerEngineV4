@@ -137,16 +137,19 @@ int main() {
             load(
                 path,
                 configuration(
-                    "5",
+                    "6",
                     "    \"shm\": {\n"
                     "      \"mode\": \"fixed_direct\",\n"
+                    "      \"name\": \"CW.ServerEngineV4.Project\",\n"
                     "      \"fixed_base_address\": \"0x0000010000000000\"\n"
                     "    },\n"));
 
         if (!succeeded(result.status) ||
-            result.value.version != 5 ||
+            result.value.version != 6 ||
             result.value.settings.shm.mode !=
                 shm_runtime_mode::fixed_direct ||
+            result.value.settings.shm.name !=
+                "CW.ServerEngineV4.Project" ||
             result.value.settings.shm.fixed_base_address !=
                 0x0000010000000000ull) {
 
@@ -161,14 +164,17 @@ int main() {
             load(
                 path,
                 configuration(
-                    "5",
+                    "6",
                     "    \"shm\": {\n"
-                    "      \"mode\": \"relocatable_transfer\"\n"
+                    "      \"mode\": \"relocatable_transfer\",\n"
+                    "      \"name\": \"CW.ServerEngineV4.Project\"\n"
                     "    },\n"));
 
         if (!succeeded(result.status) ||
             result.value.settings.shm.mode !=
                 shm_runtime_mode::relocatable_transfer ||
+            result.value.settings.shm.name !=
+                "CW.ServerEngineV4.Project" ||
             result.value.settings.shm.fixed_base_address != 0) {
 
             cleanup();
@@ -182,7 +188,7 @@ int main() {
             load(
                 path,
                 configuration(
-                    "5",
+                    "6",
                     ""));
 
         if (!expect_invalid(
@@ -201,9 +207,32 @@ int main() {
             load(
                 path,
                 configuration(
-                    "5",
+                    "6",
                     "    \"shm\": {\n"
-                    "      \"mode\": \"fixed_direct\"\n"
+                    "      \"mode\": \"fixed_direct\",\n"
+                    "      \"fixed_base_address\": \"0x0000010000000000\"\n"
+                    "    },\n"));
+
+        if (!expect_invalid(
+                result,
+                diagnostics::configuration_invalid.id,
+                "settings.shm requires mode and name")) {
+
+            cleanup();
+            std::cerr << "missing shm name validation failed\n";
+            return 1;
+        }
+    }
+
+    {
+        const auto result =
+            load(
+                path,
+                configuration(
+                    "6",
+                    "    \"shm\": {\n"
+                    "      \"mode\": \"fixed_direct\",\n"
+                    "      \"name\": \"CW.ServerEngineV4.Project\"\n"
                     "    },\n"));
 
         if (!expect_invalid(
@@ -222,9 +251,10 @@ int main() {
             load(
                 path,
                 configuration(
-                    "5",
+                    "6",
                     "    \"shm\": {\n"
                     "      \"mode\": \"relocatable_transfer\",\n"
+                    "      \"name\": \"CW.ServerEngineV4.Project\",\n"
                     "      \"fixed_base_address\": \"0x0000010000000000\"\n"
                     "    },\n"));
 
@@ -244,9 +274,32 @@ int main() {
             load(
                 path,
                 configuration(
-                    "5",
+                    "6",
+                    "    \"shm\": {\n"
+                    "      \"mode\": \"relocatable_transfer\",\n"
+                    "      \"name\": \"bad/name\"\n"
+                    "    },\n"));
+
+        if (!expect_invalid(
+                result,
+                diagnostics::configuration_invalid.id,
+                "settings.shm.name must contain 1-128 characters from A-Z, a-z, 0-9, '.', '_', or '-'")) {
+
+            cleanup();
+            std::cerr << "invalid shm name validation failed\n";
+            return 1;
+        }
+    }
+
+    {
+        const auto result =
+            load(
+                path,
+                configuration(
+                    "6",
                     "    \"shm\": {\n"
                     "      \"mode\": \"fixed_direct\",\n"
+                    "      \"name\": \"CW.ServerEngineV4.Project\",\n"
                     "      \"fixed_base_address\": \"100000000\"\n"
                     "    },\n"));
 
@@ -266,9 +319,10 @@ int main() {
             load(
                 path,
                 configuration(
-                    "5",
+                    "6",
                     "    \"shm\": {\n"
-                    "      \"mode\": \"other\"\n"
+                    "      \"mode\": \"other\",\n"
+                    "      \"name\": \"CW.ServerEngineV4.Project\"\n"
                     "    },\n"));
 
         if (!expect_invalid(
@@ -287,15 +341,16 @@ int main() {
             load(
                 path,
                 configuration(
-                    "4",
+                    "5",
                     "    \"shm\": {\n"
-                    "      \"mode\": \"relocatable_transfer\"\n"
+                    "      \"mode\": \"relocatable_transfer\",\n"
+                    "      \"name\": \"CW.ServerEngineV4.Project\"\n"
                     "    },\n"));
 
         if (!expect_invalid(
                 result,
                 diagnostics::configuration_unsupported_version.id,
-                "unsupported server configuration version; expected version 5")) {
+                "unsupported server configuration version; expected version 6")) {
 
             cleanup();
             std::cerr << "schema version validation failed\n";

@@ -13,7 +13,7 @@ The JSON parser supports:
 
 ```jsonc
 {
-  "version": 5,
+  "version": 6,
 
   "settings": {
     "abi": {
@@ -23,6 +23,7 @@ The JSON parser supports:
 
     "shm": {
       "mode": "fixed_direct",
+      "name": "CW.ServerEngineV4.Project",
       "fixed_base_address": "0x0000010000000000"
     },
 
@@ -102,6 +103,7 @@ Fixed direct mode:
 ```jsonc
 "shm": {
   "mode": "fixed_direct",
+  "name": "CW.ServerEngineV4.Project",
   "fixed_base_address": "0x0000010000000000"
 }
 ```
@@ -110,7 +112,8 @@ Relocatable transfer mode:
 
 ```jsonc
 "shm": {
-  "mode": "relocatable_transfer"
+  "mode": "relocatable_transfer",
+  "name": "CW.ServerEngineV4.Project"
 }
 ```
 
@@ -131,6 +134,18 @@ native Runtime. Task execution still uses direct C++ references; SHM relocation
 does not introduce proxies, handles, or offset lookup into the execution hot
 path.
 
+`name` is required for every SHM mode. It is the stable logical Project SHM
+name shared by Server and Task processes. The portable configuration form uses
+1-128 characters from:
+
+```text
+A-Z  a-z  0-9  .  _  -
+```
+
+There is no hidden generated suffix or product prefix. Windows uses the
+configured name directly. POSIX adds only the leading `/` required by
+`shm_open()`.
+
 `fixed_base_address` is:
 
 ```text
@@ -140,7 +155,9 @@ a non-zero x64 virtual address encoded as a 0x hexadecimal string
 ```
 
 Platform mapping code is responsible for validating whether the configured
-address can actually be reserved/mapped.
+address can actually be reserved/mapped. Name collision and exact-address
+collision fail closed; neither the name nor address receives an automatic
+fallback.
 
 SHM size is deliberately not configuration. It is derived from final G + ABI.
 There is no separately configured Runtime size.
@@ -214,7 +231,7 @@ context, for example:
 ```text
 settings requires abi, shm, and files
 settings.abi requires target and pack
-settings.shm requires mode
+settings.shm requires mode and name
 settings.files.manifest must be a single relative file name
 settings.files entries must use distinct file names
 ```
