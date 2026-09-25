@@ -71,6 +71,8 @@ inline constexpr std::array diagnostic_descriptors{
     diagnostics::project_source_save_io_failed,
     diagnostics::project_database_invalid,
     diagnostics::project_database_io_failed,
+    diagnostics::project_runtime_unsupported,
+    diagnostics::project_runtime_failed,
     diagnostics::project_startup_unsupported,
     diagnostics::project_invalid_json,
     diagnostics::project_invalid_configuration,

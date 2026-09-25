@@ -37,6 +37,9 @@ enum class server_status {
     // Persisted Project construction/runtime artifact failed structural validation.
     project_artifact_invalid,
 
+    // Native Runtime layout or final Project SHM publication failed.
+    project_runtime_failed,
+
     // One or more configured communication endpoints could not start.
     communication_start_failed,
 };

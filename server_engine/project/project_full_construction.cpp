@@ -2,6 +2,7 @@
 
 #include "project_lifecycle_context.hpp"
 #include "project_configuration_manifest_store.hpp"
+#include "runtime/project_runtime.hpp"
 #include "assign/assign_input.hpp"
 #include "construction/execution_lanes.hpp"
 #include "frontend/source_discovery.hpp"
@@ -1036,27 +1037,14 @@ server_status construct_full_project(
             project_artifact_invalid;
     }
 
-    try {
-        output =
-            std::make_unique<project>(
-                project_path,
-                std::move(resident_mapping),
-                resident_compiled);
-    }
-    catch (...) {
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_compiled_io_failed,
-                operation)
-                .file(layout.compiled)
-                .detail(
-                    "Cannot publish resident Project from final compiled.bin")
-                .build());
-
-        return server_status::io_error;
-    }
-
-    return server_status::success;
+    return create_resident_project(
+        project_path,
+        settings,
+        operation,
+        diagnostics,
+        std::move(resident_mapping),
+        resident_compiled,
+        output);
         }();
 
     if (succeeded(rebuilt)) {

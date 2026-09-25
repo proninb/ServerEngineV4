@@ -93,6 +93,7 @@
     <ClCompile Include="server_engine\project\project.cpp" />
     <ClCompile Include="server_engine\project\abi\abi_layout.cpp" />
     <ClCompile Include="server_engine\project\runtime\runtime_layout.cpp" />
+    <ClCompile Include="server_engine\project\runtime\project_runtime.cpp" />
     <ClCompile Include="server_engine\project\string\string_table.cpp" />
     <ClCompile Include="server_engine\project\semantic\identity.cpp" />
     <ClCompile Include="server_engine\project\graph\graph.cpp" />
@@ -166,6 +167,7 @@
     <ClInclude Include="server_engine\project\project.hpp" />
     <ClInclude Include="server_engine\project\abi\abi_layout.hpp" />
     <ClInclude Include="server_engine\project\runtime\runtime_layout.hpp" />
+    <ClInclude Include="server_engine\project\runtime\project_runtime.hpp" />
     <ClInclude Include="server_engine\project\project_lifecycle_context.hpp" />
     <ClInclude Include="server_engine\project\preprocessor_configuration.hpp" />
     <ClInclude Include="server_engine\project\project_identity.hpp" />

@@ -326,6 +326,22 @@ inline constexpr diagnostic_descriptor project_database_io_failed{
     "Committed Project database I/O failed",
 };
 
+inline constexpr diagnostic_descriptor project_runtime_unsupported{
+    diagnostic_id{2032},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.runtime_unsupported",
+    "Configured Project Runtime mode is not implemented",
+};
+
+inline constexpr diagnostic_descriptor project_runtime_failed{
+    diagnostic_id{2033},
+    diagnostic_domain::project,
+    diagnostic_severity::error,
+    "project.runtime_failed",
+    "Project Runtime/SHM publication failed",
+};
+
 } // namespace diagnostics
 
 }

@@ -48,6 +48,7 @@ add_executable(ServerEngineV4
     server_engine/project/project.cpp
     server_engine/project/abi/abi_layout.cpp
     server_engine/project/runtime/runtime_layout.cpp
+    server_engine/project/runtime/project_runtime.cpp
     server_engine/project/string/string_table.cpp
     server_engine/project/semantic/identity.cpp
     server_engine/project/graph/graph.cpp
@@ -273,7 +274,6 @@ if(BUILD_TESTING)
 
     add_executable(ServerEngineV4Tests
         tests/compiled_project_tests.cpp
-        server_engine/project/project.cpp
         server_engine/project/runtime/runtime_layout.cpp
         server_engine/project/abi/abi_layout.cpp
         server_engine/read_only_file_mapping.cpp

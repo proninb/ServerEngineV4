@@ -126,6 +126,9 @@
     <ClCompile Include="server_engine\project\runtime\runtime_layout.cpp">
       <Filter>server_engine\project\runtime</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\project\runtime\project_runtime.cpp">
+      <Filter>server_engine\project\runtime</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\project\string\string_table.cpp">
       <Filter>server_engine\project\string</Filter>
     </ClCompile>
@@ -342,6 +345,9 @@
       <Filter>server_engine\project\abi</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\runtime\runtime_layout.hpp">
+      <Filter>server_engine\project\runtime</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\runtime\project_runtime.hpp">
       <Filter>server_engine\project\runtime</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\project_lifecycle_context.hpp">

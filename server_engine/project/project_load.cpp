@@ -1,6 +1,7 @@
 #include "project_load.hpp"
 
 #include "project_lifecycle_context.hpp"
+#include "runtime/project_runtime.hpp"
 #include "persistence/compiled_project.hpp"
 #include "persistence/project_artifact.hpp"
 
@@ -107,28 +108,14 @@ server_status load_project(
             project_artifact_invalid;
     }
 
-    try {
-        output =
-            std::make_unique<project>(
-                project_path,
-                std::move(mapping),
-                compiled);
-    }
-    catch (...) {
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_load_failed,
-                operation)
-                .file(layout.compiled)
-                .detail(
-                    "Cannot publish resident Project from compiled.bin")
-                .build());
-
-        return server_status::
-            project_load_failed;
-    }
-
-    return server_status::success;
+    return create_resident_project(
+        project_path,
+        settings,
+        operation,
+        diagnostics,
+        std::move(mapping),
+        compiled,
+        output);
 }
 
 }

@@ -214,8 +214,18 @@ public:
                     value.alignment);
         }
 
+        std::uint64_t final_size = 0;
+
+        if (!align_up(
+                cursor,
+                maximum_alignment,
+                final_size)) {
+
+            return runtime_layout_result::overflow;
+        }
+
         output.size_value =
-            cursor;
+            final_size;
 
         output.alignment_value =
             maximum_alignment;

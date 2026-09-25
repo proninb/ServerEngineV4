@@ -1,4 +1,3 @@
-#include "project/project.hpp"
 #include "project/persistence/compiled_project.hpp"
 #include "project/persistence/crc64_ecma.hpp"
 #include "project/runtime/runtime_layout.hpp"
@@ -1364,21 +1363,13 @@ void test_direct_mmap_encoding(
                 fixture.type,
             "direct compiled mmap preserves Graph lookup");
 
-        {
-            project resident{
-                std::filesystem::temp_directory_path() /
-                    "server_engine_v4_project.json",
-                std::move(persisted),
-                persisted_view};
-
-            tests.expect(
-                !persisted.valid() &&
-                    resident.compiled().valid() &&
-                    resident.compiled().find_type(
-                        fixture.type_identity) ==
-                        fixture.type,
-                "resident Project owns compiled mmap and preserves Graph view lifetime");
-        }
+        tests.expect(
+            persisted.valid() &&
+                persisted_view.valid() &&
+                persisted_view.find_type(
+                    fixture.type_identity) ==
+                    fixture.type,
+            "compiled mmap preserves Graph view lifetime");
     }
 
     persisted.reset();
@@ -1532,6 +1523,133 @@ void test_runtime_layout(
         packed.size() == 24 &&
         packed.alignment() == 4,
         "pack-4 dense object layout");
+}
+
+void test_runtime_layout_tail_alignment(
+    test_state& tests) {
+
+    compiled_fixture fixture;
+
+    string_id wide_name;
+    string_id tail_name;
+
+    identity_ref wide_identity;
+    identity_ref tail_identity;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.strings.intern(
+                    "wide",
+                    wide_name)) &&
+            succeeded(
+                fixture.strings.intern(
+                    "tail",
+                    tail_name)) &&
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    wide_name,
+                    identity_kind::object,
+                    wide_identity)) &&
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    tail_name,
+                    identity_kind::object,
+                    tail_identity)),
+            "prepare Runtime tail-alignment identities")) {
+
+        return;
+    }
+
+    object_handle wide;
+    object_handle tail;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.add_object(
+                    wide_identity,
+                    fixture.G.intrinsic(
+                        intrinsic_type::double_type),
+                    wide)) &&
+            succeeded(
+                fixture.G.add_object(
+                    tail_identity,
+                    fixture.G.intrinsic(
+                        intrinsic_type::char_type),
+                    tail)),
+            "prepare Runtime tail-alignment objects")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            succeeded(
+                fixture.sources.finalize(
+                    fixture.files.size(),
+                    fixture.identities,
+                    fixture.G)),
+            "finalize empty Runtime tail-alignment Source Map")) {
+
+        return;
+    }
+
+    compiled_test_image image;
+
+    if (!tests.expect(
+            build_test_compiled_image(
+                fixture,
+                image) ==
+                compiled_project_image_result::success,
+            "encode Runtime tail-alignment image")) {
+
+        return;
+    }
+
+    compiled_project_view view;
+
+    if (!tests.expect(
+            view.bind(
+                image.bytes) ==
+                compiled_project_image_result::success,
+            "bind Runtime tail-alignment image")) {
+
+        return;
+    }
+
+    runtime_layout layout;
+
+    const server_abi_configuration abi{
+        abi_target::windows_x64,
+        8,
+    };
+
+    if (!tests.expect(
+            prepare_runtime_layout(
+                view,
+                abi,
+                layout) ==
+                runtime_layout_result::success,
+            "derive Runtime tail-alignment layout")) {
+
+        return;
+    }
+
+    std::uint64_t wide_offset = 0;
+    std::uint64_t tail_offset = 0;
+
+    tests.expect(
+        layout.object_offset(
+            wide,
+            wide_offset) &&
+        layout.object_offset(
+            tail,
+            tail_offset) &&
+        wide_offset == 0 &&
+        tail_offset == 8 &&
+        layout.alignment() == 8 &&
+        layout.size() == 16,
+        "Runtime total size is aligned to maximum object alignment");
 }
 
 void test_hot_cold_boundary(
@@ -2341,6 +2459,9 @@ int main() {
             tests,
             fixture,
             first);
+
+        test_runtime_layout_tail_alignment(
+            tests);
 
         test_build_lineage_overlays(
             tests,
