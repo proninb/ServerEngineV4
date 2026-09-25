@@ -9,6 +9,9 @@ namespace {
 constexpr std::uint64_t invalid_offset =
     (std::numeric_limits<std::uint64_t>::max)();
 
+constexpr std::uint64_t pending_offset =
+    invalid_offset - 1;
+
 [[nodiscard]] bool add_u64(
     std::uint64_t left,
     std::uint64_t right,
@@ -154,9 +157,6 @@ public:
     }
 
     [[nodiscard]] runtime_layout_result build() noexcept {
-        std::uint64_t cursor = 0;
-        std::uint32_t maximum_alignment = 1;
-
         for (std::size_t index = 0;
              index < project.object_count();
              ++index) {
@@ -165,6 +165,7 @@ public:
                 project.object_at(index);
 
             object_entry object;
+            runtime_value_layout value;
 
             if (!handle ||
                 !project.object(
@@ -174,7 +175,111 @@ public:
                 return runtime_layout_result::invalid_input;
             }
 
+            const auto resolved =
+                resolve(
+                    object.type,
+                    value);
+
+            if (resolved !=
+                runtime_layout_result::success) {
+
+                return resolved;
+            }
+        }
+
+        // Resolving an object may discover T& and therefore require one
+        // canonical unconnected<T>. Resolving that T can discover more
+        // reference members, so the dense worklist is allowed to grow.
+        for (std::size_t index = 0;
+             index <
+                 output.unconnected_types.size();
+             ++index) {
+
             runtime_value_layout value;
+
+            const auto resolved =
+                resolve(
+                    output.unconnected_types[index],
+                    value);
+
+            if (resolved !=
+                runtime_layout_result::success) {
+
+                return resolved;
+            }
+        }
+
+        std::uint64_t cursor = 0;
+        std::uint32_t maximum_alignment = 1;
+
+        for (const auto type :
+             output.unconnected_types) {
+
+            runtime_value_layout value;
+
+            const auto resolved =
+                resolve(
+                    type,
+                    value);
+
+            if (resolved !=
+                runtime_layout_result::success) {
+
+                return resolved;
+            }
+
+            std::uint64_t aligned = 0;
+
+            if (!align_up(
+                    cursor,
+                    value.alignment,
+                    aligned)) {
+
+                return runtime_layout_result::overflow;
+            }
+
+            const auto stored =
+                store_unconnected_offset(
+                    type,
+                    aligned);
+
+            if (stored !=
+                runtime_layout_result::success) {
+
+                return stored;
+            }
+
+            if (!add_u64(
+                    aligned,
+                    value.size,
+                    cursor)) {
+
+                return runtime_layout_result::overflow;
+            }
+
+            maximum_alignment =
+                (std::max)(
+                    maximum_alignment,
+                    value.alignment);
+        }
+
+        for (std::size_t index = 0;
+             index < project.object_count();
+             ++index) {
+
+            const auto handle =
+                project.object_at(index);
+
+            object_entry object;
+            runtime_value_layout value;
+
+            if (!handle ||
+                !project.object(
+                    handle,
+                    object)) {
+
+                return runtime_layout_result::invalid_input;
+            }
 
             const auto resolved =
                 resolve(
@@ -234,6 +339,145 @@ public:
     }
 
 private:
+    [[nodiscard]] runtime_layout_result
+    require_unconnected(
+        type_ref type) noexcept {
+
+        if (!type) {
+            return runtime_layout_result::invalid_input;
+        }
+
+        std::uint64_t* offset = nullptr;
+
+        switch (type.kind()) {
+        case type_ref_kind::intrinsic:
+            if (type.payload() >=
+                output.unconnected_intrinsic_offsets.size()) {
+
+                return runtime_layout_result::invalid_input;
+            }
+
+            offset =
+                &output.unconnected_intrinsic_offsets[
+                    type.payload()];
+            break;
+
+        case type_ref_kind::named:
+            if (type.payload() == 0 ||
+                type.payload() >
+                    output.unconnected_type_offsets.size()) {
+
+                return runtime_layout_result::invalid_input;
+            }
+
+            offset =
+                &output.unconnected_type_offsets[
+                    type.payload() - 1];
+            break;
+
+        case type_ref_kind::derived:
+            if (type.payload() == 0 ||
+                type.payload() >
+                    output.unconnected_derived_offsets.size()) {
+
+                return runtime_layout_result::invalid_input;
+            }
+
+            offset =
+                &output.unconnected_derived_offsets[
+                    type.payload() - 1];
+            break;
+
+        case type_ref_kind::invalid:
+            return runtime_layout_result::invalid_input;
+        }
+
+        if (*offset !=
+            invalid_offset) {
+
+            return runtime_layout_result::success;
+        }
+
+        *offset =
+            pending_offset;
+
+        try {
+            output.unconnected_types.push_back(
+                type);
+        }
+        catch (...) {
+            *offset =
+                invalid_offset;
+
+            return runtime_layout_result::failed;
+        }
+
+        return runtime_layout_result::success;
+    }
+
+    [[nodiscard]] runtime_layout_result
+    store_unconnected_offset(
+        type_ref type,
+        std::uint64_t value) noexcept {
+
+        std::uint64_t* offset = nullptr;
+
+        switch (type.kind()) {
+        case type_ref_kind::intrinsic:
+            if (type.payload() >=
+                output.unconnected_intrinsic_offsets.size()) {
+
+                return runtime_layout_result::invalid_input;
+            }
+
+            offset =
+                &output.unconnected_intrinsic_offsets[
+                    type.payload()];
+            break;
+
+        case type_ref_kind::named:
+            if (type.payload() == 0 ||
+                type.payload() >
+                    output.unconnected_type_offsets.size()) {
+
+                return runtime_layout_result::invalid_input;
+            }
+
+            offset =
+                &output.unconnected_type_offsets[
+                    type.payload() - 1];
+            break;
+
+        case type_ref_kind::derived:
+            if (type.payload() == 0 ||
+                type.payload() >
+                    output.unconnected_derived_offsets.size()) {
+
+                return runtime_layout_result::invalid_input;
+            }
+
+            offset =
+                &output.unconnected_derived_offsets[
+                    type.payload() - 1];
+            break;
+
+        case type_ref_kind::invalid:
+            return runtime_layout_result::invalid_input;
+        }
+
+        if (*offset !=
+                pending_offset ||
+            value >=
+                pending_offset) {
+
+            return runtime_layout_result::invalid_input;
+        }
+
+        *offset = value;
+
+        return runtime_layout_result::success;
+    }
+
     [[nodiscard]] runtime_layout_result resolve(
         type_ref type,
         runtime_value_layout& value) noexcept {
@@ -582,11 +826,22 @@ private:
             break;
 
         case derived_type_kind::pointer:
-        case derived_type_kind::lvalue_reference:
-        case derived_type_kind::rvalue_reference:
             resolved = {8, 8, 0};
             result =
                 runtime_layout_result::success;
+            break;
+
+        case derived_type_kind::lvalue_reference:
+        case derived_type_kind::rvalue_reference:
+            result =
+                require_unconnected(
+                    derived.child);
+
+            if (result ==
+                runtime_layout_result::success) {
+
+                resolved = {8, 8, 0};
+            }
             break;
 
         case derived_type_kind::bounded_array: {
@@ -670,8 +925,180 @@ void runtime_layout::reset() noexcept {
     member_offsets.clear();
     object_offsets.clear();
 
+    unconnected_intrinsic_offsets.fill(
+        invalid_offset);
+
+    unconnected_type_offsets.clear();
+    unconnected_derived_offsets.clear();
+    unconnected_types.clear();
+
+    target_value =
+        abi_target::windows_x64;
+
     size_value = 0;
     alignment_value = 1;
+    prepared_value = false;
+}
+
+bool runtime_layout::value(
+    type_ref type_value,
+    runtime_value_layout& output_value) const noexcept {
+
+    output_value = {};
+
+    if (!prepared_value ||
+        !type_value) {
+
+        return false;
+    }
+
+    switch (type_value.kind()) {
+    case type_ref_kind::intrinsic:
+        if (type_value.payload() >
+            static_cast<std::uint32_t>(
+                intrinsic_type::nullptr_type)) {
+
+            return false;
+        }
+
+        return intrinsic_layout(
+                   static_cast<intrinsic_type>(
+                       type_value.payload()),
+                   target_value,
+                   output_value) ==
+            runtime_layout_result::success;
+
+    case type_ref_kind::named:
+        if (type_value.payload() == 0 ||
+            type_value.payload() >
+                type_slots.size()) {
+
+            return false;
+        }
+
+        {
+            const auto& slot =
+                type_slots[
+                    type_value.payload() - 1];
+
+            if (slot.state !=
+                slot_state::ready) {
+
+                return false;
+            }
+
+            output_value = {
+                slot.size,
+                slot.alignment,
+                0,
+            };
+
+            return true;
+        }
+
+    case type_ref_kind::derived:
+        if (type_value.payload() == 0 ||
+            type_value.payload() >
+                derived_slots.size()) {
+
+            return false;
+        }
+
+        {
+            const auto& slot =
+                derived_slots[
+                    type_value.payload() - 1];
+
+            if (slot.state !=
+                slot_state::ready) {
+
+                return false;
+            }
+
+            output_value = {
+                slot.size,
+                slot.alignment,
+                0,
+            };
+
+            return true;
+        }
+
+    case type_ref_kind::invalid:
+        break;
+    }
+
+    return false;
+}
+
+bool runtime_layout::unconnected_offset(
+    type_ref type_value,
+    std::uint64_t& output_value) const noexcept {
+
+    output_value = 0;
+
+    if (!prepared_value ||
+        !type_value) {
+
+        return false;
+    }
+
+    std::uint64_t value =
+        invalid_offset;
+
+    switch (type_value.kind()) {
+    case type_ref_kind::intrinsic:
+        if (type_value.payload() >=
+            unconnected_intrinsic_offsets.size()) {
+
+            return false;
+        }
+
+        value =
+            unconnected_intrinsic_offsets[
+                type_value.payload()];
+        break;
+
+    case type_ref_kind::named:
+        if (type_value.payload() == 0 ||
+            type_value.payload() >
+                unconnected_type_offsets.size()) {
+
+            return false;
+        }
+
+        value =
+            unconnected_type_offsets[
+                type_value.payload() - 1];
+        break;
+
+    case type_ref_kind::derived:
+        if (type_value.payload() == 0 ||
+            type_value.payload() >
+                unconnected_derived_offsets.size()) {
+
+            return false;
+        }
+
+        value =
+            unconnected_derived_offsets[
+                type_value.payload() - 1];
+        break;
+
+    case type_ref_kind::invalid:
+        return false;
+    }
+
+    if (value ==
+            invalid_offset ||
+        value ==
+            pending_offset) {
+
+        return false;
+    }
+
+    output_value = value;
+    return true;
 }
 
 bool runtime_layout::type(
@@ -761,7 +1188,11 @@ runtime_layout_result prepare_runtime_layout(
         return runtime_layout_result::invalid_input;
     }
 
+    output.target_value =
+        abi.target;
+
     if (project.object_count() == 0) {
+        output.prepared_value = true;
         return runtime_layout_result::success;
     }
 
@@ -778,6 +1209,14 @@ runtime_layout_result prepare_runtime_layout(
 
         output.object_offsets.resize(
             project.object_count());
+
+        output.unconnected_type_offsets.assign(
+            project.type_count(),
+            invalid_offset);
+
+        output.unconnected_derived_offsets.assign(
+            project.derived_type_count(),
+            invalid_offset);
     }
     catch (...) {
         output.reset();
@@ -798,9 +1237,12 @@ runtime_layout_result prepare_runtime_layout(
         runtime_layout_result::success) {
 
         output.reset();
+        return result;
     }
 
-    return result;
+    output.prepared_value = true;
+
+    return runtime_layout_result::success;
 }
 
 }

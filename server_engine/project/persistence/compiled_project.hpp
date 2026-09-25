@@ -227,6 +227,11 @@ public:
         member_index member,
         member_record& output) const noexcept;
 
+    [[nodiscard]] bool member(
+        type_handle type,
+        std::uint32_t local_member,
+        member_record& output) const noexcept;
+
     // Direct global member-slot access for dense sequential consumers such as
     // Runtime ABI layout. This performs no name/hash lookup.
     [[nodiscard]] bool member_at(
@@ -236,6 +241,11 @@ public:
     [[nodiscard]] bool construction(
         type_handle type,
         member_index member,
+        construction_value& output) const noexcept;
+
+    [[nodiscard]] bool construction(
+        type_handle type,
+        std::uint32_t local_member,
         construction_value& output) const noexcept;
 
     [[nodiscard]] member_index find_member(
@@ -270,6 +280,9 @@ public:
         object_handle object,
         construction_value& output) const noexcept;
 
+    [[nodiscard]] link_handle link_at(
+        std::size_t index) const noexcept;
+
     [[nodiscard]] bool link(
         link_handle handle,
         link_record& output) const noexcept;
@@ -278,6 +291,10 @@ public:
     // binding per target endpoint, so sparse BUILD must not scan all OLD links.
     [[nodiscard]] link_handle find_link_target(
         object_endpoint target) const noexcept;
+
+    [[nodiscard]] link_handle find_link_target(
+        object_handle object,
+        std::uint32_t local_member) const noexcept;
 
     [[nodiscard]] bool assign(
         std::size_t index,

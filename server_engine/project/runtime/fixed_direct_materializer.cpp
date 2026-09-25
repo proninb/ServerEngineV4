@@ -1,0 +1,1835 @@
+#include "fixed_direct_materializer.hpp"
+
+#include <algorithm>
+#include <bit>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <type_traits>
+#include <vector>
+
+namespace cw::server {
+namespace {
+
+struct reference_representation_probe final {
+    int& value;
+};
+
+template <typename T>
+void store_native(
+    std::byte* target,
+    const T& value) noexcept {
+
+    std::memcpy(
+        target,
+        &value,
+        sizeof(T));
+}
+
+template <typename T>
+[[nodiscard]] bool integer_value(
+    construction_value construction,
+    T& output) noexcept {
+
+    output = {};
+
+    if (construction.kind ==
+        construction_kind::zero) {
+
+        return true;
+    }
+
+    if (construction.kind ==
+        construction_kind::signed_integer) {
+
+        const auto value =
+            std::bit_cast<std::int64_t>(
+                construction.bits());
+
+        if constexpr (
+            std::is_signed_v<T>) {
+
+            if (value <
+                    static_cast<std::int64_t>(
+                        (std::numeric_limits<T>::min)()) ||
+                value >
+                    static_cast<std::int64_t>(
+                        (std::numeric_limits<T>::max)())) {
+
+                return false;
+            }
+        }
+        else {
+            if (value < 0 ||
+                static_cast<std::uint64_t>(
+                    value) >
+                    static_cast<std::uint64_t>(
+                        (std::numeric_limits<T>::max)())) {
+
+                return false;
+            }
+        }
+
+        output =
+            static_cast<T>(
+                value);
+
+        return true;
+    }
+
+    if (construction.kind ==
+        construction_kind::unsigned_integer) {
+
+        const auto value =
+            construction.bits();
+
+        if (value >
+            static_cast<std::uint64_t>(
+                (std::numeric_limits<T>::max)())) {
+
+            return false;
+        }
+
+        output =
+            static_cast<T>(
+                value);
+
+        return true;
+    }
+
+    return false;
+}
+
+template <typename T>
+[[nodiscard]] fixed_direct_materialization_result
+write_integer(
+    construction_value construction,
+    std::byte* target) noexcept {
+
+    T value{};
+
+    if (!integer_value(
+            construction,
+            value)) {
+
+        return fixed_direct_materialization_result::
+            invalid_input;
+    }
+
+    store_native(
+        target,
+        value);
+
+    return fixed_direct_materialization_result::success;
+}
+
+template <typename T>
+[[nodiscard]] fixed_direct_materialization_result
+write_real(
+    construction_value construction,
+    std::byte* target) noexcept {
+
+    T value{};
+
+    switch (construction.kind) {
+    case construction_kind::zero:
+        break;
+
+    case construction_kind::signed_integer:
+        value =
+            static_cast<T>(
+                std::bit_cast<std::int64_t>(
+                    construction.bits()));
+        break;
+
+    case construction_kind::unsigned_integer:
+        value =
+            static_cast<T>(
+                construction.bits());
+        break;
+
+    case construction_kind::real:
+        value =
+            static_cast<T>(
+                std::bit_cast<double>(
+                    construction.bits()));
+        break;
+
+    case construction_kind::member_binding:
+    case construction_kind::object_binding:
+    case construction_kind::unsupported:
+        return fixed_direct_materialization_result::
+            invalid_input;
+    }
+
+    store_native(
+        target,
+        value);
+
+    return fixed_direct_materialization_result::success;
+}
+
+[[nodiscard]] bool zero_pointer_construction(
+    construction_value construction) noexcept {
+
+    if (construction.kind ==
+        construction_kind::zero) {
+
+        return true;
+    }
+
+    if (construction.kind ==
+            construction_kind::signed_integer ||
+        construction.kind ==
+            construction_kind::unsigned_integer) {
+
+        return construction.bits() == 0;
+    }
+
+    return false;
+}
+
+class fixed_direct_materializer final {
+public:
+    fixed_direct_materializer(
+        const compiled_project_view& project,
+        const runtime_layout& layout,
+        std::span<std::byte> runtime) noexcept
+        : project(project),
+          layout(layout),
+          runtime(runtime) {
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    run() noexcept {
+
+        if (!project.valid() ||
+            layout.size() >
+                runtime.size() ||
+            (layout.size() != 0 &&
+             runtime.data() == nullptr)) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        if (layout.size() >
+            static_cast<std::uint64_t>(
+                (std::numeric_limits<std::size_t>::max)())) {
+
+            return fixed_direct_materialization_result::
+                overflow;
+        }
+
+        const auto logical_size =
+            static_cast<std::size_t>(
+                layout.size());
+
+        std::fill_n(
+            runtime.data(),
+            logical_size,
+            std::byte{0});
+
+        for (std::size_t index = 0;
+             index <
+                 layout.unconnected_count();
+             ++index) {
+
+            const auto type =
+                layout.unconnected_type(
+                    index);
+
+            std::uint64_t offset = 0;
+
+            if (!type ||
+                !layout.unconnected_offset(
+                    type,
+                    offset)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            auto* target =
+                address(
+                    offset);
+
+            if (target == nullptr) {
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            const auto materialized =
+                canonical_value(
+                    type,
+                    target);
+
+            if (materialized !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return materialized;
+            }
+        }
+
+        for (std::size_t index = 0;
+             index <
+                 project.object_count();
+             ++index) {
+
+            const auto handle =
+                project.object_at(
+                    index);
+
+            object_entry object;
+            construction_value construction;
+
+            std::uint64_t offset = 0;
+
+            if (!handle ||
+                !project.object(
+                    handle,
+                    object) ||
+                !project.construction(
+                    handle,
+                    construction) ||
+                !layout.object_offset(
+                    handle,
+                    offset)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            auto* target =
+                address(
+                    offset);
+
+            if (target == nullptr) {
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            const auto materialized =
+                normal_value(
+                    object.type,
+                    construction,
+                    target,
+                    handle);
+
+            if (materialized !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return materialized;
+            }
+        }
+
+        return verify_links();
+    }
+
+private:
+    [[nodiscard]] std::byte* address(
+        std::uint64_t offset) const noexcept {
+
+        if (offset >=
+            layout.size()) {
+
+            return nullptr;
+        }
+
+        return runtime.data() +
+            static_cast<std::size_t>(
+                offset);
+    }
+
+    [[nodiscard]] bool value_fits(
+        std::uint64_t offset,
+        std::uint64_t size) const noexcept {
+
+        return offset <=
+                layout.size() &&
+            size <=
+                layout.size() - offset;
+    }
+
+    [[nodiscard]] bool reference_referent(
+        type_ref type,
+        type_ref& output) const noexcept {
+
+        output = {};
+
+        derived_type_record derived;
+
+        if (!project.derived(
+                type,
+                derived) ||
+            (derived.kind !=
+                 derived_type_kind::lvalue_reference &&
+             derived.kind !=
+                 derived_type_kind::rvalue_reference)) {
+
+            return false;
+        }
+
+        output = derived.child;
+        return static_cast<bool>(
+            output);
+    }
+
+    [[nodiscard]] bool record_type(
+        type_ref type,
+        type_handle& output) const noexcept {
+
+        output = {};
+
+        for (;;) {
+            if (type.kind() ==
+                type_ref_kind::named) {
+
+                const auto handle =
+                    project.type_at(
+                        type.payload() - 1);
+
+                if (!handle ||
+                    handle.value() !=
+                        type.payload()) {
+
+                    return false;
+                }
+
+                output = handle;
+                return true;
+            }
+
+            if (type.kind() !=
+                type_ref_kind::derived) {
+
+                return false;
+            }
+
+            derived_type_record derived;
+
+            if (!project.derived(
+                    type,
+                    derived) ||
+                (derived.kind !=
+                     derived_type_kind::const_qualified &&
+                 derived.kind !=
+                     derived_type_kind::volatile_qualified)) {
+
+                return false;
+            }
+
+            type = derived.child;
+        }
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    write_address(
+        std::byte* slot,
+        std::uintptr_t target) noexcept {
+
+        if (slot == nullptr ||
+            sizeof(std::uintptr_t) != 8) {
+
+            return fixed_direct_materialization_result::
+                incompatible_abi;
+        }
+
+        const auto base =
+            reinterpret_cast<std::uintptr_t>(
+                runtime.data());
+
+        if (target < base ||
+            target - base >=
+                layout.size()) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        store_native(
+            slot,
+            target);
+
+        return fixed_direct_materialization_result::success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    canonical_value(
+        type_ref type,
+        std::byte* target) noexcept {
+
+        runtime_value_layout value;
+
+        if (!layout.value(
+                type,
+                value)) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        switch (type.kind()) {
+        case type_ref_kind::intrinsic:
+            std::fill_n(
+                target,
+                static_cast<std::size_t>(
+                    value.size),
+                std::byte{0});
+
+            return fixed_direct_materialization_result::
+                success;
+
+        case type_ref_kind::named: {
+            const auto handle =
+                project.type_at(
+                    type.payload() - 1);
+
+            return canonical_record(
+                handle,
+                target);
+        }
+
+        case type_ref_kind::derived: {
+            derived_type_record derived;
+
+            if (!project.derived(
+                    type,
+                    derived)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            switch (derived.kind) {
+            case derived_type_kind::const_qualified:
+            case derived_type_kind::volatile_qualified:
+                return canonical_value(
+                    derived.child,
+                    target);
+
+            case derived_type_kind::pointer:
+                std::fill_n(
+                    target,
+                    static_cast<std::size_t>(
+                        value.size),
+                    std::byte{0});
+
+                return fixed_direct_materialization_result::
+                    success;
+
+            case derived_type_kind::lvalue_reference:
+            case derived_type_kind::rvalue_reference: {
+                std::uint64_t offset = 0;
+
+                if (!layout.unconnected_offset(
+                        derived.child,
+                        offset)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                const auto* value_target =
+                    address(
+                        offset);
+
+                if (value_target == nullptr) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                return write_address(
+                    target,
+                    reinterpret_cast<std::uintptr_t>(
+                        value_target));
+            }
+
+            case derived_type_kind::bounded_array: {
+                if (derived.payload == 0) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                runtime_value_layout child;
+
+                if (!layout.value(
+                        derived.child,
+                        child)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                for (std::uint64_t index = 0;
+                     index <
+                         derived.payload;
+                     ++index) {
+
+                    const auto materialized =
+                        canonical_value(
+                            derived.child,
+                            target +
+                                static_cast<std::size_t>(
+                                    index *
+                                    child.size));
+
+                    if (materialized !=
+                        fixed_direct_materialization_result::
+                            success) {
+
+                        return materialized;
+                    }
+                }
+
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            case derived_type_kind::unbounded_array:
+                return fixed_direct_materialization_result::
+                    unsupported_type;
+            }
+
+            break;
+        }
+
+        case type_ref_kind::invalid:
+            break;
+        }
+
+        return fixed_direct_materialization_result::
+            invalid_input;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    canonical_record(
+        type_handle handle,
+        std::byte* base) noexcept {
+
+        type_entry type;
+
+        if (!handle ||
+            !project.type(
+                handle,
+                type) ||
+            !type.defined() ||
+            type.kind !=
+                graph_type_kind::record) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        if (type.record_kind ==
+            graph_record_kind::union_type) {
+
+            return fixed_direct_materialization_result::
+                unsupported_type;
+        }
+
+        if (type.record_kind !=
+                graph_record_kind::struct_type &&
+            type.record_kind !=
+                graph_record_kind::class_type) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        for (std::uint32_t local = 0;
+             local <
+                 type.members.count;
+             ++local) {
+
+            const auto global =
+                static_cast<std::size_t>(
+                    type.members.begin) +
+                local;
+
+            member_record member;
+            std::uint64_t offset = 0;
+
+            if (!project.member_at(
+                    global,
+                    member) ||
+                !layout.member_offset(
+                    global,
+                    offset)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            auto* target =
+                base +
+                static_cast<std::size_t>(
+                    offset);
+
+            type_ref referent;
+
+            if (reference_referent(
+                    member.type,
+                    referent)) {
+
+                std::uint64_t sentinel = 0;
+
+                if (!layout.unconnected_offset(
+                        referent,
+                        sentinel)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                const auto* value_target =
+                    address(
+                        sentinel);
+
+                if (value_target == nullptr) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                const auto written =
+                    write_address(
+                        target,
+                        reinterpret_cast<std::uintptr_t>(
+                            value_target));
+
+                if (written !=
+                    fixed_direct_materialization_result::
+                        success) {
+
+                    return written;
+                }
+
+                continue;
+            }
+
+            const auto materialized =
+                canonical_value(
+                    member.type,
+                    target);
+
+            if (materialized !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return materialized;
+            }
+        }
+
+        return fixed_direct_materialization_result::success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    normal_value(
+        type_ref type,
+        construction_value construction,
+        std::byte* target,
+        object_handle top_object) noexcept {
+
+        switch (type.kind()) {
+        case type_ref_kind::intrinsic:
+            return normal_intrinsic(
+                static_cast<intrinsic_type>(
+                    type.payload()),
+                construction,
+                target);
+
+        case type_ref_kind::named: {
+            if (construction.kind !=
+                construction_kind::zero) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            const auto handle =
+                project.type_at(
+                    type.payload() - 1);
+
+            return normal_record(
+                handle,
+                target,
+                top_object);
+        }
+
+        case type_ref_kind::derived: {
+            derived_type_record derived;
+
+            if (!project.derived(
+                    type,
+                    derived)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            switch (derived.kind) {
+            case derived_type_kind::const_qualified:
+            case derived_type_kind::volatile_qualified:
+                return normal_value(
+                    derived.child,
+                    construction,
+                    target,
+                    top_object);
+
+            case derived_type_kind::pointer: {
+                if (!zero_pointer_construction(
+                        construction)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                const std::uintptr_t value = 0;
+
+                store_native(
+                    target,
+                    value);
+
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            case derived_type_kind::lvalue_reference:
+            case derived_type_kind::rvalue_reference: {
+                if (construction.kind !=
+                    construction_kind::zero) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                std::uint64_t sentinel = 0;
+
+                if (!layout.unconnected_offset(
+                        derived.child,
+                        sentinel)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                const auto* value_target =
+                    address(
+                        sentinel);
+
+                if (value_target == nullptr) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                return write_address(
+                    target,
+                    reinterpret_cast<std::uintptr_t>(
+                        value_target));
+            }
+
+            case derived_type_kind::bounded_array: {
+                if (construction.kind !=
+                        construction_kind::zero ||
+                    derived.payload == 0) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                runtime_value_layout child;
+
+                if (!layout.value(
+                        derived.child,
+                        child)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                for (std::uint64_t index = 0;
+                     index <
+                         derived.payload;
+                     ++index) {
+
+                    const auto materialized =
+                        normal_value(
+                            derived.child,
+                            {},
+                            target +
+                                static_cast<std::size_t>(
+                                    index *
+                                    child.size),
+                            {});
+
+                    if (materialized !=
+                        fixed_direct_materialization_result::
+                            success) {
+
+                        return materialized;
+                    }
+                }
+
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            case derived_type_kind::unbounded_array:
+                return fixed_direct_materialization_result::
+                    unsupported_type;
+            }
+
+            break;
+        }
+
+        case type_ref_kind::invalid:
+            break;
+        }
+
+        return fixed_direct_materialization_result::
+            invalid_input;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    normal_intrinsic(
+        intrinsic_type type,
+        construction_value construction,
+        std::byte* target) noexcept {
+
+        switch (type) {
+        case intrinsic_type::bool_type: {
+            bool value = false;
+
+            switch (construction.kind) {
+            case construction_kind::zero:
+                break;
+
+            case construction_kind::signed_integer:
+                value =
+                    std::bit_cast<std::int64_t>(
+                        construction.bits()) != 0;
+                break;
+
+            case construction_kind::unsigned_integer:
+                value =
+                    construction.bits() != 0;
+                break;
+
+            case construction_kind::real:
+                value =
+                    std::bit_cast<double>(
+                        construction.bits()) != 0.0;
+                break;
+
+            case construction_kind::member_binding:
+            case construction_kind::object_binding:
+            case construction_kind::unsupported:
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            store_native(
+                target,
+                value);
+
+            return fixed_direct_materialization_result::
+                success;
+        }
+
+        case intrinsic_type::char_type:
+            return write_integer<char>(
+                construction,
+                target);
+
+        case intrinsic_type::signed_char:
+            return write_integer<signed char>(
+                construction,
+                target);
+
+        case intrinsic_type::unsigned_char:
+            return write_integer<unsigned char>(
+                construction,
+                target);
+
+        case intrinsic_type::wchar_type:
+            return write_integer<wchar_t>(
+                construction,
+                target);
+
+        case intrinsic_type::char8_type:
+            return write_integer<char8_t>(
+                construction,
+                target);
+
+        case intrinsic_type::char16_type:
+            return write_integer<char16_t>(
+                construction,
+                target);
+
+        case intrinsic_type::char32_type:
+            return write_integer<char32_t>(
+                construction,
+                target);
+
+        case intrinsic_type::signed_short:
+            return write_integer<short>(
+                construction,
+                target);
+
+        case intrinsic_type::unsigned_short:
+            return write_integer<unsigned short>(
+                construction,
+                target);
+
+        case intrinsic_type::signed_int:
+            return write_integer<int>(
+                construction,
+                target);
+
+        case intrinsic_type::unsigned_int:
+            return write_integer<unsigned int>(
+                construction,
+                target);
+
+        case intrinsic_type::signed_long:
+            return write_integer<long>(
+                construction,
+                target);
+
+        case intrinsic_type::unsigned_long:
+            return write_integer<unsigned long>(
+                construction,
+                target);
+
+        case intrinsic_type::signed_long_long:
+            return write_integer<long long>(
+                construction,
+                target);
+
+        case intrinsic_type::unsigned_long_long:
+            return write_integer<unsigned long long>(
+                construction,
+                target);
+
+        case intrinsic_type::float_type:
+            return write_real<float>(
+                construction,
+                target);
+
+        case intrinsic_type::double_type:
+            return write_real<double>(
+                construction,
+                target);
+
+        case intrinsic_type::long_double_type:
+            return write_real<long double>(
+                construction,
+                target);
+
+        case intrinsic_type::nullptr_type: {
+            if (!zero_pointer_construction(
+                    construction)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            const std::uintptr_t value = 0;
+
+            store_native(
+                target,
+                value);
+
+            return fixed_direct_materialization_result::
+                success;
+        }
+
+        case intrinsic_type::void_type:
+            return fixed_direct_materialization_result::
+                unsupported_type;
+
+        case intrinsic_type::none:
+            break;
+        }
+
+        return fixed_direct_materialization_result::
+            invalid_input;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    normal_record(
+        type_handle handle,
+        std::byte* base,
+        object_handle link_object) noexcept {
+
+        type_entry type;
+
+        if (!handle ||
+            !project.type(
+                handle,
+                type) ||
+            !type.defined() ||
+            type.kind !=
+                graph_type_kind::record) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        if (type.record_kind ==
+            graph_record_kind::union_type) {
+
+            return fixed_direct_materialization_result::
+                unsupported_type;
+        }
+
+        if (type.record_kind !=
+                graph_record_kind::struct_type &&
+            type.record_kind !=
+                graph_record_kind::class_type) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        for (std::uint32_t local = 0;
+             local <
+                 type.members.count;
+             ++local) {
+
+            const auto global =
+                static_cast<std::size_t>(
+                    type.members.begin) +
+                local;
+
+            member_record member;
+            construction_value construction;
+            std::uint64_t offset = 0;
+
+            if (!project.member_at(
+                    global,
+                    member) ||
+                !project.construction(
+                    handle,
+                    local,
+                    construction) ||
+                !layout.member_offset(
+                    global,
+                    offset)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            auto* target =
+                base +
+                static_cast<std::size_t>(
+                    offset);
+
+            type_ref referent;
+
+            if (reference_referent(
+                    member.type,
+                    referent)) {
+
+                std::uintptr_t value_target = 0;
+
+                const auto resolved =
+                    resolve_reference_member(
+                        handle,
+                        base,
+                        link_object,
+                        local,
+                        target,
+                        value_target);
+
+                if (resolved !=
+                    fixed_direct_materialization_result::
+                        success) {
+
+                    return resolved;
+                }
+
+                const auto written =
+                    write_address(
+                        target,
+                        value_target);
+
+                if (written !=
+                    fixed_direct_materialization_result::
+                        success) {
+
+                    return written;
+                }
+
+                continue;
+            }
+
+            const auto materialized =
+                normal_value(
+                    member.type,
+                    construction,
+                    target,
+                    {});
+
+            if (materialized !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return materialized;
+            }
+        }
+
+        return fixed_direct_materialization_result::success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    resolve_reference_member(
+        type_handle record_type_value,
+        std::byte* record_base,
+        object_handle link_object,
+        std::uint32_t local,
+        std::byte* slot,
+        std::uintptr_t& output) noexcept {
+
+        output = 0;
+
+        const auto slot_address =
+            reinterpret_cast<std::uintptr_t>(
+                slot);
+
+        if (std::find(
+                resolving_references.begin(),
+                resolving_references.end(),
+                slot_address) !=
+            resolving_references.end()) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        try {
+            resolving_references.push_back(
+                slot_address);
+        }
+        catch (...) {
+            return fixed_direct_materialization_result::
+                failed;
+        }
+
+        const auto resolved =
+            [&]() noexcept
+            -> fixed_direct_materialization_result {
+
+            member_record member;
+            construction_value construction;
+
+            if (!project.member(
+                    record_type_value,
+                    local,
+                    member) ||
+                !project.construction(
+                    record_type_value,
+                    local,
+                    construction)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            type_ref referent;
+
+            if (!reference_referent(
+                    member.type,
+                    referent)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            if (link_object) {
+                const auto link =
+                    project.find_link_target(
+                        link_object,
+                        local);
+
+                if (link) {
+                    if (construction.kind !=
+                        construction_kind::zero) {
+
+                        return fixed_direct_materialization_result::
+                            invalid_input;
+                    }
+
+                    link_record record;
+
+                    if (!project.link(
+                            link,
+                            record) ||
+                        record.target.object !=
+                            link_object ||
+                        record.target.member.value() !=
+                            local) {
+
+                        return fixed_direct_materialization_result::
+                            invalid_input;
+                    }
+
+                    return resolve_endpoint(
+                        record.source,
+                        output);
+                }
+            }
+
+            switch (construction.kind) {
+            case construction_kind::zero: {
+                std::uint64_t sentinel = 0;
+
+                if (!layout.unconnected_offset(
+                        referent,
+                        sentinel)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                const auto* target =
+                    address(
+                        sentinel);
+
+                if (target == nullptr) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                output =
+                    reinterpret_cast<std::uintptr_t>(
+                        target);
+
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            case construction_kind::member_binding: {
+                if (construction.operand == 0) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                const auto source_local =
+                    construction.operand - 1;
+
+                type_entry record;
+
+                if (!project.type(
+                        record_type_value,
+                        record) ||
+                    source_local >=
+                        record.members.count) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                member_record source;
+                std::uint64_t source_offset = 0;
+
+                const auto global =
+                    static_cast<std::size_t>(
+                        record.members.begin) +
+                    source_local;
+
+                if (!project.member_at(
+                        global,
+                        source) ||
+                    !layout.member_offset(
+                        global,
+                        source_offset)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                auto* source_address =
+                    record_base +
+                    static_cast<std::size_t>(
+                        source_offset);
+
+                type_ref source_referent;
+
+                if (reference_referent(
+                        source.type,
+                        source_referent)) {
+
+                    return resolve_reference_member(
+                        record_type_value,
+                        record_base,
+                        link_object,
+                        source_local,
+                        source_address,
+                        output);
+                }
+
+                output =
+                    reinterpret_cast<std::uintptr_t>(
+                        source_address);
+
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            case construction_kind::object_binding: {
+                if (construction.operand == 0) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                const auto object =
+                    project.object_at(
+                        construction.operand - 1);
+
+                object_entry source;
+                std::uint64_t source_offset = 0;
+
+                if (!object ||
+                    object.value() !=
+                        construction.operand ||
+                    !project.object(
+                        object,
+                        source) ||
+                    !layout.object_offset(
+                        object,
+                        source_offset)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                auto* source_address =
+                    address(
+                        source_offset);
+
+                if (source_address == nullptr) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                type_ref source_referent;
+
+                if (reference_referent(
+                        source.type,
+                        source_referent)) {
+
+                    construction_value source_construction;
+
+                    if (!project.construction(
+                            object,
+                            source_construction) ||
+                        source_construction.kind !=
+                            construction_kind::zero) {
+
+                        return fixed_direct_materialization_result::
+                            invalid_input;
+                    }
+
+                    std::uint64_t sentinel = 0;
+
+                    if (!layout.unconnected_offset(
+                            source_referent,
+                            sentinel)) {
+
+                        return fixed_direct_materialization_result::
+                            invalid_input;
+                    }
+
+                    const auto* target =
+                        address(
+                            sentinel);
+
+                    if (target == nullptr) {
+                        return fixed_direct_materialization_result::
+                            invalid_input;
+                    }
+
+                    output =
+                        reinterpret_cast<std::uintptr_t>(
+                            target);
+
+                    return fixed_direct_materialization_result::
+                        success;
+                }
+
+                output =
+                    reinterpret_cast<std::uintptr_t>(
+                        source_address);
+
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            case construction_kind::signed_integer:
+            case construction_kind::unsigned_integer:
+            case construction_kind::real:
+            case construction_kind::unsupported:
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }();
+
+        resolving_references.pop_back();
+
+        return resolved;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    resolve_endpoint(
+        object_endpoint endpoint,
+        std::uintptr_t& output) noexcept {
+
+        output = 0;
+
+        object_entry object;
+        std::uint64_t object_offset = 0;
+
+        if (!endpoint.object ||
+            !endpoint.member ||
+            !project.object(
+                endpoint.object,
+                object) ||
+            !layout.object_offset(
+                endpoint.object,
+                object_offset)) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        type_handle record_type_value;
+
+        if (!record_type(
+                object.type,
+                record_type_value)) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        type_entry record;
+
+        const auto local =
+            endpoint.member.value();
+
+        if (!project.type(
+                record_type_value,
+                record) ||
+            local >=
+                record.members.count) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        member_record member;
+        std::uint64_t member_offset = 0;
+
+        const auto global =
+            static_cast<std::size_t>(
+                record.members.begin) +
+            local;
+
+        if (!project.member_at(
+                global,
+                member) ||
+            !layout.member_offset(
+                global,
+                member_offset)) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        auto* base =
+            address(
+                object_offset);
+
+        if (base == nullptr) {
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        auto* member_address =
+            base +
+            static_cast<std::size_t>(
+                member_offset);
+
+        type_ref referent;
+
+        if (reference_referent(
+                member.type,
+                referent)) {
+
+            return resolve_reference_member(
+                record_type_value,
+                base,
+                endpoint.object,
+                local,
+                member_address,
+                output);
+        }
+
+        output =
+            reinterpret_cast<std::uintptr_t>(
+                member_address);
+
+        return fixed_direct_materialization_result::success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    verify_links() noexcept {
+
+        for (std::size_t index = 0;
+             index <
+                 project.link_count();
+             ++index) {
+
+            const auto handle =
+                project.link_at(
+                    index);
+
+            link_record link;
+
+            if (!handle ||
+                !project.link(
+                    handle,
+                    link)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            object_entry target_object;
+            std::uint64_t object_offset = 0;
+
+            if (!project.object(
+                    link.target.object,
+                    target_object) ||
+                !layout.object_offset(
+                    link.target.object,
+                    object_offset)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            type_handle record_type_value;
+
+            if (!record_type(
+                    target_object.type,
+                    record_type_value)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            type_entry record;
+
+            const auto local =
+                link.target.member.value();
+
+            if (!project.type(
+                    record_type_value,
+                    record) ||
+                local >=
+                    record.members.count) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            member_record member;
+            construction_value construction;
+            std::uint64_t member_offset = 0;
+
+            const auto global =
+                static_cast<std::size_t>(
+                    record.members.begin) +
+                local;
+
+            if (!project.member_at(
+                    global,
+                    member) ||
+                !project.construction(
+                    record_type_value,
+                    local,
+                    construction) ||
+                construction.kind !=
+                    construction_kind::zero ||
+                !layout.member_offset(
+                    global,
+                    member_offset)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            type_ref referent;
+
+            if (!reference_referent(
+                    member.type,
+                    referent)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            std::uintptr_t source = 0;
+
+            const auto source_resolved =
+                resolve_endpoint(
+                    link.source,
+                    source);
+
+            if (source_resolved !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return source_resolved;
+            }
+
+            auto* target_base =
+                address(
+                    object_offset);
+
+            if (target_base == nullptr) {
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            std::uintptr_t stored = 0;
+
+            std::memcpy(
+                &stored,
+                target_base +
+                    static_cast<std::size_t>(
+                        member_offset),
+                sizeof(stored));
+
+            if (stored != source) {
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+        }
+
+        return fixed_direct_materialization_result::success;
+    }
+
+    const compiled_project_view& project;
+    const runtime_layout& layout;
+    std::span<std::byte> runtime;
+    std::vector<std::uintptr_t> resolving_references;
+};
+
+}
+
+bool fixed_direct_host_compatible(
+    const server_abi_configuration& abi) noexcept {
+
+    if (sizeof(void*) != 8 ||
+        sizeof(std::uintptr_t) != 8 ||
+        std::endian::native !=
+            std::endian::little ||
+        sizeof(bool) != 1 ||
+        sizeof(short) != 2 ||
+        sizeof(int) != 4 ||
+        sizeof(long long) != 8 ||
+        sizeof(float) != 4 ||
+        sizeof(double) != 8 ||
+        sizeof(std::nullptr_t) != 8 ||
+        sizeof(reference_representation_probe) != 8 ||
+        alignof(reference_representation_probe) != 8) {
+
+        return false;
+    }
+
+#if defined(_WIN32)
+    if (abi.target !=
+            abi_target::windows_x64 ||
+        sizeof(wchar_t) != 2 ||
+        sizeof(long) != 4 ||
+        sizeof(long double) != 8 ||
+        alignof(long double) != 8) {
+
+        return false;
+    }
+#else
+    if (abi.target !=
+            abi_target::posix_x64 ||
+        sizeof(wchar_t) != 4 ||
+        sizeof(long) != 8 ||
+        sizeof(long double) != 16 ||
+        alignof(long double) != 16) {
+
+        return false;
+    }
+#endif
+
+    void* null_pointer = nullptr;
+    std::uintptr_t null_bits =
+        (std::numeric_limits<std::uintptr_t>::max)();
+
+    std::memcpy(
+        &null_bits,
+        &null_pointer,
+        sizeof(null_bits));
+
+    if (null_bits != 0) {
+        return false;
+    }
+
+    int value = 0;
+
+    reference_representation_probe probe{
+        value};
+
+    std::uintptr_t reference_bits = 0;
+
+    std::memcpy(
+        &reference_bits,
+        &probe,
+        sizeof(reference_bits));
+
+    return reference_bits ==
+        reinterpret_cast<std::uintptr_t>(
+            &value);
+}
+
+fixed_direct_materialization_result
+materialize_fixed_direct(
+    const compiled_project_view& project,
+    const runtime_layout& layout,
+    const server_abi_configuration& abi,
+    std::span<std::byte> runtime) noexcept {
+
+    if (!fixed_direct_host_compatible(
+            abi)) {
+
+        return fixed_direct_materialization_result::
+            incompatible_abi;
+    }
+
+    fixed_direct_materializer materializer{
+        project,
+        layout,
+        runtime,
+    };
+
+    return materializer.run();
+}
+
+}

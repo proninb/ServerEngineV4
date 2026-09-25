@@ -1774,6 +1774,18 @@ bool compiled_project_view::member(
             3);
 }
 
+bool compiled_project_view::member(
+    type_handle type_value,
+    std::uint32_t local_member,
+    member_record& output) const noexcept {
+
+    return member(
+        type_value,
+        member_from_raw(
+            local_member),
+        output);
+}
+
 bool compiled_project_view::member_at(
     std::size_t index,
     member_record& output) const noexcept {
@@ -1879,6 +1891,18 @@ bool compiled_project_view::construction(
                 record + 12));
 
     return valid_construction(output);
+}
+
+bool compiled_project_view::construction(
+    type_handle type_value,
+    std::uint32_t local_member,
+    construction_value& output) const noexcept {
+
+    return construction(
+        type_value,
+        member_from_raw(
+            local_member),
+        output);
 }
 
 member_index compiled_project_view::find_member(
@@ -2230,6 +2254,17 @@ bool compiled_project_view::construction(
     return valid_construction(output);
 }
 
+link_handle compiled_project_view::link_at(
+    std::size_t index) const noexcept {
+
+    return index <
+        link_count_value
+        ? link_from_raw(
+            static_cast<std::uint32_t>(
+                index + 1))
+        : link_handle{};
+}
+
 bool compiled_project_view::link(
     link_handle handle,
     link_record& output) const noexcept {
@@ -2358,6 +2393,21 @@ link_handle compiled_project_view::find_link_target(
     }
 
     return {};
+}
+
+link_handle compiled_project_view::find_link_target(
+    object_handle object,
+    std::uint32_t local_member) const noexcept {
+
+    if (!object) {
+        return {};
+    }
+
+    return find_link_target({
+        object,
+        member_from_raw(
+            local_member),
+    });
 }
 
 bool compiled_project_view::assign(

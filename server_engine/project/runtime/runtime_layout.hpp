@@ -11,6 +11,7 @@
 #include "../abi/abi_layout.hpp"
 #include "../persistence/compiled_project.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -55,6 +56,27 @@ public:
         return alignment_value;
     }
 
+    [[nodiscard]] bool value(
+        type_ref type,
+        runtime_value_layout& output) const noexcept;
+
+    [[nodiscard]] bool unconnected_offset(
+        type_ref type,
+        std::uint64_t& output) const noexcept;
+
+    [[nodiscard]] std::size_t unconnected_count() const noexcept {
+        return unconnected_types.size();
+    }
+
+    [[nodiscard]] type_ref unconnected_type(
+        std::size_t index) const noexcept {
+
+        return index <
+                unconnected_types.size()
+            ? unconnected_types[index]
+            : type_ref{};
+    }
+
     [[nodiscard]] bool type(
         type_handle type,
         runtime_value_layout& output) const noexcept;
@@ -86,13 +108,36 @@ private:
 
     void reset() noexcept;
 
+    static constexpr std::size_t
+    intrinsic_slot_count =
+        static_cast<std::size_t>(
+            intrinsic_type::nullptr_type) + 1;
+
     std::vector<layout_slot> type_slots;
     std::vector<layout_slot> derived_slots;
     std::vector<std::uint64_t> member_offsets;
     std::vector<std::uint64_t> object_offsets;
 
+    std::array<
+        std::uint64_t,
+        intrinsic_slot_count>
+        unconnected_intrinsic_offsets{};
+
+    std::vector<std::uint64_t>
+        unconnected_type_offsets;
+
+    std::vector<std::uint64_t>
+        unconnected_derived_offsets;
+
+    std::vector<type_ref>
+        unconnected_types;
+
+    abi_target target_value =
+        abi_target::windows_x64;
+
     std::uint64_t size_value = 0;
     std::uint32_t alignment_value = 1;
+    bool prepared_value = false;
 
     friend class runtime_layout_builder;
 

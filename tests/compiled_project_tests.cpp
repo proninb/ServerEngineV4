@@ -1,5 +1,6 @@
 #include "project/persistence/compiled_project.hpp"
 #include "project/persistence/crc64_ecma.hpp"
+#include "project/runtime/fixed_direct_materializer.hpp"
 #include "project/runtime/runtime_layout.hpp"
 #include "project/file/file_context.hpp"
 #include "project/graph/graph_delta.hpp"
@@ -10,6 +11,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <span>
@@ -1464,14 +1466,14 @@ void test_runtime_layout(
         native.object_offset(
             fixture.left,
             left_offset) &&
-        left_offset == 0 &&
+        left_offset == 8 &&
         native.object_offset(
             fixture.right,
             right_offset) &&
-        right_offset == 16 &&
-        native.size() == 32 &&
+        right_offset == 24 &&
+        native.size() == 40 &&
         native.alignment() == 8,
-        "pack-8 dense object layout");
+        "pack-8 canonical sentinel plus dense object layout");
 
     abi.pack = 4;
 
@@ -1515,15 +1517,547 @@ void test_runtime_layout(
         packed.object_offset(
             fixture.left,
             left_offset) &&
-        left_offset == 0 &&
+        left_offset == 4 &&
         packed.object_offset(
             fixture.right,
             right_offset) &&
-        right_offset == 12 &&
-        packed.size() == 24 &&
+        right_offset == 16 &&
+        packed.size() == 28 &&
         packed.alignment() == 4,
-        "pack-4 dense object layout");
+        "pack-4 canonical sentinel plus dense object layout");
+
+    std::uint64_t unconnected = 0;
+
+    tests.expect(
+        native.unconnected_offset(
+            fixture.integer_type,
+            unconnected) &&
+        unconnected == 0,
+        "Runtime layout places canonical unconnected<int> before Project objects");
 }
+
+void test_fixed_direct_materializer(
+    test_state& tests) {
+
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    assign_table assigns;
+    file_context files;
+    source_map sources;
+
+    string_id a_name;
+    string_id b_name;
+    string_id in_name;
+    string_id out_name;
+    string_id source_name;
+    string_id linked_name;
+    string_id container_name;
+
+    const auto intern =
+        [&](std::string_view value,
+            string_id& output) {
+
+            return succeeded(
+                strings.intern(
+                    value,
+                    output));
+        };
+
+    if (!tests.expect(
+            intern("A", a_name) &&
+            intern("B", b_name) &&
+            intern("in", in_name) &&
+            intern("out", out_name) &&
+            intern("source", source_name) &&
+            intern("linked", linked_name) &&
+            intern("container", container_name),
+            "prepare FIXED_DIRECT materializer strings")) {
+
+        return;
+    }
+
+    identity_ref a_identity;
+    identity_ref b_identity;
+    identity_ref source_identity;
+    identity_ref linked_identity;
+    identity_ref container_identity;
+
+    if (!tests.expect(
+            succeeded(
+                identities.resolve(
+                    identities.root(),
+                    a_name,
+                    identity_kind::type,
+                    a_identity)) &&
+            succeeded(
+                identities.resolve(
+                    identities.root(),
+                    b_name,
+                    identity_kind::type,
+                    b_identity)) &&
+            succeeded(
+                identities.resolve(
+                    identities.root(),
+                    source_name,
+                    identity_kind::object,
+                    source_identity)) &&
+            succeeded(
+                identities.resolve(
+                    identities.root(),
+                    linked_name,
+                    identity_kind::object,
+                    linked_identity)) &&
+            succeeded(
+                identities.resolve(
+                    identities.root(),
+                    container_name,
+                    identity_kind::object,
+                    container_identity)),
+            "prepare FIXED_DIRECT materializer identities")) {
+
+        return;
+    }
+
+    type_handle a_type;
+    type_handle b_type;
+
+    if (!tests.expect(
+            succeeded(
+                G.declare_record(
+                    a_identity,
+                    graph_record_kind::struct_type,
+                    a_type)) &&
+            succeeded(
+                G.declare_record(
+                    b_identity,
+                    graph_record_kind::struct_type,
+                    b_type)),
+            "declare FIXED_DIRECT materializer records")) {
+
+        return;
+    }
+
+    const auto integer =
+        G.intrinsic(
+            intrinsic_type::signed_int);
+
+    type_ref integer_reference;
+
+    if (!tests.expect(
+            integer &&
+            succeeded(
+                G.derive(
+                    integer,
+                    derived_type_kind::lvalue_reference,
+                    0,
+                    integer_reference)),
+            "prepare int reference type")) {
+
+        return;
+    }
+
+    const std::array<member_record, 2>
+        a_members{{
+            {
+                in_name,
+                integer_reference,
+                graph_member_access::public_access,
+            },
+            {
+                out_name,
+                integer,
+                graph_member_access::public_access,
+            },
+        }};
+
+    const std::array<construction_value, 2>
+        a_construction{{
+            {},
+            construction_value::constant(
+                construction_kind::signed_integer,
+                42),
+        }};
+
+    if (!tests.expect(
+            succeeded(
+                G.define_record(
+                    a_type,
+                    graph_record_kind::struct_type,
+                    a_members,
+                    a_construction)),
+            "define A materializer record")) {
+
+        return;
+    }
+
+    const auto named_a =
+        G.named(
+            a_type);
+
+    type_ref a_reference;
+
+    if (!tests.expect(
+            named_a &&
+            succeeded(
+                G.derive(
+                    named_a,
+                    derived_type_kind::lvalue_reference,
+                    0,
+                    a_reference)),
+            "prepare A reference type")) {
+
+        return;
+    }
+
+    const std::array<member_record, 2>
+        b_members{{
+            {
+                in_name,
+                a_reference,
+                graph_member_access::public_access,
+            },
+            {
+                out_name,
+                named_a,
+                graph_member_access::public_access,
+            },
+        }};
+
+    if (!tests.expect(
+            succeeded(
+                G.define_record(
+                    b_type,
+                    graph_record_kind::struct_type,
+                    b_members)),
+            "define B materializer record")) {
+
+        return;
+    }
+
+    const auto named_b =
+        G.named(
+            b_type);
+
+    object_handle source_object;
+    object_handle linked_object;
+    object_handle container_object;
+
+    if (!tests.expect(
+            succeeded(
+                G.add_object(
+                    source_identity,
+                    named_a,
+                    source_object)) &&
+            succeeded(
+                G.add_object(
+                    linked_identity,
+                    named_a,
+                    linked_object)) &&
+            succeeded(
+                G.add_object(
+                    container_identity,
+                    named_b,
+                    container_object)),
+            "add FIXED_DIRECT materializer objects")) {
+
+        return;
+    }
+
+    const auto a_in =
+        G.find_member(
+            a_type,
+            in_name);
+
+    const auto a_out =
+        G.find_member(
+            a_type,
+            out_name);
+
+    link_handle link;
+
+    if (!tests.expect(
+            a_in &&
+            a_out &&
+            succeeded(
+                G.add_link(
+                    {
+                        source_object,
+                        a_out,
+                    },
+                    {
+                        linked_object,
+                        a_in,
+                    },
+                    link)),
+            "add FIXED_DIRECT native reference link")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            succeeded(
+                sources.finalize(
+                    files.size(),
+                    identities,
+                    G)),
+            "finalize FIXED_DIRECT materializer Source Map")) {
+
+        return;
+    }
+
+    compiled_project_layout persisted_layout;
+
+    if (!tests.expect(
+            prepare_compiled_project_layout(
+                strings,
+                identities,
+                G,
+                assigns,
+                files,
+                sources,
+                persisted_layout) ==
+                compiled_project_image_result::success,
+            "prepare FIXED_DIRECT compiled image")) {
+
+        return;
+    }
+
+    compiled_test_image image;
+
+    try {
+        image.bytes.assign(
+            persisted_layout.size(),
+            std::byte{0});
+    }
+    catch (...) {
+        tests.expect(
+            false,
+            "allocate FIXED_DIRECT compiled image");
+        return;
+    }
+
+    if (!tests.expect(
+            encode_compiled_project_image(
+                strings,
+                identities,
+                G,
+                assigns,
+                files,
+                sources,
+                persisted_layout,
+                image.bytes) ==
+                compiled_project_image_result::success,
+            "encode FIXED_DIRECT compiled image")) {
+
+        return;
+    }
+
+    compiled_project_view view;
+
+    if (!tests.expect(
+            view.bind(
+                image.bytes) ==
+                compiled_project_image_result::success,
+            "bind FIXED_DIRECT compiled image")) {
+
+        return;
+    }
+
+#if defined(_WIN32)
+    const server_abi_configuration abi{
+        abi_target::windows_x64,
+        8,
+    };
+#else
+    const server_abi_configuration abi{
+        abi_target::posix_x64,
+        8,
+    };
+#endif
+
+    runtime_layout layout;
+
+    if (!tests.expect(
+            fixed_direct_host_compatible(
+                abi) &&
+            prepare_runtime_layout(
+                view,
+                abi,
+                layout) ==
+                runtime_layout_result::success,
+            "prepare FIXED_DIRECT Runtime layout")) {
+
+        return;
+    }
+
+    std::vector<std::byte> runtime;
+
+    try {
+        runtime.assign(
+            static_cast<std::size_t>(
+                layout.size()),
+            std::byte{0xcc});
+    }
+    catch (...) {
+        tests.expect(
+            false,
+            "allocate FIXED_DIRECT test Runtime");
+        return;
+    }
+
+    if (!tests.expect(
+            materialize_fixed_direct(
+                view,
+                layout,
+                abi,
+                runtime) ==
+                fixed_direct_materialization_result::success,
+            "materialize FIXED_DIRECT Runtime image")) {
+
+        return;
+    }
+
+    std::uint64_t unconnected_int = 0;
+    std::uint64_t unconnected_a = 0;
+    std::uint64_t source_offset = 0;
+    std::uint64_t linked_offset = 0;
+    std::uint64_t container_offset = 0;
+
+    type_entry a_record;
+    type_entry b_record;
+
+    std::uint64_t a_in_offset = 0;
+    std::uint64_t a_out_offset = 0;
+    std::uint64_t b_in_offset = 0;
+    std::uint64_t b_out_offset = 0;
+
+    if (!tests.expect(
+            layout.unconnected_offset(
+                integer,
+                unconnected_int) &&
+            layout.unconnected_offset(
+                named_a,
+                unconnected_a) &&
+            layout.object_offset(
+                source_object,
+                source_offset) &&
+            layout.object_offset(
+                linked_object,
+                linked_offset) &&
+            layout.object_offset(
+                container_object,
+                container_offset) &&
+            view.type(
+                a_type,
+                a_record) &&
+            view.type(
+                b_type,
+                b_record) &&
+            layout.member_offset(
+                a_record.members.begin +
+                    a_in.value(),
+                a_in_offset) &&
+            layout.member_offset(
+                a_record.members.begin +
+                    a_out.value(),
+                a_out_offset) &&
+            layout.member_offset(
+                b_record.members.begin,
+                b_in_offset) &&
+            layout.member_offset(
+                b_record.members.begin + 1,
+                b_out_offset),
+            "query FIXED_DIRECT Runtime offsets")) {
+
+        return;
+    }
+
+    const auto base =
+        reinterpret_cast<std::uintptr_t>(
+            runtime.data());
+
+    const auto read_address =
+        [&](std::uint64_t offset) {
+            std::uintptr_t value = 0;
+
+            std::memcpy(
+                &value,
+                runtime.data() +
+                    static_cast<std::size_t>(
+                        offset),
+                sizeof(value));
+
+            return value;
+        };
+
+    const auto read_int =
+        [&](std::uint64_t offset) {
+            int value = 0;
+
+            std::memcpy(
+                &value,
+                runtime.data() +
+                    static_cast<std::size_t>(
+                        offset),
+                sizeof(value));
+
+            return value;
+        };
+
+    tests.expect(
+        read_address(
+            unconnected_a +
+                a_in_offset) ==
+            base +
+                unconnected_int &&
+        read_int(
+            unconnected_a +
+                a_out_offset) == 0,
+        "unconnected<A> recursively binds A.in to unconnected<int> and zeroes A.out");
+
+    tests.expect(
+        read_address(
+            source_offset +
+                a_in_offset) ==
+            base +
+                unconnected_int &&
+        read_int(
+            source_offset +
+                a_out_offset) == 42,
+        "ordinary A uses unconnected<int> for A.in and normal member initialization for A.out");
+
+    tests.expect(
+        read_address(
+            linked_offset +
+                a_in_offset) ==
+            base +
+                source_offset +
+                a_out_offset,
+        "Graph link materializes direct native reference to source storage");
+
+    tests.expect(
+        read_address(
+            container_offset +
+                b_in_offset) ==
+            base +
+                unconnected_a,
+        "B.in binds to canonical unconnected<A>");
+
+    tests.expect(
+        read_address(
+            container_offset +
+                b_out_offset +
+                a_in_offset) ==
+            base +
+                unconnected_int &&
+        read_int(
+            container_offset +
+                b_out_offset +
+                a_out_offset) == 42,
+        "B.out is a normal nested A with its own unconnected int reference");
+}
+
 
 void test_runtime_layout_tail_alignment(
     test_state& tests) {
@@ -2461,6 +2995,9 @@ int main() {
             first);
 
         test_runtime_layout_tail_alignment(
+            tests);
+
+        test_fixed_direct_materializer(
             tests);
 
         test_build_lineage_overlays(

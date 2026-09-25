@@ -1,5 +1,6 @@
 #include "project_runtime.hpp"
 
+#include "fixed_direct_materializer.hpp"
 #include "runtime_layout.hpp"
 
 #include "../../diagnostics/diagnostic_builder.hpp"
@@ -38,6 +39,33 @@ layout_failure_detail(
     }
 
     return "Runtime layout preparation failed";
+}
+
+[[nodiscard]] constexpr std::string_view
+materialization_failure_detail(
+    fixed_direct_materialization_result result) noexcept {
+
+    switch (result) {
+    case fixed_direct_materialization_result::success:
+        return "FIXED_DIRECT Runtime materialized successfully";
+
+    case fixed_direct_materialization_result::invalid_input:
+        return "Compiled Runtime construction data is not materializable";
+
+    case fixed_direct_materialization_result::unsupported_type:
+        return "Runtime contains a type not supported by FIXED_DIRECT materialization";
+
+    case fixed_direct_materialization_result::incompatible_abi:
+        return "Server process/compiler ABI does not match configured FIXED_DIRECT ABI";
+
+    case fixed_direct_materialization_result::overflow:
+        return "FIXED_DIRECT Runtime materialization overflowed";
+
+    case fixed_direct_materialization_result::failed:
+        return "FIXED_DIRECT Runtime materialization workspace allocation failed";
+    }
+
+    return "FIXED_DIRECT Runtime materialization failed";
 }
 
 [[nodiscard]] constexpr std::string_view
@@ -149,6 +177,21 @@ server_status create_resident_project(
         return server_status::unsupported;
     }
 
+    if (!fixed_direct_host_compatible(
+            settings.abi)) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_runtime_unsupported,
+                operation)
+                .file(project_path)
+                .detail(
+                    "Configured FIXED_DIRECT ABI does not match the native Server process/compiler ABI")
+                .build());
+
+        return server_status::unsupported;
+    }
+
     runtime_layout layout;
 
     const auto prepared =
@@ -232,6 +275,36 @@ server_status create_resident_project(
                 .build());
 
         return server_status::project_runtime_failed;
+    }
+
+    const auto materialized =
+        materialize_fixed_direct(
+            compiled,
+            layout,
+            settings.abi,
+            shared_memory.bytes());
+
+    if (materialized !=
+        fixed_direct_materialization_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_runtime_failed,
+                operation)
+                .file(project_path)
+                .detail(
+                    materialization_failure_detail(
+                        materialized))
+                .build());
+
+        return materialized ==
+                fixed_direct_materialization_result::
+                    incompatible_abi ||
+            materialized ==
+                fixed_direct_materialization_result::
+                    unsupported_type
+            ? server_status::unsupported
+            : server_status::project_runtime_failed;
     }
 
     try {

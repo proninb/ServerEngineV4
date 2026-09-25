@@ -21,8 +21,8 @@
 namespace cw::server {
 
 // Creates the final resident Project state for the configured Runtime/SHM mode.
-// FIXED_DIRECT allocates the one named Project SHM at the configured exact VA.
-// No Runtime object materialization is performed by this phase.
+// FIXED_DIRECT allocates the one named Project SHM at the configured exact VA
+// and materializes the final ABI-native Runtime image directly into that SHM.
 [[nodiscard]] server_status create_resident_project(
     const std::filesystem::path& project_path,
     const server_settings_configuration& settings,
