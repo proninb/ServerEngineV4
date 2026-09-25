@@ -1,5 +1,97 @@
 # PUBLISH performance review
 
+## Pass 2: Release interprocedural optimization
+
+CMake now checks compiler/linker IPO support and enables it for Release and
+RelWithDebInfo when available. `-DSERVER_ENGINE_ENABLE_IPO=OFF` restores ordinary
+optimization. Debug flags are not changed. This permits cross-translation-unit
+optimization of the frontend/parser/table calls without changing their APIs or
+the persistence contract. The tradeoff is additional optimized build/link work.
+An unsupported toolchain emits a warning and uses ordinary optimization.
+
+The baseline is the saved Pass 1 final executable (production code at
+`981c8c7`); the candidate uses the same production code with MSVC IPO enabled.
+Windows x64 Release, seven measured runs after one warmup per executable,
+alternating order, separate processes, warm OS cache. Full audit by the baseline
+executable and SHA-256 checks occur outside the lifecycle timer. Both binaries
+receive the exact same project paths and input files.
+
+| Workload | Baseline median | IPO median | Time reduction |
+|---|---:|---:|---:|
+| 100,000 single-member types | 80.414 ms | 79.835 ms | 0.7% |
+| 1,000,000 single-member types | 809.951 ms | 752.957 ms | 7.0% |
+| Mixed: 10,001 types, 160,001 members, 20,000 objects, 10,000 links | 77.470 ms | 75.983 ms | 1.9% |
+
+The million-type candidate wins all seven paired comparisons. Improvements on
+the smaller workloads are within ordinary run variability; they are not evidence
+of a large general speedup. Absolute timings from different passes should not be
+combined into a cumulative percentage. Peak working set remains about 38 MiB /
+307 MiB for simple inputs and 32 MiB for the mixed input.
+
+Raw milliseconds, in run order:
+
+| Workload / variant | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 100K baseline | 82.3099 | 78.5200 | 78.1678 | 88.1741 | 80.4135 | 83.2641 | 80.1506 |
+| 100K IPO | 79.8348 | 76.7304 | 78.6421 | 82.3623 | 79.9172 | 73.2850 | 80.9289 |
+| 1M baseline | 849.246 | 829.064 | 772.245 | 815.997 | 809.951 | 783.145 | 770.142 |
+| 1M IPO | 743.422 | 777.208 | 750.544 | 763.380 | 771.357 | 730.775 | 752.957 |
+| Mixed baseline | 77.7599 | 77.0981 | 74.9855 | 77.4702 | 81.6678 | 75.8746 | 77.5868 |
+| Mixed IPO | 76.7821 | 74.1877 | 78.7588 | 75.7915 | 81.3110 | 75.9825 | 74.4193 |
+
+All 42 measured images pass the cold audit and match within each dataset. Simple
+input hashes are unchanged from Pass 1. The mixed image hash at
+`benchmark/mixed_10000/project.json` is
+`EA6DB1B028BEDF69358380C35249035B3B7BB95A0974919A88C45B1725DB09E4`.
+Persisted paths are part of the image, so relocating a fixture can change its hash.
+
+The complete Release build and all six CTest suites pass with IPO enabled.
+Mixed-fixture REBUILD and PUBLISH both pass a baseline-executable audit and
+produce the same bytes; PUBLISH removes the REBUILD acceleration files. A
+separate CMake configuration confirms that the OFF switch omits IPO flags.
+The fixture/comparison scripts also pass a small simple-fixture smoke run with
+uneven file partitions and an even measurement count.
+
+### Reproduce
+
+Run from the repository root in PowerShell. The generator refuses an existing
+output directory; comparison refuses an existing results file. Use dedicated
+fixtures because PUBLISH replaces their persisted artifacts.
+
+```powershell
+cmake -S . -B build-no-ipo -DSERVER_ENGINE_BUILD_BENCHMARKS=ON -DSERVER_ENGINE_ENABLE_IPO=OFF
+cmake --build build-no-ipo --config Release --target ServerEngineV4PublishBenchmark
+cmake -S . -B build -DSERVER_ENGINE_BUILD_BENCHMARKS=ON -DSERVER_ENGINE_ENABLE_IPO=ON
+cmake --build build --config Release --target ServerEngineV4PublishBenchmark
+./benchmarks/new_publish_fixture.ps1 -OutputDirectory build/fixtures/mixed -Scenario mixed -TypeCount 10000 -FileCount 64
+./benchmarks/compare_publish.ps1 -BaselineExe build-no-ipo/Release/ServerEngineV4PublishBenchmark.exe -CandidateExe build/Release/ServerEngineV4PublishBenchmark.exe -Project build/fixtures/mixed/project.json -ExpectedTypes 10001 -ResultPath build/mixed-comparison.csv
+```
+
+`simple` generates one-member structs (expected types = TypeCount). `mixed`
+generates sixteen-member records with defaults and constructors, two guarded
+includes of a shared type in every header, and two objects plus one link per
+record. It places Source roots before Header roots in project order to exercise
+semantic domain ordering. Its expected type count is TypeCount + 1. These remain
+synthetic fixtures, not a representative production corpus.
+
+### Rejected reservation experiment
+
+Two lexical-token-based hints reserved the string and identity vectors, byte
+arena and hash indexes before parsing. Their speculative storage caps were
+approximately 18 MiB and 70 MiB. Neither showed a stable million-type benefit:
+paired-series medians were 818.695 -> 812.755 ms for the smaller cap, and
+787.179 -> 791.246 ms for the larger cap (seven runs each). The smaller cap also
+regressed 100K inputs. Both experiments were removed, including their APIs.
+Graph reservation was not implemented because raw token count does not reliably
+predict the distribution of types, members, objects and links.
+
+Temporary instrumentation of the ordinary optimized baseline measured 440–466
+ms for semantic parsing/finalization, 147–150 ms for lexical/assignment
+preparation, 145–159 ms for encoding, and 43–44 ms for flush on the million-type
+fixture. Instrumentation was removed before A/B measurement. Semantic decoding
+and compiled encoding remain the next targets for profiling; the data does not
+justify introducing speculative allocations or parallel shared semantic writes.
+
 ## Pass 1: publication, provenance index, and string hashing
 
 The initial allocation work below was committed as `2ebfc4e`. The next series
