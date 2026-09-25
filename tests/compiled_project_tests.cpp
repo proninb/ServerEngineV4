@@ -1663,6 +1663,12 @@ void test_persisted_sources(test_state &tests, const compiled_test_image &image)
             0,
             "reject duplicate file contribution index");
     corrupt(compiled_project_section::source_contributions,
+            3 * 8 + 4,
+            read_u32(image.bytes.data() +
+                     section_offset(image.bytes, compiled_project_section::source_contributions) +
+                     2 * 8 + 4),
+            "reject duplicate semantic contribution within a root with valid CRC");
+    corrupt(compiled_project_section::source_contributions,
             0,
             0,
             "reject invalid contribution physical file");

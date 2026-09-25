@@ -1567,11 +1567,14 @@ private:
         const std::vector<constructor_operation>& operations,
         std::vector<construction_value>& construction) noexcept {
 
-        std::vector<bool> assigned;
+        if (operations.empty()) {
+            return server_status::success;
+        }
+
+        auto& assigned = record_assigned;
 
         try {
-            assigned.resize(
-                members.size());
+            assigned.assign(members.size(), false);
         }
         catch (...) {
             return server_status::io_error;
@@ -1857,9 +1860,14 @@ private:
             return status;
         }
 
-        std::vector<member_record> members;
-        std::vector<pending_construction> pending;
-        std::vector<constructor_operation> constructor_operations;
+        // Record parsing is non-recursive. Reuse scratch storage across records
+        // and roots instead of allocating several vectors per definition.
+        auto& members = record_members;
+        auto& pending = record_pending;
+        auto& constructor_operations = record_operations;
+        members.clear();
+        pending.clear();
+        constructor_operations.clear();
 
         bool constructor_seen = false;
 
@@ -2037,7 +2045,7 @@ private:
             }
         }
 
-        std::vector<construction_value> construction;
+        auto& construction = record_construction;
 
         try {
             construction.resize(
@@ -2700,6 +2708,12 @@ private:
     semantic_token current;
     semantic_token buffered;
     bool has_buffered = false;
+
+    std::vector<member_record> record_members;
+    std::vector<pending_construction> record_pending;
+    std::vector<constructor_operation> record_operations;
+    std::vector<construction_value> record_construction;
+    std::vector<bool> record_assigned;
 };
 
 }

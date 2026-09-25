@@ -758,6 +758,53 @@ void test_source_preprocessor_rejected(
         "Source rejects C++ preprocessing");
 }
 
+void test_record_scratch_isolation(test_state& tests) {
+    const temporary_source source{
+        "record_scratch_isolation",
+        "struct A { int x = 7; int y = 9; A() : x(11) {} };\n"
+        "struct B { int x; };\n"
+        "struct Empty {};\n"
+        "struct Forward;\n"
+        "struct C { int x = 3; int y; int z = 5; };\n"
+        "struct D { int x; D() : x(13) {} };\n"};
+
+    file_context files;
+    lexical_generation lexical;
+    file_id root;
+    if (!prepare_root(tests, source.path(), files, lexical, root)) {
+        return;
+    }
+    preprocessor_configuration configuration;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    parser_failure failure;
+    if (!tests.expect(succeeded(parse_semantic_project(
+            files, lexical, 1, configuration, strings, identities, G, sources,
+            &failure)), "parse records with growing/shrinking scratch storage")) {
+        return;
+    }
+    const auto check = [&](std::string_view name, std::size_t count,
+                           std::string_view member, std::uint64_t value) {
+        const auto type = G.find_type(identities.find(
+            identities.root(), strings.find(name), identity_kind::type));
+        const auto* initial = G.construction(type, G.find_member(type, strings.find(member)));
+        (void)tests.expect(type && G.members(type).size() == count && initial != nullptr &&
+                     initial->kind == (value == 0 ? construction_kind::zero :
+                                                  construction_kind::unsigned_integer) &&
+                     initial->bits() == value,
+                     "record members and initialization do not leak between definitions");
+    };
+    check("A", 2, "x", 11);
+    check("A", 2, "y", 9);
+    check("B", 1, "x", 0);
+    check("C", 3, "x", 3);
+    check("C", 3, "y", 0);
+    check("C", 3, "z", 5);
+    check("D", 1, "x", 13);
+}
+
 void test_header_static_constructor_binding(
     test_state& tests) {
 
@@ -1251,6 +1298,8 @@ int main() {
 
         test_header_static_constructor_binding(
             tests);
+
+        test_record_scratch_isolation(tests);
 
         test_source_link_semantic_dependencies(
             tests);

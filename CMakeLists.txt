@@ -90,6 +90,69 @@ else()
     target_compile_options(ServerEngineV4 PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+
+option(
+    SERVER_ENGINE_BUILD_BENCHMARKS
+    "Build ServerEngineV4 benchmark executables"
+    OFF
+)
+
+if(SERVER_ENGINE_BUILD_BENCHMARKS)
+    get_target_property(
+        SERVER_ENGINE_V4_BENCHMARK_SOURCES
+        ServerEngineV4
+        SOURCES
+    )
+
+    list(
+        FILTER SERVER_ENGINE_V4_BENCHMARK_SOURCES
+        EXCLUDE REGEX "server_engine/main\\.cpp$"
+    )
+
+    add_executable(
+        ServerEngineV4PublishBenchmark
+        benchmarks/publish_benchmark.cpp
+        ${SERVER_ENGINE_V4_BENCHMARK_SOURCES}
+    )
+
+    target_include_directories(
+        ServerEngineV4PublishBenchmark
+        PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(WIN32)
+        target_link_libraries(
+            ServerEngineV4PublishBenchmark
+            PRIVATE
+            Psapi
+        )
+    else()
+        target_link_libraries(
+            ServerEngineV4PublishBenchmark
+            PRIVATE
+            Threads::Threads
+        )
+    endif()
+
+    if(MSVC)
+        target_compile_options(
+            ServerEngineV4PublishBenchmark
+            PRIVATE
+            /W4
+            /permissive-
+        )
+    else()
+        target_compile_options(
+            ServerEngineV4PublishBenchmark
+            PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+    endif()
+endif()
+
 include(CTest)
 
 if(BUILD_TESTING)

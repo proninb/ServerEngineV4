@@ -1,6 +1,5 @@
 #include "compiled_project.hpp"
 #include "../../filesystem_path.hpp"
-#include <unordered_set>
 #include "crc64_ecma.hpp"
 
 #include <algorithm>
@@ -4955,6 +4954,7 @@ compiled_project_image_result compiled_project_view::verify_sources() const noex
 
         std::uint64_t path_cursor = 0;
         std::uint64_t file_cursor = 0;
+        std::vector<std::uint64_t> root_semantics;
 
         for (std::size_t index = 0;
              index < source_file_count();
@@ -5003,7 +5003,7 @@ compiled_project_image_result compiled_project_view::verify_sources() const noex
                 return invalid;
             }
 
-            std::unordered_set<std::uint64_t> root_semantics;
+            root_semantics.clear();
 
             for (std::uint32_t offset = 0;
                  offset < root_range.count;
@@ -5033,13 +5033,17 @@ compiled_project_image_result compiled_project_view::verify_sources() const noex
                         ? contribution.data.slot()
                         : contribution.data.raw();
 
-                if (!root_semantics.insert(
-                        (std::uint64_t{contribution.file.value()} << 32) |
-                        semantic)
-                         .second) {
+                root_semantics.push_back(
+                    (std::uint64_t{contribution.file.value()} << 32) |
+                    semantic);
+            }
 
-                    return invalid;
-                }
+            // Uniqueness is independent of traversal order. A reusable flat
+            // buffer avoids allocating one hash node per contribution.
+            std::sort(root_semantics.begin(), root_semantics.end());
+            if (std::adjacent_find(root_semantics.begin(), root_semantics.end()) !=
+                root_semantics.end()) {
+                return invalid;
             }
 
             for (std::uint32_t offset = 0;
