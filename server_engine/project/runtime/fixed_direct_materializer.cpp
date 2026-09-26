@@ -1087,14 +1087,118 @@ private:
             invalid_input;
     }
 
+    enum class materialization_action : std::uint8_t {
+        materialize = 0,
+        none,
+        reference,
+    };
+
     struct planned_member final {
         std::size_t offset = 0;
         construction_value construction{};
         type_ref type{};
-        bool reference = false;
+        materialization_action action =
+            materialization_action::materialize;
     };
 
     static_assert(sizeof(planned_member) == 32);
+
+    [[nodiscard]] materialization_action
+    classify_materialization(
+        type_ref type,
+        construction_value construction,
+        type_ref& plan_type) const noexcept {
+
+        type_ref referent;
+
+        if (reference_referent(
+                type,
+                referent)) {
+
+            plan_type =
+                referent;
+
+            return materialization_action::
+                reference;
+        }
+
+        plan_type =
+            type;
+
+        for (;;) {
+            if (type.kind() ==
+                type_ref_kind::intrinsic) {
+
+                const auto intrinsic =
+                    static_cast<intrinsic_type>(
+                        type.payload());
+
+                if (intrinsic >
+                        intrinsic_type::void_type &&
+                    intrinsic <
+                        intrinsic_type::nullptr_type &&
+                    construction.kind ==
+                        construction_kind::zero) {
+
+                    return materialization_action::
+                        none;
+                }
+
+                if (intrinsic ==
+                        intrinsic_type::nullptr_type &&
+                    zero_pointer_construction(
+                        construction)) {
+
+                    return materialization_action::
+                        none;
+                }
+
+                return materialization_action::
+                    materialize;
+            }
+
+            if (type.kind() !=
+                type_ref_kind::derived) {
+
+                return materialization_action::
+                    materialize;
+            }
+
+            derived_type_record derived;
+
+            if (!project.derived(
+                    type,
+                    derived)) {
+
+                return materialization_action::
+                    materialize;
+            }
+
+            switch (derived.kind) {
+            case derived_type_kind::const_qualified:
+            case derived_type_kind::volatile_qualified:
+                type =
+                    derived.child;
+                continue;
+
+            case derived_type_kind::pointer:
+                return zero_pointer_construction(
+                           construction)
+                    ? materialization_action::none
+                    : materialization_action::materialize;
+
+            case derived_type_kind::lvalue_reference:
+            case derived_type_kind::rvalue_reference:
+            case derived_type_kind::bounded_array:
+            case derived_type_kind::unbounded_array:
+                return materialization_action::
+                    materialize;
+            }
+
+            return materialization_action::
+                materialize;
+        }
+    }
 
     struct record_plan final {
         std::size_t begin = 0;
@@ -1234,20 +1338,19 @@ private:
                         invalid_input;
                 }
 
-                type_ref referent;
+                type_ref plan_type;
 
-                const auto reference =
-                    reference_referent(
+                const auto action =
+                    classify_materialization(
                         member.type,
-                        referent);
+                        construction,
+                        plan_type);
 
                 planned_members.push_back({
                     offset,
                     construction,
-                    reference
-                        ? referent
-                        : member.type,
-                    reference,
+                    plan_type,
+                    action,
                 });
             }
         }
@@ -1330,12 +1433,20 @@ private:
                     record.begin +
                     local];
 
+            if (member.action ==
+                materialization_action::none) {
+
+                continue;
+            }
+
             auto* target =
                 base +
                 static_cast<std::size_t>(
                     member.offset);
 
-            if (member.reference) {
+            if (member.action ==
+                materialization_action::reference) {
+
                 std::uintptr_t stored = 0;
 
                 if (!read_reference_slot(
@@ -1733,7 +1844,8 @@ private:
                 static_cast<std::size_t>(
                     member->offset);
 
-            if (member->reference) {
+            if (member->action ==
+                materialization_action::reference) {
                 next = {
                     record_type_value,
                     base,
@@ -1848,7 +1960,8 @@ private:
 
         if (current.record_base == nullptr ||
             current.slot == nullptr ||
-            !member.reference ||
+            member.action !=
+                materialization_action::reference ||
             current.record_base +
                 static_cast<std::size_t>(
                     member.offset) !=
@@ -1917,7 +2030,8 @@ private:
                 static_cast<std::size_t>(
                     source->offset);
 
-            if (source->reference) {
+            if (source->action ==
+                materialization_action::reference) {
                 next = {
                     current.record_type,
                     current.record_base,
