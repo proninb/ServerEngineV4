@@ -1186,305 +1186,270 @@ private:
         return fixed_direct_materialization_result::success;
     }
 
-    [[nodiscard]] fixed_direct_materialization_result
-    resolve_reference_member(
-        type_handle record_type_value,
-        std::byte* record_base,
-        object_handle link_object,
-        std::uint32_t local,
-        std::byte* slot,
-        std::uintptr_t& output) noexcept {
+    enum class reference_cache_lookup : std::uint8_t {
+        absent = 0,
+        visiting,
+        resolved,
+    };
 
-        output = 0;
+    struct reference_state final {
+        type_handle record_type{};
+        std::byte* record_base = nullptr;
+        object_handle link_object{};
+        std::uint32_t local = 0;
+        std::byte* slot = nullptr;
+    };
 
-        const auto slot_address =
-            reinterpret_cast<std::uintptr_t>(
-                slot);
+    struct reference_cache_entry final {
+        std::uintptr_t slot = 0;
+        std::uintptr_t target = 0;
+    };
 
-        if (std::find(
-                resolving_references.begin(),
-                resolving_references.end(),
-                slot_address) !=
-            resolving_references.end()) {
+    static_assert(
+        sizeof(reference_cache_entry) == 16);
 
-            return fixed_direct_materialization_result::
-                invalid_input;
+    [[nodiscard]] static std::size_t
+    reference_cache_hash(
+        std::uintptr_t value) noexcept {
+
+        auto hash =
+            static_cast<std::uint64_t>(
+                value);
+
+        hash ^= hash >> 30;
+        hash *= 0xbf58476d1ce4e5b9ull;
+        hash ^= hash >> 27;
+        hash *= 0x94d049bb133111ebull;
+        hash ^= hash >> 31;
+
+        return static_cast<std::size_t>(
+            hash);
+    }
+
+    static void insert_reference_cache_entry(
+        std::vector<reference_cache_entry>& cache,
+        reference_cache_entry value) noexcept {
+
+        const auto mask =
+            cache.size() - 1;
+
+        auto position =
+            reference_cache_hash(
+                value.slot) &
+            mask;
+
+        while (cache[position].slot != 0) {
+            position =
+                (position + 1) &
+                mask;
         }
+
+        cache[position] =
+            value;
+    }
+
+    [[nodiscard]] bool grow_reference_cache() noexcept {
+
+        std::size_t capacity =
+            reference_cache.empty()
+            ? 8
+            : reference_cache.size() * 2;
+
+        if (capacity <
+                reference_cache.size() ||
+            (capacity &
+                (capacity - 1)) != 0) {
+
+            return false;
+        }
+
+        std::vector<reference_cache_entry>
+            replacement;
 
         try {
-            resolving_references.push_back(
-                slot_address);
+            replacement.resize(
+                capacity);
         }
         catch (...) {
-            return fixed_direct_materialization_result::
-                failed;
+            return false;
         }
 
-        const auto resolved =
-            [&]() noexcept
-            -> fixed_direct_materialization_result {
+        for (const auto& value :
+             reference_cache) {
 
-            member_record member;
-            construction_value construction;
+            if (value.slot != 0) {
+                insert_reference_cache_entry(
+                    replacement,
+                    value);
+            }
+        }
 
-            if (!project.member(
-                    record_type_value,
-                    local,
-                    member) ||
-                !project.construction(
-                    record_type_value,
-                    local,
-                    construction)) {
+        reference_cache.swap(
+            replacement);
 
-                return fixed_direct_materialization_result::
-                    invalid_input;
+        return true;
+    }
+
+    [[nodiscard]] reference_cache_lookup
+    reference_cache_find(
+        std::uintptr_t slot,
+        std::uintptr_t& target) const noexcept {
+
+        target = 0;
+
+        if (slot == 0 ||
+            reference_cache.empty()) {
+
+            return reference_cache_lookup::
+                absent;
+        }
+
+        const auto mask =
+            reference_cache.size() - 1;
+
+        auto position =
+            reference_cache_hash(
+                slot) &
+            mask;
+
+        for (std::size_t probe = 0;
+             probe <
+                 reference_cache.size();
+             ++probe) {
+
+            const auto& value =
+                reference_cache[
+                    position];
+
+            if (value.slot == 0) {
+                return reference_cache_lookup::
+                    absent;
             }
 
-            type_ref referent;
+            if (value.slot == slot) {
+                target = value.target;
 
-            if (!reference_referent(
-                    member.type,
-                    referent)) {
-
-                return fixed_direct_materialization_result::
-                    invalid_input;
+                return target == 0
+                    ? reference_cache_lookup::
+                        visiting
+                    : reference_cache_lookup::
+                        resolved;
             }
 
-            if (link_object) {
-                const auto link =
-                    project.find_link_target(
-                        link_object,
-                        local);
+            position =
+                (position + 1) &
+                mask;
+        }
 
-                if (link) {
-                    link_record record;
+        return reference_cache_lookup::
+            absent;
+    }
 
-                    if (!project.link(
-                            link,
-                            record) ||
-                        record.target.object !=
-                            link_object ||
-                        record.target.member.value() !=
-                            local) {
+    [[nodiscard]] bool reference_cache_mark_visiting(
+        std::uintptr_t slot) noexcept {
 
-                        return fixed_direct_materialization_result::
-                            invalid_input;
-                    }
+        if (slot == 0) {
+            return false;
+        }
 
-                    return resolve_endpoint(
-                        record.source,
-                        output);
-                }
+        if (reference_cache.empty() ||
+            reference_cache_size >=
+                reference_cache.size() / 2) {
+
+            if (!grow_reference_cache()) {
+                return false;
+            }
+        }
+
+        const auto mask =
+            reference_cache.size() - 1;
+
+        auto position =
+            reference_cache_hash(
+                slot) &
+            mask;
+
+        for (;;) {
+            auto& value =
+                reference_cache[
+                    position];
+
+            if (value.slot == 0) {
+                value.slot = slot;
+                value.target = 0;
+                ++reference_cache_size;
+                return true;
             }
 
-            switch (construction.kind) {
-            case construction_kind::zero: {
-                std::uint64_t sentinel = 0;
-
-                if (!layout.unconnected_offset(
-                        referent,
-                        sentinel)) {
-
-                    return fixed_direct_materialization_result::
-                        invalid_input;
-                }
-
-                const auto* target =
-                    address(
-                        sentinel);
-
-                if (target == nullptr) {
-                    return fixed_direct_materialization_result::
-                        invalid_input;
-                }
-
-                output =
-                    reinterpret_cast<std::uintptr_t>(
-                        target);
-
-                return fixed_direct_materialization_result::
-                    success;
+            if (value.slot == slot) {
+                return false;
             }
 
-            case construction_kind::member_binding: {
-                if (construction.operand == 0) {
-                    return fixed_direct_materialization_result::
-                        invalid_input;
-                }
+            position =
+                (position + 1) &
+                mask;
+        }
+    }
 
-                const auto source_local =
-                    construction.operand - 1;
+    [[nodiscard]] bool reference_cache_resolve(
+        std::uintptr_t slot,
+        std::uintptr_t target) noexcept {
 
-                type_entry record;
+        if (slot == 0 ||
+            target == 0 ||
+            reference_cache.empty()) {
 
-                if (!project.type(
-                        record_type_value,
-                        record) ||
-                    source_local >=
-                        record.members.count) {
+            return false;
+        }
 
-                    return fixed_direct_materialization_result::
-                        invalid_input;
-                }
+        const auto mask =
+            reference_cache.size() - 1;
 
-                member_record source;
-                std::uint64_t source_offset = 0;
+        auto position =
+            reference_cache_hash(
+                slot) &
+            mask;
 
-                const auto global =
-                    static_cast<std::size_t>(
-                        record.members.begin) +
-                    source_local;
+        for (std::size_t probe = 0;
+             probe <
+                 reference_cache.size();
+             ++probe) {
 
-                if (!project.member_at(
-                        global,
-                        source) ||
-                    !layout.member_offset(
-                        global,
-                        source_offset)) {
+            auto& value =
+                reference_cache[
+                    position];
 
-                    return fixed_direct_materialization_result::
-                        invalid_input;
-                }
-
-                auto* source_address =
-                    record_base +
-                    static_cast<std::size_t>(
-                        source_offset);
-
-                type_ref source_referent;
-
-                if (reference_referent(
-                        source.type,
-                        source_referent)) {
-
-                    return resolve_reference_member(
-                        record_type_value,
-                        record_base,
-                        link_object,
-                        source_local,
-                        source_address,
-                        output);
-                }
-
-                output =
-                    reinterpret_cast<std::uintptr_t>(
-                        source_address);
-
-                return fixed_direct_materialization_result::
-                    success;
+            if (value.slot == 0) {
+                return false;
             }
 
-            case construction_kind::object_binding: {
-                if (construction.operand == 0) {
-                    return fixed_direct_materialization_result::
-                        invalid_input;
+            if (value.slot == slot) {
+                if (value.target != 0) {
+                    return value.target ==
+                        target;
                 }
 
-                const auto object =
-                    project.object_at(
-                        construction.operand - 1);
-
-                object_entry source;
-                std::uint64_t source_offset = 0;
-
-                if (!object ||
-                    object.value() !=
-                        construction.operand ||
-                    !project.object(
-                        object,
-                        source) ||
-                    !layout.object_offset(
-                        object,
-                        source_offset)) {
-
-                    return fixed_direct_materialization_result::
-                        invalid_input;
-                }
-
-                auto* source_address =
-                    address(
-                        source_offset);
-
-                if (source_address == nullptr) {
-                    return fixed_direct_materialization_result::
-                        invalid_input;
-                }
-
-                type_ref source_referent;
-
-                if (reference_referent(
-                        source.type,
-                        source_referent)) {
-
-                    construction_value source_construction;
-
-                    if (!project.construction(
-                            object,
-                            source_construction) ||
-                        source_construction.kind !=
-                            construction_kind::zero) {
-
-                        return fixed_direct_materialization_result::
-                            invalid_input;
-                    }
-
-                    std::uint64_t sentinel = 0;
-
-                    if (!layout.unconnected_offset(
-                            source_referent,
-                            sentinel)) {
-
-                        return fixed_direct_materialization_result::
-                            invalid_input;
-                    }
-
-                    const auto* target =
-                        address(
-                            sentinel);
-
-                    if (target == nullptr) {
-                        return fixed_direct_materialization_result::
-                            invalid_input;
-                    }
-
-                    output =
-                        reinterpret_cast<std::uintptr_t>(
-                            target);
-
-                    return fixed_direct_materialization_result::
-                        success;
-                }
-
-                output =
-                    reinterpret_cast<std::uintptr_t>(
-                        source_address);
-
-                return fixed_direct_materialization_result::
-                    success;
+                value.target = target;
+                return true;
             }
 
-            case construction_kind::signed_integer:
-            case construction_kind::unsigned_integer:
-            case construction_kind::real:
-            case construction_kind::unsupported:
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
+            position =
+                (position + 1) &
+                mask;
+        }
 
-            return fixed_direct_materialization_result::
-                invalid_input;
-        }();
-
-        resolving_references.pop_back();
-
-        return resolved;
+        return false;
     }
 
     [[nodiscard]] fixed_direct_materialization_result
-    resolve_endpoint(
+    endpoint_reference_or_value(
         object_endpoint endpoint,
+        reference_state& next,
+        bool& has_next,
         std::uintptr_t& output) noexcept {
 
+        next = {};
+        has_next = false;
         output = 0;
 
         object_entry object;
@@ -1567,20 +1532,496 @@ private:
                 member.type,
                 referent)) {
 
-            return resolve_reference_member(
+            next = {
                 record_type_value,
                 base,
                 endpoint.object,
                 local,
                 member_address,
-                output);
+            };
+
+            has_next = true;
+
+            return fixed_direct_materialization_result::
+                success;
         }
 
         output =
             reinterpret_cast<std::uintptr_t>(
                 member_address);
 
-        return fixed_direct_materialization_result::success;
+        return fixed_direct_materialization_result::
+            success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    advance_reference(
+        const reference_state& current,
+        reference_state& next,
+        bool& has_next,
+        std::uintptr_t& output) noexcept {
+
+        next = {};
+        has_next = false;
+        output = 0;
+
+        member_record member;
+        construction_value construction;
+        type_entry record;
+
+        if (!current.record_type ||
+            current.record_base == nullptr ||
+            current.slot == nullptr ||
+            !project.type(
+                current.record_type,
+                record) ||
+            current.local >=
+                record.members.count ||
+            !project.member(
+                current.record_type,
+                current.local,
+                member) ||
+            !project.construction(
+                current.record_type,
+                current.local,
+                construction)) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        const auto global =
+            static_cast<std::size_t>(
+                record.members.begin) +
+            current.local;
+
+        std::uint64_t member_offset = 0;
+
+        if (!layout.member_offset(
+                global,
+                member_offset) ||
+            current.record_base +
+                static_cast<std::size_t>(
+                    member_offset) !=
+                current.slot) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        type_ref referent;
+
+        if (!reference_referent(
+                member.type,
+                referent)) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        if (current.link_object) {
+            const auto link =
+                project.find_link_target(
+                    current.link_object,
+                    current.local);
+
+            if (link) {
+                link_record value;
+
+                if (!project.link(
+                        link,
+                        value) ||
+                    value.target.object !=
+                        current.link_object ||
+                    value.target.member.value() !=
+                        current.local) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                return endpoint_reference_or_value(
+                    value.source,
+                    next,
+                    has_next,
+                    output);
+            }
+        }
+
+        switch (construction.kind) {
+        case construction_kind::zero: {
+            std::uint64_t sentinel = 0;
+
+            if (!layout.unconnected_offset(
+                    referent,
+                    sentinel)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            const auto* target =
+                address(
+                    sentinel);
+
+            if (target == nullptr) {
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            output =
+                reinterpret_cast<std::uintptr_t>(
+                    target);
+
+            return fixed_direct_materialization_result::
+                success;
+        }
+
+        case construction_kind::member_binding: {
+            if (construction.operand == 0) {
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            const auto source_local =
+                construction.operand - 1;
+
+            if (source_local >=
+                record.members.count) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            member_record source;
+            std::uint64_t source_offset = 0;
+
+            const auto source_global =
+                static_cast<std::size_t>(
+                    record.members.begin) +
+                source_local;
+
+            if (!project.member_at(
+                    source_global,
+                    source) ||
+                !layout.member_offset(
+                    source_global,
+                    source_offset)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            auto* source_address =
+                current.record_base +
+                static_cast<std::size_t>(
+                    source_offset);
+
+            type_ref source_referent;
+
+            if (reference_referent(
+                    source.type,
+                    source_referent)) {
+
+                next = {
+                    current.record_type,
+                    current.record_base,
+                    current.link_object,
+                    source_local,
+                    source_address,
+                };
+
+                has_next = true;
+
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            output =
+                reinterpret_cast<std::uintptr_t>(
+                    source_address);
+
+            return fixed_direct_materialization_result::
+                success;
+        }
+
+        case construction_kind::object_binding: {
+            if (construction.operand == 0) {
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            const auto object =
+                project.object_at(
+                    construction.operand - 1);
+
+            object_entry source;
+            std::uint64_t source_offset = 0;
+
+            if (!object ||
+                object.value() !=
+                    construction.operand ||
+                !project.object(
+                    object,
+                    source) ||
+                !layout.object_offset(
+                    object,
+                    source_offset)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            auto* source_address =
+                address(
+                    source_offset);
+
+            if (source_address == nullptr) {
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            type_ref source_referent;
+
+            if (reference_referent(
+                    source.type,
+                    source_referent)) {
+
+                construction_value source_construction;
+
+                if (!project.construction(
+                        object,
+                        source_construction) ||
+                    source_construction.kind !=
+                        construction_kind::zero) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                std::uint64_t sentinel = 0;
+
+                if (!layout.unconnected_offset(
+                        source_referent,
+                        sentinel)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                const auto* target =
+                    address(
+                        sentinel);
+
+                if (target == nullptr) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                output =
+                    reinterpret_cast<std::uintptr_t>(
+                        target);
+
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            output =
+                reinterpret_cast<std::uintptr_t>(
+                    source_address);
+
+            return fixed_direct_materialization_result::
+                success;
+        }
+
+        case construction_kind::signed_integer:
+        case construction_kind::unsigned_integer:
+        case construction_kind::real:
+        case construction_kind::unsupported:
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        return fixed_direct_materialization_result::
+            invalid_input;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    resolve_reference_member(
+        type_handle record_type_value,
+        std::byte* record_base,
+        object_handle link_object,
+        std::uint32_t local,
+        std::byte* slot,
+        std::uintptr_t& output) noexcept {
+
+        output = 0;
+        resolution_path.clear();
+
+        reference_state current{
+            record_type_value,
+            record_base,
+            link_object,
+            local,
+            slot,
+        };
+
+        const auto maximum_steps =
+            layout.size() /
+                sizeof(std::uintptr_t) +
+            1;
+
+        for (std::uint64_t step = 0;
+             step <
+                 maximum_steps;
+             ++step) {
+
+            const auto slot_address =
+                reinterpret_cast<std::uintptr_t>(
+                    current.slot);
+
+            std::uintptr_t cached = 0;
+
+            switch (reference_cache_find(
+                slot_address,
+                cached)) {
+
+            case reference_cache_lookup::resolved:
+                output = cached;
+
+                for (const auto pending :
+                     resolution_path) {
+
+                    if (!reference_cache_resolve(
+                            pending,
+                            output)) {
+
+                        return fixed_direct_materialization_result::
+                            invalid_input;
+                    }
+                }
+
+                return fixed_direct_materialization_result::
+                    success;
+
+            case reference_cache_lookup::visiting:
+                return fixed_direct_materialization_result::
+                    invalid_input;
+
+            case reference_cache_lookup::absent:
+                break;
+            }
+
+            reference_state next;
+            bool has_next = false;
+            std::uintptr_t target = 0;
+
+            const auto advanced =
+                advance_reference(
+                    current,
+                    next,
+                    has_next,
+                    target);
+
+            if (advanced !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return advanced;
+            }
+
+            // The overwhelmingly common case (T& -> non-reference T) needs
+            // no cache entry and no allocation.
+            if (!has_next &&
+                resolution_path.empty()) {
+
+                output = target;
+                return target != 0
+                    ? fixed_direct_materialization_result::
+                        success
+                    : fixed_direct_materialization_result::
+                        invalid_input;
+            }
+
+            if (!reference_cache_mark_visiting(
+                    slot_address)) {
+
+                return fixed_direct_materialization_result::
+                    failed;
+            }
+
+            try {
+                resolution_path.push_back(
+                    slot_address);
+            }
+            catch (...) {
+                return fixed_direct_materialization_result::
+                    failed;
+            }
+
+            if (!has_next) {
+                if (target == 0) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                output = target;
+
+                for (const auto pending :
+                     resolution_path) {
+
+                    if (!reference_cache_resolve(
+                            pending,
+                            output)) {
+
+                        return fixed_direct_materialization_result::
+                            invalid_input;
+                    }
+                }
+
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            current = next;
+        }
+
+        return fixed_direct_materialization_result::
+            invalid_input;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    resolve_endpoint(
+        object_endpoint endpoint,
+        std::uintptr_t& output) noexcept {
+
+        output = 0;
+
+        reference_state next;
+        bool has_next = false;
+
+        const auto resolved =
+            endpoint_reference_or_value(
+                endpoint,
+                next,
+                has_next,
+                output);
+
+        if (resolved !=
+            fixed_direct_materialization_result::
+                success ||
+            !has_next) {
+
+            return resolved;
+        }
+
+        return resolve_reference_member(
+            next.record_type,
+            next.record_base,
+            next.link_object,
+            next.local,
+            next.slot,
+            output);
     }
 
     [[nodiscard]] fixed_direct_materialization_result
@@ -1718,7 +2159,9 @@ private:
     const compiled_project_view& project;
     const runtime_layout& layout;
     std::span<std::byte> runtime;
-    std::vector<std::uintptr_t> resolving_references;
+    std::vector<reference_cache_entry> reference_cache;
+    std::size_t reference_cache_size = 0;
+    std::vector<std::uintptr_t> resolution_path;
 };
 
 }

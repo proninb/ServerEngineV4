@@ -115,6 +115,15 @@ make_settings() {
 
     settings.abi.pack = 8;
 
+    settings.shm.mode =
+        cw::server::shm_runtime_mode::fixed_direct;
+
+    settings.shm.name =
+        "CW.ServerEngineV4.PublishBenchmark";
+
+    settings.shm.fixed_base_address =
+        0x0000010000000000ull;
+
     settings.files.manifest =
         "project.manifest";
 

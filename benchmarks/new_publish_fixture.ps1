@@ -40,8 +40,9 @@ for ($fixtureFile = 0; $fixtureFile -lt $fixtureFiles; ++$fixtureFile) {
             for ($fixtureMember = 0; $fixtureMember -lt 16; ++$fixtureMember) {
                 [void]$fixtureHeader.Append("int field_$fixtureMember = $fixtureMember;`n")
             }
-            [void]$fixtureHeader.Append("$fixtureType() : field_0(7), field_1(11) {} };`n")
-            [void]$fixtureSource.Append("$fixtureType a$fixtureIndex;`n$fixtureType b$fixtureIndex;`na$fixtureIndex.field_0 = b$fixtureIndex.field_0;`n")
+            [void]$fixtureHeader.Append("int& input;`n")
+            [void]$fixtureHeader.Append("$fixtureType() : field_0(7), field_1(11), input(field_0) {} };`n")
+            [void]$fixtureSource.Append("$fixtureType a$fixtureIndex;`n$fixtureType b$fixtureIndex;`na$fixtureIndex.input = b$fixtureIndex.field_0;`n")
         }
     }
     [IO.File]::WriteAllText((Join-Path $fixtureRoot "headers/$fixtureName"), $fixtureHeader.ToString(), $fixtureUtf8)

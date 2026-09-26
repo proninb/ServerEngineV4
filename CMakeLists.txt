@@ -184,6 +184,57 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
             -Wpedantic
         )
     endif()
+
+    add_executable(
+        ServerEngineV4RuntimeBenchmark
+        benchmarks/runtime_benchmark.cpp
+        ${SERVER_ENGINE_V4_BENCHMARK_SOURCES}
+    )
+
+    target_include_directories(
+        ServerEngineV4RuntimeBenchmark
+        PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(WIN32)
+        target_link_libraries(
+            ServerEngineV4RuntimeBenchmark
+            PRIVATE
+            Psapi
+        )
+    else()
+        target_link_libraries(
+            ServerEngineV4RuntimeBenchmark
+            PRIVATE
+            Threads::Threads
+        )
+
+        if(NOT APPLE)
+            target_link_libraries(
+                ServerEngineV4RuntimeBenchmark
+                PRIVATE
+                rt
+            )
+        endif()
+    endif()
+
+    if(MSVC)
+        target_compile_options(
+            ServerEngineV4RuntimeBenchmark
+            PRIVATE
+            /W4
+            /permissive-
+        )
+    else()
+        target_compile_options(
+            ServerEngineV4RuntimeBenchmark
+            PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+    endif()
 endif()
 
 include(CTest)
