@@ -226,6 +226,15 @@ public:
             static_cast<std::size_t>(
                 layout.size());
 
+        try {
+            record_plans.resize(
+                project.type_count());
+        }
+        catch (...) {
+            return fixed_direct_materialization_result::
+                failed;
+        }
+
         std::fill_n(
             runtime.data(),
             logical_size,
@@ -1075,8 +1084,267 @@ private:
             invalid_input;
     }
 
+    struct planned_member final {
+        std::uint64_t offset = 0;
+        construction_value construction{};
+        type_ref type{};
+        bool reference = false;
+        std::uint8_t reserved[3]{};
+    };
+
+    struct record_plan final {
+        std::size_t begin = 0;
+        std::uint32_t count = 0;
+        bool seen = false;
+        bool ready = false;
+        std::uint8_t reserved[2]{};
+    };
+
+    [[nodiscard]] record_plan* plan(
+        type_handle handle) noexcept {
+
+        if (!handle ||
+            handle.value() >
+                record_plans.size()) {
+
+            return nullptr;
+        }
+
+        return &record_plans[
+            handle.value() - 1];
+    }
+
+    [[nodiscard]] const planned_member*
+    planned_member_at(
+        type_handle handle,
+        std::uint32_t local) const noexcept {
+
+        if (!handle ||
+            handle.value() >
+                record_plans.size()) {
+
+            return nullptr;
+        }
+
+        const auto& record =
+            record_plans[
+                handle.value() - 1];
+
+        if (!record.ready ||
+            local >=
+                record.count ||
+            record.begin >
+                planned_members.size() ||
+            local >
+                planned_members.size() -
+                    record.begin - 1) {
+
+            return nullptr;
+        }
+
+        return &planned_members[
+            record.begin +
+            local];
+    }
+
     [[nodiscard]] fixed_direct_materialization_result
-    normal_record(
+    prepare_record_plan(
+        type_handle handle,
+        record_plan& output) noexcept {
+
+        type_entry type;
+
+        if (!handle ||
+            !project.type(
+                handle,
+                type) ||
+            !type.defined() ||
+            type.kind !=
+                graph_type_kind::record) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        if (type.record_kind ==
+            graph_record_kind::union_type) {
+
+            return fixed_direct_materialization_result::
+                unsupported_type;
+        }
+
+        if (type.record_kind !=
+                graph_record_kind::struct_type &&
+            type.record_kind !=
+                graph_record_kind::class_type) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        const auto old_count =
+            planned_members.size();
+
+        try {
+            if (type.members.count >
+                (std::numeric_limits<std::size_t>::max)() -
+                    old_count) {
+
+                return fixed_direct_materialization_result::
+                    overflow;
+            }
+
+            planned_members.reserve(
+                old_count +
+                type.members.count);
+
+            for (std::uint32_t local = 0;
+                 local <
+                     type.members.count;
+                 ++local) {
+
+                const auto global =
+                    static_cast<std::size_t>(
+                        type.members.begin) +
+                    local;
+
+                member_record member;
+                construction_value construction;
+                std::uint64_t offset = 0;
+
+                if (!project.member_at(
+                        global,
+                        member) ||
+                    !project.construction(
+                        handle,
+                        local,
+                        construction) ||
+                    !layout.member_offset(
+                        global,
+                        offset)) {
+
+                    planned_members.resize(
+                        old_count);
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                type_ref referent;
+
+                const auto reference =
+                    reference_referent(
+                        member.type,
+                        referent);
+
+                planned_members.push_back({
+                    offset,
+                    construction,
+                    reference
+                        ? referent
+                        : member.type,
+                    reference,
+                    {},
+                });
+            }
+        }
+        catch (...) {
+            planned_members.resize(
+                old_count);
+
+            return fixed_direct_materialization_result::
+                failed;
+        }
+
+        output.begin =
+            old_count;
+
+        output.count =
+            type.members.count;
+
+        output.ready = true;
+
+        return fixed_direct_materialization_result::
+            success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    normal_record_planned(
+        type_handle handle,
+        std::byte* base,
+        object_handle link_object,
+        const record_plan& record) noexcept {
+
+        for (std::uint32_t local = 0;
+             local <
+                 record.count;
+             ++local) {
+
+            const auto& member =
+                planned_members[
+                    record.begin +
+                    local];
+
+            auto* target =
+                base +
+                static_cast<std::size_t>(
+                    member.offset);
+
+            if (member.reference) {
+                std::uintptr_t value_target = 0;
+
+                const auto resolved =
+                    resolve_reference_member(
+                        handle,
+                        base,
+                        link_object,
+                        local,
+                        target,
+                        value_target);
+
+                if (resolved !=
+                    fixed_direct_materialization_result::
+                        success) {
+
+                    return resolved;
+                }
+
+                const auto written =
+                    write_address(
+                        target,
+                        value_target);
+
+                if (written !=
+                    fixed_direct_materialization_result::
+                        success) {
+
+                    return written;
+                }
+
+                continue;
+            }
+
+            const auto materialized =
+                normal_value(
+                    member.type,
+                    member.construction,
+                    target,
+                    {});
+
+            if (materialized !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return materialized;
+            }
+        }
+
+        return fixed_direct_materialization_result::
+            success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    normal_record_unplanned(
         type_handle handle,
         std::byte* base,
         object_handle link_object) noexcept {
@@ -1199,7 +1467,59 @@ private:
             }
         }
 
-        return fixed_direct_materialization_result::success;
+        return fixed_direct_materialization_result::
+            success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    normal_record(
+        type_handle handle,
+        std::byte* base,
+        object_handle link_object) noexcept {
+
+        auto* record =
+            plan(
+                handle);
+
+        if (record == nullptr) {
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        if (record->ready) {
+            return normal_record_planned(
+                handle,
+                base,
+                link_object,
+                *record);
+        }
+
+        if (record->seen) {
+            const auto prepared =
+                prepare_record_plan(
+                    handle,
+                    *record);
+
+            if (prepared !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return prepared;
+            }
+
+            return normal_record_planned(
+                handle,
+                base,
+                link_object,
+                *record);
+        }
+
+        record->seen = true;
+
+        return normal_record_unplanned(
+            handle,
+            base,
+            link_object);
     }
 
     struct reference_state final {
@@ -1381,7 +1701,214 @@ private:
     }
 
     [[nodiscard]] fixed_direct_materialization_result
-    advance_reference(
+    advance_reference_planned(
+        const reference_state& current,
+        const planned_member& member,
+        reference_state& next,
+        bool& has_next,
+        std::uintptr_t& output) noexcept {
+
+        next = {};
+        has_next = false;
+        output = 0;
+
+        if (current.record_base == nullptr ||
+            current.slot == nullptr ||
+            !member.reference ||
+            current.record_base +
+                static_cast<std::size_t>(
+                    member.offset) !=
+                current.slot) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        const auto& construction =
+            member.construction;
+
+        const auto referent =
+            member.type;
+
+        switch (construction.kind) {
+        case construction_kind::zero: {
+            std::uint64_t sentinel = 0;
+
+            if (!layout.unconnected_offset(
+                    referent,
+                    sentinel)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            const auto* target =
+                address(
+                    sentinel);
+
+            if (target == nullptr) {
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            output =
+                reinterpret_cast<std::uintptr_t>(
+                    target);
+
+            return fixed_direct_materialization_result::
+                success;
+        }
+
+        case construction_kind::member_binding: {
+            if (construction.operand == 0) {
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            const auto source_local =
+                construction.operand - 1;
+
+            const auto* source =
+                planned_member_at(
+                    current.record_type,
+                    source_local);
+
+            if (source == nullptr) {
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            auto* source_address =
+                current.record_base +
+                static_cast<std::size_t>(
+                    source->offset);
+
+            if (source->reference) {
+                next = {
+                    current.record_type,
+                    current.record_base,
+                    current.link_object,
+                    source_local,
+                    source_address,
+                };
+
+                has_next = true;
+
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            output =
+                reinterpret_cast<std::uintptr_t>(
+                    source_address);
+
+            return fixed_direct_materialization_result::
+                success;
+        }
+
+        case construction_kind::object_binding: {
+            if (construction.operand == 0) {
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            const auto object =
+                project.object_at(
+                    construction.operand - 1);
+
+            object_entry source;
+            std::uint64_t source_offset = 0;
+
+            if (!object ||
+                object.value() !=
+                    construction.operand ||
+                !project.object(
+                    object,
+                    source) ||
+                !layout.object_offset(
+                    object,
+                    source_offset)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            auto* source_address =
+                address(
+                    source_offset);
+
+            if (source_address == nullptr) {
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            type_ref source_referent;
+
+            if (reference_referent(
+                    source.type,
+                    source_referent)) {
+
+                construction_value source_construction;
+
+                if (!project.construction(
+                        object,
+                        source_construction) ||
+                    source_construction.kind !=
+                        construction_kind::zero) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                std::uint64_t sentinel = 0;
+
+                if (!layout.unconnected_offset(
+                        source_referent,
+                        sentinel)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                const auto* target =
+                    address(
+                        sentinel);
+
+                if (target == nullptr) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                output =
+                    reinterpret_cast<std::uintptr_t>(
+                        target);
+
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            output =
+                reinterpret_cast<std::uintptr_t>(
+                    source_address);
+
+            return fixed_direct_materialization_result::
+                success;
+        }
+
+        case construction_kind::signed_integer:
+        case construction_kind::unsigned_integer:
+        case construction_kind::real:
+        case construction_kind::unsupported:
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        return fixed_direct_materialization_result::
+            invalid_input;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    advance_reference_unplanned(
         const reference_state& current,
         reference_state& next,
         bool& has_next,
@@ -1643,6 +2170,34 @@ private:
 
         return fixed_direct_materialization_result::
             invalid_input;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    advance_reference(
+        const reference_state& current,
+        reference_state& next,
+        bool& has_next,
+        std::uintptr_t& output) noexcept {
+
+        if (const auto* member =
+                planned_member_at(
+                    current.record_type,
+                    current.local);
+            member != nullptr) {
+
+            return advance_reference_planned(
+                current,
+                *member,
+                next,
+                has_next,
+                output);
+        }
+
+        return advance_reference_unplanned(
+            current,
+            next,
+            has_next,
+            output);
     }
 
     [[nodiscard]] fixed_direct_materialization_result
@@ -2057,6 +2612,8 @@ private:
     const runtime_layout& layout;
     std::span<std::byte> runtime;
     std::vector<std::uintptr_t> resolution_path;
+    std::vector<record_plan> record_plans;
+    std::vector<planned_member> planned_members;
 };
 
 }
