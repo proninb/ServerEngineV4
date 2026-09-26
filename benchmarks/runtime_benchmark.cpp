@@ -1,16 +1,19 @@
 /*
  * FIXED_DIRECT Runtime scale benchmark.
  *
- * Fixture construction and compiled.bin encoding are measured separately from
- * the Runtime pipeline. The timed Runtime stages are:
+ * Fixture construction, compiled.bin encoding, and compiled_project_view::bind()
+ * are measured in setup_ms, separately from the Runtime pipeline. The timed
+ * Runtime stages are:
  *
- *   compiled_project_view -> runtime_layout -> fixed SHM -> materialization
+ *   runtime_layout -> fixed SHM -> materialization
  *
  * Scenarios:
  *   objects N : one T { int out; int& in = out; } and N objects
  *   links N   : the same N objects with object i.in -> object i-1.out
  *   chain N   : one object whose record contains N reference members chained
  *               to one final int member
+ *   many_types N : N distinct records, each with 16 int members plus int&,
+ *                  two objects, and one link per record
  */
 #include "fixed_shared_memory.hpp"
 #include "project/assign/assign_table.hpp"
@@ -53,6 +56,7 @@ enum class scenario_kind : std::uint8_t {
     objects,
     links,
     chain,
+    many_types,
 };
 
 struct fixture_metadata final {
@@ -86,6 +90,11 @@ struct fixture_image final {
 
     if (value == "chain") {
         output = scenario_kind::chain;
+        return true;
+    }
+
+    if (value == "many_types") {
+        output = scenario_kind::many_types;
         return true;
     }
 
@@ -567,6 +576,234 @@ peak_working_set_bytes() noexcept {
         output);
 }
 
+[[nodiscard]] bool build_many_types_fixture(
+    std::size_t count,
+    fixture_image& output) noexcept {
+
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+
+    const auto integer =
+        G.intrinsic(
+            intrinsic_type::signed_int);
+
+    type_ref integer_reference;
+
+    if (!integer ||
+        !succeeded(
+            G.derive(
+                integer,
+                derived_type_kind::lvalue_reference,
+                0,
+                integer_reference))) {
+
+        return false;
+    }
+
+    constexpr std::size_t value_member_count = 16;
+    constexpr std::size_t member_count =
+        value_member_count + 1;
+
+    string_id member_names[member_count]{};
+
+    for (std::size_t index = 0;
+         index < value_member_count;
+         ++index) {
+
+        if (!indexed_string(
+                strings,
+                "field_",
+                index,
+                member_names[index])) {
+
+            return false;
+        }
+    }
+
+    if (!succeeded(
+            strings.intern(
+                "input",
+                member_names[value_member_count]))) {
+
+        return false;
+    }
+
+    member_record members[member_count]{};
+    construction_value construction[member_count]{};
+
+    for (std::size_t index = 0;
+         index < value_member_count;
+         ++index) {
+
+        members[index] = {
+            member_names[index],
+            integer,
+            graph_member_access::public_access,
+        };
+    }
+
+    members[value_member_count] = {
+        member_names[value_member_count],
+        integer_reference,
+        graph_member_access::public_access,
+    };
+
+    construction[value_member_count] =
+        construction_value::member_binding(1);
+
+    for (std::size_t index = 0;
+         index < count;
+         ++index) {
+
+        string_id type_name;
+
+        if (!indexed_string(
+                strings,
+                "T",
+                index,
+                type_name)) {
+
+            return false;
+        }
+
+        identity_ref type_identity;
+
+        if (!succeeded(
+                identities.resolve(
+                    identities.root(),
+                    type_name,
+                    identity_kind::type,
+                    type_identity))) {
+
+            return false;
+        }
+
+        type_handle type;
+
+        if (!succeeded(
+                G.declare_record(
+                    type_identity,
+                    graph_record_kind::struct_type,
+                    type)) ||
+            !succeeded(
+                G.define_record(
+                    type,
+                    graph_record_kind::struct_type,
+                    members,
+                    construction))) {
+
+            return false;
+        }
+
+        const auto named =
+            G.named(type);
+
+        const auto output_member =
+            G.find_member(
+                type,
+                member_names[0]);
+
+        const auto input_member =
+            G.find_member(
+                type,
+                member_names[value_member_count]);
+
+        if (!named ||
+            !output_member ||
+            !input_member) {
+
+            return false;
+        }
+
+        string_id first_name;
+        string_id second_name;
+
+        if (!indexed_string(
+                strings,
+                "a",
+                index,
+                first_name) ||
+            !indexed_string(
+                strings,
+                "b",
+                index,
+                second_name)) {
+
+            return false;
+        }
+
+        identity_ref first_identity;
+        identity_ref second_identity;
+
+        if (!succeeded(
+                identities.resolve(
+                    identities.root(),
+                    first_name,
+                    identity_kind::object,
+                    first_identity)) ||
+            !succeeded(
+                identities.resolve(
+                    identities.root(),
+                    second_name,
+                    identity_kind::object,
+                    second_identity))) {
+
+            return false;
+        }
+
+        object_handle first_object;
+        object_handle second_object;
+
+        if (!succeeded(
+                G.add_object(
+                    first_identity,
+                    named,
+                    first_object)) ||
+            !succeeded(
+                G.add_object(
+                    second_identity,
+                    named,
+                    second_object))) {
+
+            return false;
+        }
+
+        link_handle link;
+
+        if (!succeeded(
+                G.add_link(
+                    {
+                        first_object,
+                        output_member,
+                    },
+                    {
+                        second_object,
+                        input_member,
+                    },
+                    link))) {
+
+            return false;
+        }
+
+        output.metadata.type = type;
+        output.metadata.output_member =
+            output_member;
+        output.metadata.input_member =
+            input_member;
+        output.metadata.previous_object =
+            first_object;
+        output.metadata.last_object =
+            second_object;
+    }
+
+    return encode_fixture(
+        strings,
+        identities,
+        G,
+        output);
+}
+
 [[nodiscard]] bool build_chain_fixture(
     std::size_t depth,
     fixture_image& output) noexcept {
@@ -761,15 +998,26 @@ peak_working_set_bytes() noexcept {
 
     output = {};
 
-    return scenario ==
-        scenario_kind::chain
-        ? build_chain_fixture(
-            count,
-            output)
-        : build_object_fixture(
-            scenario,
+    if (scenario ==
+        scenario_kind::chain) {
+
+        return build_chain_fixture(
             count,
             output);
+    }
+
+    if (scenario ==
+        scenario_kind::many_types) {
+
+        return build_many_types_fixture(
+            count,
+            output);
+    }
+
+    return build_object_fixture(
+        scenario,
+        count,
+        output);
 }
 
 [[nodiscard]] bool read_pointer(
@@ -912,8 +1160,9 @@ void usage() {
     std::cerr
         << "Usage:\n"
         << "  ServerEngineV4RuntimeBenchmark objects <count>\n"
-        << "  ServerEngineV4RuntimeBenchmark links   <count>\n"
-        << "  ServerEngineV4RuntimeBenchmark chain   <depth>\n";
+        << "  ServerEngineV4RuntimeBenchmark links      <count>\n"
+        << "  ServerEngineV4RuntimeBenchmark chain      <depth>\n"
+        << "  ServerEngineV4RuntimeBenchmark many_types <type-count>\n";
 }
 
 }

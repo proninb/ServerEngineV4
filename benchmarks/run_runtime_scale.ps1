@@ -24,7 +24,9 @@ $cases = @(
     [pscustomobject]@{ scenario = 'links'; count = 100000 },
     [pscustomobject]@{ scenario = 'links'; count = 1000000 },
     [pscustomobject]@{ scenario = 'chain'; count = 100000 },
-    [pscustomobject]@{ scenario = 'chain'; count = 1000000 }
+    [pscustomobject]@{ scenario = 'chain'; count = 1000000 },
+    [pscustomobject]@{ scenario = 'many_types'; count = 1000 },
+    [pscustomobject]@{ scenario = 'many_types'; count = 10000 }
 )
 
 $culture = [Globalization.CultureInfo]::InvariantCulture
