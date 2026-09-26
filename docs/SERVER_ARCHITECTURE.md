@@ -424,6 +424,13 @@ G + ABI + SHM policy
     -> Project
 ```
 
+For FIXED_DIRECT, whole Project Runtime/SHM offsets are 64-bit. Temporary
+ABI-derived member offsets inside one native record use a 32-bit
+`record_offset`; `UINT32_MAX` is reserved as the invalid offset. A single
+native value/type layout must therefore fit within `UINT32_MAX` bytes, while
+the complete Project Runtime/SHM may exceed 4 GiB. This is a Runtime
+construction contract and does not change `compiled.bin` or SHM formats.
+
 The selected mode changes physical materialization, not semantic G. There is no
 second semantic build stage and no second Graph.
 

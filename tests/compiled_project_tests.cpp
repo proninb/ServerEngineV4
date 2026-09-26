@@ -1641,10 +1641,10 @@ void test_runtime_layout(
         return;
     }
 
-    std::uint64_t value_offset = 0;
-    std::uint64_t peer_offset = 0;
-    std::uint64_t left_offset = 0;
-    std::uint64_t right_offset = 0;
+    record_offset value_offset = 0;
+    record_offset peer_offset = 0;
+    runtime_offset left_offset = 0;
+    runtime_offset right_offset = 0;
 
     tests.expect(
         native.member_offset(
@@ -2117,19 +2117,19 @@ void test_fixed_direct_materializer(
         return;
     }
 
-    std::uint64_t unconnected_int = 0;
-    std::uint64_t unconnected_a = 0;
-    std::uint64_t source_offset = 0;
-    std::uint64_t linked_offset = 0;
-    std::uint64_t container_offset = 0;
+    runtime_offset unconnected_int = 0;
+    runtime_offset unconnected_a = 0;
+    runtime_offset source_offset = 0;
+    runtime_offset linked_offset = 0;
+    runtime_offset container_offset = 0;
 
     type_entry a_record;
     type_entry b_record;
 
-    std::uint64_t a_in_offset = 0;
-    std::uint64_t a_out_offset = 0;
-    std::uint64_t b_in_offset = 0;
-    std::uint64_t b_out_offset = 0;
+    record_offset a_in_offset = 0;
+    record_offset a_out_offset = 0;
+    record_offset b_in_offset = 0;
+    record_offset b_out_offset = 0;
 
     if (!tests.expect(
             layout.unconnected_offset(
@@ -2519,8 +2519,8 @@ void test_fixed_direct_unplanned_reference_chain(
     }
 
     type_entry record;
-    std::uint64_t object_offset = 0;
-    std::uint64_t offsets[4]{};
+    runtime_offset object_offset = 0;
+    record_offset offsets[4]{};
 
     if (!tests.expect(
             view.type(
@@ -2974,11 +2974,11 @@ void test_fixed_direct_link_prebind(
         }
 
         type_entry record;
-        std::uint64_t out_offset = 0;
-        std::uint64_t in_offset = 0;
-        std::uint64_t a_offset = 0;
-        std::uint64_t b_offset = 0;
-        std::uint64_t c_offset = 0;
+        record_offset out_offset = 0;
+        record_offset in_offset = 0;
+        runtime_offset a_offset = 0;
+        runtime_offset b_offset = 0;
+        runtime_offset c_offset = 0;
 
         if (!tests.expect(
                 view.type(

@@ -815,7 +815,7 @@ peak_working_set_bytes() noexcept {
         return false;
     }
 
-    std::uint64_t output_member_offset = 0;
+    record_offset output_member_offset = 0;
 
     if (!layout.member_offset(
             static_cast<std::size_t>(
@@ -830,7 +830,7 @@ peak_working_set_bytes() noexcept {
         scenario_kind::chain) {
 
         std::uint64_t object_offset = 0;
-        std::uint64_t reference_offset = 0;
+        record_offset reference_offset = 0;
 
         if (!layout.object_offset(
                 metadata.first_object,
@@ -858,7 +858,7 @@ peak_working_set_bytes() noexcept {
     }
 
     std::uint64_t last_offset = 0;
-    std::uint64_t input_member_offset = 0;
+    record_offset input_member_offset = 0;
 
     if (!layout.object_offset(
             metadata.last_object,

@@ -679,7 +679,7 @@ private:
                 local;
 
             member_record member;
-            std::uint64_t offset = 0;
+            record_offset offset = 0;
 
             if (!project.member_at(
                     global,
@@ -1088,12 +1088,13 @@ private:
     }
 
     struct planned_member final {
-        std::uint64_t offset = 0;
+        std::size_t offset = 0;
         construction_value construction{};
         type_ref type{};
         bool reference = false;
-        std::uint8_t reserved[3]{};
     };
+
+    static_assert(sizeof(planned_member) == 32);
 
     struct record_plan final {
         std::size_t begin = 0;
@@ -1213,7 +1214,7 @@ private:
 
                 member_record member;
                 construction_value construction;
-                std::uint64_t offset = 0;
+                record_offset offset = 0;
 
                 if (!project.member_at(
                         global,
@@ -1247,7 +1248,6 @@ private:
                         ? referent
                         : member.type,
                     reference,
-                    {},
                 });
             }
         }
@@ -1452,7 +1452,7 @@ private:
 
             member_record member;
             construction_value construction;
-            std::uint64_t offset = 0;
+            record_offset offset = 0;
 
             if (!project.member_at(
                     global,
@@ -1769,7 +1769,7 @@ private:
         }
 
         member_record member;
-        std::uint64_t member_offset = 0;
+        record_offset member_offset = 0;
 
         const auto global =
             static_cast<std::size_t>(
@@ -2117,7 +2117,7 @@ private:
                 current.local;
 
             member_record member;
-            std::uint64_t member_offset = 0;
+            record_offset member_offset = 0;
 
             if (!project.member_at(
                     global,
@@ -2200,7 +2200,7 @@ private:
                 source_local;
 
             member_record source;
-            std::uint64_t source_offset = 0;
+            record_offset source_offset = 0;
 
             if (!project.member_at(
                     source_global,
@@ -2457,7 +2457,7 @@ private:
                 source_local;
 
             member_record source;
-            std::uint64_t source_offset = 0;
+            record_offset source_offset = 0;
 
             if (!project.member_at(
                     source_global,

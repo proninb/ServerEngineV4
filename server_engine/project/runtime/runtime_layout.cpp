@@ -6,11 +6,14 @@
 namespace cw::server {
 namespace {
 
-constexpr std::uint64_t invalid_offset =
-    (std::numeric_limits<std::uint64_t>::max)();
+constexpr runtime_offset invalid_offset =
+    (std::numeric_limits<runtime_offset>::max)();
 
-constexpr std::uint64_t pending_offset =
+constexpr runtime_offset pending_offset =
     invalid_offset - 1;
+
+constexpr record_offset invalid_record_offset =
+    (std::numeric_limits<record_offset>::max)();
 
 [[nodiscard]] bool add_u64(
     std::uint64_t left,
@@ -347,7 +350,7 @@ private:
             return runtime_layout_result::invalid_input;
         }
 
-        std::uint64_t* offset = nullptr;
+        runtime_offset* offset = nullptr;
 
         switch (type.kind()) {
         case type_ref_kind::intrinsic:
@@ -420,7 +423,7 @@ private:
         type_ref type,
         std::uint64_t value) noexcept {
 
-        std::uint64_t* offset = nullptr;
+        runtime_offset* offset = nullptr;
 
         switch (type.kind()) {
         case type_ref_kind::intrinsic:
@@ -629,7 +632,7 @@ private:
                         global)];
 
             if (member_offset !=
-                invalid_offset) {
+                invalid_record_offset) {
 
                 slot.state =
                     runtime_layout::slot_state::empty;
@@ -707,8 +710,18 @@ private:
                 return runtime_layout_result::overflow;
             }
 
+            if (aligned >=
+                invalid_record_offset) {
+
+                slot.state =
+                    runtime_layout::slot_state::empty;
+
+                return runtime_layout_result::overflow;
+            }
+
             member_offset =
-                aligned;
+                static_cast<record_offset>(
+                    aligned);
 
             if (!add_u64(
                     aligned,
@@ -736,7 +749,9 @@ private:
         if (!align_up(
                 raw_size,
                 record_alignment,
-                final_size)) {
+                final_size) ||
+            final_size >
+                (std::numeric_limits<record_offset>::max)()) {
 
             slot.state =
                 runtime_layout::slot_state::empty;
@@ -900,6 +915,15 @@ private:
             return result;
         }
 
+        if (resolved.size >
+            (std::numeric_limits<record_offset>::max)()) {
+
+            slot.state =
+                runtime_layout::slot_state::empty;
+
+            return runtime_layout_result::overflow;
+        }
+
         slot.size =
             resolved.size;
 
@@ -1033,7 +1057,7 @@ bool runtime_layout::value(
 
 bool runtime_layout::unconnected_offset(
     type_ref type_value,
-    std::uint64_t& output_value) const noexcept {
+    runtime_offset& output_value) const noexcept {
 
     output_value = 0;
 
@@ -1135,14 +1159,14 @@ bool runtime_layout::type(
 
 bool runtime_layout::member_offset(
     std::size_t index,
-    std::uint64_t& output_value) const noexcept {
+    record_offset& output_value) const noexcept {
 
     output_value = 0;
 
     if (index >=
             member_offsets.size() ||
         member_offsets[index] ==
-            invalid_offset) {
+            invalid_record_offset) {
 
         return false;
     }
@@ -1155,7 +1179,7 @@ bool runtime_layout::member_offset(
 
 bool runtime_layout::object_offset(
     object_handle object,
-    std::uint64_t& output_value) const noexcept {
+    runtime_offset& output_value) const noexcept {
 
     output_value = 0;
 
@@ -1205,7 +1229,7 @@ runtime_layout_result prepare_runtime_layout(
 
         output.member_offsets.assign(
             project.member_count(),
-            invalid_offset);
+            invalid_record_offset);
 
         output.object_offsets.resize(
             project.object_count());

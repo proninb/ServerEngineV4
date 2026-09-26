@@ -26,8 +26,16 @@ enum class runtime_layout_result : std::uint8_t {
     failed,
 };
 
+// Whole Project Runtime/SHM offsets remain 64-bit. Offsets inside one native
+// record are compact 32-bit values; the maximum value is reserved internally.
+using runtime_offset = std::uint64_t;
+using record_offset = std::uint32_t;
+
+static_assert(sizeof(runtime_offset) == 8);
+static_assert(sizeof(record_offset) == 4);
+
 struct runtime_value_layout final {
-    std::uint64_t size = 0;
+    runtime_offset size = 0;
     std::uint32_t alignment = 0;
     std::uint32_t reserved = 0;
 };
@@ -48,7 +56,7 @@ public:
     runtime_layout(runtime_layout&&) noexcept = default;
     runtime_layout& operator=(runtime_layout&&) noexcept = default;
 
-    [[nodiscard]] std::uint64_t size() const noexcept {
+    [[nodiscard]] runtime_offset size() const noexcept {
         return size_value;
     }
 
@@ -62,7 +70,7 @@ public:
 
     [[nodiscard]] bool unconnected_offset(
         type_ref type,
-        std::uint64_t& output) const noexcept;
+        runtime_offset& output) const noexcept;
 
     [[nodiscard]] std::size_t unconnected_count() const noexcept {
         return unconnected_types.size();
@@ -84,11 +92,11 @@ public:
     // index is type_entry.members.begin + local member_index.
     [[nodiscard]] bool member_offset(
         std::size_t index,
-        std::uint64_t& output) const noexcept;
+        record_offset& output) const noexcept;
 
     [[nodiscard]] bool object_offset(
         object_handle object,
-        std::uint64_t& output) const noexcept;
+        runtime_offset& output) const noexcept;
 
 private:
     enum class slot_state : std::uint8_t {
@@ -115,18 +123,18 @@ private:
 
     std::vector<layout_slot> type_slots;
     std::vector<layout_slot> derived_slots;
-    std::vector<std::uint64_t> member_offsets;
-    std::vector<std::uint64_t> object_offsets;
+    std::vector<record_offset> member_offsets;
+    std::vector<runtime_offset> object_offsets;
 
     std::array<
-        std::uint64_t,
+        runtime_offset,
         intrinsic_slot_count>
         unconnected_intrinsic_offsets{};
 
-    std::vector<std::uint64_t>
+    std::vector<runtime_offset>
         unconnected_type_offsets;
 
-    std::vector<std::uint64_t>
+    std::vector<runtime_offset>
         unconnected_derived_offsets;
 
     std::vector<type_ref>
@@ -135,7 +143,7 @@ private:
     abi_target target_value =
         abi_target::windows_x64;
 
-    std::uint64_t size_value = 0;
+    runtime_offset size_value = 0;
     std::uint32_t alignment_value = 1;
     bool prepared_value = false;
 
