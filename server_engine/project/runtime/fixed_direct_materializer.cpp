@@ -2534,6 +2534,29 @@ private:
                 current.slot);
 
             try {
+                // Reserve only after two consecutive unplanned reference hops
+                // prove this is a real chain. Persisted counts are never
+                // trusted beyond already-bound Project/Runtime limits.
+                if (current_metadata.ready &&
+                    next_metadata.ready &&
+                    resolution_path.size() == 1) {
+
+                    const auto reserve_count =
+                        static_cast<std::size_t>(
+                            next_metadata.member_count);
+
+                    if (reserve_count >
+                            resolution_path.capacity() &&
+                        reserve_count <=
+                            project.member_count() &&
+                        reserve_count <=
+                            maximum_steps) {
+
+                        resolution_path.reserve(
+                            reserve_count);
+                    }
+                }
+
                 resolution_path.push_back(
                     reinterpret_cast<std::uintptr_t>(
                         current.slot));
