@@ -1230,6 +1230,24 @@ void test_round_trip(
                     42),
         "construction preservation");
 
+    const auto value_global =
+        static_cast<std::size_t>(
+            type_value.members.begin) +
+        fixture.value_member.value();
+
+    tests.expect(
+        view.construction_at(
+            value_global,
+            construction) &&
+            construction ==
+                construction_value::constant(
+                    construction_kind::signed_integer,
+                    42) &&
+        !view.construction_at(
+            view.member_count(),
+            construction),
+        "direct construction slot access");
+
     derived_type_record derived;
 
     tests.expect(

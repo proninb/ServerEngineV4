@@ -238,6 +238,12 @@ public:
         std::size_t index,
         member_record& output) const noexcept;
 
+    // Direct global member-construction access for dense Runtime consumers.
+    // This performs no type/member-range decode.
+    [[nodiscard]] bool construction_at(
+        std::size_t index,
+        construction_value& output) const noexcept;
+
     [[nodiscard]] bool construction(
         type_handle type,
         member_index member,

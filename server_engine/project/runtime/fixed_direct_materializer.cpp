@@ -2051,15 +2051,7 @@ private:
                 current.record_type,
                 record) ||
             current.local >=
-                record.members.count ||
-            !project.member(
-                current.record_type,
-                current.local,
-                member) ||
-            !project.construction(
-                current.record_type,
-                current.local,
-                construction)) {
+                record.members.count) {
 
             return fixed_direct_materialization_result::
                 invalid_input;
@@ -2072,7 +2064,13 @@ private:
 
         std::uint64_t member_offset = 0;
 
-        if (!layout.member_offset(
+        if (!project.member_at(
+                global,
+                member) ||
+            !project.construction_at(
+                global,
+                construction) ||
+            !layout.member_offset(
                 global,
                 member_offset) ||
             current.record_base +

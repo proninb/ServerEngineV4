@@ -1833,6 +1833,47 @@ bool compiled_project_view::member_at(
             3);
 }
 
+bool compiled_project_view::construction_at(
+    std::size_t index,
+    construction_value& output) const noexcept {
+
+    output = {};
+
+    const auto& values =
+        section(
+            compiled_project_section::
+                member_construction);
+
+    if (index >=
+        values.count) {
+
+        return false;
+    }
+
+    const auto* record =
+        values.data +
+        index *
+            construction_record_size;
+
+    output.low =
+        read_u32(record);
+
+    output.high =
+        read_u32(
+            record + 4);
+
+    output.operand =
+        read_u32(
+            record + 8);
+
+    output.kind =
+        static_cast<construction_kind>(
+            read_u32(
+                record + 12));
+
+    return valid_construction(output);
+}
+
 bool compiled_project_view::construction(
     type_handle type_value,
     member_index member_value,
@@ -1854,44 +1895,13 @@ bool compiled_project_view::construction(
     }
 
     const auto global =
-        static_cast<std::uint64_t>(
+        static_cast<std::size_t>(
             type_record.members.begin) +
         member_value.value();
 
-    const auto& values =
-        section(
-            compiled_project_section::
-                member_construction);
-
-    if (global >=
-        values.count) {
-
-        return false;
-    }
-
-    const auto* record =
-        values.data +
-        static_cast<std::size_t>(
-            global) *
-            construction_record_size;
-
-    output.low =
-        read_u32(record);
-
-    output.high =
-        read_u32(
-            record + 4);
-
-    output.operand =
-        read_u32(
-            record + 8);
-
-    output.kind =
-        static_cast<construction_kind>(
-            read_u32(
-                record + 12));
-
-    return valid_construction(output);
+    return construction_at(
+        global,
+        output);
 }
 
 bool compiled_project_view::construction(
