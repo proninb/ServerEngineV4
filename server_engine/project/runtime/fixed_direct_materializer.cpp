@@ -1291,6 +1291,22 @@ private:
                     member.offset);
 
             if (member.reference) {
+                std::uintptr_t stored = 0;
+
+                if (!read_reference_slot(
+                        target,
+                        stored)) {
+
+                    return fixed_direct_materialization_result::
+                        incompatible_abi;
+                }
+
+                if (runtime_address(
+                        stored)) {
+
+                    continue;
+                }
+
                 std::uintptr_t value_target = 0;
 
                 const auto resolved =
@@ -1418,6 +1434,22 @@ private:
             if (reference_referent(
                     member.type,
                     referent)) {
+
+                std::uintptr_t stored = 0;
+
+                if (!read_reference_slot(
+                        target,
+                        stored)) {
+
+                    return fixed_direct_materialization_result::
+                        incompatible_abi;
+                }
+
+                if (runtime_address(
+                        stored)) {
+
+                    continue;
+                }
 
                 std::uintptr_t value_target = 0;
 
