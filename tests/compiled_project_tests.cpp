@@ -2599,6 +2599,39 @@ void test_fixed_direct_unplanned_reference_chain(
                 expected &&
         out == 17,
         "unplanned reference chain resolves every hop to final value");
+
+    const auto cycle_construction =
+        section_offset(
+            image.bytes,
+            compiled_project_section::
+                member_construction) +
+        (static_cast<std::size_t>(
+             record.members.begin) +
+         2) *
+            sizeof(construction_value);
+
+    write_u32(
+        image.bytes.data() +
+            cycle_construction +
+            offsetof(
+                construction_value,
+                operand),
+        1);
+
+    rewrite_section_crc(
+        image.bytes,
+        compiled_project_section::
+            member_construction);
+
+    tests.expect(
+        materialize_fixed_direct(
+            view,
+            layout,
+            abi,
+            runtime) ==
+                fixed_direct_materialization_result::
+                    invalid_input,
+        "specialized unplanned reference chain preserves cycle detection");
 }
 
 void test_fixed_direct_link_prebind(

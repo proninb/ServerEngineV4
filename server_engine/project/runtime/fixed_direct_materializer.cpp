@@ -2351,6 +2351,312 @@ private:
             invalid_input;
     }
 
+
+    [[nodiscard]] fixed_direct_materialization_result
+    resolve_unplanned_member_binding_chain(
+        reference_state& current,
+        unplanned_reference_metadata& metadata,
+        std::uint64_t maximum_steps,
+        std::uint64_t& consumed,
+        bool& completed,
+        std::uintptr_t& output) noexcept {
+
+        consumed = 0;
+        completed = false;
+        output = 0;
+
+        if (!metadata.ready ||
+            !current.record_type ||
+            current.record_base == nullptr ||
+            current.slot == nullptr ||
+            current.local >=
+                metadata.member_count ||
+            metadata.global <
+                current.local ||
+            !metadata.referent ||
+            maximum_steps == 0) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        const auto member_begin =
+            metadata.global -
+            current.local;
+
+        const auto member_count =
+            metadata.member_count;
+
+        auto local =
+            current.local;
+
+        auto global =
+            metadata.global;
+
+        auto referent =
+            metadata.referent;
+
+        auto* slot =
+            current.slot;
+
+        for (;;) {
+            if (consumed >=
+                maximum_steps) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            construction_value construction;
+
+            if (!project.construction_at(
+                    global,
+                    construction)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            if (construction.kind !=
+                construction_kind::member_binding) {
+
+                current.local = local;
+                current.slot = slot;
+
+                metadata = {
+                    global,
+                    member_count,
+                    referent,
+                    true,
+                };
+
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            if (construction.operand == 0) {
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            const auto source_local =
+                construction.operand - 1;
+
+            if (source_local >=
+                member_count) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            const auto source_global =
+                member_begin +
+                source_local;
+
+            member_record source;
+            std::uint64_t source_offset = 0;
+
+            if (!project.member_at(
+                    source_global,
+                    source) ||
+                !layout.member_offset(
+                    source_global,
+                    source_offset)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            auto* source_address =
+                current.record_base +
+                static_cast<std::size_t>(
+                    source_offset);
+
+            type_ref source_referent;
+
+            const auto source_is_reference =
+                reference_referent(
+                    source.type,
+                    source_referent);
+
+            mark_reference_visiting(
+                slot);
+
+            try {
+                // The first generic hop already proved a second reference.
+                // Reserve only when this tight walker proves one more
+                // same-record reference hop.
+                if (source_is_reference &&
+                    resolution_path.size() == 1) {
+
+                    const auto reserve_count =
+                        static_cast<std::size_t>(
+                            member_count);
+
+                    const auto reserve_limit =
+                        layout.size() /
+                            sizeof(std::uintptr_t) +
+                        1;
+
+                    if (reserve_count >
+                            resolution_path.capacity() &&
+                        reserve_count <=
+                            project.member_count() &&
+                        reserve_count <=
+                            reserve_limit) {
+
+                        resolution_path.reserve(
+                            reserve_count);
+                    }
+                }
+
+                resolution_path.push_back(
+                    reinterpret_cast<std::uintptr_t>(
+                        slot));
+            }
+            catch (...) {
+                return fixed_direct_materialization_result::
+                    failed;
+            }
+
+            ++consumed;
+
+            if (!source_is_reference) {
+                const auto target =
+                    reinterpret_cast<std::uintptr_t>(
+                        source_address);
+
+                if (!runtime_address(
+                        target)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                output = target;
+
+                for (const auto pending :
+                     resolution_path) {
+
+                    auto* pending_slot =
+                        reinterpret_cast<std::byte*>(
+                            pending);
+
+                    const auto written =
+                        write_address(
+                            pending_slot,
+                            output);
+
+                    if (written !=
+                        fixed_direct_materialization_result::
+                            success) {
+
+                        return written;
+                    }
+                }
+
+                completed = true;
+
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            // A reference source itself consumes a resolver step when its slot
+            // is inspected. Preserve the generic maximum-step bound.
+            if (consumed >=
+                maximum_steps) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            std::uintptr_t stored = 0;
+
+            if (!read_reference_slot(
+                    source_address,
+                    stored)) {
+
+                return fixed_direct_materialization_result::
+                    incompatible_abi;
+            }
+
+            if (stored ==
+                reference_visiting_marker) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            if (stored ==
+                reference_link_pending_marker) {
+
+                current.local =
+                    source_local;
+
+                current.slot =
+                    source_address;
+
+                metadata = {
+                    source_global,
+                    member_count,
+                    source_referent,
+                    true,
+                };
+
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            if (stored != 0) {
+                if (!runtime_address(
+                        stored)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                output = stored;
+
+                for (const auto pending :
+                     resolution_path) {
+
+                    auto* pending_slot =
+                        reinterpret_cast<std::byte*>(
+                            pending);
+
+                    const auto written =
+                        write_address(
+                            pending_slot,
+                            output);
+
+                    if (written !=
+                        fixed_direct_materialization_result::
+                            success) {
+
+                        return written;
+                    }
+                }
+
+                completed = true;
+
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            local =
+                source_local;
+
+            global =
+                source_global;
+
+            referent =
+                source_referent;
+
+            slot =
+                source_address;
+        }
+    }
+
     [[nodiscard]] fixed_direct_materialization_result
     resolve_reference_member(
         type_handle record_type_value,
@@ -2497,6 +2803,40 @@ private:
                         target);
             }
             else {
+                if (current_metadata.ready) {
+                    std::uint64_t consumed = 0;
+                    bool completed = false;
+
+                    const auto chained =
+                        resolve_unplanned_member_binding_chain(
+                            current,
+                            current_metadata,
+                            maximum_steps - step,
+                            consumed,
+                            completed,
+                            target);
+
+                    if (chained !=
+                        fixed_direct_materialization_result::
+                            success) {
+
+                        return chained;
+                    }
+
+                    if (completed) {
+                        output = target;
+                        return fixed_direct_materialization_result::
+                            success;
+                    }
+
+                    if (consumed != 0) {
+                        step +=
+                            consumed - 1;
+
+                        continue;
+                    }
+                }
+
                 advanced =
                     advance_reference_unplanned(
                         current,
