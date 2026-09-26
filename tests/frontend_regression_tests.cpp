@@ -1217,6 +1217,410 @@ void test_source_link_failure_provenance(
         "failed Source link operation adds no provenance");
 }
 
+
+void test_declarator_arrays(
+    test_state& tests) {
+
+    const std::string header_text{
+        "struct T {\n"
+        "    int values[2][3];\n"
+        "    int* pointers[4];\n"
+        "    int (*row)[3];\n"
+        "    int (&view)[2][3] = values;\n"
+        "    int out[4];\n"
+        "    int (&in)[4] = out;\n"
+        "};\n"};
+
+    const std::string source_text{
+        "T a;\n"
+        "T b;\n"
+        "T objects[2];\n"
+        "b.in = a.out;\n"};
+
+    const temporary_source header{
+        "declarator_array_header",
+        header_text};
+
+    const temporary_source source{
+        "declarator_array_source",
+        source_text};
+
+    file_context files;
+    lexical_generation lexical;
+
+    file_id header_id;
+    file_id source_id;
+
+    if (!tests.expect(
+            succeeded(
+                files.resolve(
+                    header.path(),
+                    file_kind::header,
+                    header_id)) &&
+            succeeded(
+                files.resolve(
+                    source.path(),
+                    file_kind::source,
+                    source_id)),
+            "resolve declarator-array roots")) {
+
+        return;
+    }
+
+    const std::array<file_id, 2> roots{
+        header_id,
+        source_id};
+
+    if (!prepare_all_roots(
+            tests,
+            files,
+            lexical,
+            roots)) {
+
+        return;
+    }
+
+    preprocessor_configuration configuration;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    parser_failure failure;
+
+    if (!tests.expect(
+            succeeded(
+                parse_semantic_project(
+                    files,
+                    lexical,
+                    roots.size(),
+                    configuration,
+                    strings,
+                    identities,
+                    G,
+                    sources,
+                    &failure)),
+            "parse bounded arrays and parenthesized declarators")) {
+
+        return;
+    }
+
+    const auto type =
+        G.find_type(
+            identities.find(
+                identities.root(),
+                strings.find("T"),
+                identity_kind::type));
+
+    if (!tests.expect(
+            type,
+            "resolve declarator-array record")) {
+
+        return;
+    }
+
+    const auto member_type =
+        [&](std::string_view name,
+            type_ref& output,
+            member_index& member) {
+
+            member =
+                G.find_member(
+                    type,
+                    strings.find(name));
+
+            const auto* value =
+                G.member(
+                    type,
+                    member);
+
+            if (value == nullptr) {
+                return false;
+            }
+
+            output = value->type;
+            return true;
+        };
+
+    const auto derived_is =
+        [&](type_ref value,
+            derived_type_kind kind,
+            std::uint64_t payload,
+            type_ref& child) {
+
+            derived_type_record derived;
+
+            if (!G.derived(
+                    value,
+                    derived) ||
+                derived.kind != kind ||
+                derived.payload != payload) {
+
+                return false;
+            }
+
+            child = derived.child;
+            return true;
+        };
+
+    const auto is_int =
+        [&](type_ref value) {
+
+            intrinsic_type intrinsic;
+
+            return G.intrinsic(
+                       value,
+                       intrinsic) &&
+                intrinsic ==
+                    intrinsic_type::signed_int;
+        };
+
+    type_ref values_type;
+    type_ref pointers_type;
+    type_ref row_type;
+    type_ref view_type;
+    type_ref out_type;
+    type_ref in_type;
+
+    member_index values_member;
+    member_index pointers_member;
+    member_index row_member;
+    member_index view_member;
+    member_index out_member;
+    member_index in_member;
+
+    if (!tests.expect(
+            member_type(
+                "values",
+                values_type,
+                values_member) &&
+            member_type(
+                "pointers",
+                pointers_type,
+                pointers_member) &&
+            member_type(
+                "row",
+                row_type,
+                row_member) &&
+            member_type(
+                "view",
+                view_type,
+                view_member) &&
+            member_type(
+                "out",
+                out_type,
+                out_member) &&
+            member_type(
+                "in",
+                in_type,
+                in_member),
+            "resolve declarator-array members")) {
+
+        return;
+    }
+
+    type_ref child;
+    type_ref leaf;
+
+    tests.expect(
+        derived_is(
+            values_type,
+            derived_type_kind::bounded_array,
+            2,
+            child) &&
+        derived_is(
+            child,
+            derived_type_kind::bounded_array,
+            3,
+            leaf) &&
+        is_int(leaf),
+        "multidimensional array preserves C++ bound order");
+
+    tests.expect(
+        derived_is(
+            pointers_type,
+            derived_type_kind::bounded_array,
+            4,
+            child) &&
+        derived_is(
+            child,
+            derived_type_kind::pointer,
+            0,
+            leaf) &&
+        is_int(leaf),
+        "array of pointers binds suffix outside pointer prefix");
+
+    tests.expect(
+        derived_is(
+            row_type,
+            derived_type_kind::pointer,
+            0,
+            child) &&
+        derived_is(
+            child,
+            derived_type_kind::bounded_array,
+            3,
+            leaf) &&
+        is_int(leaf),
+        "parenthesized declarator distinguishes pointer to array");
+
+    type_ref view_array;
+    type_ref view_inner;
+
+    tests.expect(
+        derived_is(
+            view_type,
+            derived_type_kind::lvalue_reference,
+            0,
+            view_array) &&
+        derived_is(
+            view_array,
+            derived_type_kind::bounded_array,
+            2,
+            view_inner) &&
+        derived_is(
+            view_inner,
+            derived_type_kind::bounded_array,
+            3,
+            leaf) &&
+        is_int(leaf),
+        "reference to multidimensional array preserves native type shape");
+
+    type_ref in_array;
+
+    tests.expect(
+        derived_is(
+            out_type,
+            derived_type_kind::bounded_array,
+            4,
+            child) &&
+        is_int(child) &&
+        derived_is(
+            in_type,
+            derived_type_kind::lvalue_reference,
+            0,
+            in_array) &&
+        in_array == out_type,
+        "whole-array reference uses exact array TypeRef");
+
+    const auto* view_binding =
+        G.construction(
+            type,
+            view_member);
+
+    const auto* in_binding =
+        G.construction(
+            type,
+            in_member);
+
+    tests.expect(
+        view_binding != nullptr &&
+        view_binding->kind ==
+            construction_kind::member_binding &&
+        view_binding->operand ==
+            values_member.value() + 1 &&
+        in_binding != nullptr &&
+        in_binding->kind ==
+            construction_kind::member_binding &&
+        in_binding->operand ==
+            out_member.value() + 1,
+        "array-reference defaults normalize to member bindings");
+
+    const auto objects =
+        G.find_object(
+            identities.find(
+                identities.root(),
+                strings.find("objects"),
+                identity_kind::object));
+
+    const auto* object =
+        G.find(objects);
+
+    type_ref object_element;
+    type_handle object_record;
+
+    tests.expect(
+        object != nullptr &&
+        derived_is(
+            object->type,
+            derived_type_kind::bounded_array,
+            2,
+            object_element) &&
+        G.named(
+            object_element,
+            object_record) &&
+        object_record == type,
+        "Project object may be a bounded array of records");
+
+    tests.expect(
+        G.link_count() == 1,
+        "whole-array static link binds reference-to-array target");
+}
+
+void test_invalid_array_declarators(
+    test_state& tests) {
+
+    const auto reject =
+        [&](std::string_view label,
+            std::string text,
+            parser_failure_kind expected_kind,
+            std::string_view expected_detail,
+            std::string_view marker) {
+
+            const temporary_source source{
+                label,
+                text};
+
+            parser_failure failure;
+
+            const auto status =
+                parse_file(
+                    tests,
+                    source.path(),
+                    failure);
+
+            tests.expect(
+                status ==
+                    server_status::
+                        project_configuration_invalid &&
+                failure.kind ==
+                    expected_kind &&
+                failure.file &&
+                failure.source.offset ==
+                    text.find(marker) &&
+                failure.detail ==
+                    expected_detail,
+                label);
+        };
+
+    reject(
+        "array_of_references",
+        "struct Bad { int& values[4]; };\n",
+        parser_failure_kind::semantic,
+        "Arrays of references are not valid C++",
+        "[");
+
+    reject(
+        "unbounded_array",
+        "struct Bad { int values[]; };\n",
+        parser_failure_kind::unsupported,
+        "Unbounded arrays are not implemented",
+        "[");
+
+    reject(
+        "zero_array_bound",
+        "struct Bad { int values[0]; };\n",
+        parser_failure_kind::semantic,
+        "Array bound must be greater than zero",
+        "0");
+
+    reject(
+        "array_bound_expression",
+        "struct Bad { int values[2 + 2]; };\n",
+        parser_failure_kind::unsupported,
+        "Array bound expressions are not implemented",
+        "+");
+}
+
 void test_semantic_type_diagnostics(
     test_state& tests) {
 
@@ -1731,6 +2135,12 @@ int main() {
             tests);
 
         test_source_link_failure_provenance(
+            tests);
+
+        test_declarator_arrays(
+            tests);
+
+        test_invalid_array_declarators(
             tests);
 
         test_semantic_type_diagnostics(

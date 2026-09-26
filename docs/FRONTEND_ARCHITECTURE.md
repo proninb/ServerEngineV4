@@ -897,6 +897,16 @@ G mutation remains fail-closed as a defensive invariant. A successfully
 constructed G is already semantically valid, so persistence and Runtime/SHM
 materialization do not repeat source-level C++ semantic validation.
 
+Declarators use construction-only modifier scratch rather than a persisted
+syntax tree. The direct slice supports `*`, `&`, `&&`, parenthesized declarator
+grouping, and positive-decimal bounded-array suffixes. Modifiers are collected
+from the identifier outward and applied to the base type in reverse, preserving
+C++ binding for array-of-pointer, pointer-to-array, reference-to-array, and
+multidimensional-array forms. Invalid normalized shapes such as arrays of
+references fail in Parser/Semantic and defensively at the Graph mutation
+boundary. Unbounded arrays, bound expressions, and indexed subobject endpoints
+remain fail-closed.
+
 Parser/Semantic writes normalized construction values directly into G.
 Member defaults, constructor initializer-list operations, constructor-body field
 assignments, and supported object initializers survive only as compact

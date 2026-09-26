@@ -965,8 +965,91 @@ server_status graph::derive(
 
     output = {};
 
+    const auto payload_valid =
+        kind ==
+            derived_type_kind::bounded_array
+        ? payload != 0
+        : payload == 0;
+
     if (!contains(child) ||
-        !valid_derived_kind(kind)) {
+        !valid_derived_kind(kind) ||
+        !payload_valid) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    auto unqualified_child =
+        child;
+
+    bool child_reference = false;
+    bool child_void = false;
+
+    for (;;) {
+        if (unqualified_child.kind() ==
+            type_ref_kind::intrinsic) {
+
+            child_void =
+                unqualified_child.payload() ==
+                static_cast<std::uint32_t>(
+                    intrinsic_type::void_type);
+            break;
+        }
+
+        if (unqualified_child.kind() !=
+            type_ref_kind::derived) {
+
+            break;
+        }
+
+        const auto& record =
+            derived_types[
+                unqualified_child.payload() - 1];
+
+        if (record.kind ==
+                derived_type_kind::const_qualified ||
+            record.kind ==
+                derived_type_kind::volatile_qualified) {
+
+            unqualified_child =
+                record.child;
+            continue;
+        }
+
+        child_reference =
+            record.kind ==
+                derived_type_kind::lvalue_reference ||
+            record.kind ==
+                derived_type_kind::rvalue_reference;
+
+        break;
+    }
+
+    if (child_reference &&
+        (kind ==
+             derived_type_kind::pointer ||
+         kind ==
+             derived_type_kind::lvalue_reference ||
+         kind ==
+             derived_type_kind::rvalue_reference ||
+         kind ==
+             derived_type_kind::bounded_array ||
+         kind ==
+             derived_type_kind::unbounded_array)) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    if (child_void &&
+        (kind ==
+             derived_type_kind::lvalue_reference ||
+         kind ==
+             derived_type_kind::rvalue_reference ||
+         kind ==
+             derived_type_kind::bounded_array ||
+         kind ==
+             derived_type_kind::unbounded_array)) {
 
         return server_status::
             project_configuration_invalid;

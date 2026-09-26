@@ -575,8 +575,37 @@ A() : field(value), ref(other) { field = value; ref = other; }
 ```
 
 Constructor parameters and arbitrary constructor statements/expressions remain
-fail-closed. Nonempty aggregate member construction, arrays, and Runtime
-materialization remain later capabilities.
+fail-closed. Nonempty aggregate array initialization and indexed subobject
+expressions remain later capabilities.
+
+The direct declarator slice separates the base type from declarator binding.
+Construction-only modifier scratch is normalized immediately into canonical
+`type_ref`; no declarator AST survives into G.
+
+Supported declarator operations are:
+
+```text
+*       pointer
+&       lvalue reference
+&&      rvalue reference
+(...)   declarator grouping
+[N]     bounded array with a positive decimal literal bound
+```
+
+Binding follows C++ declarator precedence, so these remain distinct:
+
+```cpp
+int* values[4];      // array[4] of pointer-to-int
+int (*value)[4];     // pointer to array[4] of int
+int (&view)[4];      // reference to array[4] of int
+int matrix[2][3];    // array[2] of array[3] of int
+```
+
+Bounded arrays are normal derived `type_ref` values and therefore use the same
+compiled.bin, ABI layout, and FIXED_DIRECT materialization machinery as other
+types. Whole-array reference-member binding and whole-member static links are
+supported. Unbounded arrays, array-bound expressions, nonempty aggregate array
+initializers, and indexed array-element link endpoints fail closed.
 
 The direct Parser slice also accepts Project objects and static links:
 

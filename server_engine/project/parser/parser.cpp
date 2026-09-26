@@ -3,6 +3,7 @@
 #include "../frontend/semantic_input.hpp"
 #include "../graph/construction_semantics.hpp"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <charconv>
@@ -66,6 +67,8 @@ enum class semantic_domain : std::uint8_t {
     source,
 };
 
+constexpr std::size_t declarator_depth_limit = 64;
+
 enum class pending_construction_kind : std::uint8_t {
     value,
     member_name,
@@ -93,6 +96,18 @@ struct constructor_operation final {
 struct resolved_link_endpoint final {
     object_endpoint endpoint{};
     type_ref type{};
+    semantic_source_location location;
+};
+
+struct declarator_modifier final {
+    std::uint64_t payload = 0;
+    derived_type_kind kind =
+        derived_type_kind::pointer;
+    semantic_source_location location;
+};
+
+struct parsed_declarator final {
+    string_id name{};
     semantic_source_location location;
 };
 
@@ -877,7 +892,7 @@ private:
         return server_status::success;
     }
 
-    [[nodiscard]] server_status parse_type(
+    [[nodiscard]] server_status parse_type_specifier(
         identity_ref scope,
         type_ref& output) noexcept {
 
@@ -979,46 +994,360 @@ private:
             }
         }
 
-        const auto qualified =
-            apply_qualifiers(
-                const_qualified,
-                volatile_qualified,
-                output);
+        return apply_qualifiers(
+            const_qualified,
+            volatile_qualified,
+            output);
+    }
 
-        if (!succeeded(qualified)) {
-            return qualified;
+    [[nodiscard]] bool is_void_type(
+        type_ref type) const noexcept {
+
+        derived_type_record derived;
+
+        while (G.derived(
+                   type,
+                   derived) &&
+               (derived.kind ==
+                    derived_type_kind::const_qualified ||
+                derived.kind ==
+                    derived_type_kind::volatile_qualified)) {
+
+            type = derived.child;
         }
 
-        for (;;) {
-            derived_type_kind modifier;
+        intrinsic_type intrinsic;
 
-            if (at(token_kind::star)) {
-                modifier = derived_type_kind::pointer;
-            }
-            else if (at(token_kind::ampersand)) {
-                modifier = derived_type_kind::lvalue_reference;
-            }
-            else if (at(token_kind::logical_and)) {
-                modifier = derived_type_kind::rvalue_reference;
-            }
-            else {
-                break;
+        return G.intrinsic(
+                   type,
+                   intrinsic) &&
+            intrinsic ==
+                intrinsic_type::void_type;
+    }
+
+    [[nodiscard]] server_status append_declarator_modifier(
+        derived_type_kind kind,
+        std::uint64_t payload,
+        semantic_source_location location) noexcept {
+
+        try {
+            declarator_modifiers.push_back({
+                payload,
+                kind,
+                location,
+            });
+
+            return server_status::success;
+        }
+        catch (...) {
+            return server_status::io_error;
+        }
+    }
+
+    [[nodiscard]] server_status parse_declarator_node(
+        parsed_declarator& output,
+        std::size_t depth) noexcept {
+
+        if (depth >=
+            declarator_depth_limit) {
+
+            return fail(
+                parser_failure_kind::unsupported,
+                "Declarator nesting exceeds the supported depth");
+        }
+
+        const auto prefix_begin =
+            declarator_modifiers.size();
+
+        while (at(token_kind::star) ||
+               at(token_kind::ampersand) ||
+               at(token_kind::logical_and)) {
+
+            const auto location =
+                current_location();
+
+            const auto kind =
+                at(token_kind::star)
+                ? derived_type_kind::pointer
+                : at(token_kind::ampersand)
+                    ? derived_type_kind::lvalue_reference
+                    : derived_type_kind::rvalue_reference;
+
+            auto status =
+                append_declarator_modifier(
+                    kind,
+                    0,
+                    location);
+
+            if (!succeeded(status)) {
+                return status;
             }
 
-            const auto advanced = advance();
-            if (!succeeded(advanced)) {
-                return advanced;
+            status = advance();
+
+            if (!succeeded(status)) {
+                return status;
+            }
+        }
+
+        const auto prefix_end =
+            declarator_modifiers.size();
+
+        if (at(token_kind::identifier) &&
+            current.identifier) {
+
+            if (output.name) {
+                return fail(
+                    parser_failure_kind::syntax,
+                    "Declarator contains multiple identifiers");
+            }
+
+            output.name =
+                current.identifier;
+
+            output.location =
+                current_location();
+
+            const auto status = advance();
+
+            if (!succeeded(status)) {
+                return status;
+            }
+        }
+        else if (at(token_kind::l_paren)) {
+            auto status = advance();
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            status =
+                parse_declarator_node(
+                    output,
+                    depth + 1);
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            status =
+                expect(
+                    token_kind::r_paren,
+                    "Expected ')' after parenthesized declarator");
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            status = advance();
+
+            if (!succeeded(status)) {
+                return status;
+            }
+        }
+        else {
+            return fail(
+                parser_failure_kind::syntax,
+                "Expected declarator identifier or parenthesized declarator");
+        }
+
+        while (at(token_kind::l_bracket)) {
+            const auto array_location =
+                current_location();
+
+            auto status = advance();
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            if (at(token_kind::r_bracket)) {
+                return fail_at(
+                    parser_failure_kind::unsupported,
+                    "Unbounded arrays are not implemented",
+                    array_location);
+            }
+
+            if (!at(token_kind::pp_number)) {
+                return fail(
+                    parser_failure_kind::unsupported,
+                    "Array bounds require a positive decimal integer literal");
+            }
+
+            const auto bound_location =
+                current_location();
+
+            const auto spelling =
+                token_text(current);
+
+            std::uint64_t bound = 0;
+
+            const auto converted =
+                std::from_chars(
+                    spelling.data(),
+                    spelling.data() +
+                        spelling.size(),
+                    bound);
+
+            if (converted.ec != std::errc{} ||
+                converted.ptr !=
+                    spelling.data() +
+                        spelling.size()) {
+
+                return fail_at(
+                    parser_failure_kind::unsupported,
+                    "Only positive decimal array bounds are supported",
+                    bound_location);
+            }
+
+            if (bound == 0) {
+                return fail_at(
+                    parser_failure_kind::semantic,
+                    "Array bound must be greater than zero",
+                    bound_location);
+            }
+
+            status = advance();
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            if (!at(token_kind::r_bracket)) {
+                return fail(
+                    parser_failure_kind::unsupported,
+                    "Array bound expressions are not implemented");
+            }
+
+            status = advance();
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            status =
+                append_declarator_modifier(
+                    derived_type_kind::bounded_array,
+                    bound,
+                    array_location);
+
+            if (!succeeded(status)) {
+                return status;
+            }
+        }
+
+        if (prefix_begin !=
+            prefix_end) {
+
+            auto begin =
+                declarator_modifiers.begin() +
+                static_cast<std::ptrdiff_t>(
+                    prefix_begin);
+
+            auto middle =
+                declarator_modifiers.begin() +
+                static_cast<std::ptrdiff_t>(
+                    prefix_end);
+
+            std::reverse(
+                begin,
+                middle);
+
+            std::rotate(
+                begin,
+                middle,
+                declarator_modifiers.end());
+        }
+
+        return server_status::success;
+    }
+
+    [[nodiscard]] server_status apply_declarator(
+        type_ref base,
+        type_ref& output) noexcept {
+
+        output = base;
+
+        for (std::size_t index =
+                 declarator_modifiers.size();
+             index != 0;
+             --index) {
+
+            const auto& modifier =
+                declarator_modifiers[
+                    index - 1];
+
+            const auto child_is_reference =
+                reference_type(output);
+
+            if (modifier.kind ==
+                    derived_type_kind::pointer &&
+                child_is_reference) {
+
+                return fail_at(
+                    parser_failure_kind::semantic,
+                    "Pointers to references are not valid C++",
+                    modifier.location);
+            }
+
+            if (modifier.kind ==
+                    derived_type_kind::lvalue_reference ||
+                modifier.kind ==
+                    derived_type_kind::rvalue_reference) {
+
+                if (child_is_reference) {
+                    return fail_at(
+                        parser_failure_kind::semantic,
+                        "References to references are not valid C++",
+                        modifier.location);
+                }
+
+                if (is_void_type(output)) {
+                    return fail_at(
+                        parser_failure_kind::semantic,
+                        "References to void are not valid C++",
+                        modifier.location);
+                }
+            }
+
+            if (modifier.kind ==
+                derived_type_kind::bounded_array) {
+
+                if (child_is_reference) {
+                    return fail_at(
+                        parser_failure_kind::semantic,
+                        "Arrays of references are not valid C++",
+                        modifier.location);
+                }
+
+                if (is_void_type(output)) {
+                    return fail_at(
+                        parser_failure_kind::semantic,
+                        "Arrays of void are not valid C++",
+                        modifier.location);
+                }
             }
 
             type_ref wrapped;
+
             const auto derived =
                 G.derive(
                     output,
-                    modifier,
-                    0,
+                    modifier.kind,
+                    modifier.payload,
                     wrapped);
 
             if (!succeeded(derived)) {
+                if (derived ==
+                    server_status::
+                        project_configuration_invalid) {
+
+                    return fail_at(
+                        parser_failure_kind::semantic,
+                        "Declarator produces an invalid C++ type",
+                        modifier.location);
+                }
+
                 return derived;
             }
 
@@ -1026,6 +1355,46 @@ private:
         }
 
         return server_status::success;
+    }
+
+    [[nodiscard]] server_status parse_declared_type(
+        identity_ref scope,
+        type_ref& output,
+        parsed_declarator& declarator) noexcept {
+
+        output = {};
+        declarator = {};
+        declarator_modifiers.clear();
+
+        type_ref base;
+
+        auto status =
+            parse_type_specifier(
+                scope,
+                base);
+
+        if (!succeeded(status)) {
+            return status;
+        }
+
+        status =
+            parse_declarator_node(
+                declarator,
+                0);
+
+        if (!succeeded(status)) {
+            return status;
+        }
+
+        if (!declarator.name) {
+            return fail(
+                parser_failure_kind::syntax,
+                "Declarator has no identifier");
+        }
+
+        return apply_declarator(
+            base,
+            output);
     }
 
     [[nodiscard]] server_status parse_number(
@@ -2107,38 +2476,28 @@ private:
             }
 
             type_ref member_type;
+            parsed_declarator declarator;
 
             status =
-                parse_type(
+                parse_declared_type(
                     scope,
-                    member_type);
+                    member_type,
+                    declarator);
 
             if (!succeeded(status)) {
                 return status;
-            }
-
-            if (!at(token_kind::identifier) ||
-                !current.identifier) {
-
-                return fail(
-                    parser_failure_kind::syntax,
-                    "Expected record member identifier");
             }
 
             const auto name =
-                current.identifier;
+                declarator.name;
 
             for (const auto& existing : members) {
                 if (existing.name == name) {
-                    return fail(
+                    return fail_at(
                         parser_failure_kind::semantic,
-                        "Record member name is duplicated");
+                        "Record member name is duplicated",
+                        declarator.location);
                 }
-            }
-
-            status = advance();
-            if (!succeeded(status)) {
-                return status;
             }
 
             pending_construction initializer;
@@ -2326,29 +2685,23 @@ private:
         }
 
         type_ref type;
+        parsed_declarator declarator;
 
         auto status =
-            parse_type(
+            parse_declared_type(
                 scope,
-                type);
+                type,
+                declarator);
 
         if (!succeeded(status)) {
             return status;
         }
 
-        if (!at(token_kind::identifier) ||
-            !current.identifier) {
-
-            return fail(
-                parser_failure_kind::syntax,
-                "Expected object identifier");
-        }
-
         const auto object_file =
-            current.file;
+            declarator.location.file;
 
         const auto name =
-            current.identifier;
+            declarator.name;
 
         identity_ref identity;
 
@@ -2363,13 +2716,6 @@ private:
                 name,
                 identity_kind::object,
                 identity);
-
-        if (!succeeded(status)) {
-            return status;
-        }
-
-        status =
-            advance();
 
         if (!succeeded(status)) {
             return status;
@@ -2926,6 +3272,7 @@ private:
     semantic_token buffered;
     bool has_buffered = false;
 
+    std::vector<declarator_modifier> declarator_modifiers;
     std::vector<member_record> record_members;
     std::vector<pending_construction> record_pending;
     std::vector<constructor_operation> record_operations;

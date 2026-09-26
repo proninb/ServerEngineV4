@@ -105,6 +105,120 @@ struct compiled_fixture final {
         name);
 }
 
+
+void test_graph_derived_type_invariants(
+    test_state& tests) {
+
+    graph G;
+
+    const auto integer =
+        G.intrinsic(
+            intrinsic_type::signed_int);
+
+    const auto void_value =
+        G.intrinsic(
+            intrinsic_type::void_type);
+
+    type_ref integer_reference;
+
+    if (!tests.expect(
+            integer &&
+            void_value &&
+            succeeded(
+                G.derive(
+                    integer,
+                    derived_type_kind::lvalue_reference,
+                    0,
+                    integer_reference)),
+            "prepare Graph derived-type invariant inputs")) {
+
+        return;
+    }
+
+    type_ref output;
+
+    tests.expect(
+        G.derive(
+            integer,
+            derived_type_kind::bounded_array,
+            0,
+            output) ==
+                server_status::
+                    project_configuration_invalid &&
+        !output,
+        "Graph rejects zero bounded-array extent");
+
+    tests.expect(
+        G.derive(
+            integer,
+            derived_type_kind::pointer,
+            1,
+            output) ==
+                server_status::
+                    project_configuration_invalid &&
+        !output,
+        "Graph rejects payload on non-array derived type");
+
+    tests.expect(
+        G.derive(
+            integer_reference,
+            derived_type_kind::bounded_array,
+            4,
+            output) ==
+                server_status::
+                    project_configuration_invalid &&
+        !output,
+        "Graph rejects array of references");
+
+    tests.expect(
+        G.derive(
+            integer_reference,
+            derived_type_kind::pointer,
+            0,
+            output) ==
+                server_status::
+                    project_configuration_invalid &&
+        !output,
+        "Graph rejects pointer to reference");
+
+    tests.expect(
+        G.derive(
+            void_value,
+            derived_type_kind::lvalue_reference,
+            0,
+            output) ==
+                server_status::
+                    project_configuration_invalid &&
+        !output,
+        "Graph rejects reference to void");
+
+    type_ref inner;
+    type_ref outer;
+    type_ref array_reference;
+
+    tests.expect(
+        succeeded(
+            G.derive(
+                integer,
+                derived_type_kind::bounded_array,
+                3,
+                inner)) &&
+        succeeded(
+            G.derive(
+                inner,
+                derived_type_kind::bounded_array,
+                2,
+                outer)) &&
+        succeeded(
+            G.derive(
+                outer,
+                derived_type_kind::lvalue_reference,
+                0,
+                array_reference)) &&
+        array_reference,
+        "Graph accepts reference to bounded multidimensional array");
+}
+
 void test_graph_reference_invariants(
     test_state& tests) {
 
@@ -1585,6 +1699,455 @@ void test_direct_mmap_encoding(
         "remove direct compiled mmap test file");
 }
 
+
+
+void test_fixed_direct_arrays(
+    test_state& tests) {
+
+    compiled_fixture fixture;
+
+    string_id type_name;
+    string_id out_name;
+    string_id in_name;
+    string_id a_name;
+    string_id b_name;
+    string_id objects_name;
+
+    const auto intern =
+        [&](std::string_view value,
+            string_id& output) {
+
+            return succeeded(
+                fixture.strings.intern(
+                    value,
+                    output));
+        };
+
+    if (!tests.expect(
+            intern("ArrayRecord", type_name) &&
+            intern("out", out_name) &&
+            intern("in", in_name) &&
+            intern("a", a_name) &&
+            intern("b", b_name) &&
+            intern("objects", objects_name),
+            "prepare FIXED_DIRECT array strings")) {
+
+        return;
+    }
+
+    identity_ref type_identity;
+    identity_ref a_identity;
+    identity_ref b_identity;
+    identity_ref objects_identity;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    type_name,
+                    identity_kind::type,
+                    type_identity)) &&
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    a_name,
+                    identity_kind::object,
+                    a_identity)) &&
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    b_name,
+                    identity_kind::object,
+                    b_identity)) &&
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    objects_name,
+                    identity_kind::object,
+                    objects_identity)),
+            "prepare FIXED_DIRECT array identities")) {
+
+        return;
+    }
+
+    type_handle type;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.declare_record(
+                    type_identity,
+                    graph_record_kind::struct_type,
+                    type)),
+            "declare FIXED_DIRECT array record")) {
+
+        return;
+    }
+
+    const auto integer =
+        fixture.G.intrinsic(
+            intrinsic_type::signed_int);
+
+    type_ref inner_array;
+    type_ref outer_array;
+    type_ref array_reference;
+
+    if (!tests.expect(
+            integer &&
+            succeeded(
+                fixture.G.derive(
+                    integer,
+                    derived_type_kind::bounded_array,
+                    3,
+                    inner_array)) &&
+            succeeded(
+                fixture.G.derive(
+                    inner_array,
+                    derived_type_kind::bounded_array,
+                    2,
+                    outer_array)) &&
+            succeeded(
+                fixture.G.derive(
+                    outer_array,
+                    derived_type_kind::lvalue_reference,
+                    0,
+                    array_reference)),
+            "derive FIXED_DIRECT array types")) {
+
+        return;
+    }
+
+    const std::array<member_record, 2>
+        members{{
+            {
+                out_name,
+                outer_array,
+                graph_member_access::public_access,
+            },
+            {
+                in_name,
+                array_reference,
+                graph_member_access::public_access,
+            },
+        }};
+
+    const std::array<construction_value, 2>
+        construction{{
+            {},
+            construction_value::member_binding(1),
+        }};
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.define_record(
+                    type,
+                    graph_record_kind::struct_type,
+                    members,
+                    construction)),
+            "define FIXED_DIRECT array record")) {
+
+        return;
+    }
+
+    const auto named_type =
+        fixture.G.named(type);
+
+    type_ref object_array_type;
+
+    if (!tests.expect(
+            named_type &&
+            succeeded(
+                fixture.G.derive(
+                    named_type,
+                    derived_type_kind::bounded_array,
+                    2,
+                    object_array_type)),
+            "derive FIXED_DIRECT record-array object type")) {
+
+        return;
+    }
+
+    object_handle a;
+    object_handle b;
+    object_handle objects;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.add_object(
+                    a_identity,
+                    named_type,
+                    a)) &&
+            succeeded(
+                fixture.G.add_object(
+                    b_identity,
+                    named_type,
+                    b)) &&
+            succeeded(
+                fixture.G.add_object(
+                    objects_identity,
+                    object_array_type,
+                    objects)),
+            "add FIXED_DIRECT array objects")) {
+
+        return;
+    }
+
+    const auto out =
+        fixture.G.find_member(
+            type,
+            out_name);
+
+    const auto in =
+        fixture.G.find_member(
+            type,
+            in_name);
+
+    link_handle link;
+
+    if (!tests.expect(
+            out &&
+            in &&
+            succeeded(
+                fixture.G.add_link(
+                    {
+                        a,
+                        out,
+                    },
+                    {
+                        b,
+                        in,
+                    },
+                    link)),
+            "add whole-array FIXED_DIRECT reference link")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            succeeded(
+                fixture.sources.finalize(
+                    fixture.files.size(),
+                    fixture.identities,
+                    fixture.G)),
+            "finalize FIXED_DIRECT array Source Map")) {
+
+        return;
+    }
+
+    compiled_test_image image;
+
+    if (!tests.expect(
+            build_test_compiled_image(
+                fixture,
+                image) ==
+                compiled_project_image_result::success,
+            "encode FIXED_DIRECT array image")) {
+
+        return;
+    }
+
+    compiled_project_view view;
+
+    if (!tests.expect(
+            view.bind(
+                image.bytes) ==
+                compiled_project_image_result::success,
+            "bind FIXED_DIRECT array image")) {
+
+        return;
+    }
+
+#if defined(_WIN32)
+    const server_abi_configuration abi{
+        abi_target::windows_x64,
+        8,
+    };
+#else
+    const server_abi_configuration abi{
+        abi_target::posix_x64,
+        8,
+    };
+#endif
+
+    runtime_layout layout;
+
+    if (!tests.expect(
+            fixed_direct_host_compatible(
+                abi) &&
+            prepare_runtime_layout(
+                view,
+                abi,
+                layout) ==
+                runtime_layout_result::success,
+            "prepare FIXED_DIRECT array Runtime layout")) {
+
+        return;
+    }
+
+    std::vector<std::byte> runtime;
+
+    try {
+        runtime.assign(
+            static_cast<std::size_t>(
+                layout.size()),
+            std::byte{0xcc});
+    }
+    catch (...) {
+        tests.expect(
+            false,
+            "allocate FIXED_DIRECT array Runtime");
+        return;
+    }
+
+    if (!tests.expect(
+            materialize_fixed_direct(
+                view,
+                layout,
+                abi,
+                runtime) ==
+                fixed_direct_materialization_result::
+                    success,
+            "materialize FIXED_DIRECT arrays")) {
+
+        return;
+    }
+
+    type_entry record;
+    record_offset out_offset = 0;
+    record_offset in_offset = 0;
+    runtime_offset a_offset = 0;
+    runtime_offset b_offset = 0;
+    runtime_offset objects_offset = 0;
+    runtime_value_layout record_layout;
+
+    if (!tests.expect(
+            view.type(
+                type,
+                record) &&
+            layout.member_offset(
+                static_cast<std::size_t>(
+                    record.members.begin) +
+                    out.value(),
+                out_offset) &&
+            layout.member_offset(
+                static_cast<std::size_t>(
+                    record.members.begin) +
+                    in.value(),
+                in_offset) &&
+            layout.object_offset(
+                a,
+                a_offset) &&
+            layout.object_offset(
+                b,
+                b_offset) &&
+            layout.object_offset(
+                objects,
+                objects_offset) &&
+            layout.value(
+                named_type,
+                record_layout),
+            "query FIXED_DIRECT array offsets")) {
+
+        return;
+    }
+
+    const auto base =
+        reinterpret_cast<std::uintptr_t>(
+            runtime.data());
+
+    const auto read_address =
+        [&](runtime_offset offset) {
+            std::uintptr_t value = 0;
+
+            std::memcpy(
+                &value,
+                runtime.data() +
+                    static_cast<std::size_t>(
+                        offset),
+                sizeof(value));
+
+            return value;
+        };
+
+    const auto a_out =
+        base +
+        static_cast<std::uintptr_t>(
+            a_offset +
+            out_offset);
+
+    tests.expect(
+        read_address(
+            a_offset +
+                in_offset) ==
+                    a_out &&
+        read_address(
+            b_offset +
+                in_offset) ==
+                    a_out,
+        "default and static-link references bind whole native arrays");
+
+    bool object_array_bindings = true;
+
+    for (std::uint64_t index = 0;
+         index < 2;
+         ++index) {
+
+        const auto element_offset =
+            objects_offset +
+            index *
+                record_layout.size;
+
+        const auto expected =
+            base +
+            static_cast<std::uintptr_t>(
+                element_offset +
+                out_offset);
+
+        object_array_bindings =
+            object_array_bindings &&
+            read_address(
+                element_offset +
+                    in_offset) ==
+                expected;
+    }
+
+    tests.expect(
+        object_array_bindings,
+        "record-array Project object materializes per-element native self-bindings");
+
+    constexpr std::size_t element =
+        5;
+
+    const int written = 37;
+
+    std::memcpy(
+        runtime.data() +
+            static_cast<std::size_t>(
+                a_offset +
+                out_offset) +
+            element *
+                sizeof(int),
+        &written,
+        sizeof(written));
+
+    const auto linked =
+        read_address(
+            b_offset +
+                in_offset);
+
+    int observed = 0;
+
+    std::memcpy(
+        &observed,
+        reinterpret_cast<const void*>(
+            linked +
+            element *
+                sizeof(int)),
+        sizeof(observed));
+
+    tests.expect(
+        observed == written,
+        "reference-to-array exposes the same nested-array storage");
+}
 
 void test_runtime_layout(
     test_state& tests,
@@ -4108,6 +4671,9 @@ int main() {
     try {
         test_state tests;
 
+        test_graph_derived_type_invariants(
+            tests);
+
         test_graph_reference_invariants(
             tests);
 
@@ -4158,6 +4724,9 @@ int main() {
             first);
 
         test_runtime_layout_tail_alignment(
+            tests);
+
+        test_fixed_direct_arrays(
             tests);
 
         test_fixed_direct_materializer(
