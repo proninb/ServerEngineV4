@@ -191,54 +191,6 @@ write_real(
 }
 
 
-[[nodiscard]] constexpr std::uint64_t
-mix64(
-    std::uint64_t value) noexcept {
-
-    value ^= value >> 30;
-    value *= 0xbf58476d1ce4e5b9ULL;
-    value ^= value >> 27;
-    value *= 0x94d049bb133111ebULL;
-    value ^= value >> 31;
-
-    return value;
-}
-
-[[nodiscard]] std::size_t pending_link_index_capacity(
-    std::size_t live) noexcept {
-
-    if (live == 0) {
-        return 0;
-    }
-
-    if (live >
-        (std::numeric_limits<std::size_t>::max)() /
-            2) {
-
-        return 0;
-    }
-
-    const auto required =
-        live * 2;
-
-    std::size_t capacity = 8;
-
-    while (capacity <
-        required) {
-
-        if (capacity >
-            (std::numeric_limits<std::size_t>::max)() /
-                2) {
-
-            return 0;
-        }
-
-        capacity *= 2;
-    }
-
-    return capacity;
-}
-
 class fixed_direct_materializer final {
 public:
     fixed_direct_materializer(
@@ -281,21 +233,6 @@ public:
 
             link_target_slots.resize(
                 project.link_count());
-
-            if (project.link_count() != 0) {
-                const auto capacity =
-                    pending_link_index_capacity(
-                        project.link_count());
-
-                if (capacity == 0) {
-                    return fixed_direct_materialization_result::
-                        overflow;
-                }
-
-                pending_link_index.assign(
-                    capacity,
-                    0);
-            }
         }
         catch (...) {
             return fixed_direct_materialization_result::
@@ -1820,15 +1757,60 @@ private:
     };
 
     // During construction a native reference slot is also its state:
-    // 0 = unresolved, pending = Graph link target, visiting = cycle detection,
-    // Runtime address = resolved.
+    // 0 = unresolved, ~link_handle = pending static link,
+    // max = cycle detection, Runtime address = resolved.
     static constexpr std::uintptr_t
         reference_visiting_marker =
             (std::numeric_limits<std::uintptr_t>::max)();
 
-    static constexpr std::uintptr_t
-        reference_link_pending_marker =
-            reference_visiting_marker - 1;
+    [[nodiscard]] static constexpr std::uintptr_t
+    encode_pending_link(
+        std::uint32_t link) noexcept {
+
+        return ~static_cast<std::uintptr_t>(
+            link);
+    }
+
+    [[nodiscard]] static constexpr bool
+    decode_pending_link(
+        std::uintptr_t value,
+        std::uint32_t& output) noexcept {
+
+        output = 0;
+
+        if (value ==
+            reference_visiting_marker) {
+
+            return false;
+        }
+
+        const auto decoded =
+            ~value;
+
+        if (decoded == 0 ||
+            decoded >
+                link_handle::maximum_slot) {
+
+            return false;
+        }
+
+        output =
+            static_cast<std::uint32_t>(
+                decoded);
+
+        return true;
+    }
+
+    [[nodiscard]] static constexpr bool
+    is_pending_link(
+        std::uintptr_t value) noexcept {
+
+        std::uint32_t ignored = 0;
+
+        return decode_pending_link(
+            value,
+            ignored);
+    }
 
     [[nodiscard]] bool runtime_address(
         std::uintptr_t value) const noexcept {
@@ -1876,109 +1858,6 @@ private:
             reference_visiting_marker);
     }
 
-
-    [[nodiscard]] bool insert_pending_link(
-        std::byte* slot,
-        std::uint32_t link) noexcept {
-
-        if (slot == nullptr ||
-            link == 0 ||
-            pending_link_index.empty()) {
-
-            return false;
-        }
-
-        const auto mask =
-            pending_link_index.size() - 1;
-
-        auto position =
-            static_cast<std::size_t>(
-                mix64(
-                    reinterpret_cast<std::uintptr_t>(
-                        slot) >>
-                    3)) &
-            mask;
-
-        for (std::size_t probe = 0;
-             probe <
-                pending_link_index.size();
-             ++probe) {
-
-            auto& raw =
-                pending_link_index[
-                    position];
-
-            if (raw == 0) {
-                raw = link;
-                return true;
-            }
-
-            if (raw <=
-                link_target_slots.size() &&
-                link_target_slots[
-                    raw - 1] ==
-                    slot) {
-
-                return false;
-            }
-
-            position =
-                (position + 1) &
-                mask;
-        }
-
-        return false;
-    }
-
-    [[nodiscard]] std::uint32_t pending_link(
-        const std::byte* slot) const noexcept {
-
-        if (slot == nullptr ||
-            pending_link_index.empty()) {
-
-            return 0;
-        }
-
-        const auto mask =
-            pending_link_index.size() - 1;
-
-        auto position =
-            static_cast<std::size_t>(
-                mix64(
-                    reinterpret_cast<std::uintptr_t>(
-                        slot) >>
-                    3)) &
-            mask;
-
-        for (std::size_t probe = 0;
-             probe <
-                pending_link_index.size();
-             ++probe) {
-
-            const auto raw =
-                pending_link_index[
-                    position];
-
-            if (raw == 0) {
-                return 0;
-            }
-
-            if (raw <=
-                    link_target_slots.size() &&
-                link_target_slots[
-                    raw - 1] ==
-                    slot) {
-
-                return raw;
-            }
-
-            position =
-                (position + 1) &
-                mask;
-        }
-
-        return 0;
-    }
 
     [[nodiscard]] fixed_direct_materialization_result
     endpoint_path_reference_or_value(
@@ -2266,7 +2145,7 @@ private:
     }
 
     [[nodiscard]] fixed_direct_materialization_result
-    endpoint_reference_or_value(
+    direct_endpoint_reference_or_value(
         object_endpoint endpoint,
         reference_state& next,
         bool& has_next,
@@ -2276,22 +2155,10 @@ private:
         has_next = false;
         output = 0;
 
-        if (endpoint.member.is_path()) {
-            return endpoint_path_reference_or_value(
-                endpoint,
-                next,
-                has_next,
-                output);
-        }
-
         object_entry object;
         std::uint64_t object_offset = 0;
 
-        const auto direct_member =
-            endpoint.member.direct_member();
-
         if (!endpoint.object ||
-            !direct_member ||
             !project.object(
                 endpoint.object,
                 object) ||
@@ -2313,8 +2180,11 @@ private:
                 invalid_input;
         }
 
+        // Caller has already classified this endpoint as a direct member.
+        // Use the raw zero-based local index so the common link path matches
+        // the pre-SUBOBJECT resolver without another tag dispatch.
         const auto local =
-            direct_member.value();
+            endpoint.member.value();
 
         auto* base =
             address(
@@ -2436,6 +2306,28 @@ private:
 
         return fixed_direct_materialization_result::
             success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    endpoint_reference_or_value(
+        object_endpoint endpoint,
+        reference_state& next,
+        bool& has_next,
+        std::uintptr_t& output) noexcept {
+
+        if (endpoint.member.is_path()) {
+            return endpoint_path_reference_or_value(
+                endpoint,
+                next,
+                has_next,
+                output);
+        }
+
+        return direct_endpoint_reference_or_value(
+            endpoint,
+            next,
+            has_next,
+            output);
     }
 
     [[nodiscard]] fixed_direct_materialization_result
@@ -3196,8 +3088,8 @@ private:
                     invalid_input;
             }
 
-            if (stored ==
-                reference_link_pending_marker) {
+            if (is_pending_link(
+                    stored)) {
 
                 current.local =
                     source_local;
@@ -3316,9 +3208,12 @@ private:
                     invalid_input;
             }
 
+            std::uint32_t raw_link = 0;
+
             const auto link_pending =
-                stored ==
-                    reference_link_pending_marker;
+                decode_pending_link(
+                    stored,
+                    raw_link);
 
             if (stored != 0 &&
                 !link_pending) {
@@ -3365,10 +3260,6 @@ private:
             fixed_direct_materialization_result advanced;
 
             if (link_pending) {
-                const auto raw_link =
-                    pending_link(
-                        current.slot);
-
                 if (raw_link == 0 ||
                     raw_link >
                         project.link_count()) {
@@ -3568,7 +3459,7 @@ private:
     }
 
     [[nodiscard]] fixed_direct_materialization_result
-    resolve_endpoint(
+    resolve_direct_endpoint(
         object_endpoint endpoint,
         std::uintptr_t& output) noexcept {
 
@@ -3578,7 +3469,41 @@ private:
         bool has_next = false;
 
         const auto resolved =
-            endpoint_reference_or_value(
+            direct_endpoint_reference_or_value(
+                endpoint,
+                next,
+                has_next,
+                output);
+
+        if (resolved !=
+            fixed_direct_materialization_result::
+                success ||
+            !has_next) {
+
+            return resolved;
+        }
+
+        return resolve_reference_member(
+            next.record_type,
+            next.record_base,
+            next.link_object,
+            next.local,
+            next.slot,
+            output);
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    resolve_path_endpoint(
+        object_endpoint endpoint,
+        std::uintptr_t& output) noexcept {
+
+        output = 0;
+
+        reference_state next;
+        bool has_next = false;
+
+        const auto resolved =
+            endpoint_path_reference_or_value(
                 endpoint,
                 next,
                 has_next,
@@ -3629,7 +3554,13 @@ private:
             std::uintptr_t target_value = 0;
 
             const auto target_resolved =
-                endpoint_reference_or_value(
+                link.target.member.is_path()
+                ? endpoint_path_reference_or_value(
+                    link.target,
+                    target,
+                    target_is_reference,
+                    target_value)
+                : direct_endpoint_reference_or_value(
                     link.target,
                     target,
                     target_is_reference,
@@ -3656,20 +3587,24 @@ private:
                     invalid_input;
             }
 
-            link_target_slots[index] =
-                target.slot;
+            const auto raw_link =
+                handle.value();
 
-            if (!insert_pending_link(
-                    target.slot,
-                    handle.value())) {
+            if (raw_link == 0 ||
+                raw_link >
+                    link_handle::maximum_slot) {
 
                 return fixed_direct_materialization_result::
                     invalid_input;
             }
 
+            link_target_slots[index] =
+                target.slot;
+
             store_native(
                 target.slot,
-                reference_link_pending_marker);
+                encode_pending_link(
+                    raw_link));
         }
 
         return fixed_direct_materialization_result::
@@ -3730,8 +3665,13 @@ private:
                 continue;
             }
 
-            if (stored !=
-                reference_link_pending_marker) {
+            std::uint32_t raw_pending = 0;
+
+            if (!decode_pending_link(
+                    stored,
+                    raw_pending) ||
+                raw_pending !=
+                    handle.value()) {
 
                 return fixed_direct_materialization_result::
                     invalid_input;
@@ -3740,7 +3680,11 @@ private:
             std::uintptr_t source = 0;
 
             const auto source_resolved =
-                resolve_endpoint(
+                link.source.member.is_path()
+                ? resolve_path_endpoint(
+                    link.source,
+                    source)
+                : resolve_direct_endpoint(
                     link.source,
                     source);
 
@@ -3776,11 +3720,9 @@ private:
     std::vector<planned_member> planned_members;
 
     // PASS 1 owns target validation. PASS 2 reuses the exact validated SHM
-    // slot without repeating endpoint resolution. The compact reverse index is
-    // construction-only and is consulted only when a reference chain reaches
-    // another pending static-link target.
+    // slot without repeating endpoint resolution. Pending-link identity lives
+    // temporarily in the native reference slot itself.
     std::vector<std::byte*> link_target_slots;
-    std::vector<std::uint32_t> pending_link_index;
 };
 
 }

@@ -2500,47 +2500,85 @@ bool compiled_project_view::link(
             handle.value() - 1) *
             link_record_size;
 
-    output.source.object =
+    const auto source_object =
         object_from_raw(
             read_u32(record));
 
-    output.source.member =
-        endpoint_ref::from_raw(
-            read_u32(
-                record + 4));
+    const auto source_endpoint =
+        read_u32(
+            record + 4);
 
-    output.target.object =
+    const auto target_object =
         object_from_raw(
             read_u32(
                 record + 8));
 
-    output.target.member =
-        endpoint_ref::from_raw(
-            read_u32(
-                record + 12));
+    const auto target_endpoint =
+        read_u32(
+            record + 12);
 
-    const auto valid_endpoint =
-        [this](const object_endpoint& endpoint) noexcept {
-            if (!endpoint.object ||
-                !endpoint.member ||
-                endpoint.object.value() >
-                    object_count_value) {
+    if (!source_object ||
+        !target_object) {
 
-                return false;
-            }
+        return false;
+    }
 
-            if (!endpoint.member.is_path()) {
-                return true;
-            }
+    // Direct member endpoints have both tag bits clear. They are the common
+    // Runtime case, so validate both persisted words with one branch and avoid
+    // path decoding/range checks entirely.
+    if ((source_endpoint |
+         target_endpoint) <=
+        endpoint_path_handle::maximum_slot) {
 
-            return endpoint.member.path().value() <=
-                endpoint_path_count();
+        output.source = {
+            source_object,
+            endpoint_ref{
+                source_endpoint},
         };
 
-    return valid_endpoint(
-               output.source) &&
-        valid_endpoint(
-            output.target);
+        output.target = {
+            target_object,
+            endpoint_ref{
+                target_endpoint},
+        };
+
+        return true;
+    }
+
+    output.source = {
+        source_object,
+        endpoint_ref::from_raw(
+            source_endpoint),
+    };
+
+    output.target = {
+        target_object,
+        endpoint_ref::from_raw(
+            target_endpoint),
+    };
+
+    if (!output.source.member ||
+        !output.target.member) {
+
+        output = {};
+        return false;
+    }
+
+    const auto path_count =
+        endpoint_path_count();
+
+    if ((output.source.member.is_path() &&
+         output.source.member.path().value() >
+             path_count) ||
+        (output.target.member.is_path() &&
+         output.target.member.path().value() >
+             path_count)) {
+
+        output = {};
+        return false;
+    }
+
+    return true;
 }
 
 

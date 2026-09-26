@@ -1,7 +1,7 @@
 param(
     [string]$Exe = "build/Release/ServerEngineV4RuntimeBenchmark.exe",
     [ValidateRange(1, 21)][int]$Runs = 3,
-    [string]$ResultPath = "build/runtime-scale.csv"
+    [string]$ResultPath = "build/runtime-scale-subobject-v1.csv"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,6 +23,8 @@ $cases = @(
     [pscustomobject]@{ scenario = 'objects'; count = 1000000 },
     [pscustomobject]@{ scenario = 'links'; count = 100000 },
     [pscustomobject]@{ scenario = 'links'; count = 1000000 },
+    [pscustomobject]@{ scenario = 'indexed_links'; count = 100000 },
+    [pscustomobject]@{ scenario = 'indexed_links'; count = 1000000 },
     [pscustomobject]@{ scenario = 'chain'; count = 100000 },
     [pscustomobject]@{ scenario = 'chain'; count = 1000000 },
     [pscustomobject]@{ scenario = 'many_types'; count = 1000 },
@@ -57,6 +59,8 @@ foreach ($case in $cases) {
             'materialize_ms',
             'runtime_total_ms',
             'runtime_bytes',
+            'endpoint_paths',
+            'endpoint_path_steps',
             'peak_ws_bytes')) {
 
             if (!$fields.ContainsKey($required)) {
@@ -80,6 +84,8 @@ foreach ($case in $cases) {
             members = [long]::Parse($fields.members, $culture)
             objects = [long]::Parse($fields.objects, $culture)
             links = [long]::Parse($fields.links, $culture)
+            endpoint_paths = [long]::Parse($fields.endpoint_paths, $culture)
+            endpoint_path_steps = [long]::Parse($fields.endpoint_path_steps, $culture)
             peak_ws_bytes = [long]::Parse($fields.peak_ws_bytes, $culture)
         }
 
@@ -89,32 +95,58 @@ foreach ($case in $cases) {
         Write-Output "run=$run,$line"
     }
 
-    $times = @(
+    $caseRows = @(
         $rows |
         Where-Object {
             $_.scenario -eq $case.scenario -and
             $_.count -eq $case.count
-        } |
+        }
+    )
+
+    $runtimeTimes = @(
+        $caseRows |
         Sort-Object runtime_total_ms |
         ForEach-Object runtime_total_ms
     )
 
-    $middle = [int][Math]::Floor($times.Count / 2)
+    $materializeTimes = @(
+        $caseRows |
+        Sort-Object materialize_ms |
+        ForEach-Object materialize_ms
+    )
 
-    if ($times.Count % 2 -eq 0) {
-        $median =
-            ($times[$middle - 1] +
-             $times[$middle]) / 2
+    $middle = [int][Math]::Floor(
+        $runtimeTimes.Count / 2)
+
+    if ($runtimeTimes.Count % 2 -eq 0) {
+        $runtimeMedian =
+            ($runtimeTimes[$middle - 1] +
+             $runtimeTimes[$middle]) / 2
+
+        $materializeMedian =
+            ($materializeTimes[$middle - 1] +
+             $materializeTimes[$middle]) / 2
     }
     else {
-        $median = $times[$middle]
+        $runtimeMedian =
+            $runtimeTimes[$middle]
+
+        $materializeMedian =
+            $materializeTimes[$middle]
     }
 
+    $last = $caseRows[-1]
+
     Write-Output (
-        "median,scenario={0},count={1},runtime_total_ms={2}" -f
+        "median,scenario={0},count={1},materialize_ms={2},runtime_total_ms={3},compiled_bytes={4},endpoint_paths={5},endpoint_path_steps={6},peak_ws_bytes={7}" -f
         $case.scenario,
         $case.count,
-        $median)
+        $materializeMedian,
+        $runtimeMedian,
+        $last.compiled_bytes,
+        $last.endpoint_paths,
+        $last.endpoint_path_steps,
+        $last.peak_ws_bytes)
 }
 
 Write-Output "results=$runtimeResult"

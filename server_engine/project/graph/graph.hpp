@@ -170,6 +170,8 @@ private:
     }
 
     std::uint32_t raw = invalid_value;
+
+    friend class compiled_project_view;
 };
 
 static_assert(sizeof(endpoint_ref) == 4);

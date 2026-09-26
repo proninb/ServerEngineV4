@@ -10,6 +10,8 @@
  * Scenarios:
  *   objects N : one T { int out; int& in = out; } and N objects
  *   links N   : the same N objects with object i.in -> object i-1.out
+ *   indexed_links N : source[N].values[2] -> target[N].in through canonical
+ *                     endpoint paths
  *   chain N   : one object whose record contains N reference members chained
  *               to one final int member
  *   many_types N : N distinct records, each with 16 int members plus int&,
@@ -55,18 +57,21 @@ using namespace cw::server;
 enum class scenario_kind : std::uint8_t {
     objects,
     links,
+    indexed_links,
     chain,
     many_types,
 };
 
 struct fixture_metadata final {
     type_handle type{};
+    type_handle target_type{};
     member_index output_member{};
     member_index input_member{};
     member_index first_reference{};
     object_handle first_object{};
     object_handle previous_object{};
     object_handle last_object{};
+    std::uint64_t element_count = 0;
 };
 
 struct fixture_image final {
@@ -85,6 +90,11 @@ struct fixture_image final {
 
     if (value == "links") {
         output = scenario_kind::links;
+        return true;
+    }
+
+    if (value == "indexed_links") {
+        output = scenario_kind::indexed_links;
         return true;
     }
 
@@ -991,6 +1001,304 @@ peak_working_set_bytes() noexcept {
         output);
 }
 
+
+[[nodiscard]] bool build_indexed_links_fixture(
+    std::size_t count,
+    fixture_image& output) noexcept {
+
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+
+    identity_ref source_type_identity;
+    identity_ref target_type_identity;
+    identity_ref source_object_identity;
+    identity_ref target_object_identity;
+
+    if (!resolve_named_identity(
+            strings,
+            identities,
+            "IndexedSource",
+            identity_kind::type,
+            source_type_identity) ||
+        !resolve_named_identity(
+            strings,
+            identities,
+            "IndexedTarget",
+            identity_kind::type,
+            target_type_identity) ||
+        !resolve_named_identity(
+            strings,
+            identities,
+            "source",
+            identity_kind::object,
+            source_object_identity) ||
+        !resolve_named_identity(
+            strings,
+            identities,
+            "target",
+            identity_kind::object,
+            target_object_identity)) {
+
+        return false;
+    }
+
+    type_handle source_type;
+    type_handle target_type;
+
+    if (!succeeded(
+            G.declare_record(
+                source_type_identity,
+                graph_record_kind::struct_type,
+                source_type)) ||
+        !succeeded(
+            G.declare_record(
+                target_type_identity,
+                graph_record_kind::struct_type,
+                target_type))) {
+
+        return false;
+    }
+
+    string_id values_name;
+    string_id input_name;
+
+    if (!succeeded(
+            strings.intern(
+                "values",
+                values_name)) ||
+        !succeeded(
+            strings.intern(
+                "in",
+                input_name))) {
+
+        return false;
+    }
+
+    const auto integer =
+        G.intrinsic(
+            intrinsic_type::signed_int);
+
+    type_ref values_type;
+    type_ref input_type;
+
+    if (!integer ||
+        !succeeded(
+            G.derive(
+                integer,
+                derived_type_kind::bounded_array,
+                4,
+                values_type)) ||
+        !succeeded(
+            G.derive(
+                integer,
+                derived_type_kind::lvalue_reference,
+                0,
+                input_type))) {
+
+        return false;
+    }
+
+    const member_record source_members[]{
+        {
+            values_name,
+            values_type,
+            graph_member_access::public_access,
+        },
+    };
+
+    const member_record target_members[]{
+        {
+            input_name,
+            input_type,
+            graph_member_access::public_access,
+        },
+    };
+
+    if (!succeeded(
+            G.define_record(
+                source_type,
+                graph_record_kind::struct_type,
+                source_members)) ||
+        !succeeded(
+            G.define_record(
+                target_type,
+                graph_record_kind::struct_type,
+                target_members))) {
+
+        return false;
+    }
+
+    const auto source_named =
+        G.named(
+            source_type);
+
+    const auto target_named =
+        G.named(
+            target_type);
+
+    type_ref source_array;
+    type_ref target_array;
+
+    if (!source_named ||
+        !target_named ||
+        !succeeded(
+            G.derive(
+                source_named,
+                derived_type_kind::bounded_array,
+                count,
+                source_array)) ||
+        !succeeded(
+            G.derive(
+                target_named,
+                derived_type_kind::bounded_array,
+                count,
+                target_array))) {
+
+        return false;
+    }
+
+    object_handle source_object;
+    object_handle target_object;
+
+    if (!succeeded(
+            G.add_object(
+                source_object_identity,
+                source_array,
+                source_object)) ||
+        !succeeded(
+            G.add_object(
+                target_object_identity,
+                target_array,
+                target_object))) {
+
+        return false;
+    }
+
+    const auto values =
+        G.find_member(
+            source_type,
+            values_name);
+
+    const auto input =
+        G.find_member(
+            target_type,
+            input_name);
+
+    if (!values ||
+        !input) {
+
+        return false;
+    }
+
+    for (std::size_t index = 0;
+         index < count;
+         ++index) {
+
+        const endpoint_path_step source_steps[]{
+            {
+                index,
+                endpoint_path_step_kind::array_index,
+                {},
+            },
+            {
+                values.value(),
+                endpoint_path_step_kind::member,
+                {},
+            },
+            {
+                2,
+                endpoint_path_step_kind::array_index,
+                {},
+            },
+        };
+
+        const endpoint_path_step target_steps[]{
+            {
+                index,
+                endpoint_path_step_kind::array_index,
+                {},
+            },
+            {
+                input.value(),
+                endpoint_path_step_kind::member,
+                {},
+            },
+        };
+
+        endpoint_path_handle source_path;
+        endpoint_path_handle target_path;
+        type_ref source_value;
+        type_ref target_value;
+
+        if (!succeeded(
+                G.intern_endpoint_path(
+                    source_array,
+                    source_steps,
+                    source_path,
+                    &source_value)) ||
+            !succeeded(
+                G.intern_endpoint_path(
+                    target_array,
+                    target_steps,
+                    target_path,
+                    &target_value)) ||
+            source_value !=
+                integer ||
+            target_value !=
+                input_type) {
+
+            return false;
+        }
+
+        link_handle link;
+
+        if (!succeeded(
+                G.add_link(
+                    {
+                        source_object,
+                        endpoint_ref::from_path(
+                            source_path),
+                    },
+                    {
+                        target_object,
+                        endpoint_ref::from_path(
+                            target_path),
+                    },
+                    link))) {
+
+            return false;
+        }
+    }
+
+    output.metadata.type =
+        source_type;
+
+    output.metadata.target_type =
+        target_type;
+
+    output.metadata.output_member =
+        values;
+
+    output.metadata.input_member =
+        input;
+
+    output.metadata.first_object =
+        source_object;
+
+    output.metadata.last_object =
+        target_object;
+
+    output.metadata.element_count =
+        count;
+
+    return encode_fixture(
+        strings,
+        identities,
+        G,
+        output);
+}
+
 [[nodiscard]] bool build_fixture(
     scenario_kind scenario,
     std::size_t count,
@@ -1010,6 +1318,14 @@ peak_working_set_bytes() noexcept {
         scenario_kind::many_types) {
 
         return build_many_types_fixture(
+            count,
+            output);
+    }
+
+    if (scenario ==
+        scenario_kind::indexed_links) {
+
+        return build_indexed_links_fixture(
             count,
             output);
     }
@@ -1072,6 +1388,112 @@ peak_working_set_bytes() noexcept {
             output_member_offset)) {
 
         return false;
+    }
+
+
+    if (scenario ==
+        scenario_kind::indexed_links) {
+
+        if (!metadata.target_type ||
+            !metadata.first_object ||
+            !metadata.last_object ||
+            metadata.element_count == 0) {
+
+            return false;
+        }
+
+        type_entry target_type;
+
+        runtime_value_layout source_record;
+        runtime_value_layout target_record;
+
+        record_offset input_member_offset = 0;
+        std::uint64_t source_offset = 0;
+        std::uint64_t target_offset = 0;
+
+        if (!project.type(
+                metadata.target_type,
+                target_type) ||
+            !layout.type(
+                metadata.type,
+                source_record) ||
+            !layout.type(
+                metadata.target_type,
+                target_record) ||
+            !layout.member_offset(
+                static_cast<std::size_t>(
+                    target_type.members.begin) +
+                    metadata.input_member.value(),
+                input_member_offset) ||
+            !layout.object_offset(
+                metadata.first_object,
+                source_offset) ||
+            !layout.object_offset(
+                metadata.last_object,
+                target_offset)) {
+
+            return false;
+        }
+
+        const auto element =
+            metadata.element_count - 1;
+
+        if ((source_record.size != 0 &&
+             element >
+                (std::numeric_limits<std::uint64_t>::max)() /
+                    source_record.size) ||
+            (target_record.size != 0 &&
+             element >
+                (std::numeric_limits<std::uint64_t>::max)() /
+                    target_record.size)) {
+
+            return false;
+        }
+
+        const auto source_element =
+            element *
+            source_record.size;
+
+        const auto target_element =
+            element *
+            target_record.size;
+
+        if (source_offset >
+                (std::numeric_limits<std::uint64_t>::max)() -
+                    source_element ||
+            source_offset +
+                source_element >
+                    (std::numeric_limits<std::uint64_t>::max)() -
+                        output_member_offset -
+                        2 * sizeof(int) ||
+            target_offset >
+                (std::numeric_limits<std::uint64_t>::max)() -
+                    target_element ||
+            target_offset +
+                target_element >
+                    (std::numeric_limits<std::uint64_t>::max)() -
+                        input_member_offset) {
+
+            return false;
+        }
+
+        const auto expected =
+            memory.address() +
+            source_offset +
+            source_element +
+            output_member_offset +
+            2 * sizeof(int);
+
+        std::uintptr_t stored = 0;
+
+        return read_pointer(
+                   memory,
+                   target_offset +
+                       target_element +
+                       input_member_offset,
+                   stored) &&
+            stored ==
+                expected;
     }
 
     if (scenario ==
@@ -1160,8 +1582,9 @@ void usage() {
     std::cerr
         << "Usage:\n"
         << "  ServerEngineV4RuntimeBenchmark objects <count>\n"
-        << "  ServerEngineV4RuntimeBenchmark links      <count>\n"
-        << "  ServerEngineV4RuntimeBenchmark chain      <depth>\n"
+        << "  ServerEngineV4RuntimeBenchmark links         <count>\n"
+        << "  ServerEngineV4RuntimeBenchmark indexed_links <count>\n"
+        << "  ServerEngineV4RuntimeBenchmark chain         <depth>\n"
         << "  ServerEngineV4RuntimeBenchmark many_types <type-count>\n";
 }
 
@@ -1391,6 +1814,10 @@ int main(
         << project.object_count()
         << ",links="
         << project.link_count()
+        << ",endpoint_paths="
+        << project.endpoint_path_count()
+        << ",endpoint_path_steps="
+        << project.endpoint_path_step_count()
         << ",peak_ws_bytes="
         << peak_working_set_bytes()
         << '\n';
