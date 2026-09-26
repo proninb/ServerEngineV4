@@ -2243,6 +2243,595 @@ void test_fixed_direct_materializer(
 }
 
 
+
+void test_fixed_direct_link_prebind(
+    test_state& tests) {
+
+    struct fixture final {
+        fixture()
+            : identities(strings) {
+        }
+
+        string_table strings;
+        identity_space identities;
+        graph G;
+        assign_table assigns;
+        file_context files;
+        source_map sources;
+
+        string_id type_name{};
+        string_id out_name{};
+        string_id in_name{};
+        string_id a_name{};
+        string_id b_name{};
+        string_id c_name{};
+
+        identity_ref type_identity{};
+        identity_ref a_identity{};
+        identity_ref b_identity{};
+        identity_ref c_identity{};
+
+        type_handle type{};
+        type_ref integer{};
+        type_ref integer_reference{};
+        type_ref named_type{};
+
+        member_index out{};
+        member_index in{};
+
+        object_handle a{};
+        object_handle b{};
+        object_handle c{};
+    };
+
+    const auto prepare =
+        [&](fixture& value) {
+            const auto intern =
+                [&](std::string_view spelling,
+                    string_id& output) {
+
+                    return succeeded(
+                        value.strings.intern(
+                            spelling,
+                            output));
+                };
+
+            if (!intern("T", value.type_name) ||
+                !intern("out", value.out_name) ||
+                !intern("in", value.in_name) ||
+                !intern("a", value.a_name) ||
+                !intern("b", value.b_name) ||
+                !intern("c", value.c_name) ||
+                !succeeded(
+                    value.identities.resolve(
+                        value.identities.root(),
+                        value.type_name,
+                        identity_kind::type,
+                        value.type_identity)) ||
+                !succeeded(
+                    value.identities.resolve(
+                        value.identities.root(),
+                        value.a_name,
+                        identity_kind::object,
+                        value.a_identity)) ||
+                !succeeded(
+                    value.identities.resolve(
+                        value.identities.root(),
+                        value.b_name,
+                        identity_kind::object,
+                        value.b_identity)) ||
+                !succeeded(
+                    value.identities.resolve(
+                        value.identities.root(),
+                        value.c_name,
+                        identity_kind::object,
+                        value.c_identity)) ||
+                !succeeded(
+                    value.G.declare_record(
+                        value.type_identity,
+                        graph_record_kind::struct_type,
+                        value.type))) {
+
+                return false;
+            }
+
+            value.integer =
+                value.G.intrinsic(
+                    intrinsic_type::signed_int);
+
+            if (!value.integer ||
+                !succeeded(
+                    value.G.derive(
+                        value.integer,
+                        derived_type_kind::lvalue_reference,
+                        0,
+                        value.integer_reference))) {
+
+                return false;
+            }
+
+            const std::array<member_record, 2>
+                members{{
+                    {
+                        value.out_name,
+                        value.integer,
+                        graph_member_access::public_access,
+                    },
+                    {
+                        value.in_name,
+                        value.integer_reference,
+                        graph_member_access::public_access,
+                    },
+                }};
+
+            if (!succeeded(
+                    value.G.define_record(
+                        value.type,
+                        graph_record_kind::struct_type,
+                        members))) {
+
+                return false;
+            }
+
+            value.named_type =
+                value.G.named(
+                    value.type);
+
+            value.out =
+                value.G.find_member(
+                    value.type,
+                    value.out_name);
+
+            value.in =
+                value.G.find_member(
+                    value.type,
+                    value.in_name);
+
+            return value.named_type &&
+                value.out &&
+                value.in &&
+                succeeded(
+                    value.G.add_object(
+                        value.a_identity,
+                        value.named_type,
+                        value.a)) &&
+                succeeded(
+                    value.G.add_object(
+                        value.b_identity,
+                        value.named_type,
+                        value.b)) &&
+                succeeded(
+                    value.G.add_object(
+                        value.c_identity,
+                        value.named_type,
+                        value.c));
+        };
+
+    const auto encode =
+        [&](fixture& value,
+            compiled_test_image& image) {
+
+            if (!succeeded(
+                    value.sources.finalize(
+                        value.files.size(),
+                        value.identities,
+                        value.G))) {
+
+                return false;
+            }
+
+            compiled_project_layout persisted;
+
+            if (prepare_compiled_project_layout(
+                    value.strings,
+                    value.identities,
+                    value.G,
+                    value.assigns,
+                    value.files,
+                    value.sources,
+                    persisted) !=
+                compiled_project_image_result::
+                    success) {
+
+                return false;
+            }
+
+            try {
+                image.bytes.assign(
+                    persisted.size(),
+                    std::byte{0});
+            }
+            catch (...) {
+                return false;
+            }
+
+            return encode_compiled_project_image(
+                value.strings,
+                value.identities,
+                value.G,
+                value.assigns,
+                value.files,
+                value.sources,
+                persisted,
+                image.bytes) ==
+                    compiled_project_image_result::
+                        success;
+        };
+
+#if defined(_WIN32)
+    const server_abi_configuration abi{
+        abi_target::windows_x64,
+        8,
+    };
+#else
+    const server_abi_configuration abi{
+        abi_target::posix_x64,
+        8,
+    };
+#endif
+
+    const auto prepare_runtime =
+        [&](compiled_test_image& image,
+            compiled_project_view& view,
+            runtime_layout& layout,
+            std::vector<std::byte>& runtime) {
+
+            if (view.bind(
+                    image.bytes) !=
+                        compiled_project_image_result::
+                            success ||
+                prepare_runtime_layout(
+                    view,
+                    abi,
+                    layout) !=
+                        runtime_layout_result::
+                            success) {
+
+                return false;
+            }
+
+            try {
+                runtime.assign(
+                    static_cast<std::size_t>(
+                        layout.size()),
+                    std::byte{0xcc});
+            }
+            catch (...) {
+                return false;
+            }
+
+            return true;
+        };
+
+    {
+        fixture value;
+
+        if (!tests.expect(
+                prepare(value),
+                "prepare FIXED_DIRECT link dependency fixture")) {
+
+            return;
+        }
+
+        link_handle first;
+        link_handle second;
+
+        if (!tests.expect(
+                succeeded(
+                    value.G.add_link(
+                        {
+                            value.b,
+                            value.in,
+                        },
+                        {
+                            value.a,
+                            value.in,
+                        },
+                        first)) &&
+                succeeded(
+                    value.G.add_link(
+                        {
+                            value.c,
+                            value.out,
+                        },
+                        {
+                            value.b,
+                            value.in,
+                        },
+                        second)),
+                "build later-link reference dependency")) {
+
+            return;
+        }
+
+        compiled_test_image image;
+
+        if (!tests.expect(
+                encode(
+                    value,
+                    image),
+                "encode FIXED_DIRECT link dependency image")) {
+
+            return;
+        }
+
+        compiled_project_view view;
+        runtime_layout layout;
+        std::vector<std::byte> runtime;
+
+        if (!tests.expect(
+                prepare_runtime(
+                    image,
+                    view,
+                    layout,
+                    runtime),
+                "prepare FIXED_DIRECT link dependency Runtime")) {
+
+            return;
+        }
+
+        if (!tests.expect(
+                materialize_fixed_direct(
+                    view,
+                    layout,
+                    abi,
+                    runtime) ==
+                    fixed_direct_materialization_result::
+                        success,
+                "materialize later-link reference dependency")) {
+
+            return;
+        }
+
+        type_entry record;
+        std::uint64_t out_offset = 0;
+        std::uint64_t in_offset = 0;
+        std::uint64_t a_offset = 0;
+        std::uint64_t b_offset = 0;
+        std::uint64_t c_offset = 0;
+
+        if (!tests.expect(
+                view.type(
+                    value.type,
+                    record) &&
+                layout.member_offset(
+                    static_cast<std::size_t>(
+                        record.members.begin) +
+                        value.out.value(),
+                    out_offset) &&
+                layout.member_offset(
+                    static_cast<std::size_t>(
+                        record.members.begin) +
+                        value.in.value(),
+                    in_offset) &&
+                layout.object_offset(
+                    value.a,
+                    a_offset) &&
+                layout.object_offset(
+                    value.b,
+                    b_offset) &&
+                layout.object_offset(
+                    value.c,
+                    c_offset),
+                "query FIXED_DIRECT dependency Runtime offsets")) {
+
+            return;
+        }
+
+        const auto base =
+            reinterpret_cast<std::uintptr_t>(
+                runtime.data());
+
+        const auto read_address =
+            [&](std::uint64_t offset) {
+                std::uintptr_t result = 0;
+
+                std::memcpy(
+                    &result,
+                    runtime.data() +
+                        static_cast<std::size_t>(
+                            offset),
+                    sizeof(result));
+
+                return result;
+            };
+
+        const auto c_out =
+            base +
+            static_cast<std::uintptr_t>(
+                c_offset + out_offset);
+
+        tests.expect(
+            read_address(
+                a_offset +
+                    in_offset) ==
+                    c_out &&
+            read_address(
+                b_offset +
+                    in_offset) ==
+                    c_out,
+            "dense link prebind resolves reference dependency through later link");
+    }
+
+    {
+        fixture value;
+
+        if (!tests.expect(
+                prepare(value),
+                "prepare FIXED_DIRECT link cycle fixture")) {
+
+            return;
+        }
+
+        link_handle first;
+        link_handle second;
+
+        if (!tests.expect(
+                succeeded(
+                    value.G.add_link(
+                        {
+                            value.b,
+                            value.in,
+                        },
+                        {
+                            value.a,
+                            value.in,
+                        },
+                        first)) &&
+                succeeded(
+                    value.G.add_link(
+                        {
+                            value.a,
+                            value.in,
+                        },
+                        {
+                            value.b,
+                            value.in,
+                        },
+                        second)),
+                "build FIXED_DIRECT link dependency cycle")) {
+
+            return;
+        }
+
+        compiled_test_image image;
+
+        if (!tests.expect(
+                encode(
+                    value,
+                    image),
+                "encode FIXED_DIRECT link cycle image")) {
+
+            return;
+        }
+
+        compiled_project_view view;
+        runtime_layout layout;
+        std::vector<std::byte> runtime;
+
+        if (!tests.expect(
+                prepare_runtime(
+                    image,
+                    view,
+                    layout,
+                    runtime),
+                "prepare FIXED_DIRECT link cycle Runtime")) {
+
+            return;
+        }
+
+        tests.expect(
+            materialize_fixed_direct(
+                view,
+                layout,
+                abi,
+                runtime) ==
+                fixed_direct_materialization_result::
+                    invalid_input,
+            "FIXED_DIRECT rejects Graph link dependency cycle");
+    }
+
+    {
+        fixture value;
+
+        if (!tests.expect(
+                prepare(value),
+                "prepare FIXED_DIRECT duplicate link target fixture")) {
+
+            return;
+        }
+
+        link_handle first;
+        link_handle second;
+
+        if (!tests.expect(
+                succeeded(
+                    value.G.add_link(
+                        {
+                            value.c,
+                            value.out,
+                        },
+                        {
+                            value.a,
+                            value.in,
+                        },
+                        first)) &&
+                succeeded(
+                    value.G.add_link(
+                        {
+                            value.c,
+                            value.out,
+                        },
+                        {
+                            value.b,
+                            value.in,
+                        },
+                        second)),
+                "build two distinct FIXED_DIRECT link targets")) {
+
+            return;
+        }
+
+        compiled_test_image image;
+
+        if (!tests.expect(
+                encode(
+                    value,
+                    image),
+                "encode FIXED_DIRECT duplicate-target baseline")) {
+
+            return;
+        }
+
+        compiled_project_view view;
+        runtime_layout layout;
+        std::vector<std::byte> runtime;
+
+        if (!tests.expect(
+                prepare_runtime(
+                    image,
+                    view,
+                    layout,
+                    runtime),
+                "prepare FIXED_DIRECT duplicate-target Runtime")) {
+
+            return;
+        }
+
+        constexpr std::size_t persisted_link_size =
+            sizeof(std::uint32_t) * 4;
+
+        const auto links =
+            section_offset(
+                image.bytes,
+                compiled_project_section::
+                    links);
+
+        auto* first_link =
+            image.bytes.data() +
+            links;
+
+        auto* second_link =
+            first_link +
+            persisted_link_size;
+
+        std::memcpy(
+            second_link + 8,
+            first_link + 8,
+            8);
+
+        tests.expect(
+            materialize_fixed_direct(
+                view,
+                layout,
+                abi,
+                runtime) ==
+                fixed_direct_materialization_result::
+                    invalid_input,
+            "FIXED_DIRECT rejects duplicate persisted Graph link target without cold audit");
+    }
+}
+
 void test_runtime_layout_tail_alignment(
     test_state& tests) {
 
@@ -3182,6 +3771,9 @@ int main() {
             tests);
 
         test_fixed_direct_materializer(
+            tests);
+
+        test_fixed_direct_link_prebind(
             tests);
 
         test_build_lineage_overlays(

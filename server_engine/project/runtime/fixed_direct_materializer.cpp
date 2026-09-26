@@ -273,6 +273,26 @@ public:
             }
         }
 
+        const auto links_marked =
+            mark_link_targets();
+
+        if (links_marked !=
+            fixed_direct_materialization_result::
+                success) {
+
+            return links_marked;
+        }
+
+        const auto links_materialized =
+            materialize_links();
+
+        if (links_materialized !=
+            fixed_direct_materialization_result::
+                success) {
+
+            return links_materialized;
+        }
+
         for (std::size_t index = 0;
              index <
                  project.object_count();
@@ -324,15 +344,6 @@ public:
 
                 return materialized;
             }
-        }
-
-        // Every persisted Graph link must be consumed exactly once while its
-        // concrete target reference is materialized.
-        if (consumed_links !=
-            project.link_count()) {
-
-            return fixed_direct_materialization_result::
-                invalid_input;
         }
 
         return fixed_direct_materialization_result::
@@ -1199,11 +1210,16 @@ private:
         std::byte* slot = nullptr;
     };
 
-    // During construction a native reference slot is also its memoization
-    // state: 0 = unresolved, UINTPTR_MAX = visiting, Runtime address = resolved.
+    // During construction a native reference slot is also its state:
+    // 0 = unresolved, pending = Graph link target, visiting = cycle detection,
+    // Runtime address = resolved.
     static constexpr std::uintptr_t
         reference_visiting_marker =
             (std::numeric_limits<std::uintptr_t>::max)();
+
+    static constexpr std::uintptr_t
+        reference_link_pending_marker =
+            reference_visiting_marker - 1;
 
     [[nodiscard]] bool runtime_address(
         std::uintptr_t value) const noexcept {
@@ -1436,15 +1452,6 @@ private:
                     current.local);
 
             if (link) {
-                if (consumed_links >=
-                    project.link_count()) {
-
-                    return fixed_direct_materialization_result::
-                        invalid_input;
-                }
-
-                ++consumed_links;
-
                 link_record value;
 
                 if (!project.link(
@@ -1712,7 +1719,13 @@ private:
                     invalid_input;
             }
 
-            if (stored != 0) {
+            const auto link_pending =
+                stored ==
+                    reference_link_pending_marker;
+
+            if (stored != 0 &&
+                !link_pending) {
+
                 if (!runtime_address(
                         stored)) {
 
@@ -1750,12 +1763,49 @@ private:
             bool has_next = false;
             std::uintptr_t target = 0;
 
-            const auto advanced =
-                advance_reference(
-                    current,
-                    next,
-                    has_next,
-                    target);
+            fixed_direct_materialization_result advanced;
+
+            if (link_pending) {
+                if (!current.link_object) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                const auto link =
+                    project.find_link_target(
+                        current.link_object,
+                        current.local);
+
+                link_record value;
+
+                if (!link ||
+                    !project.link(
+                        link,
+                        value) ||
+                    value.target.object !=
+                        current.link_object ||
+                    value.target.member.value() !=
+                        current.local) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                advanced =
+                    endpoint_reference_or_value(
+                        value.source,
+                        next,
+                        has_next,
+                        target);
+            }
+            else {
+                advanced =
+                    advance_reference(
+                        current,
+                        next,
+                        has_next,
+                        target);
+            }
 
             if (advanced !=
                 fixed_direct_materialization_result::
@@ -1868,11 +1918,172 @@ private:
             output);
     }
 
+    [[nodiscard]] fixed_direct_materialization_result
+    mark_link_targets() noexcept {
+
+        for (std::size_t index = 0;
+             index <
+                 project.link_count();
+             ++index) {
+
+            const auto handle =
+                project.link_at(
+                    index);
+
+            link_record link;
+
+            if (!handle ||
+                !project.link(
+                    handle,
+                    link)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            reference_state target;
+            bool target_is_reference = false;
+            std::uintptr_t target_value = 0;
+
+            const auto target_resolved =
+                endpoint_reference_or_value(
+                    link.target,
+                    target,
+                    target_is_reference,
+                    target_value);
+
+            if (target_resolved !=
+                    fixed_direct_materialization_result::
+                        success ||
+                !target_is_reference ||
+                target.slot == nullptr) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            std::uintptr_t stored = 0;
+
+            if (!read_reference_slot(
+                    target.slot,
+                    stored) ||
+                stored != 0) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            store_native(
+                target.slot,
+                reference_link_pending_marker);
+        }
+
+        return fixed_direct_materialization_result::
+            success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    materialize_links() noexcept {
+
+        for (std::size_t index = 0;
+             index <
+                 project.link_count();
+             ++index) {
+
+            const auto handle =
+                project.link_at(
+                    index);
+
+            link_record link;
+
+            if (!handle ||
+                !project.link(
+                    handle,
+                    link)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            reference_state target;
+            bool target_is_reference = false;
+            std::uintptr_t target_value = 0;
+
+            const auto target_resolved =
+                endpoint_reference_or_value(
+                    link.target,
+                    target,
+                    target_is_reference,
+                    target_value);
+
+            if (target_resolved !=
+                    fixed_direct_materialization_result::
+                        success ||
+                !target_is_reference ||
+                target.slot == nullptr) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            std::uintptr_t stored = 0;
+
+            if (!read_reference_slot(
+                    target.slot,
+                    stored)) {
+
+                return fixed_direct_materialization_result::
+                    incompatible_abi;
+            }
+
+            if (runtime_address(
+                    stored)) {
+
+                continue;
+            }
+
+            if (stored !=
+                reference_link_pending_marker) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            std::uintptr_t source = 0;
+
+            const auto source_resolved =
+                resolve_endpoint(
+                    link.source,
+                    source);
+
+            if (source_resolved !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return source_resolved;
+            }
+
+            const auto written =
+                write_address(
+                    target.slot,
+                    source);
+
+            if (written !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return written;
+            }
+        }
+
+        return fixed_direct_materialization_result::
+            success;
+    }
+
     const compiled_project_view& project;
     const runtime_layout& layout;
     std::span<std::byte> runtime;
     std::vector<std::uintptr_t> resolution_path;
-    std::size_t consumed_links = 0;
 };
 
 }
