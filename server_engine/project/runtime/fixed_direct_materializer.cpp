@@ -1200,13 +1200,20 @@ private:
         }
     }
 
-    struct record_plan final {
-        std::size_t begin = 0;
-        std::uint32_t count = 0;
-        bool seen = false;
-        bool ready = false;
-        std::uint8_t reserved[2]{};
+    enum class record_plan_state : std::uint32_t {
+        empty = 0,
+        seen,
+        ready,
     };
+
+    struct record_plan final {
+        std::uint32_t begin = 0;
+        std::uint32_t count = 0;
+        record_plan_state state =
+            record_plan_state::empty;
+    };
+
+    static_assert(sizeof(record_plan) == 12);
 
     [[nodiscard]] record_plan* plan(
         type_handle handle) noexcept {
@@ -1238,20 +1245,25 @@ private:
             record_plans[
                 handle.value() - 1];
 
-        if (!record.ready ||
+        const auto begin =
+            static_cast<std::size_t>(
+                record.begin);
+
+        if (record.state !=
+                record_plan_state::ready ||
             local >=
                 record.count ||
-            record.begin >
+            begin >
                 planned_members.size() ||
             local >
                 planned_members.size() -
-                    record.begin - 1) {
+                    begin - 1) {
 
             return nullptr;
         }
 
         return &planned_members[
-            record.begin +
+            begin +
             local];
     }
 
@@ -1293,15 +1305,20 @@ private:
         const auto old_count =
             planned_members.size();
 
+        const auto maximum =
+            static_cast<std::size_t>(
+                (std::numeric_limits<std::uint32_t>::max)());
+
+        if (old_count >
+                maximum ||
+            type.members.count >
+                maximum - old_count) {
+
+            return fixed_direct_materialization_result::
+                overflow;
+        }
+
         try {
-            if (type.members.count >
-                (std::numeric_limits<std::size_t>::max)() -
-                    old_count) {
-
-                return fixed_direct_materialization_result::
-                    overflow;
-            }
-
             planned_members.reserve(
                 old_count +
                 type.members.count);
@@ -1363,12 +1380,14 @@ private:
         }
 
         output.begin =
-            old_count;
+            static_cast<std::uint32_t>(
+                old_count);
 
         output.count =
             type.members.count;
 
-        output.ready = true;
+        output.state =
+            record_plan_state::ready;
 
         return fixed_direct_materialization_result::
             success;
@@ -1390,7 +1409,9 @@ private:
                 invalid_input;
         }
 
-        if (record->ready) {
+        if (record->state ==
+            record_plan_state::ready) {
+
             return fixed_direct_materialization_result::
                 success;
         }
@@ -1430,7 +1451,8 @@ private:
 
             const auto& member =
                 planned_members[
-                    record.begin +
+                    static_cast<std::size_t>(
+                        record.begin) +
                     local];
 
             if (member.action ==
@@ -1674,15 +1696,15 @@ private:
                 invalid_input;
         }
 
-        if (record->ready) {
+        switch (record->state) {
+        case record_plan_state::ready:
             return normal_record_planned(
                 handle,
                 base,
                 link_object,
                 *record);
-        }
 
-        if (record->seen) {
+        case record_plan_state::seen: {
             const auto prepared =
                 prepare_record_plan(
                     handle,
@@ -1702,12 +1724,18 @@ private:
                 *record);
         }
 
-        record->seen = true;
+        case record_plan_state::empty:
+            record->state =
+                record_plan_state::seen;
 
-        return normal_record_unplanned(
-            handle,
-            base,
-            link_object);
+            return normal_record_unplanned(
+                handle,
+                base,
+                link_object);
+        }
+
+        return fixed_direct_materialization_result::
+            invalid_input;
     }
 
     struct reference_state final {
