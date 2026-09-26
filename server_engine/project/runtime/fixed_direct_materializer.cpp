@@ -229,6 +229,9 @@ public:
         try {
             record_plans.resize(
                 project.type_count());
+
+            link_target_slots.resize(
+                project.link_count());
         }
         catch (...) {
             return fixed_direct_materialization_result::
@@ -3041,6 +3044,9 @@ private:
             store_native(
                 target.slot,
                 reference_link_pending_marker);
+
+            link_target_slots[index] =
+                target.slot;
         }
 
         return fixed_direct_materialization_result::
@@ -3070,23 +3076,17 @@ private:
                     invalid_input;
             }
 
-            reference_state target;
-            bool target_is_reference = false;
-            std::uintptr_t target_value = 0;
+            if (index >=
+                link_target_slots.size()) {
 
-            const auto target_resolved =
-                endpoint_reference_or_value(
-                    link.target,
-                    target,
-                    target_is_reference,
-                    target_value);
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
 
-            if (target_resolved !=
-                    fixed_direct_materialization_result::
-                        success ||
-                !target_is_reference ||
-                target.slot == nullptr) {
+            auto* target_slot =
+                link_target_slots[index];
 
+            if (target_slot == nullptr) {
                 return fixed_direct_materialization_result::
                     invalid_input;
             }
@@ -3094,7 +3094,7 @@ private:
             std::uintptr_t stored = 0;
 
             if (!read_reference_slot(
-                    target.slot,
+                    target_slot,
                     stored)) {
 
                 return fixed_direct_materialization_result::
@@ -3130,7 +3130,7 @@ private:
 
             const auto written =
                 write_address(
-                    target.slot,
+                    target_slot,
                     source);
 
             if (written !=
@@ -3151,6 +3151,10 @@ private:
     std::vector<std::uintptr_t> resolution_path;
     std::vector<record_plan> record_plans;
     std::vector<planned_member> planned_members;
+
+    // PASS 1 owns target validation. PASS 2 reuses the exact validated SHM
+    // slot without repeating endpoint resolution.
+    std::vector<std::byte*> link_target_slots;
 };
 
 }
