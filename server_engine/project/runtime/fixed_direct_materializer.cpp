@@ -1269,6 +1269,48 @@ private:
     }
 
     [[nodiscard]] fixed_direct_materialization_result
+    observe_endpoint_plan(
+        type_handle handle,
+        std::uint32_t member_count) noexcept {
+
+        auto* record =
+            plan(
+                handle);
+
+        if (record == nullptr ||
+            member_count == 0) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        if (record->ready) {
+            return fixed_direct_materialization_result::
+                success;
+        }
+
+        // Before publication count is temporary endpoint-use pressure.
+        // Build the full record plan only after point lookups have done at
+        // least one record-width of repeated semantic decoding.
+        if (record->count <
+            member_count) {
+
+            ++record->count;
+        }
+
+        if (record->count <
+            member_count) {
+
+            return fixed_direct_materialization_result::
+                success;
+        }
+
+        return prepare_record_plan(
+            handle,
+            *record);
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
     normal_record_planned(
         type_handle handle,
         std::byte* base,
@@ -1656,10 +1698,53 @@ private:
                 invalid_input;
         }
 
-        type_entry record;
-
         const auto local =
             endpoint.member.value();
+
+        auto* base =
+            address(
+                object_offset);
+
+        if (base == nullptr) {
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        if (const auto* member =
+                planned_member_at(
+                    record_type_value,
+                    local);
+            member != nullptr) {
+
+            auto* member_address =
+                base +
+                static_cast<std::size_t>(
+                    member->offset);
+
+            if (member->reference) {
+                next = {
+                    record_type_value,
+                    base,
+                    endpoint.object,
+                    local,
+                    member_address,
+                };
+
+                has_next = true;
+
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            output =
+                reinterpret_cast<std::uintptr_t>(
+                    member_address);
+
+            return fixed_direct_materialization_result::
+                success;
+        }
+
+        type_entry record;
 
         if (!project.type(
                 record_type_value,
@@ -1690,15 +1775,6 @@ private:
                 invalid_input;
         }
 
-        auto* base =
-            address(
-                object_offset);
-
-        if (base == nullptr) {
-            return fixed_direct_materialization_result::
-                invalid_input;
-        }
-
         auto* member_address =
             base +
             static_cast<std::size_t>(
@@ -1706,10 +1782,24 @@ private:
 
         type_ref referent;
 
-        if (reference_referent(
+        const auto reference =
+            reference_referent(
                 member.type,
-                referent)) {
+                referent);
 
+        const auto observed =
+            observe_endpoint_plan(
+                record_type_value,
+                record.members.count);
+
+        if (observed !=
+            fixed_direct_materialization_result::
+                success) {
+
+            return observed;
+        }
+
+        if (reference) {
             next = {
                 record_type_value,
                 base,
