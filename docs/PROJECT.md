@@ -604,8 +604,13 @@ int matrix[2][3];    // array[2] of array[3] of int
 Bounded arrays are normal derived `type_ref` values and therefore use the same
 compiled.bin, ABI layout, and FIXED_DIRECT materialization machinery as other
 types. Whole-array reference-member binding and whole-member static links are
-supported. Unbounded arrays, array-bound expressions, nonempty aggregate array
-initializers, and indexed array-element link endpoints fail closed.
+supported. Static link endpoints may traverse value-record members and bounded
+array elements with decimal literal indices, for example `A.out[2]`,
+`objects[1].in`, and `A.matrix[1][2]`. These subobject paths are canonicalized
+in G and persisted in compiled.bin while direct `object.member` endpoints keep
+the compact direct-member representation. Pointer/reference dereference inside
+a path, unbounded arrays, array-bound/index expressions, and nonempty aggregate
+array initializers remain fail-closed.
 
 The direct Parser slice also accepts Project objects and static links:
 

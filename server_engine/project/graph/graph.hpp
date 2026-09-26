@@ -33,6 +33,176 @@ struct graph_range final {
 
 static_assert(sizeof(graph_range) == 8);
 
+class endpoint_path_handle final {
+public:
+    constexpr endpoint_path_handle() noexcept = default;
+
+    [[nodiscard]] constexpr std::uint32_t value() const noexcept {
+        return slot;
+    }
+
+    [[nodiscard]] constexpr bool valid() const noexcept {
+        return slot != 0 &&
+            slot <= maximum_slot;
+    }
+
+    [[nodiscard]] explicit constexpr operator bool() const noexcept {
+        return valid();
+    }
+
+    friend constexpr bool operator==(
+        endpoint_path_handle,
+        endpoint_path_handle) noexcept = default;
+
+    static constexpr std::uint32_t maximum_slot =
+        0x3fffffffu;
+
+private:
+    explicit constexpr endpoint_path_handle(
+        std::uint32_t value) noexcept
+        : slot(value) {
+    }
+
+    std::uint32_t slot = 0;
+
+    friend class graph;
+    friend class graph_delta;
+    friend class compiled_project_view;
+    friend class endpoint_ref;
+};
+
+static_assert(sizeof(endpoint_path_handle) == 4);
+static_assert(std::is_trivially_copyable_v<endpoint_path_handle>);
+
+class endpoint_ref final {
+public:
+    constexpr endpoint_ref() noexcept = default;
+
+    constexpr endpoint_ref(
+        member_index member) noexcept
+        : raw(member &&
+                  member.value() <=
+                      payload_mask
+              ? member.value()
+              : invalid_value) {
+    }
+
+    [[nodiscard]] static constexpr endpoint_ref from_path(
+        endpoint_path_handle path) noexcept {
+
+        return path
+            ? endpoint_ref{
+                path_tag |
+                path.value()}
+            : endpoint_ref{};
+    }
+
+    [[nodiscard]] static constexpr endpoint_ref from_raw(
+        std::uint32_t value) noexcept {
+
+        const endpoint_ref result{value};
+
+        return result.valid()
+            ? result
+            : endpoint_ref{};
+    }
+
+    [[nodiscard]] constexpr bool is_member() const noexcept {
+        return (raw & kind_mask) == 0;
+    }
+
+    [[nodiscard]] constexpr bool is_path() const noexcept {
+        return (raw & kind_mask) ==
+                path_tag &&
+            (raw & payload_mask) != 0;
+    }
+
+    [[nodiscard]] constexpr bool valid() const noexcept {
+        return is_member() ||
+            is_path();
+    }
+
+    [[nodiscard]] explicit constexpr operator bool() const noexcept {
+        return valid();
+    }
+
+    [[nodiscard]] constexpr std::uint32_t value() const noexcept {
+        return raw;
+    }
+
+    [[nodiscard]] constexpr member_index direct_member() const noexcept {
+        return is_member()
+            ? member_index{raw}
+            : member_index{};
+    }
+
+    [[nodiscard]] constexpr operator member_index() const noexcept {
+        return direct_member();
+    }
+
+    [[nodiscard]] constexpr endpoint_path_handle path() const noexcept {
+        return is_path()
+            ? endpoint_path_handle{
+                raw & payload_mask}
+            : endpoint_path_handle{};
+    }
+
+    friend constexpr bool operator==(
+        endpoint_ref,
+        endpoint_ref) noexcept = default;
+
+private:
+    static constexpr std::uint32_t kind_mask =
+        0xc0000000u;
+
+    static constexpr std::uint32_t path_tag =
+        0x40000000u;
+
+    static constexpr std::uint32_t payload_mask =
+        0x3fffffffu;
+
+    static constexpr std::uint32_t invalid_value =
+        0xffffffffu;
+
+    explicit constexpr endpoint_ref(
+        std::uint32_t value) noexcept
+        : raw(value) {
+    }
+
+    std::uint32_t raw = invalid_value;
+};
+
+static_assert(sizeof(endpoint_ref) == 4);
+static_assert(std::is_trivially_copyable_v<endpoint_ref>);
+
+enum class endpoint_path_step_kind : std::uint8_t {
+    member = 1,
+    array_index = 2,
+};
+
+struct endpoint_path_step final {
+    std::uint64_t value = 0;
+    endpoint_path_step_kind kind =
+        endpoint_path_step_kind::member;
+    std::uint8_t reserved[7]{};
+
+    friend constexpr bool operator==(
+        const endpoint_path_step&,
+        const endpoint_path_step&) noexcept = default;
+};
+
+static_assert(sizeof(endpoint_path_step) == 16);
+static_assert(std::is_trivially_copyable_v<endpoint_path_step>);
+
+struct endpoint_path_record final {
+    graph_range steps;
+    type_ref root_type{};
+    type_ref value_type{};
+};
+
+static_assert(sizeof(endpoint_path_record) == 16);
+static_assert(std::is_trivially_copyable_v<endpoint_path_record>);
+
 enum class graph_type_kind : std::uint8_t {
     record = 1,
 };
@@ -114,7 +284,7 @@ static_assert(std::is_trivially_copyable_v<object_entry>);
 
 struct object_endpoint final {
     object_handle object{};
-    member_index member{};
+    endpoint_ref member{};
 
     friend constexpr bool operator==(
         const object_endpoint&,
@@ -177,6 +347,20 @@ public:
         derived_type_kind kind,
         std::uint64_t payload,
         type_ref& output) noexcept;
+
+    [[nodiscard]] server_status intern_endpoint_path(
+        type_ref root_type,
+        std::span<const endpoint_path_step> steps,
+        endpoint_path_handle& output,
+        type_ref* value_type = nullptr) noexcept;
+
+    [[nodiscard]] bool endpoint_path(
+        endpoint_path_handle path,
+        endpoint_path_record& output) const noexcept;
+
+    [[nodiscard]] std::span<const endpoint_path_step>
+    endpoint_path_steps(
+        endpoint_path_handle path) const noexcept;
 
     [[nodiscard]] bool contains(
         type_handle type) const noexcept;
@@ -272,6 +456,14 @@ public:
         return derived_types.size();
     }
 
+    [[nodiscard]] std::size_t endpoint_path_count() const noexcept {
+        return endpoint_paths.size();
+    }
+
+    [[nodiscard]] std::size_t endpoint_path_step_count() const noexcept {
+        return endpoint_path_step_values.size();
+    }
+
     [[nodiscard]] std::span<const type_entry>
     type_entries() const noexcept {
         return types;
@@ -317,6 +509,16 @@ public:
         return derived_types;
     }
 
+    [[nodiscard]] std::span<const endpoint_path_record>
+    endpoint_path_entries() const noexcept {
+        return endpoint_paths;
+    }
+
+    [[nodiscard]] std::span<const endpoint_path_step>
+    endpoint_path_step_entries() const noexcept {
+        return endpoint_path_step_values;
+    }
+
 private:
     enum class location_kind : std::uint8_t {
         none = 0,
@@ -329,12 +531,18 @@ private:
         type_ref type{};
     };
 
+    struct endpoint_path_index_slot final {
+        std::uint32_t fingerprint = 0;
+        endpoint_path_handle path{};
+    };
+
     struct link_target_index_slot final {
         std::uint64_t key = 0;
         link_handle link{};
     };
 
     static_assert(sizeof(derived_index_slot) == 8);
+    static_assert(sizeof(endpoint_path_index_slot) == 8);
 
     [[nodiscard]] static std::uint32_t encode_location(
         location_kind kind,
@@ -373,6 +581,31 @@ private:
         std::uint64_t hash,
         std::uint32_t fingerprint) const noexcept;
 
+
+    [[nodiscard]] static std::uint64_t hash_endpoint_path(
+        type_ref root_type,
+        std::span<const endpoint_path_step> steps) noexcept;
+
+    [[nodiscard]] bool resolve_endpoint_path(
+        type_ref root_type,
+        std::span<const endpoint_path_step> steps,
+        type_ref& output) const noexcept;
+
+    [[nodiscard]] endpoint_path_handle find_endpoint_path(
+        type_ref root_type,
+        std::span<const endpoint_path_step> steps,
+        std::uint64_t hash,
+        std::uint32_t fingerprint) const noexcept;
+
+    [[nodiscard]] server_status ensure_endpoint_path_index_capacity(
+        std::size_t additional) noexcept;
+
+    void insert_endpoint_path_index(
+        std::vector<endpoint_path_index_slot>& target,
+        endpoint_path_handle path,
+        std::uint64_t hash,
+        std::uint32_t fingerprint) const noexcept;
+
     [[nodiscard]] static std::uint64_t link_target_key(
         object_endpoint target) noexcept;
 
@@ -405,6 +638,10 @@ private:
     std::vector<object_entry> objects;
     std::vector<identity_ref> object_identities;
     std::vector<construction_value> object_construction;
+
+    std::vector<endpoint_path_record> endpoint_paths;
+    std::vector<endpoint_path_step> endpoint_path_step_values;
+    std::vector<endpoint_path_index_slot> endpoint_path_index;
 
     std::vector<link_record> links;
 

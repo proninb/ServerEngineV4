@@ -60,6 +60,8 @@ constexpr std::uint32_t derived_record_size = 16;
 constexpr std::uint32_t object_record_size = 8;
 constexpr std::uint32_t object_identity_size = 4;
 constexpr std::uint32_t link_record_size = 16;
+constexpr std::uint32_t endpoint_path_record_size = 16;
+constexpr std::uint32_t endpoint_path_step_record_size = 16;
 constexpr std::uint32_t graph_identity_record_size = 4;
 constexpr std::uint32_t assign_record_size = 16;
 
@@ -416,6 +418,70 @@ void write_u64(
         : hash;
 }
 
+
+[[nodiscard]] std::uint64_t endpoint_path_hash(
+    type_ref root_type,
+    const auto& step_at,
+    std::uint32_t begin,
+    std::uint32_t count) noexcept {
+
+    std::uint64_t hash =
+        1469598103934665603ull;
+
+    const auto mix =
+        [&hash](std::uint64_t value) noexcept {
+            for (std::size_t index = 0;
+                 index < 8;
+                 ++index) {
+
+                hash ^=
+                    static_cast<std::uint8_t>(
+                        value & 0xffu);
+
+                hash *=
+                    1099511628211ull;
+
+                value >>= 8;
+            }
+        };
+
+    mix(root_type.value());
+
+    for (std::uint32_t local = 0;
+         local < count;
+         ++local) {
+
+        endpoint_path_step step;
+
+        if (!step_at(
+                static_cast<std::size_t>(
+                    begin) +
+                    local,
+                step)) {
+
+            return 0;
+        }
+
+        mix(static_cast<std::uint8_t>(
+            step.kind));
+
+        mix(step.value);
+    }
+
+    return hash == 0
+        ? 1
+        : hash;
+}
+
+[[nodiscard]] bool valid_endpoint_path_step_kind(
+    endpoint_path_step_kind kind) noexcept {
+
+    return kind ==
+            endpoint_path_step_kind::member ||
+        kind ==
+            endpoint_path_step_kind::array_index;
+}
+
 [[nodiscard]] std::uint64_t link_target_hash(
     object_endpoint target) noexcept {
 
@@ -538,6 +604,12 @@ void write_u64(
     case compiled_project_section::links:
         return link_record_size;
 
+    case compiled_project_section::endpoint_paths:
+        return endpoint_path_record_size;
+
+    case compiled_project_section::endpoint_path_steps:
+        return endpoint_path_step_record_size;
+
     case compiled_project_section::graph_identity_index:
         return graph_identity_record_size;
 
@@ -557,6 +629,7 @@ void write_u64(
 
     case compiled_project_section::derived_index:
     case compiled_project_section::link_target_index:
+    case compiled_project_section::endpoint_path_index:
         return index_record_size;
     }
 
@@ -1009,6 +1082,24 @@ compiled_project_view::bind(
                 compiled_project_section::
                     link_target_index)];
 
+    const auto& endpoint_paths =
+        candidate[
+            section_index(
+                compiled_project_section::
+                    endpoint_paths)];
+
+    const auto& endpoint_path_steps =
+        candidate[
+            section_index(
+                compiled_project_section::
+                    endpoint_path_steps)];
+
+    const auto& endpoint_path_index =
+        candidate[
+            section_index(
+                compiled_project_section::
+                    endpoint_path_index)];
+
     const auto& graph_identity =
         candidate[
             section_index(
@@ -1045,6 +1136,10 @@ compiled_project_view::bind(
         index_capacity(
             links.count);
 
+    const auto expected_endpoint_path_index_count =
+        index_capacity(
+            endpoint_paths.count);
+
     if (string_count >
             (std::numeric_limits<std::uint32_t>::max)() ||
         identity_count == 0 ||
@@ -1070,6 +1165,11 @@ compiled_project_view::bind(
         expected_identity_index_count == 0 ||
         expected_derived_index_count == 0 ||
         expected_link_target_index_count == 0 ||
+        expected_endpoint_path_index_count == 0 ||
+        endpoint_paths.count >
+            endpoint_path_handle::maximum_slot ||
+        endpoint_path_steps.count >
+            (std::numeric_limits<std::uint32_t>::max)() ||
         string_core.count !=
             string_count ||
         string_index.count !=
@@ -1096,6 +1196,8 @@ compiled_project_view::bind(
             link_count ||
         link_target_index.count !=
             expected_link_target_index_count ||
+        endpoint_path_index.count !=
+            expected_endpoint_path_index_count ||
         graph_identity.count !=
             identity_count + 1 ||
         assign_records.count !=
@@ -2265,6 +2367,104 @@ bool compiled_project_view::construction(
     return valid_construction(output);
 }
 
+
+bool compiled_project_view::endpoint_path(
+    endpoint_path_handle path,
+    endpoint_path_record& output) const noexcept {
+
+    output = {};
+
+    if (!path) {
+        return false;
+    }
+
+    const auto& values =
+        section(
+            compiled_project_section::
+                endpoint_paths);
+
+    if (path.value() >
+        values.count) {
+
+        return false;
+    }
+
+    const auto* record =
+        values.data +
+        static_cast<std::size_t>(
+            path.value() - 1) *
+            endpoint_path_record_size;
+
+    output.steps = {
+        read_u32(record),
+        read_u32(record + 4),
+    };
+
+    output.root_type =
+        type_ref_from_raw(
+            read_u32(record + 8));
+
+    output.value_type =
+        type_ref_from_raw(
+            read_u32(record + 12));
+
+    const auto step_count =
+        endpoint_path_step_count();
+
+    return output.steps.count != 0 &&
+        output.steps.begin <=
+            step_count &&
+        output.steps.count <=
+            step_count -
+                output.steps.begin &&
+        output.root_type &&
+        output.value_type;
+}
+
+bool compiled_project_view::endpoint_path_step_at(
+    std::size_t index,
+    endpoint_path_step& output) const noexcept {
+
+    output = {};
+
+    const auto& values =
+        section(
+            compiled_project_section::
+                endpoint_path_steps);
+
+    if (index >=
+        values.count) {
+
+        return false;
+    }
+
+    const auto* record =
+        values.data +
+        index *
+            endpoint_path_step_record_size;
+
+    output.value =
+        read_u64(record);
+
+    output.kind =
+        static_cast<endpoint_path_step_kind>(
+            static_cast<std::uint8_t>(
+                record[8]));
+
+    if (!valid_endpoint_path_step_kind(
+            output.kind) ||
+        !zero_bytes(
+            record + 9,
+            7)) {
+
+        output = {};
+        return false;
+    }
+
+    return true;
+}
+
+
 link_handle compiled_project_view::link_at(
     std::size_t index) const noexcept {
 
@@ -2305,7 +2505,7 @@ bool compiled_project_view::link(
             read_u32(record));
 
     output.source.member =
-        member_from_raw(
+        endpoint_ref::from_raw(
             read_u32(
                 record + 4));
 
@@ -2315,14 +2515,32 @@ bool compiled_project_view::link(
                 record + 8));
 
     output.target.member =
-        member_from_raw(
+        endpoint_ref::from_raw(
             read_u32(
                 record + 12));
 
-    return output.source.object &&
-        output.source.member &&
-        output.target.object &&
-        output.target.member;
+    const auto valid_endpoint =
+        [this](const object_endpoint& endpoint) noexcept {
+            if (!endpoint.object ||
+                !endpoint.member ||
+                endpoint.object.value() >
+                    object_count_value) {
+
+                return false;
+            }
+
+            if (!endpoint.member.is_path()) {
+                return true;
+            }
+
+            return endpoint.member.path().value() <=
+                endpoint_path_count();
+        };
+
+    return valid_endpoint(
+               output.source) &&
+        valid_endpoint(
+            output.target);
 }
 
 
@@ -2416,8 +2634,9 @@ link_handle compiled_project_view::find_link_target(
 
     return find_link_target({
         object,
-        member_from_raw(
-            local_member),
+        endpoint_ref{
+            member_from_raw(
+                local_member)},
     });
 }
 
@@ -3273,6 +3492,265 @@ compiled_project_view::verify_contents() const noexcept {
         }
     }
 
+
+    // Endpoint paths are canonical semantic subobject paths. Cold audit
+    // validates both path semantics and the persisted canonical index.
+    {
+        const auto& path_index =
+            section(
+                compiled_project_section::
+                    endpoint_path_index);
+
+        std::size_t indexed_paths = 0;
+        std::uint32_t expected_step_begin = 0;
+
+        for (std::size_t index = 0;
+             index <
+                endpoint_path_count();
+             ++index) {
+
+            const auto handle =
+                endpoint_path_handle{
+                    static_cast<std::uint32_t>(
+                        index + 1)};
+
+            endpoint_path_record path;
+
+            if (!endpoint_path(
+                    handle,
+                    path) ||
+                path.steps.begin !=
+                    expected_step_begin) {
+
+                return compiled_project_image_result::
+                    invalid_image;
+            }
+
+            auto current_type =
+                path.root_type;
+
+            for (std::uint32_t local = 0;
+                 local <
+                    path.steps.count;
+                 ++local) {
+
+                endpoint_path_step step;
+
+                if (!endpoint_path_step_at(
+                        static_cast<std::size_t>(
+                            path.steps.begin) +
+                            local,
+                        step)) {
+
+                    return compiled_project_image_result::
+                        invalid_image;
+                }
+
+                derived_type_record derived_value;
+
+                while (derived(
+                           current_type,
+                           derived_value) &&
+                       (derived_value.kind ==
+                            derived_type_kind::const_qualified ||
+                        derived_value.kind ==
+                            derived_type_kind::volatile_qualified)) {
+
+                    current_type =
+                        derived_value.child;
+                }
+
+                if (step.kind ==
+                    endpoint_path_step_kind::array_index) {
+
+                    if (!derived(
+                            current_type,
+                            derived_value) ||
+                        derived_value.kind !=
+                            derived_type_kind::bounded_array ||
+                        step.value >=
+                            derived_value.payload) {
+
+                        return compiled_project_image_result::
+                            invalid_image;
+                    }
+
+                    current_type =
+                        derived_value.child;
+                    continue;
+                }
+
+                if (step.value >
+                    (std::numeric_limits<std::uint32_t>::max)()) {
+
+                    return compiled_project_image_result::
+                        invalid_image;
+                }
+
+                if (current_type.kind() !=
+                    type_ref_kind::named) {
+
+                    return compiled_project_image_result::
+                        invalid_image;
+                }
+
+                const auto record_handle =
+                    type_from_raw(
+                        current_type.payload());
+
+                type_entry record;
+                member_record member_value;
+
+                if (!record_handle ||
+                    !type(
+                        record_handle,
+                        record) ||
+                    step.value >=
+                        record.members.count ||
+                    !member(
+                        record_handle,
+                        static_cast<std::uint32_t>(
+                            step.value),
+                        member_value)) {
+
+                    return compiled_project_image_result::
+                        invalid_image;
+                }
+
+                current_type =
+                    member_value.type;
+            }
+
+            if (current_type !=
+                path.value_type) {
+
+                return compiled_project_image_result::
+                    invalid_image;
+            }
+
+            const auto hash =
+                endpoint_path_hash(
+                    path.root_type,
+                    [this](
+                        std::size_t step,
+                        endpoint_path_step& value) noexcept {
+                        return endpoint_path_step_at(
+                            step,
+                            value);
+                    },
+                    path.steps.begin,
+                    path.steps.count);
+
+            if (hash == 0) {
+                return compiled_project_image_result::
+                    invalid_image;
+            }
+
+            const auto fingerprint =
+                identity_fingerprint(
+                    hash);
+
+            auto position =
+                hash &
+                (path_index.count - 1);
+
+            bool found = false;
+
+            for (std::uint64_t probe = 0;
+                 probe <
+                    path_index.count;
+                 ++probe) {
+
+                const auto* slot =
+                    path_index.data +
+                    static_cast<std::size_t>(
+                        position) *
+                        index_record_size;
+
+                const auto raw =
+                    read_u32(
+                        slot + 4);
+
+                if (raw == 0) {
+                    break;
+                }
+
+                if (read_u32(slot) ==
+                        fingerprint &&
+                    raw ==
+                        handle.value()) {
+
+                    found = true;
+                    break;
+                }
+
+                position =
+                    (position + 1) &
+                    (path_index.count - 1);
+            }
+
+            if (!found) {
+                return compiled_project_image_result::
+                    invalid_image;
+            }
+
+            expected_step_begin +=
+                path.steps.count;
+        }
+
+        if (expected_step_begin !=
+            endpoint_path_step_count()) {
+
+            return compiled_project_image_result::
+                invalid_image;
+        }
+
+        for (std::uint64_t index = 0;
+             index <
+                path_index.count;
+             ++index) {
+
+            const auto* slot =
+                path_index.data +
+                static_cast<std::size_t>(
+                    index) *
+                    index_record_size;
+
+            const auto fingerprint =
+                read_u32(slot);
+
+            const auto raw =
+                read_u32(
+                    slot + 4);
+
+            if (raw == 0) {
+                if (fingerprint != 0) {
+                    return compiled_project_image_result::
+                        invalid_image;
+                }
+
+                continue;
+            }
+
+            if (fingerprint == 0 ||
+                raw >
+                    endpoint_path_count()) {
+
+                return compiled_project_image_result::
+                    invalid_image;
+            }
+
+            ++indexed_paths;
+        }
+
+        if (indexed_paths !=
+            endpoint_path_count()) {
+
+            return compiled_project_image_result::
+                invalid_image;
+        }
+    }
+
     // Target uniqueness and lookup are validated against the persisted
     // O(1) link target index; cold audit performs no transient O(L) allocation.
     for (std::size_t index = 0;
@@ -3294,66 +3772,99 @@ compiled_project_view::verify_contents() const noexcept {
                 invalid_image;
         }
 
-        object_entry source_object;
-        object_entry target_object;
+        const auto endpoint_type =
+            [this](
+                object_endpoint endpoint,
+                type_ref& output) noexcept {
 
-        if (!object(
-                value.source.object,
-                source_object) ||
-            !object(
-                value.target.object,
-                target_object) ||
-            source_object.type.kind() !=
-                type_ref_kind::named ||
-            target_object.type.kind() !=
-                type_ref_kind::named) {
+                output = {};
 
-            return compiled_project_image_result::
-                invalid_image;
-        }
+                object_entry object_value;
 
-        const auto source_handle =
-            type_from_raw(
-                source_object.type.payload());
+                if (!object(
+                        endpoint.object,
+                        object_value) ||
+                    !endpoint.member) {
 
-        const auto target_handle =
-            type_from_raw(
-                target_object.type.payload());
+                    return false;
+                }
 
-        type_entry source_type;
-        type_entry target_type;
+                if (endpoint.member.is_path()) {
+                    endpoint_path_record path;
 
-        if (!type(
-                source_handle,
+                    if (!endpoint_path(
+                            endpoint.member.path(),
+                            path) ||
+                        path.root_type !=
+                            object_value.type) {
+
+                        return false;
+                    }
+
+                    output =
+                        path.value_type;
+
+                    return static_cast<bool>(
+                        output);
+                }
+
+                auto object_type =
+                    object_value.type;
+
+                derived_type_record derived_value;
+
+                while (derived(
+                           object_type,
+                           derived_value) &&
+                       (derived_value.kind ==
+                            derived_type_kind::const_qualified ||
+                        derived_value.kind ==
+                            derived_type_kind::volatile_qualified)) {
+
+                    object_type =
+                        derived_value.child;
+                }
+
+                if (object_type.kind() !=
+                    type_ref_kind::named) {
+
+                    return false;
+                }
+
+                const auto record =
+                    type_from_raw(
+                        object_type.payload());
+
+                member_record member_value;
+
+                if (!record ||
+                    !member(
+                        record,
+                        endpoint.member.direct_member(),
+                        member_value)) {
+
+                    return false;
+                }
+
+                output =
+                    member_value.type;
+
+                return static_cast<bool>(
+                    output);
+            };
+
+        type_ref source_type;
+        type_ref target_type;
+
+        if (!endpoint_type(
+                value.source,
                 source_type) ||
-            !type(
-                target_handle,
+            !endpoint_type(
+                value.target,
                 target_type) ||
-            !value.source.member ||
-            !value.target.member ||
-            value.source.member.value() >=
-                source_type.members.count ||
-            value.target.member.value() >=
-                target_type.members.count) {
-
-            return compiled_project_image_result::
-                invalid_image;
-        }
-
-        member_record source_member;
-        member_record target_member;
-
-        if (!member(
-                source_handle,
-                value.source.member,
-                source_member) ||
-            !member(
-                target_handle,
-                value.target.member,
-                target_member) ||
             !reference_binding_compatible(
-                target_member.type,
-                source_member.type)) {
+                target_type,
+                source_type)) {
 
             return compiled_project_image_result::
                 invalid_image;
@@ -3503,6 +4014,14 @@ prepare_compiled_project_layout(const string_table &strings,
         static_cast<std::uint64_t>(
             G.link_count());
 
+    const auto endpoint_path_count =
+        static_cast<std::uint64_t>(
+            G.endpoint_path_count());
+
+    const auto endpoint_path_step_count =
+        static_cast<std::uint64_t>(
+            G.endpoint_path_step_count());
+
     const auto assign_count =
         static_cast<std::uint64_t>(
             assigns.size());
@@ -3520,6 +4039,10 @@ prepare_compiled_project_layout(const string_table &strings,
         object_count >
             object_handle::maximum_slot ||
         link_count >
+            (std::numeric_limits<std::uint32_t>::max)() ||
+        endpoint_path_count >
+            endpoint_path_handle::maximum_slot ||
+        endpoint_path_step_count >
             (std::numeric_limits<std::uint32_t>::max)() ||
         assign_count >
             (std::numeric_limits<std::uint32_t>::max)()) {
@@ -3563,10 +4086,15 @@ prepare_compiled_project_layout(const string_table &strings,
         index_capacity(
             link_count);
 
+    const auto endpoint_path_index_count =
+        index_capacity(
+            endpoint_path_count);
+
     if (string_index_count == 0 ||
         identity_index_count == 0 ||
         derived_index_count == 0 ||
-        link_target_index_count == 0) {
+        link_target_index_count == 0 ||
+        endpoint_path_index_count == 0) {
 
         return compiled_project_image_result::
             failed;
@@ -3672,6 +4200,21 @@ prepare_compiled_project_layout(const string_table &strings,
             compiled_project_section::link_target_index,
             index_record_size,
             link_target_index_count,
+        },
+        {
+            compiled_project_section::endpoint_paths,
+            endpoint_path_record_size,
+            endpoint_path_count,
+        },
+        {
+            compiled_project_section::endpoint_path_steps,
+            endpoint_path_step_record_size,
+            endpoint_path_step_count,
+        },
+        {
+            compiled_project_section::endpoint_path_index,
+            index_record_size,
+            endpoint_path_index_count,
         },
     }};
 
@@ -3817,6 +4360,10 @@ encode_compiled_project_image(const string_table &strings,
         compiled_project_section::
             link_target_index);
 
+    clear_section(
+        compiled_project_section::
+            endpoint_path_index);
+
     const auto count =
         [&](compiled_project_section kind) noexcept {
             return layout[
@@ -3859,6 +4406,16 @@ encode_compiled_project_image(const string_table &strings,
             compiled_project_section::
                 links);
 
+    const auto endpoint_path_count =
+        count(
+            compiled_project_section::
+                endpoint_paths);
+
+    const auto endpoint_path_step_count =
+        count(
+            compiled_project_section::
+                endpoint_path_steps);
+
     const auto assign_count =
         count(
             compiled_project_section::
@@ -3894,6 +4451,11 @@ encode_compiled_project_image(const string_table &strings,
             compiled_project_section::
                 link_target_index);
 
+    const auto endpoint_path_index_count =
+        count(
+            compiled_project_section::
+                endpoint_path_index);
+
     if (string_count !=
             strings.size() ||
         string_bytes_count !=
@@ -3914,6 +4476,10 @@ encode_compiled_project_image(const string_table &strings,
             G.object_construction_entries().size() ||
         link_count !=
             G.link_count() ||
+        endpoint_path_count !=
+            G.endpoint_path_count() ||
+        endpoint_path_step_count !=
+            G.endpoint_path_step_count() ||
         assign_count !=
             assigns.size() ||
         assign_bytes_count !=
@@ -4583,6 +5149,185 @@ encode_compiled_project_image(const string_table &strings,
                 record + 12,
                 static_cast<std::uint32_t>(
                     initial.kind));
+        }
+    }
+
+
+    // Canonical endpoint subobject paths + persisted lookup index.
+    {
+        auto* paths =
+            section_data(
+                compiled_project_section::
+                    endpoint_paths);
+
+        auto* steps_out =
+            section_data(
+                compiled_project_section::
+                    endpoint_path_steps);
+
+        auto* index_out =
+            section_data(
+                compiled_project_section::
+                    endpoint_path_index);
+
+        const auto path_entries =
+            G.endpoint_path_entries();
+
+        const auto step_entries =
+            G.endpoint_path_step_entries();
+
+        std::uint32_t expected_begin = 0;
+
+        for (std::size_t index = 0;
+             index <
+                step_entries.size();
+             ++index) {
+
+            const auto& value =
+                step_entries[index];
+
+            if (!valid_endpoint_path_step_kind(
+                    value.kind)) {
+
+                return compiled_project_image_result::
+                    invalid_state;
+            }
+
+            auto* record =
+                steps_out +
+                index *
+                    endpoint_path_step_record_size;
+
+            write_u64(
+                record,
+                value.value);
+
+            record[8] =
+                static_cast<std::byte>(
+                    static_cast<std::uint8_t>(
+                        value.kind));
+
+            std::fill_n(
+                record + 9,
+                7,
+                std::byte{0});
+        }
+
+        const auto mask =
+            endpoint_path_index_count - 1;
+
+        for (std::size_t index = 0;
+             index <
+                path_entries.size();
+             ++index) {
+
+            const auto& value =
+                path_entries[index];
+
+            if (value.steps.begin !=
+                    expected_begin ||
+                value.steps.count == 0 ||
+                value.steps.begin >
+                    step_entries.size() ||
+                value.steps.count >
+                    step_entries.size() -
+                        value.steps.begin ||
+                !G.contains(
+                    value.root_type) ||
+                !G.contains(
+                    value.value_type)) {
+
+                return compiled_project_image_result::
+                    invalid_state;
+            }
+
+            auto* record =
+                paths +
+                index *
+                    endpoint_path_record_size;
+
+            write_u32(
+                record,
+                value.steps.begin);
+
+            write_u32(
+                record + 4,
+                value.steps.count);
+
+            write_u32(
+                record + 8,
+                value.root_type.value());
+
+            write_u32(
+                record + 12,
+                value.value_type.value());
+
+            const auto hash =
+                endpoint_path_hash(
+                    value.root_type,
+                    [&step_entries](
+                        std::size_t step,
+                        endpoint_path_step& output) noexcept {
+                        if (step >=
+                            step_entries.size()) {
+
+                            return false;
+                        }
+
+                        output =
+                            step_entries[step];
+
+                        return true;
+                    },
+                    value.steps.begin,
+                    value.steps.count);
+
+            if (hash == 0) {
+                return compiled_project_image_result::
+                    invalid_state;
+            }
+
+            auto position =
+                hash &
+                mask;
+
+            for (;;) {
+                auto* slot =
+                    index_out +
+                    static_cast<std::size_t>(
+                        position) *
+                        index_record_size;
+
+                if (read_u32(
+                        slot + 4) == 0) {
+
+                    write_u32(
+                        slot,
+                        identity_fingerprint(
+                            hash));
+
+                    write_u32(
+                        slot + 4,
+                        static_cast<std::uint32_t>(
+                            index + 1));
+
+                    break;
+                }
+
+                position =
+                    (position + 1) &
+                    mask;
+            }
+
+            expected_begin +=
+                value.steps.count;
+        }
+
+        if (expected_begin !=
+            step_entries.size()) {
+
+            return compiled_project_image_result::
+                invalid_state;
         }
     }
 

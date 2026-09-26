@@ -904,8 +904,11 @@ from the identifier outward and applied to the base type in reverse, preserving
 C++ binding for array-of-pointer, pointer-to-array, reference-to-array, and
 multidimensional-array forms. Invalid normalized shapes such as arrays of
 references fail in Parser/Semantic and defensively at the Graph mutation
-boundary. Unbounded arrays, bound expressions, and indexed subobject endpoints
-remain fail-closed.
+boundary. Static link endpoints may traverse direct record members and bounded
+array elements using decimal literal indices. Complex endpoints normalize into
+canonical endpoint paths; the common `object.member` case remains the compact
+direct-member endpoint. Pointer/reference dereference, unbounded arrays, and
+bound/index expressions remain fail-closed.
 
 Parser/Semantic writes normalized construction values directly into G.
 Member defaults, constructor initializer-list operations, constructor-body field

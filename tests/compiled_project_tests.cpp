@@ -106,6 +106,328 @@ struct compiled_fixture final {
 }
 
 
+
+compiled_project_image_result build_test_compiled_image(
+    const compiled_fixture& fixture,
+    compiled_test_image& output);
+
+void test_endpoint_path_persistence(
+    test_state& tests) {
+
+    compiled_fixture fixture;
+
+    string_id type_name;
+    string_id values_name;
+    string_id input_name;
+    string_id a_name;
+    string_id b_name;
+
+    const auto intern =
+        [&](std::string_view value,
+            string_id& output) {
+
+            return succeeded(
+                fixture.strings.intern(
+                    value,
+                    output));
+        };
+
+    if (!tests.expect(
+            intern("PathRecord", type_name) &&
+            intern("values", values_name) &&
+            intern("in", input_name) &&
+            intern("a", a_name) &&
+            intern("b", b_name),
+            "prepare endpoint-path persistence strings")) {
+
+        return;
+    }
+
+    identity_ref type_identity;
+    identity_ref a_identity;
+    identity_ref b_identity;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    type_name,
+                    identity_kind::type,
+                    type_identity)) &&
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    a_name,
+                    identity_kind::object,
+                    a_identity)) &&
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    b_name,
+                    identity_kind::object,
+                    b_identity)),
+            "prepare endpoint-path persistence identities")) {
+
+        return;
+    }
+
+    type_handle type;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.declare_record(
+                    type_identity,
+                    graph_record_kind::struct_type,
+                    type)),
+            "declare endpoint-path persistence record")) {
+
+        return;
+    }
+
+    const auto integer =
+        fixture.G.intrinsic(
+            intrinsic_type::signed_int);
+
+    type_ref array_type;
+    type_ref reference_type;
+
+    if (!tests.expect(
+            integer &&
+            succeeded(
+                fixture.G.derive(
+                    integer,
+                    derived_type_kind::bounded_array,
+                    4,
+                    array_type)) &&
+            succeeded(
+                fixture.G.derive(
+                    integer,
+                    derived_type_kind::lvalue_reference,
+                    0,
+                    reference_type)),
+            "derive endpoint-path persistence types")) {
+
+        return;
+    }
+
+    const std::array<member_record, 2>
+        members{{
+            {
+                values_name,
+                array_type,
+                graph_member_access::public_access,
+            },
+            {
+                input_name,
+                reference_type,
+                graph_member_access::public_access,
+            },
+        }};
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.define_record(
+                    type,
+                    graph_record_kind::struct_type,
+                    members)),
+            "define endpoint-path persistence record")) {
+
+        return;
+    }
+
+    const auto named =
+        fixture.G.named(type);
+
+    object_handle a;
+    object_handle b;
+
+    if (!tests.expect(
+            named &&
+            succeeded(
+                fixture.G.add_object(
+                    a_identity,
+                    named,
+                    a)) &&
+            succeeded(
+                fixture.G.add_object(
+                    b_identity,
+                    named,
+                    b)),
+            "add endpoint-path persistence objects")) {
+
+        return;
+    }
+
+    const auto values =
+        fixture.G.find_member(
+            type,
+            values_name);
+
+    const auto input =
+        fixture.G.find_member(
+            type,
+            input_name);
+
+    const std::array<endpoint_path_step, 2>
+        steps{{
+            {
+                values.value(),
+                endpoint_path_step_kind::member,
+                {},
+            },
+            {
+                2,
+                endpoint_path_step_kind::array_index,
+                {},
+            },
+        }};
+
+    endpoint_path_handle path;
+    type_ref path_type;
+
+    if (!tests.expect(
+            values &&
+            input &&
+            succeeded(
+                fixture.G.intern_endpoint_path(
+                    named,
+                    steps,
+                    path,
+                    &path_type)) &&
+            path &&
+            path_type ==
+                integer,
+            "intern endpoint-path persistence source")) {
+
+        return;
+    }
+
+    endpoint_path_handle repeated;
+    type_ref repeated_type;
+
+    tests.expect(
+        succeeded(
+            fixture.G.intern_endpoint_path(
+                named,
+                steps,
+                repeated,
+                &repeated_type)) &&
+        repeated ==
+            path &&
+        repeated_type ==
+            integer &&
+        fixture.G.endpoint_path_count() ==
+            1 &&
+        fixture.G.endpoint_path_step_count() ==
+            2,
+        "endpoint paths are canonical in G");
+
+    link_handle link;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.add_link(
+                    {
+                        a,
+                        endpoint_ref::from_path(
+                            path),
+                    },
+                    {
+                        b,
+                        input,
+                    },
+                    link)),
+            "add link with endpoint-path source")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            succeeded(
+                fixture.sources.finalize(
+                    fixture.files.size(),
+                    fixture.identities,
+                    fixture.G)),
+            "finalize endpoint-path persistence Source Map")) {
+
+        return;
+    }
+
+    compiled_test_image image;
+
+    if (!tests.expect(
+            build_test_compiled_image(
+                fixture,
+                image) ==
+                compiled_project_image_result::success,
+            "encode endpoint-path persistence image")) {
+
+        return;
+    }
+
+    compiled_project_view view;
+
+    if (!tests.expect(
+            view.bind(
+                image.bytes) ==
+                compiled_project_image_result::success &&
+            view.verify_contents() ==
+                compiled_project_image_result::success,
+            "bind and audit endpoint-path persistence image")) {
+
+        return;
+    }
+
+    link_record persisted_link;
+    endpoint_path_record persisted_path;
+    endpoint_path_step first;
+    endpoint_path_step second;
+
+    tests.expect(
+        view.endpoint_path_count() ==
+            1 &&
+        view.endpoint_path_step_count() ==
+            2 &&
+        view.link(
+            link,
+            persisted_link) &&
+        persisted_link.source.object ==
+            a &&
+        persisted_link.source.member.is_path() &&
+        persisted_link.source.member.path() ==
+            path &&
+        persisted_link.target.object ==
+            b &&
+        persisted_link.target.member.direct_member() ==
+            input &&
+        view.endpoint_path(
+            path,
+            persisted_path) &&
+        persisted_path.root_type ==
+            named &&
+        persisted_path.value_type ==
+            integer &&
+        persisted_path.steps.begin ==
+            0 &&
+        persisted_path.steps.count ==
+            2 &&
+        view.endpoint_path_step_at(
+            0,
+            first) &&
+        first.kind ==
+            endpoint_path_step_kind::member &&
+        first.value ==
+            values.value() &&
+        view.endpoint_path_step_at(
+            1,
+            second) &&
+        second.kind ==
+            endpoint_path_step_kind::array_index &&
+        second.value ==
+            2,
+        "compiled.bin preserves canonical endpoint path");
+}
+
 void test_graph_derived_type_invariants(
     test_state& tests) {
 
@@ -2147,6 +2469,414 @@ void test_fixed_direct_arrays(
     tests.expect(
         observed == written,
         "reference-to-array exposes the same nested-array storage");
+}
+
+
+void test_fixed_direct_subobject_links(
+    test_state& tests) {
+
+    compiled_fixture fixture;
+
+    string_id type_name;
+    string_id values_name;
+    string_id input_name;
+    string_id source_name;
+    string_id objects_name;
+
+    const auto intern =
+        [&](std::string_view value,
+            string_id& output) {
+
+            return succeeded(
+                fixture.strings.intern(
+                    value,
+                    output));
+        };
+
+    if (!tests.expect(
+            intern("SubobjectRecord", type_name) &&
+            intern("values", values_name) &&
+            intern("in", input_name) &&
+            intern("source", source_name) &&
+            intern("objects", objects_name),
+            "prepare FIXED_DIRECT subobject-link strings")) {
+
+        return;
+    }
+
+    identity_ref type_identity;
+    identity_ref source_identity;
+    identity_ref objects_identity;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    type_name,
+                    identity_kind::type,
+                    type_identity)) &&
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    source_name,
+                    identity_kind::object,
+                    source_identity)) &&
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    objects_name,
+                    identity_kind::object,
+                    objects_identity)),
+            "prepare FIXED_DIRECT subobject-link identities")) {
+
+        return;
+    }
+
+    type_handle type;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.declare_record(
+                    type_identity,
+                    graph_record_kind::struct_type,
+                    type)),
+            "declare FIXED_DIRECT subobject-link record")) {
+
+        return;
+    }
+
+    const auto integer =
+        fixture.G.intrinsic(
+            intrinsic_type::signed_int);
+
+    type_ref values_type;
+    type_ref input_type;
+
+    if (!tests.expect(
+            integer &&
+            succeeded(
+                fixture.G.derive(
+                    integer,
+                    derived_type_kind::bounded_array,
+                    4,
+                    values_type)) &&
+            succeeded(
+                fixture.G.derive(
+                    integer,
+                    derived_type_kind::lvalue_reference,
+                    0,
+                    input_type)),
+            "derive FIXED_DIRECT subobject-link types")) {
+
+        return;
+    }
+
+    const std::array<member_record, 2>
+        members{{
+            {
+                values_name,
+                values_type,
+                graph_member_access::public_access,
+            },
+            {
+                input_name,
+                input_type,
+                graph_member_access::public_access,
+            },
+        }};
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.define_record(
+                    type,
+                    graph_record_kind::struct_type,
+                    members)),
+            "define FIXED_DIRECT subobject-link record")) {
+
+        return;
+    }
+
+    const auto named =
+        fixture.G.named(type);
+
+    type_ref object_array;
+
+    if (!tests.expect(
+            named &&
+            succeeded(
+                fixture.G.derive(
+                    named,
+                    derived_type_kind::bounded_array,
+                    2,
+                    object_array)),
+            "derive FIXED_DIRECT subobject object array")) {
+
+        return;
+    }
+
+    object_handle source;
+    object_handle objects;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.add_object(
+                    source_identity,
+                    named,
+                    source)) &&
+            succeeded(
+                fixture.G.add_object(
+                    objects_identity,
+                    object_array,
+                    objects)),
+            "add FIXED_DIRECT subobject-link objects")) {
+
+        return;
+    }
+
+    const auto values =
+        fixture.G.find_member(
+            type,
+            values_name);
+
+    const auto input =
+        fixture.G.find_member(
+            type,
+            input_name);
+
+    const std::array<endpoint_path_step, 2>
+        source_steps{{
+            {
+                values.value(),
+                endpoint_path_step_kind::member,
+                {},
+            },
+            {
+                2,
+                endpoint_path_step_kind::array_index,
+                {},
+            },
+        }};
+
+    const std::array<endpoint_path_step, 2>
+        target_steps{{
+            {
+                1,
+                endpoint_path_step_kind::array_index,
+                {},
+            },
+            {
+                input.value(),
+                endpoint_path_step_kind::member,
+                {},
+            },
+        }};
+
+    endpoint_path_handle source_path;
+    endpoint_path_handle target_path;
+    type_ref source_type;
+    type_ref target_type;
+
+    if (!tests.expect(
+            values &&
+            input &&
+            succeeded(
+                fixture.G.intern_endpoint_path(
+                    named,
+                    source_steps,
+                    source_path,
+                    &source_type)) &&
+            succeeded(
+                fixture.G.intern_endpoint_path(
+                    object_array,
+                    target_steps,
+                    target_path,
+                    &target_type)) &&
+            source_type ==
+                integer &&
+            target_type ==
+                input_type,
+            "intern FIXED_DIRECT source and target subobject paths")) {
+
+        return;
+    }
+
+    link_handle link;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.add_link(
+                    {
+                        source,
+                        endpoint_ref::from_path(
+                            source_path),
+                    },
+                    {
+                        objects,
+                        endpoint_ref::from_path(
+                            target_path),
+                    },
+                    link)),
+            "add FIXED_DIRECT indexed subobject link")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            succeeded(
+                fixture.sources.finalize(
+                    fixture.files.size(),
+                    fixture.identities,
+                    fixture.G)),
+            "finalize FIXED_DIRECT subobject-link Source Map")) {
+
+        return;
+    }
+
+    compiled_test_image image;
+
+    if (!tests.expect(
+            build_test_compiled_image(
+                fixture,
+                image) ==
+                compiled_project_image_result::success,
+            "encode FIXED_DIRECT subobject-link image")) {
+
+        return;
+    }
+
+    compiled_project_view view;
+
+    if (!tests.expect(
+            view.bind(
+                image.bytes) ==
+                compiled_project_image_result::success &&
+            view.verify_contents() ==
+                compiled_project_image_result::success,
+            "bind FIXED_DIRECT subobject-link image")) {
+
+        return;
+    }
+
+#if defined(_WIN32)
+    const server_abi_configuration abi{
+        abi_target::windows_x64,
+        8,
+    };
+#else
+    const server_abi_configuration abi{
+        abi_target::posix_x64,
+        8,
+    };
+#endif
+
+    runtime_layout layout;
+
+    if (!tests.expect(
+            fixed_direct_host_compatible(
+                abi) &&
+            prepare_runtime_layout(
+                view,
+                abi,
+                layout) ==
+                runtime_layout_result::success,
+            "prepare FIXED_DIRECT subobject-link Runtime layout")) {
+
+        return;
+    }
+
+    std::vector<std::byte> runtime;
+
+    try {
+        runtime.assign(
+            static_cast<std::size_t>(
+                layout.size()),
+            std::byte{0xcc});
+    }
+    catch (...) {
+        tests.expect(
+            false,
+            "allocate FIXED_DIRECT subobject-link Runtime");
+        return;
+    }
+
+    if (!tests.expect(
+            materialize_fixed_direct(
+                view,
+                layout,
+                abi,
+                runtime) ==
+                fixed_direct_materialization_result::
+                    success,
+            "materialize FIXED_DIRECT indexed subobject link")) {
+
+        return;
+    }
+
+    type_entry record;
+    record_offset values_offset = 0;
+    record_offset input_offset = 0;
+    runtime_offset source_offset = 0;
+    runtime_offset objects_offset = 0;
+    runtime_value_layout record_layout;
+
+    if (!tests.expect(
+            view.type(
+                type,
+                record) &&
+            layout.member_offset(
+                static_cast<std::size_t>(
+                    record.members.begin) +
+                    values.value(),
+                values_offset) &&
+            layout.member_offset(
+                static_cast<std::size_t>(
+                    record.members.begin) +
+                    input.value(),
+                input_offset) &&
+            layout.object_offset(
+                source,
+                source_offset) &&
+            layout.object_offset(
+                objects,
+                objects_offset) &&
+            layout.value(
+                named,
+                record_layout),
+            "query FIXED_DIRECT subobject-link offsets")) {
+
+        return;
+    }
+
+    const auto base =
+        reinterpret_cast<std::uintptr_t>(
+            runtime.data());
+
+    const auto expected_source =
+        base +
+        static_cast<std::uintptr_t>(
+            source_offset +
+            values_offset +
+            2 *
+                sizeof(int));
+
+    const auto target_slot_offset =
+        objects_offset +
+        record_layout.size +
+        input_offset;
+
+    std::uintptr_t observed = 0;
+
+    std::memcpy(
+        &observed,
+        runtime.data() +
+            static_cast<std::size_t>(
+                target_slot_offset),
+        sizeof(observed));
+
+    tests.expect(
+        observed ==
+            expected_source,
+        "indexed target reference points directly at indexed source element");
 }
 
 void test_runtime_layout(
@@ -4671,6 +5401,9 @@ int main() {
     try {
         test_state tests;
 
+        test_endpoint_path_persistence(
+            tests);
+
         test_graph_derived_type_invariants(
             tests);
 
@@ -4727,6 +5460,9 @@ int main() {
             tests);
 
         test_fixed_direct_arrays(
+            tests);
+
+        test_fixed_direct_subobject_links(
             tests);
 
         test_fixed_direct_materializer(

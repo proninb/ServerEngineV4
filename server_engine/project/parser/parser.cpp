@@ -2910,6 +2910,7 @@ private:
         resolved_link_endpoint& output) noexcept {
 
         output = {};
+        endpoint_steps.clear();
 
         if (!at(token_kind::identifier) ||
             !current.identifier) {
@@ -2918,6 +2919,9 @@ private:
                 parser_failure_kind::syntax,
                 "Expected object identifier in link endpoint");
         }
+
+        const auto object_location =
+            current_location();
 
         const auto object_identity =
             find_object_identity(
@@ -2945,91 +2949,6 @@ private:
                 "Link endpoint object is not present in G");
         }
 
-        auto status = advance();
-        if (!succeeded(status)) {
-            return status;
-        }
-
-        status =
-            expect(
-                token_kind::dot,
-                "Expected '.' in link endpoint");
-
-        if (!succeeded(status)) {
-            return status;
-        }
-
-        status = advance();
-        if (!succeeded(status)) {
-            return status;
-        }
-
-        if (!at(token_kind::identifier) ||
-            !current.identifier) {
-
-            return fail(
-                parser_failure_kind::syntax,
-                "Expected member identifier in link endpoint");
-        }
-
-        auto object_type =
-            object_value->type;
-
-        derived_type_record derived;
-
-        while (G.derived(
-                object_type,
-                derived)) {
-
-            if (derived.kind !=
-                    derived_type_kind::const_qualified &&
-                derived.kind !=
-                    derived_type_kind::volatile_qualified) {
-
-                return fail(
-                    parser_failure_kind::unsupported,
-                    "Link endpoints require direct named record objects");
-            }
-
-            object_type = derived.child;
-        }
-
-        type_handle record;
-
-        if (!G.named(
-                object_type,
-                record)) {
-
-            return fail(
-                parser_failure_kind::unsupported,
-                "Link endpoints require direct named record objects");
-        }
-
-        const auto member =
-            G.find_member(
-                record,
-                current.identifier);
-
-        if (!member) {
-            return fail(
-                parser_failure_kind::semantic,
-                "Link endpoint member is not visible");
-        }
-
-        const auto* member_value =
-            G.member(
-                record,
-                member);
-
-        if (member_value == nullptr) {
-            return fail(
-                parser_failure_kind::semantic,
-                "Link endpoint member is not present in G");
-        }
-
-        const auto member_location =
-            current_location();
-
         auto dependency =
             sources.add_dependency(
                 object);
@@ -3038,26 +2957,364 @@ private:
             return dependency;
         }
 
-        dependency =
-            sources.add_dependency(
-                record);
+        auto current_type =
+            object_value->type;
 
-        if (!succeeded(dependency)) {
-            return dependency;
+        auto status = advance();
+
+        if (!succeeded(status)) {
+            return status;
+        }
+
+        const auto strip_cv =
+            [this](type_ref& type) noexcept {
+                derived_type_record derived;
+
+                while (G.derived(
+                           type,
+                           derived) &&
+                       (derived.kind ==
+                            derived_type_kind::const_qualified ||
+                        derived.kind ==
+                            derived_type_kind::volatile_qualified)) {
+
+                    type =
+                        derived.child;
+                }
+            };
+
+        for (;;) {
+            if (at(token_kind::l_bracket)) {
+                const auto bracket_location =
+                    current_location();
+
+                auto indexed_type =
+                    current_type;
+
+                strip_cv(
+                    indexed_type);
+
+                derived_type_record array;
+
+                if (!G.derived(
+                        indexed_type,
+                        array) ||
+                    array.kind !=
+                        derived_type_kind::bounded_array) {
+
+                    return fail_at(
+                        parser_failure_kind::semantic,
+                        "Array index is applied to a non-array link subobject",
+                        bracket_location);
+                }
+
+                status = advance();
+
+                if (!succeeded(status)) {
+                    return status;
+                }
+
+                if (!at(token_kind::pp_number)) {
+                    return fail(
+                        parser_failure_kind::unsupported,
+                        "Array link index requires a decimal integer literal");
+                }
+
+                const auto index_location =
+                    current_location();
+
+                const auto spelling =
+                    token_text(current);
+
+                std::uint64_t index = 0;
+
+                const auto converted =
+                    std::from_chars(
+                        spelling.data(),
+                        spelling.data() +
+                            spelling.size(),
+                        index);
+
+                if (converted.ec !=
+                        std::errc{} ||
+                    converted.ptr !=
+                        spelling.data() +
+                            spelling.size()) {
+
+                    return fail_at(
+                        parser_failure_kind::unsupported,
+                        "Only decimal integer array link indices are supported",
+                        index_location);
+                }
+
+                if (index >=
+                    array.payload) {
+
+                    return fail_at(
+                        parser_failure_kind::semantic,
+                        "Array link index is outside the declared bound",
+                        index_location);
+                }
+
+                status = advance();
+
+                if (!succeeded(status)) {
+                    return status;
+                }
+
+                if (!at(token_kind::r_bracket)) {
+                    return fail(
+                        parser_failure_kind::unsupported,
+                        "Array link index expressions are not implemented");
+                }
+
+                status = advance();
+
+                if (!succeeded(status)) {
+                    return status;
+                }
+
+                try {
+                    endpoint_steps.push_back({
+                        index,
+                        endpoint_path_step_kind::
+                            array_index,
+                        {},
+                    });
+                }
+                catch (...) {
+                    return server_status::io_error;
+                }
+
+                current_type =
+                    array.child;
+
+                output.location =
+                    index_location;
+
+                continue;
+            }
+
+            if (at(token_kind::dot)) {
+                const auto dot_location =
+                    current_location();
+
+                auto record_type =
+                    current_type;
+
+                strip_cv(
+                    record_type);
+
+                type_handle record;
+
+                if (!G.named(
+                        record_type,
+                        record)) {
+
+                    return fail_at(
+                        parser_failure_kind::unsupported,
+                        "Link member selection requires a direct record subobject",
+                        dot_location);
+                }
+
+                dependency =
+                    sources.add_dependency(
+                        record);
+
+                if (!succeeded(dependency)) {
+                    return dependency;
+                }
+
+                status = advance();
+
+                if (!succeeded(status)) {
+                    return status;
+                }
+
+                if (!at(token_kind::identifier) ||
+                    !current.identifier) {
+
+                    return fail(
+                        parser_failure_kind::syntax,
+                        "Expected member identifier after '.' in link endpoint");
+                }
+
+                const auto member_location =
+                    current_location();
+
+                const auto member =
+                    G.find_member(
+                        record,
+                        current.identifier);
+
+                if (!member) {
+                    return fail_at(
+                        parser_failure_kind::semantic,
+                        "Link endpoint member is not visible",
+                        member_location);
+                }
+
+                const auto* member_value =
+                    G.member(
+                        record,
+                        member);
+
+                if (member_value == nullptr) {
+                    return fail_at(
+                        parser_failure_kind::semantic,
+                        "Link endpoint member is not present in G",
+                        member_location);
+                }
+
+                try {
+                    endpoint_steps.push_back({
+                        member.value(),
+                        endpoint_path_step_kind::
+                            member,
+                        {},
+                    });
+                }
+                catch (...) {
+                    return server_status::io_error;
+                }
+
+                current_type =
+                    member_value->type;
+
+                output.location =
+                    member_location;
+
+                status = advance();
+
+                if (!succeeded(status)) {
+                    return status;
+                }
+
+                continue;
+            }
+
+            break;
+        }
+
+        if (endpoint_steps.empty()) {
+            return fail_at(
+                parser_failure_kind::syntax,
+                "Link endpoint must select a member or bounded-array subobject",
+                object_location);
+        }
+
+        output.type =
+            current_type;
+
+        if (endpoint_steps.size() == 1 &&
+            endpoint_steps.front().kind ==
+                endpoint_path_step_kind::member) {
+
+            auto root =
+                object_value->type;
+
+            strip_cv(
+                root);
+
+            type_handle record;
+
+            if (!G.named(
+                    root,
+                    record)) {
+
+                return fail_at(
+                    parser_failure_kind::semantic,
+                    "Direct link endpoint root is not a record",
+                    output.location);
+            }
+
+            const auto* type =
+                G.find(record);
+
+            const auto raw =
+                endpoint_steps.front().value;
+
+            if (type == nullptr ||
+                raw >=
+                    type->members.count) {
+
+                return fail_at(
+                    parser_failure_kind::semantic,
+                    "Direct link member index is invalid",
+                    output.location);
+            }
+
+            const auto global =
+                static_cast<std::size_t>(
+                    type->members.begin) +
+                static_cast<std::size_t>(
+                    raw);
+
+            const auto entries =
+                G.member_entries();
+
+            if (global >=
+                entries.size()) {
+
+                return fail_at(
+                    parser_failure_kind::semantic,
+                    "Direct link member storage is invalid",
+                    output.location);
+            }
+
+            const auto member =
+                G.find_member(
+                    record,
+                    entries[global].name);
+
+            if (!member ||
+                member.value() !=
+                    raw) {
+
+                return fail_at(
+                    parser_failure_kind::semantic,
+                    "Direct link member could not be normalized",
+                    output.location);
+            }
+
+            output.endpoint = {
+                object,
+                member,
+            };
+
+            return server_status::success;
+        }
+
+        endpoint_path_handle path;
+        type_ref resolved;
+
+        status =
+            G.intern_endpoint_path(
+                object_value->type,
+                endpoint_steps,
+                path,
+                &resolved);
+
+        if (!succeeded(status) ||
+            !path ||
+            resolved !=
+                current_type) {
+
+            return succeeded(status)
+                ? fail_at(
+                    parser_failure_kind::semantic,
+                    "Link subobject path could not be normalized",
+                    output.location)
+                : status;
         }
 
         output.endpoint = {
             object,
-            member,
+            endpoint_ref::from_path(
+                path),
         };
 
-        output.type =
-            member_value->type;
-
-        output.location =
-            member_location;
-
-        return advance();
+        return server_status::success;
     }
 
     [[nodiscard]] server_status parse_link(
@@ -3273,6 +3530,7 @@ private:
     bool has_buffered = false;
 
     std::vector<declarator_modifier> declarator_modifiers;
+    std::vector<endpoint_path_step> endpoint_steps;
     std::vector<member_record> record_members;
     std::vector<pending_construction> record_pending;
     std::vector<constructor_operation> record_operations;

@@ -23,12 +23,12 @@
 
 namespace cw::server {
 
-inline constexpr std::uint32_t compiled_project_format_version = 7;
+inline constexpr std::uint32_t compiled_project_format_version = 8;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;
 
-inline constexpr std::size_t compiled_project_directory_count = 24;
+inline constexpr std::size_t compiled_project_directory_count = 27;
 
 inline constexpr std::size_t
 compiled_project_directory_entry_size = 32;
@@ -66,6 +66,9 @@ enum class compiled_project_section : std::uint32_t {
     source_paths = 22,
     derived_index = 23,
     link_target_index = 24,
+    endpoint_paths = 25,
+    endpoint_path_steps = 26,
+    endpoint_path_index = 27,
 };
 
 enum class compiled_project_image_result : std::uint8_t {
@@ -285,6 +288,28 @@ public:
     [[nodiscard]] bool construction(
         object_handle object,
         construction_value& output) const noexcept;
+
+    [[nodiscard]] std::size_t endpoint_path_count() const noexcept {
+        return static_cast<std::size_t>(
+            section(
+                compiled_project_section::
+                    endpoint_paths).count);
+    }
+
+    [[nodiscard]] std::size_t endpoint_path_step_count() const noexcept {
+        return static_cast<std::size_t>(
+            section(
+                compiled_project_section::
+                    endpoint_path_steps).count);
+    }
+
+    [[nodiscard]] bool endpoint_path(
+        endpoint_path_handle path,
+        endpoint_path_record& output) const noexcept;
+
+    [[nodiscard]] bool endpoint_path_step_at(
+        std::size_t index,
+        endpoint_path_step& output) const noexcept;
 
     [[nodiscard]] link_handle link_at(
         std::size_t index) const noexcept;

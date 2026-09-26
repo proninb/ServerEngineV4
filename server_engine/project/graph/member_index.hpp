@@ -15,6 +15,7 @@ namespace cw::server {
 class graph;
 class graph_delta;
 class compiled_project_view;
+class endpoint_ref;
 
 class member_index final {
 public:
@@ -50,6 +51,7 @@ private:
     friend class graph;
     friend class graph_delta;
     friend class compiled_project_view;
+    friend class endpoint_ref;
 };
 
 static_assert(sizeof(member_index) == 4);

@@ -1,6 +1,7 @@
 #include "graph.hpp"
 #include "construction_semantics.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <utility>
 
@@ -1320,6 +1321,504 @@ bool graph::derived(
     return true;
 }
 
+
+std::uint64_t graph::hash_endpoint_path(
+    type_ref root_type,
+    std::span<const endpoint_path_step> steps) noexcept {
+
+    std::uint64_t hash =
+        1469598103934665603ull;
+
+    const auto mix =
+        [&hash](std::uint64_t value) noexcept {
+            for (std::size_t index = 0;
+                 index < 8;
+                 ++index) {
+
+                hash ^=
+                    static_cast<std::uint8_t>(
+                        value & 0xffu);
+
+                hash *=
+                    1099511628211ull;
+
+                value >>= 8;
+            }
+        };
+
+    mix(root_type.value());
+
+    for (const auto& step : steps) {
+        mix(static_cast<std::uint8_t>(
+            step.kind));
+        mix(step.value);
+    }
+
+    return hash == 0
+        ? 1
+        : hash;
+}
+
+bool graph::resolve_endpoint_path(
+    type_ref root_type,
+    std::span<const endpoint_path_step> steps,
+    type_ref& output) const noexcept {
+
+    output = {};
+
+    if (!contains(root_type) ||
+        steps.empty()) {
+
+        return false;
+    }
+
+    auto current_type =
+        root_type;
+
+    for (const auto& step : steps) {
+        for (const auto reserved :
+             step.reserved) {
+
+            if (reserved != 0) {
+                return false;
+            }
+        }
+
+        derived_type_record derived_value;
+
+        while (derived(
+                   current_type,
+                   derived_value) &&
+               (derived_value.kind ==
+                    derived_type_kind::const_qualified ||
+                derived_value.kind ==
+                    derived_type_kind::volatile_qualified)) {
+
+            current_type =
+                derived_value.child;
+        }
+
+        switch (step.kind) {
+        case endpoint_path_step_kind::member: {
+            if (step.value >
+                (std::numeric_limits<std::uint32_t>::max)()) {
+
+                return false;
+            }
+
+            type_handle record;
+
+            if (!named(
+                    current_type,
+                    record)) {
+
+                return false;
+            }
+
+            const auto* entry =
+                find(record);
+
+            if (entry == nullptr ||
+                !entry->defined() ||
+                step.value >=
+                    entry->members.count) {
+
+                return false;
+            }
+
+            const auto global =
+                static_cast<std::size_t>(
+                    entry->members.begin) +
+                static_cast<std::size_t>(
+                    step.value);
+
+            if (global >=
+                member_records.size()) {
+
+                return false;
+            }
+
+            current_type =
+                member_records[
+                    global].type;
+
+            break;
+        }
+
+        case endpoint_path_step_kind::array_index:
+            if (!derived(
+                    current_type,
+                    derived_value) ||
+                derived_value.kind !=
+                    derived_type_kind::bounded_array ||
+                step.value >=
+                    derived_value.payload) {
+
+                return false;
+            }
+
+            current_type =
+                derived_value.child;
+            break;
+
+        default:
+            return false;
+        }
+    }
+
+    output =
+        current_type;
+
+    return contains(output);
+}
+
+endpoint_path_handle graph::find_endpoint_path(
+    type_ref root_type,
+    std::span<const endpoint_path_step> steps,
+    std::uint64_t hash,
+    std::uint32_t fingerprint_value) const noexcept {
+
+    if (endpoint_path_index.empty()) {
+        return {};
+    }
+
+    const auto mask =
+        endpoint_path_index.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            hash) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe <
+            endpoint_path_index.size();
+         ++probe) {
+
+        const auto& slot =
+            endpoint_path_index[
+                position];
+
+        if (!slot.path) {
+            return {};
+        }
+
+        if (slot.fingerprint ==
+                fingerprint_value &&
+            slot.path.value() <=
+                endpoint_paths.size()) {
+
+            const auto& record =
+                endpoint_paths[
+                    slot.path.value() - 1];
+
+            if (record.root_type ==
+                    root_type &&
+                record.steps.count ==
+                    steps.size() &&
+                record.steps.begin <=
+                    endpoint_path_step_values.size() &&
+                record.steps.count <=
+                    endpoint_path_step_values.size() -
+                        record.steps.begin) {
+
+                const auto existing =
+                    std::span<const endpoint_path_step>{
+                        endpoint_path_step_values.data() +
+                            record.steps.begin,
+                        record.steps.count};
+
+                if (std::equal(
+                        existing.begin(),
+                        existing.end(),
+                        steps.begin(),
+                        steps.end())) {
+
+                    return slot.path;
+                }
+            }
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return {};
+}
+
+void graph::insert_endpoint_path_index(
+    std::vector<endpoint_path_index_slot>& target,
+    endpoint_path_handle path,
+    std::uint64_t hash,
+    std::uint32_t fingerprint_value) const noexcept {
+
+    const auto mask =
+        target.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            hash) &
+        mask;
+
+    while (target[position].path) {
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    target[position] = {
+        fingerprint_value,
+        path,
+    };
+}
+
+server_status graph::ensure_endpoint_path_index_capacity(
+    std::size_t additional) noexcept {
+
+    if (additional >
+        (std::numeric_limits<std::size_t>::max)() -
+            endpoint_paths.size()) {
+
+        return server_status::io_error;
+    }
+
+    const auto required =
+        endpoint_paths.size() +
+        additional;
+
+    if (!endpoint_path_index.empty() &&
+        required <=
+            endpoint_path_index.size() / 2) {
+
+        return server_status::success;
+    }
+
+    const auto capacity =
+        next_index_capacity(
+            required);
+
+    if (capacity == 0) {
+        return server_status::io_error;
+    }
+
+    try {
+        std::vector<endpoint_path_index_slot>
+            candidate(capacity);
+
+        for (std::size_t index = 0;
+             index <
+                endpoint_paths.size();
+             ++index) {
+
+            const auto path =
+                endpoint_path_handle{
+                    static_cast<std::uint32_t>(
+                        index + 1)};
+
+            const auto& record =
+                endpoint_paths[index];
+
+            const auto steps =
+                std::span<const endpoint_path_step>{
+                    endpoint_path_step_values.data() +
+                        record.steps.begin,
+                    record.steps.count};
+
+            const auto hash =
+                hash_endpoint_path(
+                    record.root_type,
+                    steps);
+
+            insert_endpoint_path_index(
+                candidate,
+                path,
+                hash,
+                fingerprint(hash));
+        }
+
+        endpoint_path_index =
+            std::move(candidate);
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
+server_status graph::intern_endpoint_path(
+    type_ref root_type,
+    std::span<const endpoint_path_step> steps,
+    endpoint_path_handle& output,
+    type_ref* value_type) noexcept {
+
+    output = {};
+
+    if (value_type != nullptr) {
+        *value_type = {};
+    }
+
+    type_ref resolved;
+
+    if (!resolve_endpoint_path(
+            root_type,
+            steps,
+            resolved)) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    const auto hash =
+        hash_endpoint_path(
+            root_type,
+            steps);
+
+    const auto fingerprint_value =
+        fingerprint(hash);
+
+    if (const auto existing =
+            find_endpoint_path(
+                root_type,
+                steps,
+                hash,
+                fingerprint_value);
+        existing) {
+
+        output = existing;
+
+        if (value_type != nullptr) {
+            *value_type =
+                endpoint_paths[
+                    existing.value() - 1].
+                    value_type;
+        }
+
+        return server_status::success;
+    }
+
+    if (endpoint_paths.size() >=
+            endpoint_path_handle::maximum_slot ||
+        steps.size() >
+            (std::numeric_limits<std::uint32_t>::max)() ||
+        endpoint_path_step_values.size() >
+            (std::numeric_limits<std::uint32_t>::max)() -
+                steps.size()) {
+
+        return server_status::io_error;
+    }
+
+    const auto prepared =
+        ensure_endpoint_path_index_capacity(1);
+
+    if (!succeeded(prepared)) {
+        return prepared;
+    }
+
+    const auto old_path_count =
+        endpoint_paths.size();
+
+    const auto old_step_count =
+        endpoint_path_step_values.size();
+
+    try {
+        endpoint_path_step_values.insert(
+            endpoint_path_step_values.end(),
+            steps.begin(),
+            steps.end());
+
+        endpoint_paths.push_back({
+            {
+                static_cast<std::uint32_t>(
+                    old_step_count),
+                static_cast<std::uint32_t>(
+                    steps.size()),
+            },
+            root_type,
+            resolved,
+        });
+
+        output =
+            endpoint_path_handle{
+                static_cast<std::uint32_t>(
+                    endpoint_paths.size())};
+
+        insert_endpoint_path_index(
+            endpoint_path_index,
+            output,
+            hash,
+            fingerprint_value);
+
+        if (value_type != nullptr) {
+            *value_type =
+                resolved;
+        }
+
+        return server_status::success;
+    }
+    catch (...) {
+        endpoint_paths.resize(
+            old_path_count);
+
+        endpoint_path_step_values.resize(
+            old_step_count);
+
+        output = {};
+
+        if (value_type != nullptr) {
+            *value_type = {};
+        }
+
+        return server_status::io_error;
+    }
+}
+
+bool graph::endpoint_path(
+    endpoint_path_handle path,
+    endpoint_path_record& output) const noexcept {
+
+    output = {};
+
+    if (!path ||
+        path.value() >
+            endpoint_paths.size()) {
+
+        return false;
+    }
+
+    output =
+        endpoint_paths[
+            path.value() - 1];
+
+    return output.steps.begin <=
+            endpoint_path_step_values.size() &&
+        output.steps.count <=
+            endpoint_path_step_values.size() -
+                output.steps.begin;
+}
+
+std::span<const endpoint_path_step>
+graph::endpoint_path_steps(
+    endpoint_path_handle path) const noexcept {
+
+    endpoint_path_record record;
+
+    if (!endpoint_path(
+            path,
+            record)) {
+
+        return {};
+    }
+
+    return {
+        endpoint_path_step_values.data() +
+            record.steps.begin,
+        record.steps.count,
+    };
+}
+
+
 std::uint64_t graph::link_target_key(
     object_endpoint target) noexcept {
 
@@ -1430,10 +1929,52 @@ bool graph::endpoint_type(
         return false;
     }
 
+    if (endpoint.member.is_path()) {
+        endpoint_path_record path;
+
+        if (!endpoint_path(
+                endpoint.member.path(),
+                path) ||
+            path.root_type !=
+                object->type) {
+
+            return false;
+        }
+
+        output =
+            path.value_type;
+
+        return contains(output);
+    }
+
+    const auto member_value =
+        endpoint.member.direct_member();
+
+    if (!member_value) {
+        return false;
+    }
+
+    auto object_type =
+        object->type;
+
+    derived_type_record derived_value;
+
+    while (derived(
+               object_type,
+               derived_value) &&
+           (derived_value.kind ==
+                derived_type_kind::const_qualified ||
+            derived_value.kind ==
+                derived_type_kind::volatile_qualified)) {
+
+        object_type =
+            derived_value.child;
+    }
+
     type_handle type;
 
     if (!named(
-            object->type,
+            object_type,
             type)) {
 
         return false;
@@ -1442,7 +1983,7 @@ bool graph::endpoint_type(
     const auto* value =
         member(
             type,
-            endpoint.member);
+            member_value);
 
     if (value == nullptr) {
         return false;

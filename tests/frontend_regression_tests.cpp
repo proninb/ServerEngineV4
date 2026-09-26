@@ -1312,7 +1312,8 @@ void test_declarator_arrays(
                 identity_kind::type));
 
     if (!tests.expect(
-            type,
+            static_cast<bool>(
+                type),
             "resolve declarator-array record")) {
 
         return;
@@ -1618,6 +1619,264 @@ void test_invalid_array_declarators(
         "struct Bad { int values[2 + 2]; };\n",
         parser_failure_kind::unsupported,
         "Array bound expressions are not implemented",
+        "+");
+}
+
+
+void test_subobject_link_endpoints(
+    test_state& tests) {
+
+    const std::string header_text{
+        "struct T {\n"
+        "    int values[2][3];\n"
+        "    int& in;\n"
+        "};\n"};
+
+    const std::string source_text{
+        "T a;\n"
+        "T objects[2];\n"
+        "objects[1].in = a.values[1][2];\n"
+        "a.in = objects[0].values[0][1];\n"};
+
+    const temporary_source header{
+        "subobject_link_header",
+        header_text};
+
+    const temporary_source source{
+        "subobject_link_source",
+        source_text};
+
+    file_context files;
+    lexical_generation lexical;
+
+    file_id header_id;
+    file_id source_id;
+
+    if (!tests.expect(
+            succeeded(
+                files.resolve(
+                    header.path(),
+                    file_kind::header,
+                    header_id)) &&
+            succeeded(
+                files.resolve(
+                    source.path(),
+                    file_kind::source,
+                    source_id)),
+            "resolve subobject-link roots")) {
+
+        return;
+    }
+
+    const std::array<file_id, 2> roots{
+        header_id,
+        source_id};
+
+    if (!prepare_all_roots(
+            tests,
+            files,
+            lexical,
+            roots)) {
+
+        return;
+    }
+
+    preprocessor_configuration configuration;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    parser_failure failure;
+
+    if (!tests.expect(
+            succeeded(
+                parse_semantic_project(
+                    files,
+                    lexical,
+                    roots.size(),
+                    configuration,
+                    strings,
+                    identities,
+                    G,
+                    sources,
+                    &failure)),
+            "parse indexed subobject static links")) {
+
+        return;
+    }
+
+    tests.expect(
+        G.link_count() == 2 &&
+        G.endpoint_path_count() == 3,
+        "indexed endpoints intern only complex canonical paths");
+
+    const auto links =
+        G.link_entries();
+
+    if (!tests.expect(
+            links.size() == 2,
+            "resolve indexed subobject links from dense G storage")) {
+
+        return;
+    }
+
+    const auto& first_link =
+        links[0];
+
+    const auto& second_link =
+        links[1];
+
+    if (!tests.expect(
+            first_link.target.member.is_path() &&
+            first_link.source.member.is_path() &&
+            second_link.target.member.is_member() &&
+            second_link.source.member.is_path(),
+            "direct and path endpoints preserve compact link representation")) {
+
+        return;
+    }
+
+    endpoint_path_record target_path;
+    endpoint_path_record source_path;
+
+    const auto target_steps =
+        G.endpoint_path_steps(
+            first_link.target.member.path());
+
+    const auto source_steps =
+        G.endpoint_path_steps(
+            first_link.source.member.path());
+
+    tests.expect(
+        G.endpoint_path(
+            first_link.target.member.path(),
+            target_path) &&
+        G.endpoint_path(
+            first_link.source.member.path(),
+            source_path) &&
+        target_steps.size() == 2 &&
+        target_steps[0].kind ==
+            endpoint_path_step_kind::array_index &&
+        target_steps[0].value == 1 &&
+        target_steps[1].kind ==
+            endpoint_path_step_kind::member &&
+        source_steps.size() == 3 &&
+        source_steps[0].kind ==
+            endpoint_path_step_kind::member &&
+        source_steps[1].kind ==
+            endpoint_path_step_kind::array_index &&
+        source_steps[1].value == 1 &&
+        source_steps[2].kind ==
+            endpoint_path_step_kind::array_index &&
+        source_steps[2].value == 2,
+        "subobject path order matches source spelling");
+}
+
+void test_subobject_link_diagnostics(
+    test_state& tests) {
+
+    const std::string header_text{
+        "struct T { int a[2]; int& in; };\n"};
+
+    const auto reject =
+        [&](std::string_view label,
+            std::string source_text,
+            parser_failure_kind kind,
+            std::string_view detail,
+            std::string_view marker) {
+
+            const temporary_source header{
+                std::string{label} +
+                    "_header",
+                header_text};
+
+            const temporary_source source{
+                std::string{label} +
+                    "_source",
+                source_text};
+
+            file_context files;
+            lexical_generation lexical;
+
+            file_id header_id;
+            file_id source_id;
+
+            if (!tests.expect(
+                    succeeded(
+                        files.resolve(
+                            header.path(),
+                            file_kind::header,
+                            header_id)) &&
+                    succeeded(
+                        files.resolve(
+                            source.path(),
+                            file_kind::source,
+                            source_id)),
+                    std::string{label} +
+                        " resolve roots")) {
+
+                return;
+            }
+
+            const std::array<file_id, 2> roots{
+                header_id,
+                source_id};
+
+            if (!prepare_all_roots(
+                    tests,
+                    files,
+                    lexical,
+                    roots)) {
+
+                return;
+            }
+
+            preprocessor_configuration configuration;
+            string_table strings;
+            identity_space identities{strings};
+            graph G;
+            source_map sources;
+            parser_failure failure;
+
+            const auto status =
+                parse_semantic_project(
+                    files,
+                    lexical,
+                    roots.size(),
+                    configuration,
+                    strings,
+                    identities,
+                    G,
+                    sources,
+                    &failure);
+
+            tests.expect(
+                status ==
+                    server_status::
+                        project_configuration_invalid &&
+                failure.kind ==
+                    kind &&
+                failure.file ==
+                    source_id &&
+                failure.source.offset ==
+                    source_text.find(marker) &&
+                failure.detail ==
+                    detail,
+                label);
+        };
+
+    reject(
+        "subobject_link_out_of_bounds",
+        "T x;\nx.in = x.a[2];\n",
+        parser_failure_kind::semantic,
+        "Array link index is outside the declared bound",
+        "2]");
+
+    reject(
+        "subobject_link_index_expression",
+        "T x;\nx.in = x.a[0 + 1];\n",
+        parser_failure_kind::unsupported,
+        "Array link index expressions are not implemented",
         "+");
 }
 
@@ -2141,6 +2400,12 @@ int main() {
             tests);
 
         test_invalid_array_declarators(
+            tests);
+
+        test_subobject_link_endpoints(
+            tests);
+
+        test_subobject_link_diagnostics(
             tests);
 
         test_semantic_type_diagnostics(
