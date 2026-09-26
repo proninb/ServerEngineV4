@@ -1445,35 +1445,8 @@ private:
                 invalid_input;
         }
 
-        if (current.link_object) {
-            const auto link =
-                project.find_link_target(
-                    current.link_object,
-                    current.local);
-
-            if (link) {
-                link_record value;
-
-                if (!project.link(
-                        link,
-                        value) ||
-                    value.target.object !=
-                        current.link_object ||
-                    value.target.member.value() !=
-                        current.local) {
-
-                    return fixed_direct_materialization_result::
-                        invalid_input;
-                }
-
-                return endpoint_reference_or_value(
-                    value.source,
-                    next,
-                    has_next,
-                    output);
-            }
-        }
-
+        // Dense link prebinding owns Graph-link semantics. A zero slot that
+        // reaches this path is therefore governed only by type construction.
         switch (construction.kind) {
         case construction_kind::zero: {
             std::uint64_t sentinel = 0;
