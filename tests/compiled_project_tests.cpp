@@ -2262,6 +2262,345 @@ void test_fixed_direct_materializer(
 
 
 
+void test_fixed_direct_unplanned_reference_chain(
+    test_state& tests) {
+
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    assign_table assigns;
+    file_context files;
+    source_map sources;
+
+    string_id type_name;
+    string_id r0_name;
+    string_id r1_name;
+    string_id r2_name;
+    string_id out_name;
+    string_id object_name;
+
+    if (!tests.expect(
+            succeeded(strings.intern("ReferenceChain", type_name)) &&
+            succeeded(strings.intern("r0", r0_name)) &&
+            succeeded(strings.intern("r1", r1_name)) &&
+            succeeded(strings.intern("r2", r2_name)) &&
+            succeeded(strings.intern("out", out_name)) &&
+            succeeded(strings.intern("x", object_name)),
+            "prepare unplanned reference-chain strings")) {
+
+        return;
+    }
+
+    identity_ref type_identity;
+    identity_ref object_identity;
+
+    if (!tests.expect(
+            succeeded(
+                identities.resolve(
+                    identities.root(),
+                    type_name,
+                    identity_kind::type,
+                    type_identity)) &&
+            succeeded(
+                identities.resolve(
+                    identities.root(),
+                    object_name,
+                    identity_kind::object,
+                    object_identity)),
+            "prepare unplanned reference-chain identities")) {
+
+        return;
+    }
+
+    type_handle type;
+
+    if (!tests.expect(
+            succeeded(
+                G.declare_record(
+                    type_identity,
+                    graph_record_kind::struct_type,
+                    type)),
+            "declare unplanned reference-chain record")) {
+
+        return;
+    }
+
+    const auto integer =
+        G.intrinsic(
+            intrinsic_type::signed_int);
+
+    type_ref integer_reference;
+
+    if (!tests.expect(
+            integer &&
+            succeeded(
+                G.derive(
+                    integer,
+                    derived_type_kind::lvalue_reference,
+                    0,
+                    integer_reference)),
+            "prepare unplanned reference-chain type")) {
+
+        return;
+    }
+
+    const std::array<member_record, 4>
+        members{{
+            {
+                r0_name,
+                integer_reference,
+                graph_member_access::public_access,
+            },
+            {
+                r1_name,
+                integer_reference,
+                graph_member_access::public_access,
+            },
+            {
+                r2_name,
+                integer_reference,
+                graph_member_access::public_access,
+            },
+            {
+                out_name,
+                integer,
+                graph_member_access::public_access,
+            },
+        }};
+
+    const std::array<construction_value, 4>
+        construction{{
+            construction_value::member_binding(2),
+            construction_value::member_binding(3),
+            construction_value::member_binding(4),
+            construction_value::constant(
+                construction_kind::signed_integer,
+                17),
+        }};
+
+    if (!tests.expect(
+            succeeded(
+                G.define_record(
+                    type,
+                    graph_record_kind::struct_type,
+                    members,
+                    construction)),
+            "define unplanned reference-chain record")) {
+
+        return;
+    }
+
+    object_handle object;
+
+    if (!tests.expect(
+            succeeded(
+                G.add_object(
+                    object_identity,
+                    G.named(type),
+                    object)) &&
+            succeeded(
+                sources.finalize(
+                    files.size(),
+                    identities,
+                    G)),
+            "prepare unplanned reference-chain object")) {
+
+        return;
+    }
+
+    compiled_project_layout persisted;
+
+    if (!tests.expect(
+            prepare_compiled_project_layout(
+                strings,
+                identities,
+                G,
+                assigns,
+                files,
+                sources,
+                persisted) ==
+                compiled_project_image_result::success,
+            "prepare unplanned reference-chain compiled image")) {
+
+        return;
+    }
+
+    compiled_test_image image;
+
+    try {
+        image.bytes.assign(
+            persisted.size(),
+            std::byte{0});
+    }
+    catch (...) {
+        tests.expect(
+            false,
+            "allocate unplanned reference-chain image");
+        return;
+    }
+
+    if (!tests.expect(
+            encode_compiled_project_image(
+                strings,
+                identities,
+                G,
+                assigns,
+                files,
+                sources,
+                persisted,
+                image.bytes) ==
+                compiled_project_image_result::success,
+            "encode unplanned reference-chain image")) {
+
+        return;
+    }
+
+    compiled_project_view view;
+
+    if (!tests.expect(
+            view.bind(
+                image.bytes) ==
+                compiled_project_image_result::success,
+            "bind unplanned reference-chain image")) {
+
+        return;
+    }
+
+#if defined(_WIN32)
+    const server_abi_configuration abi{
+        abi_target::windows_x64,
+        8,
+    };
+#else
+    const server_abi_configuration abi{
+        abi_target::posix_x64,
+        8,
+    };
+#endif
+
+    runtime_layout layout;
+
+    if (!tests.expect(
+            prepare_runtime_layout(
+                view,
+                abi,
+                layout) ==
+                runtime_layout_result::success,
+            "prepare unplanned reference-chain Runtime layout")) {
+
+        return;
+    }
+
+    std::vector<std::byte> runtime;
+
+    try {
+        runtime.assign(
+            static_cast<std::size_t>(
+                layout.size()),
+            std::byte{0xcc});
+    }
+    catch (...) {
+        tests.expect(
+            false,
+            "allocate unplanned reference-chain Runtime");
+        return;
+    }
+
+    if (!tests.expect(
+            materialize_fixed_direct(
+                view,
+                layout,
+                abi,
+                runtime) ==
+                fixed_direct_materialization_result::success,
+            "materialize unplanned reference chain")) {
+
+        return;
+    }
+
+    type_entry record;
+    std::uint64_t object_offset = 0;
+    std::uint64_t offsets[4]{};
+
+    if (!tests.expect(
+            view.type(
+                type,
+                record) &&
+            layout.object_offset(
+                object,
+                object_offset),
+            "query unplanned reference-chain record")) {
+
+        return;
+    }
+
+    for (std::size_t index = 0;
+         index < 4;
+         ++index) {
+
+        if (!tests.expect(
+                layout.member_offset(
+                    static_cast<std::size_t>(
+                        record.members.begin) +
+                        index,
+                    offsets[index]),
+                "query unplanned reference-chain member offset")) {
+
+            return;
+        }
+    }
+
+    const auto base =
+        reinterpret_cast<std::uintptr_t>(
+            runtime.data());
+
+    const auto expected =
+        base +
+        static_cast<std::uintptr_t>(
+            object_offset +
+            offsets[3]);
+
+    const auto read_address =
+        [&](std::uint64_t offset) {
+            std::uintptr_t value = 0;
+
+            std::memcpy(
+                &value,
+                runtime.data() +
+                    static_cast<std::size_t>(
+                        offset),
+                sizeof(value));
+
+            return value;
+        };
+
+    int out = 0;
+
+    std::memcpy(
+        &out,
+        runtime.data() +
+            static_cast<std::size_t>(
+                object_offset +
+                offsets[3]),
+        sizeof(out));
+
+    tests.expect(
+        read_address(
+            object_offset +
+                offsets[0]) ==
+                expected &&
+        read_address(
+            object_offset +
+                offsets[1]) ==
+                expected &&
+        read_address(
+            object_offset +
+                offsets[2]) ==
+                expected &&
+        out == 17,
+        "unplanned reference chain resolves every hop to final value");
+}
+
 void test_fixed_direct_link_prebind(
     test_state& tests) {
 
@@ -3789,6 +4128,9 @@ int main() {
             tests);
 
         test_fixed_direct_materializer(
+            tests);
+
+        test_fixed_direct_unplanned_reference_chain(
             tests);
 
         test_fixed_direct_link_prebind(

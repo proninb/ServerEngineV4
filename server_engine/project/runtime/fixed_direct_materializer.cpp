@@ -1604,6 +1604,15 @@ private:
         std::byte* slot = nullptr;
     };
 
+    // Construction-only sidecar for consecutive unplanned reference hops.
+    // A ready value contains only metadata already validated for current.slot.
+    struct unplanned_reference_metadata final {
+        std::size_t global = 0;
+        std::uint32_t member_count = 0;
+        type_ref referent{};
+        bool ready = false;
+    };
+
     // During construction a native reference slot is also its state:
     // 0 = unresolved, pending = Graph link target, visiting = cycle detection,
     // Runtime address = resolved.
@@ -2032,61 +2041,105 @@ private:
     [[nodiscard]] fixed_direct_materialization_result
     advance_reference_unplanned(
         const reference_state& current,
+        const unplanned_reference_metadata& metadata,
         reference_state& next,
+        unplanned_reference_metadata& next_metadata,
         bool& has_next,
         std::uintptr_t& output) noexcept {
 
         next = {};
+        next_metadata = {};
         has_next = false;
         output = 0;
 
-        member_record member;
-        construction_value construction;
-        type_entry record;
-
         if (!current.record_type ||
             current.record_base == nullptr ||
-            current.slot == nullptr ||
-            !project.type(
-                current.record_type,
-                record) ||
-            current.local >=
-                record.members.count) {
+            current.slot == nullptr) {
 
             return fixed_direct_materialization_result::
                 invalid_input;
         }
 
-        const auto global =
-            static_cast<std::size_t>(
-                record.members.begin) +
-            current.local;
-
-        std::uint64_t member_offset = 0;
-
-        if (!project.member_at(
-                global,
-                member) ||
-            !project.construction_at(
-                global,
-                construction) ||
-            !layout.member_offset(
-                global,
-                member_offset) ||
-            current.record_base +
-                static_cast<std::size_t>(
-                    member_offset) !=
-                current.slot) {
-
-            return fixed_direct_materialization_result::
-                invalid_input;
-        }
-
+        std::size_t global = 0;
+        std::size_t member_begin = 0;
+        std::uint32_t member_count = 0;
         type_ref referent;
 
-        if (!reference_referent(
-                member.type,
-                referent)) {
+        if (metadata.ready) {
+            if (current.local >=
+                    metadata.member_count ||
+                metadata.global <
+                    current.local ||
+                !metadata.referent) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            global =
+                metadata.global;
+
+            member_begin =
+                metadata.global -
+                current.local;
+
+            member_count =
+                metadata.member_count;
+
+            referent =
+                metadata.referent;
+        }
+        else {
+            type_entry record;
+
+            if (!project.type(
+                    current.record_type,
+                    record) ||
+                current.local >=
+                    record.members.count) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            member_begin =
+                static_cast<std::size_t>(
+                    record.members.begin);
+
+            member_count =
+                record.members.count;
+
+            global =
+                member_begin +
+                current.local;
+
+            member_record member;
+            std::uint64_t member_offset = 0;
+
+            if (!project.member_at(
+                    global,
+                    member) ||
+                !layout.member_offset(
+                    global,
+                    member_offset) ||
+                current.record_base +
+                    static_cast<std::size_t>(
+                        member_offset) !=
+                    current.slot ||
+                !reference_referent(
+                    member.type,
+                    referent)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+        }
+
+        construction_value construction;
+
+        if (!project.construction_at(
+                global,
+                construction)) {
 
             return fixed_direct_materialization_result::
                 invalid_input;
@@ -2133,19 +2186,18 @@ private:
                 construction.operand - 1;
 
             if (source_local >=
-                record.members.count) {
+                member_count) {
 
                 return fixed_direct_materialization_result::
                     invalid_input;
             }
 
+            const auto source_global =
+                member_begin +
+                source_local;
+
             member_record source;
             std::uint64_t source_offset = 0;
-
-            const auto source_global =
-                static_cast<std::size_t>(
-                    record.members.begin) +
-                source_local;
 
             if (!project.member_at(
                     source_global,
@@ -2175,6 +2227,13 @@ private:
                     current.link_object,
                     source_local,
                     source_address,
+                };
+
+                next_metadata = {
+                    source_global,
+                    member_count,
+                    source_referent,
+                    true,
                 };
 
                 has_next = true;
@@ -2293,34 +2352,6 @@ private:
     }
 
     [[nodiscard]] fixed_direct_materialization_result
-    advance_reference(
-        const reference_state& current,
-        reference_state& next,
-        bool& has_next,
-        std::uintptr_t& output) noexcept {
-
-        if (const auto* member =
-                planned_member_at(
-                    current.record_type,
-                    current.local);
-            member != nullptr) {
-
-            return advance_reference_planned(
-                current,
-                *member,
-                next,
-                has_next,
-                output);
-        }
-
-        return advance_reference_unplanned(
-            current,
-            next,
-            has_next,
-            output);
-    }
-
-    [[nodiscard]] fixed_direct_materialization_result
     resolve_reference_member(
         type_handle record_type_value,
         std::byte* record_base,
@@ -2339,6 +2370,9 @@ private:
             local,
             slot,
         };
+
+        unplanned_reference_metadata
+            current_metadata;
 
         const auto maximum_steps =
             layout.size() /
@@ -2408,6 +2442,8 @@ private:
             }
 
             reference_state next;
+            unplanned_reference_metadata
+                next_metadata;
             bool has_next = false;
             std::uintptr_t target = 0;
 
@@ -2446,11 +2482,27 @@ private:
                         has_next,
                         target);
             }
+            else if (const auto* member =
+                         planned_member_at(
+                             current.record_type,
+                             current.local);
+                     member != nullptr) {
+
+                advanced =
+                    advance_reference_planned(
+                        current,
+                        *member,
+                        next,
+                        has_next,
+                        target);
+            }
             else {
                 advanced =
-                    advance_reference(
+                    advance_reference_unplanned(
                         current,
+                        current_metadata,
                         next,
+                        next_metadata,
                         has_next,
                         target);
             }
@@ -2526,6 +2578,8 @@ private:
             }
 
             current = next;
+            current_metadata =
+                next_metadata;
         }
 
         return fixed_direct_materialization_result::
