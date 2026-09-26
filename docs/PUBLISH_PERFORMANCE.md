@@ -1,5 +1,40 @@
 # PUBLISH performance review
 
+## Mixed-workload runtime plan growth (2026-09-26)
+
+The current mixed fixture has 10,001 types, 170,001 members, 20,000 objects,
+and 10,000 links. Generate it with `new_publish_fixture.ps1`; older generated
+fixtures may link ordinary integer members and are rejected by the current
+reference-target rules. The historical mixed results below use a different
+fixture and are not a directly comparable baseline.
+
+Stage timing isolated the multi-second LOAD/PUBLISH delay to runtime
+materialization: approximately 2.6 ms for layout versus 3,905 ms for
+materialization. `prepare_record_plan` reserved exactly the accumulated member
+count plus the next record's members before appending each record. With many
+distinct types, this repeatedly reallocated and copied all previous plans,
+producing quadratic copying for fixed-size records.
+
+Removing that exact-size reservation lets `std::vector::push_back` use geometric
+growth. The existing count bounds, allocation-failure handling, and rollback
+remain in place. Diagnostic materialization time fell to approximately 10.8 ms.
+No persisted format or validation policy changes are involved.
+
+With the temporary timers removed, an alternating A/B comparison (one warmup
+and seven measured runs per executable, Release IPO) measured PUBLISH medians
+of 3,378.59 ms before and 95.8247 ms after: 35.3x faster, a 97.2% time reduction.
+The candidate won all seven pairs. Both executables include the same existing
+local runtime work; only the reservation above differs. The baseline executable
+audited every image outside the timer, and every SHA-256 matched
+`0D9DE075B2EF1D5767F7C1405BED60B4C2D6D219B1F079AD68D8CDEEC6AF123C`.
+Raw results are in `build/publish-mixed-growth-ab.csv`. A subsequent candidate
+LOAD took 12.77 ms (single run). All eight Release CTest suites and the six
+runtime scale cases (three runs each) pass.
+
+Performance coverage must include many distinct record types, not only many
+objects of one type: the existing `objects`, `links`, and `chain` runtime
+scenarios each contain one record type and do not expose this growth pattern.
+
 ## Pass 3: semantic streaming hot path
 
 This pass starts from `20885736`, with Release IPO enabled. It changes only

@@ -1319,9 +1319,9 @@ private:
         }
 
         try {
-            planned_members.reserve(
-                old_count +
-                type.members.count);
+            // Let push_back grow geometrically. Reserving the exact next
+            // record size here repeatedly copies all earlier record plans
+            // when a project contains many distinct record types.
 
             for (std::uint32_t local = 0;
                  local <
