@@ -326,7 +326,17 @@ public:
             }
         }
 
-        return verify_links();
+        // Every persisted Graph link must be consumed exactly once while its
+        // concrete target reference is materialized.
+        if (consumed_links !=
+            project.link_count()) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        return fixed_direct_materialization_result::
+            success;
     }
 
 private:
@@ -438,13 +448,8 @@ private:
                 incompatible_abi;
         }
 
-        const auto base =
-            reinterpret_cast<std::uintptr_t>(
-                runtime.data());
-
-        if (target < base ||
-            target - base >=
-                layout.size()) {
+        if (!runtime_address(
+                target)) {
 
             return fixed_direct_materialization_result::
                 invalid_input;
@@ -1186,12 +1191,6 @@ private:
         return fixed_direct_materialization_result::success;
     }
 
-    enum class reference_cache_lookup : std::uint8_t {
-        absent = 0,
-        visiting,
-        resolved,
-    };
-
     struct reference_state final {
         type_handle record_type{};
         std::byte* record_base = nullptr;
@@ -1200,245 +1199,56 @@ private:
         std::byte* slot = nullptr;
     };
 
-    struct reference_cache_entry final {
-        std::uintptr_t slot = 0;
-        std::uintptr_t target = 0;
-    };
+    // During construction a native reference slot is also its memoization
+    // state: 0 = unresolved, UINTPTR_MAX = visiting, Runtime address = resolved.
+    static constexpr std::uintptr_t
+        reference_visiting_marker =
+            (std::numeric_limits<std::uintptr_t>::max)();
 
-    static_assert(
-        sizeof(reference_cache_entry) == 16);
+    [[nodiscard]] bool runtime_address(
+        std::uintptr_t value) const noexcept {
 
-    [[nodiscard]] static std::size_t
-    reference_cache_hash(
-        std::uintptr_t value) noexcept {
-
-        auto hash =
-            static_cast<std::uint64_t>(
-                value);
-
-        hash ^= hash >> 30;
-        hash *= 0xbf58476d1ce4e5b9ull;
-        hash ^= hash >> 27;
-        hash *= 0x94d049bb133111ebull;
-        hash ^= hash >> 31;
-
-        return static_cast<std::size_t>(
-            hash);
-    }
-
-    static void insert_reference_cache_entry(
-        std::vector<reference_cache_entry>& cache,
-        reference_cache_entry value) noexcept {
-
-        const auto mask =
-            cache.size() - 1;
-
-        auto position =
-            reference_cache_hash(
-                value.slot) &
-            mask;
-
-        while (cache[position].slot != 0) {
-            position =
-                (position + 1) &
-                mask;
-        }
-
-        cache[position] =
-            value;
-    }
-
-    [[nodiscard]] bool grow_reference_cache() noexcept {
-
-        std::size_t capacity =
-            reference_cache.empty()
-            ? 8
-            : reference_cache.size() * 2;
-
-        if (capacity <
-                reference_cache.size() ||
-            (capacity &
-                (capacity - 1)) != 0) {
+        if (value == 0 ||
+            runtime.data() == nullptr) {
 
             return false;
         }
 
-        std::vector<reference_cache_entry>
-            replacement;
+        const auto base =
+            reinterpret_cast<std::uintptr_t>(
+                runtime.data());
 
-        try {
-            replacement.resize(
-                capacity);
-        }
-        catch (...) {
+        return value >= base &&
+            value - base <
+                layout.size();
+    }
+
+    [[nodiscard]] bool read_reference_slot(
+        const std::byte* slot,
+        std::uintptr_t& value) const noexcept {
+
+        value = 0;
+
+        if (slot == nullptr ||
+            sizeof(std::uintptr_t) != 8) {
+
             return false;
         }
 
-        for (const auto& value :
-             reference_cache) {
-
-            if (value.slot != 0) {
-                insert_reference_cache_entry(
-                    replacement,
-                    value);
-            }
-        }
-
-        reference_cache.swap(
-            replacement);
+        std::memcpy(
+            &value,
+            slot,
+            sizeof(value));
 
         return true;
     }
 
-    [[nodiscard]] reference_cache_lookup
-    reference_cache_find(
-        std::uintptr_t slot,
-        std::uintptr_t& target) const noexcept {
+    void mark_reference_visiting(
+        std::byte* slot) noexcept {
 
-        target = 0;
-
-        if (slot == 0 ||
-            reference_cache.empty()) {
-
-            return reference_cache_lookup::
-                absent;
-        }
-
-        const auto mask =
-            reference_cache.size() - 1;
-
-        auto position =
-            reference_cache_hash(
-                slot) &
-            mask;
-
-        for (std::size_t probe = 0;
-             probe <
-                 reference_cache.size();
-             ++probe) {
-
-            const auto& value =
-                reference_cache[
-                    position];
-
-            if (value.slot == 0) {
-                return reference_cache_lookup::
-                    absent;
-            }
-
-            if (value.slot == slot) {
-                target = value.target;
-
-                return target == 0
-                    ? reference_cache_lookup::
-                        visiting
-                    : reference_cache_lookup::
-                        resolved;
-            }
-
-            position =
-                (position + 1) &
-                mask;
-        }
-
-        return reference_cache_lookup::
-            absent;
-    }
-
-    [[nodiscard]] bool reference_cache_mark_visiting(
-        std::uintptr_t slot) noexcept {
-
-        if (slot == 0) {
-            return false;
-        }
-
-        if (reference_cache.empty() ||
-            reference_cache_size >=
-                reference_cache.size() / 2) {
-
-            if (!grow_reference_cache()) {
-                return false;
-            }
-        }
-
-        const auto mask =
-            reference_cache.size() - 1;
-
-        auto position =
-            reference_cache_hash(
-                slot) &
-            mask;
-
-        for (;;) {
-            auto& value =
-                reference_cache[
-                    position];
-
-            if (value.slot == 0) {
-                value.slot = slot;
-                value.target = 0;
-                ++reference_cache_size;
-                return true;
-            }
-
-            if (value.slot == slot) {
-                return false;
-            }
-
-            position =
-                (position + 1) &
-                mask;
-        }
-    }
-
-    [[nodiscard]] bool reference_cache_resolve(
-        std::uintptr_t slot,
-        std::uintptr_t target) noexcept {
-
-        if (slot == 0 ||
-            target == 0 ||
-            reference_cache.empty()) {
-
-            return false;
-        }
-
-        const auto mask =
-            reference_cache.size() - 1;
-
-        auto position =
-            reference_cache_hash(
-                slot) &
-            mask;
-
-        for (std::size_t probe = 0;
-             probe <
-                 reference_cache.size();
-             ++probe) {
-
-            auto& value =
-                reference_cache[
-                    position];
-
-            if (value.slot == 0) {
-                return false;
-            }
-
-            if (value.slot == slot) {
-                if (value.target != 0) {
-                    return value.target ==
-                        target;
-                }
-
-                value.target = target;
-                return true;
-            }
-
-            position =
-                (position + 1) &
-                mask;
-        }
-
-        return false;
+        store_native(
+            slot,
+            reference_visiting_marker);
     }
 
     [[nodiscard]] fixed_direct_materialization_result
@@ -1626,6 +1436,15 @@ private:
                     current.local);
 
             if (link) {
+                if (consumed_links >=
+                    project.link_count()) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                ++consumed_links;
+
                 link_record value;
 
                 if (!project.link(
@@ -1876,40 +1695,55 @@ private:
                  maximum_steps;
              ++step) {
 
-            const auto slot_address =
-                reinterpret_cast<std::uintptr_t>(
-                    current.slot);
+            std::uintptr_t stored = 0;
 
-            std::uintptr_t cached = 0;
+            if (!read_reference_slot(
+                    current.slot,
+                    stored)) {
 
-            switch (reference_cache_find(
-                slot_address,
-                cached)) {
+                return fixed_direct_materialization_result::
+                    incompatible_abi;
+            }
 
-            case reference_cache_lookup::resolved:
-                output = cached;
+            if (stored ==
+                reference_visiting_marker) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            if (stored != 0) {
+                if (!runtime_address(
+                        stored)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                output = stored;
 
                 for (const auto pending :
                      resolution_path) {
 
-                    if (!reference_cache_resolve(
-                            pending,
-                            output)) {
+                    auto* pending_slot =
+                        reinterpret_cast<std::byte*>(
+                            pending);
 
-                        return fixed_direct_materialization_result::
-                            invalid_input;
+                    const auto written =
+                        write_address(
+                            pending_slot,
+                            output);
+
+                    if (written !=
+                        fixed_direct_materialization_result::
+                            success) {
+
+                        return written;
                     }
                 }
 
                 return fixed_direct_materialization_result::
                     success;
-
-            case reference_cache_lookup::visiting:
-                return fixed_direct_materialization_result::
-                    invalid_input;
-
-            case reference_cache_lookup::absent:
-                break;
             }
 
             reference_state next;
@@ -1930,29 +1764,29 @@ private:
                 return advanced;
             }
 
-            // The overwhelmingly common case (T& -> non-reference T) needs
-            // no cache entry and no allocation.
+            // Direct T& -> T is the dominant case and needs no path storage.
             if (!has_next &&
                 resolution_path.empty()) {
 
-                output = target;
-                return target != 0
-                    ? fixed_direct_materialization_result::
-                        success
-                    : fixed_direct_materialization_result::
+                if (!runtime_address(
+                        target)) {
+
+                    return fixed_direct_materialization_result::
                         invalid_input;
-            }
+                }
 
-            if (!reference_cache_mark_visiting(
-                    slot_address)) {
-
+                output = target;
                 return fixed_direct_materialization_result::
-                    failed;
+                    success;
             }
+
+            mark_reference_visiting(
+                current.slot);
 
             try {
                 resolution_path.push_back(
-                    slot_address);
+                    reinterpret_cast<std::uintptr_t>(
+                        current.slot));
             }
             catch (...) {
                 return fixed_direct_materialization_result::
@@ -1960,7 +1794,9 @@ private:
             }
 
             if (!has_next) {
-                if (target == 0) {
+                if (!runtime_address(
+                        target)) {
+
                     return fixed_direct_materialization_result::
                         invalid_input;
                 }
@@ -1970,12 +1806,20 @@ private:
                 for (const auto pending :
                      resolution_path) {
 
-                    if (!reference_cache_resolve(
-                            pending,
-                            output)) {
+                    auto* pending_slot =
+                        reinterpret_cast<std::byte*>(
+                            pending);
 
-                        return fixed_direct_materialization_result::
-                            invalid_input;
+                    const auto written =
+                        write_address(
+                            pending_slot,
+                            output);
+
+                    if (written !=
+                        fixed_direct_materialization_result::
+                            success) {
+
+                        return written;
                     }
                 }
 
@@ -2024,144 +1868,11 @@ private:
             output);
     }
 
-    [[nodiscard]] fixed_direct_materialization_result
-    verify_links() noexcept {
-
-        for (std::size_t index = 0;
-             index <
-                 project.link_count();
-             ++index) {
-
-            const auto handle =
-                project.link_at(
-                    index);
-
-            link_record link;
-
-            if (!handle ||
-                !project.link(
-                    handle,
-                    link)) {
-
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
-
-            object_entry target_object;
-            std::uint64_t object_offset = 0;
-
-            if (!project.object(
-                    link.target.object,
-                    target_object) ||
-                !layout.object_offset(
-                    link.target.object,
-                    object_offset)) {
-
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
-
-            type_handle record_type_value;
-
-            if (!record_type(
-                    target_object.type,
-                    record_type_value)) {
-
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
-
-            type_entry record;
-
-            const auto local =
-                link.target.member.value();
-
-            if (!project.type(
-                    record_type_value,
-                    record) ||
-                local >=
-                    record.members.count) {
-
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
-
-            member_record member;
-            std::uint64_t member_offset = 0;
-
-            const auto global =
-                static_cast<std::size_t>(
-                    record.members.begin) +
-                local;
-
-            if (!project.member_at(
-                    global,
-                    member) ||
-                !layout.member_offset(
-                    global,
-                    member_offset)) {
-
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
-
-            type_ref referent;
-
-            if (!reference_referent(
-                    member.type,
-                    referent)) {
-
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
-
-            std::uintptr_t source = 0;
-
-            const auto source_resolved =
-                resolve_endpoint(
-                    link.source,
-                    source);
-
-            if (source_resolved !=
-                fixed_direct_materialization_result::
-                    success) {
-
-                return source_resolved;
-            }
-
-            auto* target_base =
-                address(
-                    object_offset);
-
-            if (target_base == nullptr) {
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
-
-            std::uintptr_t stored = 0;
-
-            std::memcpy(
-                &stored,
-                target_base +
-                    static_cast<std::size_t>(
-                        member_offset),
-                sizeof(stored));
-
-            if (stored != source) {
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
-        }
-
-        return fixed_direct_materialization_result::success;
-    }
-
     const compiled_project_view& project;
     const runtime_layout& layout;
     std::span<std::byte> runtime;
-    std::vector<reference_cache_entry> reference_cache;
-    std::size_t reference_cache_size = 0;
     std::vector<std::uintptr_t> resolution_path;
+    std::size_t consumed_links = 0;
 };
 
 }
