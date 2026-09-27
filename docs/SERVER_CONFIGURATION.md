@@ -77,6 +77,7 @@ contracts shared by all Project lifecycle modes.
 Supported targets:
 
 ```text
+windows-x86
 windows-x64
 posix-x64
 ```
@@ -151,13 +152,19 @@ configured name directly. POSIX adds only the leading `/` required by
 ```text
 required for fixed_direct
 forbidden for relocatable_transfer
-a non-zero x64 virtual address encoded as a 0x hexadecimal string
+a non-zero target virtual address encoded as a 0x hexadecimal string
 ```
 
 Platform mapping code is responsible for validating whether the configured
 address can actually be reserved/mapped. Name collision and exact-address
 collision fail closed; neither the name nor address receives an automatic
 fallback.
+
+FIXED_DIRECT is target-ABI driven. The Server process pointer width does not
+have to equal the Runtime target pointer width. For example, a Windows x64
+Server may materialize a `windows-x86` Runtime by writing 4-byte target
+addresses, provided the fixed SHM range is representable by the x86 target and
+the Server can map that same virtual address.
 
 SHM size is deliberately not configuration. It is derived from final G + ABI.
 There is no separately configured Runtime size.

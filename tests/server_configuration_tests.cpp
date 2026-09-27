@@ -13,14 +13,15 @@ using namespace cw::server;
 
 [[nodiscard]] std::string configuration(
     std::string_view version,
-    std::string_view shm) {
+    std::string_view shm,
+    std::string_view target = "windows-x64") {
 
     return
         "{\n"
         "  \"version\": " + std::string(version) + ",\n"
         "  \"settings\": {\n"
         "    \"abi\": {\n"
-        "      \"target\": \"windows-x64\",\n"
+        "      \"target\": \"" + std::string(target) + "\",\n"
         "      \"pack\": 8\n"
         "    },\n" +
         std::string(shm) +
@@ -155,6 +156,31 @@ int main() {
 
             cleanup();
             std::cerr << "valid fixed_direct configuration failed\n";
+            return 1;
+        }
+    }
+
+    {
+        const auto result =
+            load(
+                path,
+                configuration(
+                    "6",
+                    "    \"shm\": {\n"
+                    "      \"mode\": \"fixed_direct\",\n"
+                    "      \"name\": \"CW.ServerEngineV4.Project.X86\",\n"
+                    "      \"fixed_base_address\": \"0x20000000\"\n"
+                    "    },\n",
+                    "windows-x86"));
+
+        if (!succeeded(result.status) ||
+            result.value.settings.abi.target !=
+                abi_target::windows_x86 ||
+            result.value.settings.shm.fixed_base_address !=
+                0x20000000ull) {
+
+            cleanup();
+            std::cerr << "valid windows-x86 target configuration failed\n";
             return 1;
         }
     }

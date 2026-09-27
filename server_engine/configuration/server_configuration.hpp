@@ -95,6 +95,7 @@ struct telemetry_configuration {
 enum class abi_target : std::uint8_t {
     windows_x64 = 1,
     posix_x64 = 2,
+    windows_x86 = 3,
 };
 
 // Process-wide physical layout contract shared by all Projects and the one SHM.
@@ -119,7 +120,7 @@ struct server_shm_configuration final {
     std::string name;
 
     // Required only by fixed_direct. Platform mapping code validates whether
-    // this x64 virtual address can actually host the Runtime/SHM mapping.
+    // this target virtual address can actually host the Runtime/SHM mapping.
     std::uint64_t fixed_base_address = 0;
 };
 

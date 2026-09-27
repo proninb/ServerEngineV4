@@ -4795,6 +4795,172 @@ void test_fixed_direct_link_prebind(
     }
 }
 
+void test_windows_x86_target_runtime(
+    test_state& tests,
+    const compiled_fixture& fixture,
+    const compiled_test_image& image) {
+
+    compiled_project_view view;
+
+    if (!tests.expect(
+            view.bind(
+                image.bytes) ==
+                compiled_project_image_result::success &&
+            view.verify_contents() ==
+                compiled_project_image_result::success,
+            "bind windows-x86 target image")) {
+
+        return;
+    }
+
+    const server_abi_configuration abi{
+        abi_target::windows_x86,
+        8,
+    };
+
+    runtime_layout layout;
+
+    if (!tests.expect(
+            prepare_runtime_layout(
+                view,
+                abi,
+                layout) ==
+                runtime_layout_result::success,
+            "prepare windows-x86 target Runtime layout")) {
+
+        return;
+    }
+
+    runtime_value_layout record_layout;
+    runtime_value_layout reference_layout;
+
+    if (!tests.expect(
+            layout.value(
+                fixture.named_type,
+                record_layout) &&
+            layout.value(
+                fixture.reference_type,
+                reference_layout) &&
+            record_layout.size == 8 &&
+            record_layout.alignment == 4 &&
+            reference_layout.size == 4 &&
+            reference_layout.alignment == 4,
+            "windows-x86 uses 4-byte native pointer/reference layout")) {
+
+        return;
+    }
+
+    std::vector<std::byte> runtime;
+
+    try {
+        runtime.assign(
+            static_cast<std::size_t>(
+                layout.size()),
+            std::byte{0xcc});
+    }
+    catch (...) {
+        tests.expect(
+            false,
+            "allocate windows-x86 target Runtime");
+        return;
+    }
+
+    constexpr std::uint64_t target_base =
+        0x20000000ull;
+
+    if (!tests.expect(
+            fixed_direct_target_range_compatible(
+                abi,
+                target_base,
+                layout.size()) &&
+            materialize_fixed_direct(
+                view,
+                layout,
+                abi,
+                target_base,
+                runtime) ==
+                fixed_direct_materialization_result::
+                    success,
+            "materialize windows-x86 target image from host byte buffer")) {
+
+        return;
+    }
+
+    type_entry record;
+    record_offset value_offset = 0;
+    record_offset peer_offset = 0;
+    runtime_offset left_offset = 0;
+    runtime_offset right_offset = 0;
+
+    if (!tests.expect(
+            view.type(
+                fixture.type,
+                record) &&
+            layout.member_offset(
+                static_cast<std::size_t>(
+                    record.members.begin) +
+                    fixture.value_member.value(),
+                value_offset) &&
+            layout.member_offset(
+                static_cast<std::size_t>(
+                    record.members.begin) +
+                    fixture.peer_member.value(),
+                peer_offset) &&
+            layout.object_offset(
+                fixture.left,
+                left_offset) &&
+            layout.object_offset(
+                fixture.right,
+                right_offset),
+            "query windows-x86 target offsets")) {
+
+        return;
+    }
+
+    std::uint32_t observed = 0;
+
+    std::memcpy(
+        &observed,
+        runtime.data() +
+            static_cast<std::size_t>(
+                right_offset +
+                peer_offset),
+        sizeof(observed));
+
+    const auto expected =
+        static_cast<std::uint32_t>(
+            target_base +
+            left_offset +
+            value_offset);
+
+    tests.expect(
+        observed == expected,
+        "windows-x86 reference stores target VA, not host buffer address");
+
+    const server_abi_configuration wrong_target{
+        abi_target::windows_x64,
+        8,
+    };
+
+    tests.expect(
+        materialize_fixed_direct(
+            view,
+            layout,
+            wrong_target,
+            target_base,
+            runtime) ==
+                fixed_direct_materialization_result::
+                    incompatible_abi,
+        "FIXED_DIRECT rejects target codec that does not match Runtime layout");
+
+    tests.expect(
+        !fixed_direct_target_range_compatible(
+            abi,
+            0xc0000000ull,
+            layout.size()),
+        "windows-x86 rejects Runtime range reserved for construction markers");
+}
+
 void test_runtime_layout_tail_alignment(
     test_state& tests) {
 
@@ -5735,6 +5901,11 @@ int main() {
             first);
 
         test_runtime_layout(
+            tests,
+            fixture,
+            first);
+
+        test_windows_x86_target_runtime(
             tests,
             fixture,
             first);

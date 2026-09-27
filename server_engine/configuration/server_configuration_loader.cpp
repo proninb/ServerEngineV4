@@ -850,6 +850,12 @@ private:
                 return;
             }
 
+            if (target == "windows-x86") {
+                configuration.settings.abi.target =
+                    abi_target::windows_x86;
+                return;
+            }
+
             if (target == "windows-x64") {
                 configuration.settings.abi.target =
                     abi_target::windows_x64;
@@ -864,7 +870,7 @@ private:
 
             fail(
                 schema_failure::invalid_value,
-                "settings.abi.target must be windows-x64 or posix-x64");
+                "settings.abi.target must be windows-x86, windows-x64, or posix-x64");
             return;
         }
 
@@ -997,7 +1003,7 @@ private:
 
                 fail(
                     schema_failure::invalid_value,
-                    "settings.shm.fixed_base_address must be a non-zero x64 address");
+                    "settings.shm.fixed_base_address must be a non-zero virtual address");
                 return;
             }
 

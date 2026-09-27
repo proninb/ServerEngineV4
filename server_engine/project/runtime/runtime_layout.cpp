@@ -85,6 +85,19 @@ constexpr record_offset invalid_record_offset =
 
     output = {};
 
+    abi_properties properties;
+
+    if (!abi_layout_properties(
+            target,
+            properties)) {
+
+        return runtime_layout_result::invalid_input;
+    }
+
+    const auto windows =
+        target == abi_target::windows_x86 ||
+        target == abi_target::windows_x64;
+
     switch (type) {
     case intrinsic_type::bool_type:
     case intrinsic_type::char_type:
@@ -96,7 +109,7 @@ constexpr record_offset invalid_record_offset =
 
     case intrinsic_type::wchar_type:
         output =
-            target == abi_target::windows_x64
+            windows
                 ? runtime_value_layout{2, 2, 0}
                 : runtime_value_layout{4, 4, 0};
         return runtime_layout_result::success;
@@ -117,7 +130,7 @@ constexpr record_offset invalid_record_offset =
     case intrinsic_type::signed_long:
     case intrinsic_type::unsigned_long:
         output =
-            target == abi_target::windows_x64
+            windows
                 ? runtime_value_layout{4, 4, 0}
                 : runtime_value_layout{8, 8, 0};
         return runtime_layout_result::success;
@@ -125,13 +138,20 @@ constexpr record_offset invalid_record_offset =
     case intrinsic_type::signed_long_long:
     case intrinsic_type::unsigned_long_long:
     case intrinsic_type::double_type:
-    case intrinsic_type::nullptr_type:
         output = {8, 8, 0};
+        return runtime_layout_result::success;
+
+    case intrinsic_type::nullptr_type:
+        output = {
+            properties.pointer_size,
+            properties.pointer_alignment,
+            0,
+        };
         return runtime_layout_result::success;
 
     case intrinsic_type::long_double_type:
         output =
-            target == abi_target::windows_x64
+            windows
                 ? runtime_value_layout{8, 8, 0}
                 : runtime_value_layout{16, 16, 0};
         return runtime_layout_result::success;
@@ -849,24 +869,60 @@ private:
                     resolved);
             break;
 
-        case derived_type_kind::pointer:
-            resolved = {8, 8, 0};
+        case derived_type_kind::pointer: {
+            abi_properties properties;
+
+            if (!abi_layout_properties(
+                    abi.target,
+                    properties)) {
+
+                result =
+                    runtime_layout_result::invalid_input;
+                break;
+            }
+
+            resolved = {
+                properties.pointer_size,
+                properties.pointer_alignment,
+                0,
+            };
+
             result =
                 runtime_layout_result::success;
             break;
+        }
 
         case derived_type_kind::lvalue_reference:
-        case derived_type_kind::rvalue_reference:
+        case derived_type_kind::rvalue_reference: {
             result =
                 require_unconnected(
                     derived.child);
 
-            if (result ==
+            if (result !=
                 runtime_layout_result::success) {
 
-                resolved = {8, 8, 0};
+                break;
             }
+
+            abi_properties properties;
+
+            if (!abi_layout_properties(
+                    abi.target,
+                    properties)) {
+
+                result =
+                    runtime_layout_result::invalid_input;
+                break;
+            }
+
+            resolved = {
+                properties.reference_size,
+                properties.reference_alignment,
+                0,
+            };
+
             break;
+        }
 
         case derived_type_kind::bounded_array: {
             if (derived.payload == 0) {

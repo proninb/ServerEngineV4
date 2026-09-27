@@ -12,10 +12,6 @@
 namespace cw::server {
 namespace {
 
-struct reference_representation_probe final {
-    int& value;
-};
-
 template <typename T>
 void store_native(
     std::byte* target,
@@ -196,9 +192,13 @@ public:
     fixed_direct_materializer(
         const compiled_project_view& project,
         const runtime_layout& layout,
+        const server_abi_configuration& abi,
+        std::uint64_t target_base_address,
         std::span<std::byte> runtime) noexcept
         : project(project),
           layout(layout),
+          abi(abi),
+          target_base_address(target_base_address),
           runtime(runtime) {
     }
 
@@ -213,6 +213,32 @@ public:
 
             return fixed_direct_materialization_result::
                 invalid_input;
+        }
+
+        if (!fixed_direct_host_compatible(
+                abi) ||
+            layout.target() !=
+                abi.target) {
+
+            return fixed_direct_materialization_result::
+                incompatible_abi;
+        }
+
+        if (!abi_layout_properties(
+                abi.target,
+                properties)) {
+
+            return fixed_direct_materialization_result::
+                incompatible_abi;
+        }
+
+        if (!fixed_direct_target_range_compatible(
+                abi,
+                target_base_address,
+                layout.size())) {
+
+            return fixed_direct_materialization_result::
+                overflow;
         }
 
         if (layout.size() >
@@ -364,6 +390,72 @@ public:
     }
 
 private:
+    [[nodiscard]] std::uint64_t target_word_mask() const noexcept {
+        return properties.reference_size == 4
+            ? static_cast<std::uint64_t>(
+                (std::numeric_limits<std::uint32_t>::max)())
+            : (std::numeric_limits<std::uint64_t>::max)();
+    }
+
+    void store_target_word(
+        std::byte* slot,
+        std::uint64_t value) const noexcept {
+
+        if (properties.reference_size == 4) {
+            const auto narrowed =
+                static_cast<std::uint32_t>(
+                    value);
+
+            store_native(
+                slot,
+                narrowed);
+            return;
+        }
+
+        store_native(
+            slot,
+            value);
+    }
+
+    [[nodiscard]] std::uint64_t target_address(
+        const std::byte* value) const noexcept {
+
+        if (value == nullptr ||
+            runtime.data() == nullptr) {
+
+            return 0;
+        }
+
+        const auto host_base =
+            reinterpret_cast<std::uintptr_t>(
+                runtime.data());
+
+        const auto host_value =
+            reinterpret_cast<std::uintptr_t>(
+                value);
+
+        if (host_value < host_base) {
+            return 0;
+        }
+
+        const auto offset =
+            static_cast<std::uint64_t>(
+                host_value - host_base);
+
+        if (offset >=
+                layout.size() ||
+            target_base_address >
+                (std::numeric_limits<std::uint64_t>::max)() -
+                    offset) {
+
+            return 0;
+        }
+
+        return
+            target_base_address +
+            offset;
+    }
+
     [[nodiscard]] std::byte* address(
         std::uint64_t offset) const noexcept {
 
@@ -463,13 +555,11 @@ private:
     [[nodiscard]] fixed_direct_materialization_result
     write_address(
         std::byte* slot,
-        std::uintptr_t target) noexcept {
+        std::uint64_t target) noexcept {
 
-        if (slot == nullptr ||
-            sizeof(std::uintptr_t) != 8) {
-
+        if (slot == nullptr) {
             return fixed_direct_materialization_result::
-                incompatible_abi;
+                invalid_input;
         }
 
         if (!runtime_address(
@@ -479,7 +569,14 @@ private:
                 invalid_input;
         }
 
-        store_native(
+        if (target >
+            target_word_mask()) {
+
+            return fixed_direct_materialization_result::
+                overflow;
+        }
+
+        store_target_word(
             slot,
             target);
 
@@ -573,8 +670,7 @@ private:
 
                 return write_address(
                     target,
-                    reinterpret_cast<std::uintptr_t>(
-                        value_target));
+                    target_address(value_target));
             }
 
             case derived_type_kind::bounded_array: {
@@ -726,8 +822,7 @@ private:
                 const auto written =
                     write_address(
                         target,
-                        reinterpret_cast<std::uintptr_t>(
-                            value_target));
+                        target_address(value_target));
 
                 if (written !=
                     fixed_direct_materialization_result::
@@ -816,11 +911,9 @@ private:
                         invalid_input;
                 }
 
-                const std::uintptr_t value = 0;
-
-                store_native(
+                store_target_word(
                     target,
-                    value);
+                    0);
 
                 return fixed_direct_materialization_result::
                     success;
@@ -856,8 +949,7 @@ private:
 
                 return write_address(
                     target,
-                    reinterpret_cast<std::uintptr_t>(
-                        value_target));
+                    target_address(value_target));
             }
 
             case derived_type_kind::bounded_array: {
@@ -1066,11 +1158,9 @@ private:
                     invalid_input;
             }
 
-            const std::uintptr_t value = 0;
-
-            store_native(
+            store_target_word(
                 target,
-                value);
+                0);
 
             return fixed_direct_materialization_result::
                 success;
@@ -1470,7 +1560,7 @@ private:
             if (member.action ==
                 materialization_action::reference) {
 
-                std::uintptr_t stored = 0;
+                std::uint64_t stored = 0;
 
                 if (!read_reference_slot(
                         target,
@@ -1486,7 +1576,7 @@ private:
                     continue;
                 }
 
-                std::uintptr_t value_target = 0;
+                std::uint64_t value_target = 0;
 
                 const auto resolved =
                     resolve_reference_member(
@@ -1614,7 +1704,7 @@ private:
                     member.type,
                     referent)) {
 
-                std::uintptr_t stored = 0;
+                std::uint64_t stored = 0;
 
                 if (!read_reference_slot(
                         target,
@@ -1630,7 +1720,7 @@ private:
                     continue;
                 }
 
-                std::uintptr_t value_target = 0;
+                std::uint64_t value_target = 0;
 
                 const auto resolved =
                     resolve_reference_member(
@@ -1756,36 +1846,42 @@ private:
         bool ready = false;
     };
 
-    // During construction a native reference slot is also its state:
+    // During construction a target-native reference slot is also its state:
     // 0 = unresolved, ~link_handle = pending static link,
-    // max = cycle detection, Runtime address = resolved.
-    static constexpr std::uintptr_t
-        reference_visiting_marker =
-            (std::numeric_limits<std::uintptr_t>::max)();
+    // target-width max = cycle detection, target address = resolved.
+    [[nodiscard]] std::uint64_t
+    reference_visiting_marker() const noexcept {
 
-    [[nodiscard]] static constexpr std::uintptr_t
-    encode_pending_link(
-        std::uint32_t link) noexcept {
-
-        return ~static_cast<std::uintptr_t>(
-            link);
+        return target_word_mask();
     }
 
-    [[nodiscard]] static constexpr bool
-    decode_pending_link(
-        std::uintptr_t value,
-        std::uint32_t& output) noexcept {
+    [[nodiscard]] std::uint64_t encode_pending_link(
+        std::uint32_t link) const noexcept {
+
+        return
+            (~static_cast<std::uint64_t>(
+                link)) &
+            target_word_mask();
+    }
+
+    [[nodiscard]] bool decode_pending_link(
+        std::uint64_t value,
+        std::uint32_t& output) const noexcept {
 
         output = 0;
 
-        if (value ==
-            reference_visiting_marker) {
+        const auto mask =
+            target_word_mask();
+
+        if (value > mask ||
+            value ==
+                reference_visiting_marker()) {
 
             return false;
         }
 
         const auto decoded =
-            ~value;
+            (~value) & mask;
 
         if (decoded == 0 ||
             decoded >
@@ -1801,9 +1897,8 @@ private:
         return true;
     }
 
-    [[nodiscard]] static constexpr bool
-    is_pending_link(
-        std::uintptr_t value) noexcept {
+    [[nodiscard]] bool is_pending_link(
+        std::uint64_t value) const noexcept {
 
         std::uint32_t ignored = 0;
 
@@ -1813,32 +1908,37 @@ private:
     }
 
     [[nodiscard]] bool runtime_address(
-        std::uintptr_t value) const noexcept {
+        std::uint64_t value) const noexcept {
 
-        if (value == 0 ||
-            runtime.data() == nullptr) {
-
-            return false;
-        }
-
-        const auto base =
-            reinterpret_cast<std::uintptr_t>(
-                runtime.data());
-
-        return value >= base &&
-            value - base <
+        return
+            value >= target_base_address &&
+            value - target_base_address <
                 layout.size();
     }
 
     [[nodiscard]] bool read_reference_slot(
         const std::byte* slot,
-        std::uintptr_t& value) const noexcept {
+        std::uint64_t& value) const noexcept {
 
         value = 0;
 
-        if (slot == nullptr ||
-            sizeof(std::uintptr_t) != 8) {
+        if (slot == nullptr) {
+            return false;
+        }
 
+        if (properties.reference_size == 4) {
+            std::uint32_t narrowed = 0;
+
+            std::memcpy(
+                &narrowed,
+                slot,
+                sizeof(narrowed));
+
+            value = narrowed;
+            return true;
+        }
+
+        if (properties.reference_size != 8) {
             return false;
         }
 
@@ -1853,9 +1953,9 @@ private:
     void mark_reference_visiting(
         std::byte* slot) noexcept {
 
-        store_native(
+        store_target_word(
             slot,
-            reference_visiting_marker);
+            reference_visiting_marker());
     }
 
 
@@ -1864,7 +1964,7 @@ private:
         object_endpoint endpoint,
         reference_state& next,
         bool& has_next,
-        std::uintptr_t& output) noexcept {
+        std::uint64_t& output) noexcept {
 
         next = {};
         has_next = false;
@@ -2137,8 +2237,7 @@ private:
         }
 
         output =
-            reinterpret_cast<std::uintptr_t>(
-                current_address);
+            target_address(current_address);
 
         return fixed_direct_materialization_result::
             success;
@@ -2149,7 +2248,7 @@ private:
         object_endpoint endpoint,
         reference_state& next,
         bool& has_next,
-        std::uintptr_t& output) noexcept {
+        std::uint64_t& output) noexcept {
 
         next = {};
         has_next = false;
@@ -2223,8 +2322,7 @@ private:
             }
 
             output =
-                reinterpret_cast<std::uintptr_t>(
-                    member_address);
+                target_address(member_address);
 
             return fixed_direct_materialization_result::
                 success;
@@ -2301,8 +2399,7 @@ private:
         }
 
         output =
-            reinterpret_cast<std::uintptr_t>(
-                member_address);
+            target_address(member_address);
 
         return fixed_direct_materialization_result::
             success;
@@ -2313,7 +2410,7 @@ private:
         object_endpoint endpoint,
         reference_state& next,
         bool& has_next,
-        std::uintptr_t& output) noexcept {
+        std::uint64_t& output) noexcept {
 
         if (endpoint.member.is_path()) {
             return endpoint_path_reference_or_value(
@@ -2336,7 +2433,7 @@ private:
         const planned_member& member,
         reference_state& next,
         bool& has_next,
-        std::uintptr_t& output) noexcept {
+        std::uint64_t& output) noexcept {
 
         next = {};
         has_next = false;
@@ -2383,8 +2480,7 @@ private:
             }
 
             output =
-                reinterpret_cast<std::uintptr_t>(
-                    target);
+                target_address(target);
 
             return fixed_direct_materialization_result::
                 success;
@@ -2431,8 +2527,7 @@ private:
             }
 
             output =
-                reinterpret_cast<std::uintptr_t>(
-                    source_address);
+                target_address(source_address);
 
             return fixed_direct_materialization_result::
                 success;
@@ -2512,16 +2607,14 @@ private:
                 }
 
                 output =
-                    reinterpret_cast<std::uintptr_t>(
-                        target);
+                    target_address(target);
 
                 return fixed_direct_materialization_result::
                     success;
             }
 
             output =
-                reinterpret_cast<std::uintptr_t>(
-                    source_address);
+                target_address(source_address);
 
             return fixed_direct_materialization_result::
                 success;
@@ -2546,7 +2639,7 @@ private:
         reference_state& next,
         unplanned_reference_metadata& next_metadata,
         bool& has_next,
-        std::uintptr_t& output) noexcept {
+        std::uint64_t& output) noexcept {
 
         next = {};
         next_metadata = {};
@@ -2670,8 +2763,7 @@ private:
             }
 
             output =
-                reinterpret_cast<std::uintptr_t>(
-                    target);
+                target_address(target);
 
             return fixed_direct_materialization_result::
                 success;
@@ -2744,8 +2836,7 @@ private:
             }
 
             output =
-                reinterpret_cast<std::uintptr_t>(
-                    source_address);
+                target_address(source_address);
 
             return fixed_direct_materialization_result::
                 success;
@@ -2825,16 +2916,14 @@ private:
                 }
 
                 output =
-                    reinterpret_cast<std::uintptr_t>(
-                        target);
+                    target_address(target);
 
                 return fixed_direct_materialization_result::
                     success;
             }
 
             output =
-                reinterpret_cast<std::uintptr_t>(
-                    source_address);
+                target_address(source_address);
 
             return fixed_direct_materialization_result::
                 success;
@@ -2860,7 +2949,7 @@ private:
         std::uint64_t maximum_steps,
         std::uint64_t& consumed,
         bool& completed,
-        std::uintptr_t& output) noexcept {
+        std::uint64_t& output) noexcept {
 
         consumed = 0;
         completed = false;
@@ -2996,7 +3085,7 @@ private:
 
                     const auto reserve_limit =
                         layout.size() /
-                            sizeof(std::uintptr_t) +
+                            properties.reference_size +
                         1;
 
                     if (reserve_count >
@@ -3024,8 +3113,7 @@ private:
 
             if (!source_is_reference) {
                 const auto target =
-                    reinterpret_cast<std::uintptr_t>(
-                        source_address);
+                    target_address(source_address);
 
                 if (!runtime_address(
                         target)) {
@@ -3071,7 +3159,7 @@ private:
                     invalid_input;
             }
 
-            std::uintptr_t stored = 0;
+            std::uint64_t stored = 0;
 
             if (!read_reference_slot(
                     source_address,
@@ -3082,7 +3170,7 @@ private:
             }
 
             if (stored ==
-                reference_visiting_marker) {
+                reference_visiting_marker()) {
 
                 return fixed_direct_materialization_result::
                     invalid_input;
@@ -3165,7 +3253,7 @@ private:
         object_handle link_object,
         std::uint32_t local,
         std::byte* slot,
-        std::uintptr_t& output) noexcept {
+        std::uint64_t& output) noexcept {
 
         output = 0;
         resolution_path.clear();
@@ -3183,7 +3271,7 @@ private:
 
         const auto maximum_steps =
             layout.size() /
-                sizeof(std::uintptr_t) +
+                properties.reference_size +
             1;
 
         for (std::uint64_t step = 0;
@@ -3191,7 +3279,7 @@ private:
                  maximum_steps;
              ++step) {
 
-            std::uintptr_t stored = 0;
+            std::uint64_t stored = 0;
 
             if (!read_reference_slot(
                     current.slot,
@@ -3202,7 +3290,7 @@ private:
             }
 
             if (stored ==
-                reference_visiting_marker) {
+                reference_visiting_marker()) {
 
                 return fixed_direct_materialization_result::
                     invalid_input;
@@ -3255,7 +3343,7 @@ private:
             unplanned_reference_metadata
                 next_metadata;
             bool has_next = false;
-            std::uintptr_t target = 0;
+            std::uint64_t target = 0;
 
             fixed_direct_materialization_result advanced;
 
@@ -3461,7 +3549,7 @@ private:
     [[nodiscard]] fixed_direct_materialization_result
     resolve_direct_endpoint(
         object_endpoint endpoint,
-        std::uintptr_t& output) noexcept {
+        std::uint64_t& output) noexcept {
 
         output = 0;
 
@@ -3495,7 +3583,7 @@ private:
     [[nodiscard]] fixed_direct_materialization_result
     resolve_path_endpoint(
         object_endpoint endpoint,
-        std::uintptr_t& output) noexcept {
+        std::uint64_t& output) noexcept {
 
         output = 0;
 
@@ -3551,7 +3639,7 @@ private:
 
             reference_state target;
             bool target_is_reference = false;
-            std::uintptr_t target_value = 0;
+            std::uint64_t target_value = 0;
 
             const auto target_resolved =
                 link.target.member.is_path()
@@ -3576,7 +3664,7 @@ private:
                     invalid_input;
             }
 
-            std::uintptr_t stored = 0;
+            std::uint64_t stored = 0;
 
             if (!read_reference_slot(
                     target.slot,
@@ -3601,7 +3689,7 @@ private:
             link_target_slots[index] =
                 target.slot;
 
-            store_native(
+            store_target_word(
                 target.slot,
                 encode_pending_link(
                     raw_link));
@@ -3649,7 +3737,7 @@ private:
                     invalid_input;
             }
 
-            std::uintptr_t stored = 0;
+            std::uint64_t stored = 0;
 
             if (!read_reference_slot(
                     target_slot,
@@ -3677,7 +3765,7 @@ private:
                     invalid_input;
             }
 
-            std::uintptr_t source = 0;
+            std::uint64_t source = 0;
 
             const auto source_resolved =
                 link.source.member.is_path()
@@ -3714,6 +3802,9 @@ private:
 
     const compiled_project_view& project;
     const runtime_layout& layout;
+    const server_abi_configuration& abi;
+    std::uint64_t target_base_address = 0;
+    abi_properties properties;
     std::span<std::byte> runtime;
     std::vector<std::uintptr_t> resolution_path;
     std::vector<record_plan> record_plans;
@@ -3730,73 +3821,108 @@ private:
 bool fixed_direct_host_compatible(
     const server_abi_configuration& abi) noexcept {
 
-    if (sizeof(void*) != 8 ||
-        sizeof(std::uintptr_t) != 8 ||
-        std::endian::native !=
+    if (std::endian::native !=
             std::endian::little ||
         sizeof(bool) != 1 ||
+        sizeof(char8_t) != 1 ||
+        sizeof(char16_t) != 2 ||
+        sizeof(char32_t) != 4 ||
         sizeof(short) != 2 ||
         sizeof(int) != 4 ||
         sizeof(long long) != 8 ||
         sizeof(float) != 4 ||
-        sizeof(double) != 8 ||
-        sizeof(std::nullptr_t) != 8 ||
-        sizeof(reference_representation_probe) != 8 ||
-        alignof(reference_representation_probe) != 8) {
+        sizeof(double) != 8) {
 
         return false;
     }
 
 #if defined(_WIN32)
-    if (abi.target !=
-            abi_target::windows_x64 ||
-        sizeof(wchar_t) != 2 ||
-        sizeof(long) != 4 ||
-        sizeof(long double) != 8 ||
-        alignof(long double) != 8) {
-
-        return false;
-    }
+    return
+        (abi.target ==
+             abi_target::windows_x86 ||
+         abi.target ==
+             abi_target::windows_x64) &&
+        sizeof(wchar_t) == 2 &&
+        sizeof(long) == 4 &&
+        sizeof(long double) == 8;
 #else
-    if (abi.target !=
-            abi_target::posix_x64 ||
-        sizeof(wchar_t) != 4 ||
-        sizeof(long) != 8 ||
-        sizeof(long double) != 16 ||
-        alignof(long double) != 16) {
-
-        return false;
-    }
+    return
+        abi.target ==
+            abi_target::posix_x64 &&
+        sizeof(void*) == 8 &&
+        sizeof(wchar_t) == 4 &&
+        sizeof(long) == 8 &&
+        sizeof(long double) == 16;
 #endif
+}
 
-    void* null_pointer = nullptr;
-    std::uintptr_t null_bits =
-        (std::numeric_limits<std::uintptr_t>::max)();
+bool fixed_direct_target_range_compatible(
+    const server_abi_configuration& abi,
+    std::uint64_t target_base_address,
+    std::uint64_t runtime_size) noexcept {
 
-    std::memcpy(
-        &null_bits,
-        &null_pointer,
-        sizeof(null_bits));
+    abi_properties properties;
 
-    if (null_bits != 0) {
+    if (!abi_layout_properties(
+            abi.target,
+            properties) ||
+        target_base_address == 0) {
+
         return false;
     }
 
-    int value = 0;
+    const auto mask =
+        properties.reference_size == 4
+        ? static_cast<std::uint64_t>(
+            (std::numeric_limits<std::uint32_t>::max)())
+        : (std::numeric_limits<std::uint64_t>::max)();
 
-    reference_representation_probe probe{
-        value};
+    if (target_base_address > mask) {
+        return false;
+    }
 
-    std::uintptr_t reference_bits = 0;
+    std::uint64_t last_address =
+        target_base_address;
 
-    std::memcpy(
-        &reference_bits,
-        &probe,
-        sizeof(reference_bits));
+    if (runtime_size != 0) {
+        const auto tail =
+            runtime_size - 1;
 
-    return reference_bits ==
-        reinterpret_cast<std::uintptr_t>(
-            &value);
+        if (tail >
+            mask - target_base_address) {
+
+            return false;
+        }
+
+        last_address += tail;
+    }
+
+    const auto reserved_begin =
+        mask -
+        static_cast<std::uint64_t>(
+            link_handle::maximum_slot);
+
+    return last_address <
+        reserved_begin;
+}
+
+fixed_direct_materialization_result
+materialize_fixed_direct(
+    const compiled_project_view& project,
+    const runtime_layout& layout,
+    const server_abi_configuration& abi,
+    std::uint64_t target_base_address,
+    std::span<std::byte> runtime) noexcept {
+
+    fixed_direct_materializer materializer{
+        project,
+        layout,
+        abi,
+        target_base_address,
+        runtime,
+    };
+
+    return materializer.run();
 }
 
 fixed_direct_materialization_result
@@ -3806,20 +3932,14 @@ materialize_fixed_direct(
     const server_abi_configuration& abi,
     std::span<std::byte> runtime) noexcept {
 
-    if (!fixed_direct_host_compatible(
-            abi)) {
-
-        return fixed_direct_materialization_result::
-            incompatible_abi;
-    }
-
-    fixed_direct_materializer materializer{
+    return materialize_fixed_direct(
         project,
         layout,
-        runtime,
-    };
-
-    return materializer.run();
+        abi,
+        static_cast<std::uint64_t>(
+            reinterpret_cast<std::uintptr_t>(
+                runtime.data())),
+        runtime);
 }
 
 }

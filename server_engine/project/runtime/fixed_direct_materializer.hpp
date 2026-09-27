@@ -1,10 +1,10 @@
 /*
  * FIXED_DIRECT ABI image materializer.
  *
- * The materializer writes the final native x64 object image directly into
+ * The materializer writes the final target-native object image directly into
  * Project SHM. It allocates no second Runtime buffer. Native reference slots
- * contain absolute addresses valid because Server and Tasks map the same SHM
- * at the same virtual address.
+ * contain target-width absolute addresses valid because Tasks map the same SHM
+ * at the same configured virtual address.
  */
 #pragma once
 
@@ -28,13 +28,22 @@ enum class fixed_direct_materialization_result : std::uint8_t {
     failed,
 };
 
-// Verifies the concrete process/compiler representation required by the
-// FIXED_DIRECT ABI image contract, including native data-member references.
 [[nodiscard]] bool fixed_direct_host_compatible(
     const server_abi_configuration& abi) noexcept;
 
-// Writes canonical unconnected<T> objects and all Project objects directly into
-// caller-owned final SHM bytes. runtime must cover layout.size() bytes.
+[[nodiscard]] bool fixed_direct_target_range_compatible(
+    const server_abi_configuration& abi,
+    std::uint64_t target_base_address,
+    std::uint64_t runtime_size) noexcept;
+
+[[nodiscard]] fixed_direct_materialization_result
+materialize_fixed_direct(
+    const compiled_project_view& project,
+    const runtime_layout& layout,
+    const server_abi_configuration& abi,
+    std::uint64_t target_base_address,
+    std::span<std::byte> runtime) noexcept;
+
 [[nodiscard]] fixed_direct_materialization_result
 materialize_fixed_direct(
     const compiled_project_view& project,

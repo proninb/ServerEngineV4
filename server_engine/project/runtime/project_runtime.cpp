@@ -56,7 +56,7 @@ materialization_failure_detail(
         return "Runtime contains a type not supported by FIXED_DIRECT materialization";
 
     case fixed_direct_materialization_result::incompatible_abi:
-        return "Server process/compiler ABI does not match configured FIXED_DIRECT ABI";
+        return "Server process/compiler representation cannot encode configured FIXED_DIRECT target ABI";
 
     case fixed_direct_materialization_result::overflow:
         return "FIXED_DIRECT Runtime materialization overflowed";
@@ -186,7 +186,7 @@ server_status create_resident_project(
                 operation)
                 .file(project_path)
                 .detail(
-                    "Configured FIXED_DIRECT ABI does not match the native Server process/compiler ABI")
+                    "Server process/compiler representation cannot encode the configured FIXED_DIRECT target ABI")
                 .build());
 
         return server_status::unsupported;
@@ -211,6 +211,23 @@ server_status create_resident_project(
                 .detail(
                     layout_failure_detail(
                         prepared))
+                .build());
+
+        return server_status::project_runtime_failed;
+    }
+
+    if (!fixed_direct_target_range_compatible(
+            settings.abi,
+            settings.shm.fixed_base_address,
+            layout.size())) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_runtime_failed,
+                operation)
+                .file(project_path)
+                .detail(
+                    "Configured Project SHM address range is not representable by the FIXED_DIRECT target ABI")
                 .build());
 
         return server_status::project_runtime_failed;
@@ -282,6 +299,7 @@ server_status create_resident_project(
             compiled,
             layout,
             settings.abi,
+            settings.shm.fixed_base_address,
             shared_memory.bytes());
 
     if (materialized !=

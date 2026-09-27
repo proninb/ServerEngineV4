@@ -64,6 +64,10 @@ public:
         return alignment_value;
     }
 
+    [[nodiscard]] abi_target target() const noexcept {
+        return target_value;
+    }
+
     [[nodiscard]] bool value(
         type_ref type,
         runtime_value_layout& output) const noexcept;

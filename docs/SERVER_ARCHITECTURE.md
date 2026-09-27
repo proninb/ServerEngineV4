@@ -427,9 +427,17 @@ G + ABI + SHM policy
 For FIXED_DIRECT, whole Project Runtime/SHM offsets are 64-bit. Temporary
 ABI-derived member offsets inside one native record use a 32-bit
 `record_offset`; `UINT32_MAX` is reserved as the invalid offset. A single
-native value/type layout must therefore fit within `UINT32_MAX` bytes, while
-the complete Project Runtime/SHM may exceed 4 GiB. This is a Runtime
-construction contract and does not change `compiled.bin` or SHM formats.
+native value/type layout must therefore fit within `UINT32_MAX` bytes.
+
+Pointer/reference representation is derived from the Runtime target ABI, not
+from the Server process. A Windows x64 Server can therefore build a
+`windows-x86` FIXED_DIRECT image: Server-side pointers address the writable SHM
+view, while Runtime reference slots contain 4-byte target virtual addresses.
+The configured fixed SHM range must fit the target address space and must not
+overlap the construction-time pending-link marker range.
+
+This is a Runtime construction contract and does not change `compiled.bin` or
+the semantic G representation.
 
 The selected mode changes physical materialization, not semantic G. There is no
 second semantic build stage and no second Graph.

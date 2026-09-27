@@ -11,12 +11,45 @@ abi_layout_key make_abi_layout_key(
     };
 }
 
+bool abi_layout_properties(
+    abi_target target,
+    abi_properties& output) noexcept {
+
+    output = {};
+
+    switch (target) {
+    case abi_target::windows_x86:
+        output = {
+            4,
+            4,
+            4,
+            4,
+        };
+        return true;
+
+    case abi_target::windows_x64:
+    case abi_target::posix_x64:
+        output = {
+            8,
+            8,
+            8,
+            8,
+        };
+        return true;
+    }
+
+    return false;
+}
+
 bool valid_abi_layout_key(
     const abi_layout_key& key) noexcept {
 
+    abi_properties properties;
+
     const auto target_valid =
-        key.target == abi_target::windows_x64 ||
-        key.target == abi_target::posix_x64;
+        abi_layout_properties(
+            key.target,
+            properties);
 
     const auto pack_valid =
         key.pack == 1 ||

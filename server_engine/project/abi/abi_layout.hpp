@@ -23,6 +23,20 @@ struct abi_layout_key final {
         const abi_layout_key&) noexcept = default;
 };
 
+struct abi_properties final {
+    std::uint32_t pointer_size = 0;
+    std::uint32_t pointer_alignment = 0;
+    std::uint32_t reference_size = 0;
+    std::uint32_t reference_alignment = 0;
+};
+
+static_assert(sizeof(abi_properties) == 16);
+static_assert(std::is_trivially_copyable_v<abi_properties>);
+
+[[nodiscard]] bool abi_layout_properties(
+    abi_target target,
+    abi_properties& output) noexcept;
+
 [[nodiscard]] abi_layout_key make_abi_layout_key(
     const server_abi_configuration& configuration) noexcept;
 
