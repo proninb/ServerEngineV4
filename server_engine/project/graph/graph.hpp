@@ -221,11 +221,40 @@ enum class graph_member_access : std::uint8_t {
     private_access = 3,
 };
 
+inline constexpr std::uint8_t graph_base_virtual =
+    0x01u;
+
+inline constexpr std::uint8_t graph_base_flag_mask =
+    graph_base_virtual;
+
+struct base_record final {
+    type_handle type{};
+    graph_member_access access =
+        graph_member_access::public_access;
+    std::uint8_t flags = 0;
+    std::uint16_t reserved = 0;
+
+    [[nodiscard]] constexpr bool virtual_base() const noexcept {
+        return (flags & graph_base_virtual) != 0;
+    }
+};
+
+static_assert(sizeof(base_record) == 8);
+static_assert(std::is_trivially_copyable_v<base_record>);
+
 inline constexpr std::uint16_t graph_type_defined =
     0x0001u;
 
+inline constexpr std::uint16_t graph_type_polymorphic =
+    0x0002u;
+
+inline constexpr std::uint16_t graph_type_flag_mask =
+    graph_type_defined |
+    graph_type_polymorphic;
+
 struct type_entry final {
     graph_range members;
+    graph_range bases;
     graph_type_kind kind =
         graph_type_kind::record;
     graph_record_kind record_kind =
@@ -235,9 +264,13 @@ struct type_entry final {
     [[nodiscard]] constexpr bool defined() const noexcept {
         return (flags & graph_type_defined) != 0;
     }
+
+    [[nodiscard]] constexpr bool polymorphic() const noexcept {
+        return (flags & graph_type_polymorphic) != 0;
+    }
 };
 
-static_assert(sizeof(type_entry) == 12);
+static_assert(sizeof(type_entry) == 20);
 static_assert(std::is_trivially_copyable_v<type_entry>);
 
 struct member_record final {
@@ -324,7 +357,9 @@ public:
         type_handle type,
         graph_record_kind kind,
         std::span<const member_record> definition,
-        std::span<const construction_value> construction = {}) noexcept;
+        std::span<const construction_value> construction = {},
+        std::span<const base_record> bases = {},
+        bool declares_virtual = false) noexcept;
 
     [[nodiscard]] server_status add_object(
         identity_ref identity,
@@ -397,6 +432,12 @@ public:
     [[nodiscard]] identity_ref identity(
         object_handle object) const noexcept;
 
+    [[nodiscard]] std::span<const base_record> bases(
+        type_handle type) const noexcept;
+
+    [[nodiscard]] bool polymorphic(
+        type_handle type) const noexcept;
+
     [[nodiscard]] std::span<const member_record> members(
         type_handle type) const noexcept;
 
@@ -446,6 +487,10 @@ public:
         return member_records.size();
     }
 
+    [[nodiscard]] std::size_t base_count() const noexcept {
+        return base_records.size();
+    }
+
     [[nodiscard]] std::size_t object_count() const noexcept {
         return objects.size();
     }
@@ -474,6 +519,11 @@ public:
     [[nodiscard]] std::span<const identity_ref>
     type_identity_entries() const noexcept {
         return type_identities;
+    }
+
+    [[nodiscard]] std::span<const base_record>
+    base_entries() const noexcept {
+        return base_records;
     }
 
     [[nodiscard]] std::span<const member_record>
@@ -634,6 +684,7 @@ private:
 
     std::vector<type_entry> types;
     std::vector<identity_ref> type_identities;
+    std::vector<base_record> base_records;
     std::vector<member_record> member_records;
     std::vector<construction_value> member_construction;
 

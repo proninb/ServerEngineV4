@@ -585,6 +585,15 @@ private:
             return runtime_layout_result::unsupported_type;
         }
 
+        // CXX-CLASS-ABI-V1A persists semantic class metadata but does not yet
+        // guess physical C++ ABI offsets. Until the compiler-validated backend
+        // is installed, any base class or polymorphic record fails closed.
+        if (type.bases.count != 0 ||
+            type.polymorphic()) {
+
+            return runtime_layout_result::unsupported_type;
+        }
+
         slot.state =
             runtime_layout::slot_state::visiting;
 

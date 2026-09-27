@@ -758,6 +758,158 @@ void test_source_preprocessor_rejected(
         "Source rejects C++ preprocessing");
 }
 
+void test_class_abi_semantics(
+    test_state& tests) {
+
+    const temporary_source source{
+        "class_abi_semantics",
+        "struct A {\n"
+        "    virtual void f();\n"
+        "    int a;\n"
+        "};\n"
+        "struct B : public A {\n"
+        "    void f() override;\n"
+        "    int b;\n"
+        "};\n"
+        "struct C : A {\n"
+        "    virtual ~C();\n"
+        "    int c;\n"
+        "};\n"
+        "struct Plain {\n"
+        "    int value;\n"
+        "};\n"};
+
+    file_context files;
+    lexical_generation lexical;
+    file_id root;
+
+    if (!prepare_root(
+            tests,
+            source.path(),
+            files,
+            lexical,
+            root)) {
+
+        return;
+    }
+
+    preprocessor_configuration configuration;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    parser_failure failure;
+
+    if (!tests.expect(
+            succeeded(
+                parse_semantic_project(
+                    files,
+                    lexical,
+                    1,
+                    configuration,
+                    strings,
+                    identities,
+                    G,
+                    sources,
+                    &failure)),
+            "parse class ABI semantic declarations")) {
+
+        return;
+    }
+
+    const auto type =
+        [&](std::string_view name) {
+            return G.find_type(
+                identities.find(
+                    identities.root(),
+                    strings.find(name),
+                    identity_kind::type));
+        };
+
+    const auto a = type("A");
+    const auto b = type("B");
+    const auto c = type("C");
+    const auto plain = type("Plain");
+
+    const auto* a_entry = G.find(a);
+    const auto* b_entry = G.find(b);
+    const auto* c_entry = G.find(c);
+    const auto* plain_entry = G.find(plain);
+
+    const auto b_bases =
+        G.bases(b);
+
+    const auto c_bases =
+        G.bases(c);
+
+    tests.expect(
+        a_entry != nullptr &&
+        b_entry != nullptr &&
+        c_entry != nullptr &&
+        plain_entry != nullptr &&
+        a_entry->polymorphic() &&
+        b_entry->polymorphic() &&
+        c_entry->polymorphic() &&
+        !plain_entry->polymorphic() &&
+        G.polymorphic(a) &&
+        G.polymorphic(b) &&
+        G.polymorphic(c) &&
+        !G.polymorphic(plain),
+        "virtual declarations and inheritance normalize to type polymorphic flag");
+
+    tests.expect(
+        b_bases.size() == 1 &&
+        b_bases[0].type == a &&
+        b_bases[0].access ==
+            graph_member_access::
+                public_access &&
+        !b_bases[0].virtual_base() &&
+        c_bases.size() == 1 &&
+        c_bases[0].type == a,
+        "single non-virtual base relation retained directly by type_entry");
+
+    const temporary_source virtual_base{
+        "class_abi_virtual_base",
+        "struct A {};\n"
+        "struct B : virtual A {};\n"};
+
+    parser_failure virtual_failure;
+
+    tests.expect(
+        parse_file(
+            tests,
+            virtual_base.path(),
+            virtual_failure) ==
+                server_status::
+                    project_configuration_invalid &&
+        virtual_failure.kind ==
+            parser_failure_kind::unsupported &&
+        virtual_failure.detail ==
+            "Virtual base classes are not implemented in CXX-CLASS-ABI-V1",
+        "virtual inheritance fails closed before Runtime ABI layout");
+
+    const temporary_source multiple_base{
+        "class_abi_multiple_base",
+        "struct A {};\n"
+        "struct B {};\n"
+        "struct C : A, B {};\n"};
+
+    parser_failure multiple_failure;
+
+    tests.expect(
+        parse_file(
+            tests,
+            multiple_base.path(),
+            multiple_failure) ==
+                server_status::
+                    project_configuration_invalid &&
+        multiple_failure.kind ==
+            parser_failure_kind::unsupported &&
+        multiple_failure.detail ==
+            "Multiple inheritance is not implemented in CXX-CLASS-ABI-V1",
+        "multiple inheritance fails closed in V1 semantic slice");
+}
+
 void test_record_scratch_isolation(test_state& tests) {
     const temporary_source source{
         "record_scratch_isolation",
@@ -2389,6 +2541,9 @@ int main() {
             tests);
 
         test_record_scratch_isolation(tests);
+
+        test_class_abi_semantics(
+            tests);
 
         test_source_link_semantic_dependencies(
             tests);

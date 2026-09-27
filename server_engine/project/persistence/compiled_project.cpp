@@ -52,8 +52,9 @@ constexpr std::size_t header_crc_offset = 248;
 constexpr std::uint32_t string_core_size = 8;
 constexpr std::uint32_t index_record_size = 8;
 constexpr std::uint32_t identity_core_size = 12;
-constexpr std::uint32_t type_record_size = 12;
+constexpr std::uint32_t type_record_size = 20;
 constexpr std::uint32_t type_identity_size = 4;
+constexpr std::uint32_t base_record_size = 8;
 constexpr std::uint32_t member_record_size = 12;
 constexpr std::uint32_t construction_record_size = 16;
 constexpr std::uint32_t derived_record_size = 16;
@@ -583,6 +584,9 @@ void write_u64(
     case compiled_project_section::type_identities:
         return type_identity_size;
 
+    case compiled_project_section::bases:
+        return base_record_size;
+
     case compiled_project_section::members:
         return member_record_size;
 
@@ -1028,6 +1032,12 @@ compiled_project_view::bind(
                 compiled_project_section::
                     type_identities)];
 
+    const auto& bases =
+        candidate[
+            section_index(
+                compiled_project_section::
+                    bases)];
+
     const auto& members =
         candidate[
             section_index(
@@ -1182,6 +1192,8 @@ compiled_project_view::bind(
             type_count ||
         type_identities.count !=
             type_count ||
+        bases.count >
+            (std::numeric_limits<std::uint32_t>::max)() ||
         members.count !=
             construction.count ||
         derived_index.count !=
@@ -1736,19 +1748,27 @@ bool compiled_project_view::type(
         read_u32(
             record + 4);
 
+    output.bases.begin =
+        read_u32(
+            record + 8);
+
+    output.bases.count =
+        read_u32(
+            record + 12);
+
     output.kind =
         static_cast<graph_type_kind>(
             std::to_integer<std::uint8_t>(
-                record[8]));
+                record[16]));
 
     output.record_kind =
         static_cast<graph_record_kind>(
             std::to_integer<std::uint8_t>(
-                record[9]));
+                record[17]));
 
     output.flags =
         read_u16(
-            record + 10);
+            record + 18);
 
     return true;
 }
@@ -1776,6 +1796,54 @@ identity_ref compiled_project_view::identity(
 
     return identity_from_raw(
         read_u32(record));
+}
+
+bool compiled_project_view::base_at(
+    std::size_t index,
+    base_record& output) const noexcept {
+
+    output = {};
+
+    const auto& values =
+        section(
+            compiled_project_section::
+                bases);
+
+    if (index >=
+        values.count) {
+
+        return false;
+    }
+
+    const auto* record =
+        values.data +
+        index *
+            base_record_size;
+
+    output.type =
+        type_from_raw(
+            read_u32(record));
+
+    output.access =
+        static_cast<graph_member_access>(
+            std::to_integer<std::uint8_t>(
+                record[4]));
+
+    output.flags =
+        std::to_integer<std::uint8_t>(
+            record[5]);
+
+    output.reserved =
+        read_u16(
+            record + 6);
+
+    return
+        output.type &&
+        valid_member_access(
+            output.access) &&
+        (output.flags &
+            ~graph_base_flag_mask) == 0 &&
+        output.reserved == 0;
 }
 
 type_handle compiled_project_view::find_type(
@@ -3118,13 +3186,24 @@ compiled_project_view::verify_contents() const noexcept {
             compiled_project_section::
                 member_construction);
 
+    const auto& bases =
+        section(
+            compiled_project_section::
+                bases);
+
     // Cold audit marks ownership once so overlap/orphan validation stays O(n).
     std::vector<std::uint8_t> member_owners;
+    std::vector<std::uint8_t> base_owners;
 
     try {
         member_owners.assign(
             static_cast<std::size_t>(
                 members.count),
+            0);
+
+        base_owners.assign(
+            static_cast<std::size_t>(
+                bases.count),
             0);
     }
     catch (...) {
@@ -3153,7 +3232,7 @@ compiled_project_view::verify_contents() const noexcept {
             !valid_record_kind(
                 type_value.record_kind) ||
             (type_value.flags &
-                ~graph_type_defined) != 0 ||
+                ~graph_type_flag_mask) != 0 ||
             !identity_value ||
             identity_value.kind() !=
                 identity_kind::type ||
@@ -3166,13 +3245,105 @@ compiled_project_view::verify_contents() const noexcept {
 
         if (!type_value.defined()) {
             if (type_value.members.begin != 0 ||
-                type_value.members.count != 0) {
+                type_value.members.count != 0 ||
+                type_value.bases.begin != 0 ||
+                type_value.bases.count != 0 ||
+                type_value.polymorphic()) {
 
                 return compiled_project_image_result::
                     invalid_image;
             }
 
             continue;
+        }
+
+        if (type_value.record_kind ==
+                graph_record_kind::union_type &&
+            (type_value.bases.count != 0 ||
+             type_value.polymorphic())) {
+
+            return compiled_project_image_result::
+                invalid_image;
+        }
+
+        const auto base_begin =
+            static_cast<std::uint64_t>(
+                type_value.bases.begin);
+
+        const auto base_count =
+            static_cast<std::uint64_t>(
+                type_value.bases.count);
+
+        if (base_begin >
+                bases.count ||
+            base_count >
+                bases.count -
+                    base_begin) {
+
+            return compiled_project_image_result::
+                invalid_image;
+        }
+
+        bool inherited_polymorphic = false;
+
+        for (std::uint32_t local = 0;
+             local <
+                type_value.bases.count;
+             ++local) {
+
+            const auto global =
+                base_begin +
+                local;
+
+            auto& owner =
+                base_owners[
+                    static_cast<std::size_t>(
+                        global)];
+
+            if (owner != 0) {
+                return compiled_project_image_result::
+                    invalid_image;
+            }
+
+            owner = 1;
+
+            base_record base;
+
+            if (!base_at(
+                    static_cast<std::size_t>(
+                        global),
+                    base) ||
+                base.type == handle) {
+
+                return compiled_project_image_result::
+                    invalid_image;
+            }
+
+            type_entry base_type;
+
+            if (!type(
+                    base.type,
+                    base_type) ||
+                !base_type.defined() ||
+                base_type.kind !=
+                    graph_type_kind::record ||
+                base_type.record_kind ==
+                    graph_record_kind::union_type) {
+
+                return compiled_project_image_result::
+                    invalid_image;
+            }
+
+            inherited_polymorphic =
+                inherited_polymorphic ||
+                base_type.polymorphic();
+        }
+
+        if (inherited_polymorphic &&
+            !type_value.polymorphic()) {
+
+            return compiled_project_image_result::
+                invalid_image;
         }
 
         const auto begin =
@@ -3295,6 +3466,15 @@ compiled_project_view::verify_contents() const noexcept {
         }
     }
 
+    for (const auto owner :
+         base_owners) {
+
+        if (owner == 0) {
+            return compiled_project_image_result::
+                invalid_image;
+        }
+    }
+
     if (members.count !=
         construction_values.count) {
 
@@ -3302,7 +3482,7 @@ compiled_project_view::verify_contents() const noexcept {
             invalid_image;
     }
 
-    const auto& derived_values =
+        const auto& derived_values =
         section(
             compiled_project_section::
                 derived_types);
@@ -4040,6 +4220,10 @@ prepare_compiled_project_layout(const string_table &strings,
         static_cast<std::uint64_t>(
             G.member_count());
 
+    const auto base_count =
+        static_cast<std::uint64_t>(
+            G.base_count());
+
     const auto derived_count =
         static_cast<std::uint64_t>(
             G.derived_type_count());
@@ -4071,6 +4255,8 @@ prepare_compiled_project_layout(const string_table &strings,
         type_count >
             type_handle::maximum_slot ||
         member_count >
+            (std::numeric_limits<std::uint32_t>::max)() ||
+        base_count >
             (std::numeric_limits<std::uint32_t>::max)() ||
         derived_count >
             type_ref::maximum_payload ||
@@ -4254,6 +4440,11 @@ prepare_compiled_project_layout(const string_table &strings,
             index_record_size,
             endpoint_path_index_count,
         },
+        {
+            compiled_project_section::bases,
+            base_record_size,
+            base_count,
+        },
     }};
 
     std::uint64_t cursor =
@@ -4429,6 +4620,11 @@ encode_compiled_project_image(const string_table &strings,
             compiled_project_section::
                 members);
 
+    const auto base_count =
+        count(
+            compiled_project_section::
+                bases);
+
     const auto derived_count =
         count(
             compiled_project_section::
@@ -4504,6 +4700,8 @@ encode_compiled_project_image(const string_table &strings,
             G.type_count() ||
         member_count !=
             G.member_count() ||
+        base_count !=
+            G.base_count() ||
         derived_count !=
             G.derived_type_count() ||
         object_count !=
@@ -4796,12 +4994,21 @@ encode_compiled_project_image(const string_table &strings,
                 !valid_record_kind(
                     value.record_kind) ||
                 (value.flags &
-                    ~graph_type_defined) != 0 ||
+                    ~graph_type_flag_mask) != 0 ||
+                (value.record_kind ==
+                     graph_record_kind::union_type &&
+                 (value.bases.count != 0 ||
+                  value.polymorphic())) ||
+                value.bases.begin >
+                    G.base_entries().size() ||
+                value.bases.count >
+                    G.base_entries().size() -
+                        value.bases.begin ||
                 !identities.contains(identity) ||
                 identity.kind() !=
                     identity_kind::type) {
 
-                        return compiled_project_image_result::
+                return compiled_project_image_result::
                     invalid_state;
             }
 
@@ -4818,18 +5025,26 @@ encode_compiled_project_image(const string_table &strings,
                 record + 4,
                 value.members.count);
 
-            record[8] =
+            write_u32(
+                record + 8,
+                value.bases.begin);
+
+            write_u32(
+                record + 12,
+                value.bases.count);
+
+            record[16] =
                 static_cast<std::byte>(
                     static_cast<std::uint8_t>(
                         value.kind));
 
-            record[9] =
+            record[17] =
                 static_cast<std::byte>(
                     static_cast<std::uint8_t>(
                         value.record_kind));
 
             write_u16(
-                record + 10,
+                record + 18,
                 value.flags);
 
             write_u32(
@@ -4845,7 +5060,8 @@ encode_compiled_project_image(const string_table &strings,
                     graph_identity_record_size;
 
             if (read_u32(location) != 0) {
-                        return compiled_project_image_result::
+
+                return compiled_project_image_result::
                     invalid_state;
             }
 
@@ -4855,6 +5071,61 @@ encode_compiled_project_image(const string_table &strings,
                     1,
                     static_cast<std::uint32_t>(
                         index + 1)));
+        }
+    }
+
+    // ABI-independent base relations. Physical base offsets remain
+    // construction-only Runtime ABI layout state.
+    {
+        auto* bases_out =
+            section_data(
+                compiled_project_section::
+                    bases);
+
+        const auto base_entries =
+            G.base_entries();
+
+        for (std::size_t index = 0;
+             index <
+                base_entries.size();
+             ++index) {
+
+            const auto& value =
+                base_entries[index];
+
+            if (!G.contains(
+                    value.type) ||
+                !valid_member_access(
+                    value.access) ||
+                (value.flags &
+                    ~graph_base_flag_mask) != 0 ||
+                value.reserved != 0) {
+
+                return compiled_project_image_result::
+                    invalid_state;
+            }
+
+            auto* record =
+                bases_out +
+                index *
+                    base_record_size;
+
+            write_u32(
+                record,
+                value.type.value());
+
+            record[4] =
+                static_cast<std::byte>(
+                    static_cast<std::uint8_t>(
+                        value.access));
+
+            record[5] =
+                static_cast<std::byte>(
+                    value.flags);
+
+            write_u16(
+                record + 6,
+                0);
         }
     }
 

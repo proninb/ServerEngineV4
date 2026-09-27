@@ -111,6 +111,286 @@ compiled_project_image_result build_test_compiled_image(
     const compiled_fixture& fixture,
     compiled_test_image& output);
 
+void test_class_abi_persistence(
+    test_state& tests) {
+
+    compiled_fixture fixture;
+
+    string_id a_name;
+    string_id b_name;
+    string_id c_name;
+    string_id a_member_name;
+    string_id b_member_name;
+    string_id c_member_name;
+    string_id instance_name;
+
+    const auto intern =
+        [&](std::string_view value,
+            string_id& output) {
+
+            return succeeded(
+                fixture.strings.intern(
+                    value,
+                    output));
+        };
+
+    if (!tests.expect(
+            intern("AbiA", a_name) &&
+            intern("AbiB", b_name) &&
+            intern("AbiC", c_name) &&
+            intern("a", a_member_name) &&
+            intern("b", b_member_name) &&
+            intern("c", c_member_name) &&
+            intern("instance", instance_name),
+            "prepare class ABI persistence strings")) {
+
+        return;
+    }
+
+    identity_ref a_identity;
+    identity_ref b_identity;
+    identity_ref c_identity;
+    identity_ref instance_identity;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    a_name,
+                    identity_kind::type,
+                    a_identity)) &&
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    b_name,
+                    identity_kind::type,
+                    b_identity)) &&
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    c_name,
+                    identity_kind::type,
+                    c_identity)) &&
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    instance_name,
+                    identity_kind::object,
+                    instance_identity)),
+            "prepare class ABI persistence identities")) {
+
+        return;
+    }
+
+    type_handle a;
+    type_handle b;
+    type_handle c;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.declare_record(
+                    a_identity,
+                    graph_record_kind::struct_type,
+                    a)) &&
+            succeeded(
+                fixture.G.declare_record(
+                    b_identity,
+                    graph_record_kind::struct_type,
+                    b)) &&
+            succeeded(
+                fixture.G.declare_record(
+                    c_identity,
+                    graph_record_kind::struct_type,
+                    c)),
+            "declare class ABI persistence records")) {
+
+        return;
+    }
+
+    const auto integer =
+        fixture.G.intrinsic(
+            intrinsic_type::signed_int);
+
+    const std::array<member_record, 1>
+        a_members{{
+            {
+                a_member_name,
+                integer,
+                graph_member_access::public_access,
+            },
+        }};
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.define_record(
+                    a,
+                    graph_record_kind::struct_type,
+                    a_members,
+                    {},
+                    {},
+                    true)),
+            "define polymorphic base record")) {
+
+        return;
+    }
+
+    const std::array<base_record, 1>
+        b_bases{{
+            {
+                a,
+                graph_member_access::public_access,
+                0,
+                0,
+            },
+        }};
+
+    const std::array<member_record, 1>
+        b_members{{
+            {
+                b_member_name,
+                integer,
+                graph_member_access::public_access,
+            },
+        }};
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.define_record(
+                    b,
+                    graph_record_kind::struct_type,
+                    b_members,
+                    {},
+                    b_bases,
+                    false)),
+            "define inherited polymorphic record")) {
+
+        return;
+    }
+
+    const std::array<member_record, 1>
+        c_members{{
+            {
+                c_member_name,
+                integer,
+                graph_member_access::public_access,
+            },
+        }};
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.define_record(
+                    c,
+                    graph_record_kind::struct_type,
+                    c_members)),
+            "define unrelated plain record")) {
+
+        return;
+    }
+
+    object_handle instance;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.add_object(
+                    instance_identity,
+                    fixture.G.named(b),
+                    instance)),
+            "add inherited polymorphic Runtime object")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            succeeded(
+                fixture.sources.finalize(
+                    fixture.files.size(),
+                    fixture.identities,
+                    fixture.G)),
+            "finalize class ABI persistence Source Map")) {
+
+        return;
+    }
+
+    compiled_test_image image;
+
+    if (!tests.expect(
+            build_test_compiled_image(
+                fixture,
+                image) ==
+                compiled_project_image_result::success,
+            "encode class ABI persistence image")) {
+
+        return;
+    }
+
+    compiled_project_view view;
+
+    if (!tests.expect(
+            view.bind(
+                image.bytes) ==
+                compiled_project_image_result::success &&
+            view.verify_contents() ==
+                compiled_project_image_result::success,
+            "bind and audit class ABI persistence image")) {
+
+        return;
+    }
+
+    type_entry persisted_a;
+    type_entry persisted_b;
+    type_entry persisted_c;
+    base_record persisted_base;
+
+    tests.expect(
+        view.type(
+            a,
+            persisted_a) &&
+        view.type(
+            b,
+            persisted_b) &&
+        view.type(
+            c,
+            persisted_c) &&
+        persisted_a.polymorphic() &&
+        persisted_a.bases.count == 0 &&
+        persisted_b.polymorphic() &&
+        persisted_b.bases.count == 1 &&
+        !persisted_c.polymorphic() &&
+        persisted_c.bases.count == 0 &&
+        view.base_at(
+            persisted_b.bases.begin,
+            persisted_base) &&
+        persisted_base.type == a &&
+        persisted_base.access ==
+            graph_member_access::
+                public_access &&
+        !persisted_base.virtual_base(),
+        "compiled.bin preserves type-local polymorphism and base ranges");
+
+#if defined(_WIN32)
+    const server_abi_configuration abi{
+        abi_target::windows_x64,
+        8,
+    };
+#else
+    const server_abi_configuration abi{
+        abi_target::posix_x64,
+        8,
+    };
+#endif
+
+    runtime_layout layout;
+
+    tests.expect(
+        prepare_runtime_layout(
+            view,
+            abi,
+            layout) ==
+            runtime_layout_result::
+                unsupported_type,
+        "Runtime class ABI remains fail-closed until V1B physical layout");
+}
+
 void test_endpoint_path_persistence(
     test_state& tests) {
 
@@ -5400,6 +5680,9 @@ int main() {
 
     try {
         test_state tests;
+
+        test_class_abi_persistence(
+            tests);
 
         test_endpoint_path_persistence(
             tests);

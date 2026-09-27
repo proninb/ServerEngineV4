@@ -2340,7 +2340,156 @@ private:
             return status;
         }
 
+        auto& bases = record_bases;
+        bases.clear();
+
+        if (at(token_kind::colon)) {
+            if (kind ==
+                graph_record_kind::union_type) {
+
+                return fail(
+                    parser_failure_kind::semantic,
+                    "Union types cannot have base classes");
+            }
+
+            status = advance();
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            graph_member_access base_access =
+                default_access(kind);
+
+            bool virtual_base = false;
+            bool access_seen = false;
+            bool virtual_seen = false;
+
+            for (;;) {
+                if (!access_seen &&
+                    (at(token_kind::kw_public) ||
+                     at(token_kind::kw_protected) ||
+                     at(token_kind::kw_private))) {
+
+                    if (at(token_kind::kw_public)) {
+                        base_access =
+                            graph_member_access::
+                                public_access;
+                    }
+                    else if (at(token_kind::kw_protected)) {
+                        base_access =
+                            graph_member_access::
+                                protected_access;
+                    }
+                    else {
+                        base_access =
+                            graph_member_access::
+                                private_access;
+                    }
+
+                    access_seen = true;
+
+                    status = advance();
+                    if (!succeeded(status)) {
+                        return status;
+                    }
+
+                    continue;
+                }
+
+                if (!virtual_seen &&
+                    at(token_kind::kw_virtual)) {
+
+                    virtual_base = true;
+                    virtual_seen = true;
+
+                    status = advance();
+                    if (!succeeded(status)) {
+                        return status;
+                    }
+
+                    continue;
+                }
+
+                break;
+            }
+
+            if (virtual_base) {
+                return fail(
+                    parser_failure_kind::unsupported,
+                    "Virtual base classes are not implemented in CXX-CLASS-ABI-V1");
+            }
+
+            if (!at(token_kind::identifier) ||
+                !current.identifier) {
+
+                return fail(
+                    parser_failure_kind::syntax,
+                    "Expected base class type");
+            }
+
+            const auto base_identity =
+                find_type_identity(
+                    scope,
+                    current.identifier);
+
+            const auto base =
+                G.find_type(
+                    base_identity);
+
+            const auto* base_type =
+                G.find(base);
+
+            if (!base_identity ||
+                !base ||
+                base_type == nullptr ||
+                !base_type->defined() ||
+                base_type->record_kind ==
+                    graph_record_kind::union_type) {
+
+                return fail(
+                    parser_failure_kind::semantic,
+                    "Base class must name a complete non-union record type");
+            }
+
+            const auto dependency =
+                sources.add_dependency(
+                    base);
+
+            if (!succeeded(dependency)) {
+                return dependency;
+            }
+
+            try {
+                bases.push_back({
+                    base,
+                    base_access,
+                    0,
+                    0,
+                });
+            }
+            catch (...) {
+                return server_status::io_error;
+            }
+
+            status = advance();
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            if (at(token_kind::comma)) {
+                return fail(
+                    parser_failure_kind::unsupported,
+                    "Multiple inheritance is not implemented in CXX-CLASS-ABI-V1");
+            }
+        }
+
         if (at(token_kind::semicolon)) {
+            if (!bases.empty()) {
+                return fail(
+                    parser_failure_kind::syntax,
+                    "A base-specifier list requires a record definition");
+            }
+
             status =
                 sources.add(
                     record_file,
@@ -2358,7 +2507,7 @@ private:
         status =
             expect(
                 token_kind::l_brace,
-                "Expected ';' or '{' after record declaration");
+                "Expected ';', base-specifier list, or '{' after record declaration");
 
         if (!succeeded(status)) {
             return status;
@@ -2379,6 +2528,219 @@ private:
         constructor_operations.clear();
 
         bool constructor_seen = false;
+        bool declares_virtual = false;
+
+        const bool base_polymorphic =
+            !bases.empty() &&
+            G.polymorphic(
+                bases.front().type);
+
+        const auto contextual =
+            [&](std::string_view value) noexcept {
+                return
+                    at(token_kind::identifier) &&
+                    current.identifier &&
+                    strings.get(
+                        current.identifier) ==
+                        value;
+            };
+
+        const auto parse_method_tail =
+            [&](bool virtual_prefix) -> server_status {
+                if (!at(token_kind::l_paren)) {
+                    return fail(
+                        parser_failure_kind::syntax,
+                        "Expected '(' after method declarator");
+                }
+
+                std::size_t depth = 0;
+
+                for (;;) {
+                    if (at(token_kind::invalid)) {
+                        return fail(
+                            parser_failure_kind::syntax,
+                            "Method parameter list is not closed");
+                    }
+
+                    if (at(token_kind::l_paren)) {
+                        ++depth;
+                    }
+                    else if (at(token_kind::r_paren)) {
+                        if (depth == 0) {
+                            return fail(
+                                parser_failure_kind::syntax,
+                                "Unexpected ')' in method declaration");
+                        }
+
+                        --depth;
+                    }
+
+                    auto advanced = advance();
+                    if (!succeeded(advanced)) {
+                        return advanced;
+                    }
+
+                    if (depth == 0) {
+                        break;
+                    }
+                }
+
+                bool override_seen = false;
+                bool final_seen = false;
+
+                for (;;) {
+                    if (at(token_kind::kw_const) ||
+                        at(token_kind::kw_volatile)) {
+
+                        const auto advanced =
+                            advance();
+
+                        if (!succeeded(advanced)) {
+                            return advanced;
+                        }
+
+                        continue;
+                    }
+
+                    if (at(token_kind::kw_noexcept)) {
+                        auto advanced =
+                            advance();
+
+                        if (!succeeded(advanced)) {
+                            return advanced;
+                        }
+
+                        if (at(token_kind::l_paren)) {
+                            std::size_t noexcept_depth = 0;
+
+                            for (;;) {
+                                if (at(token_kind::invalid)) {
+                                    return fail(
+                                        parser_failure_kind::syntax,
+                                        "noexcept expression is not closed");
+                                }
+
+                                if (at(token_kind::l_paren)) {
+                                    ++noexcept_depth;
+                                }
+                                else if (at(token_kind::r_paren)) {
+                                    if (noexcept_depth == 0) {
+                                        return fail(
+                                            parser_failure_kind::syntax,
+                                            "Unexpected ')' in noexcept expression");
+                                    }
+
+                                    --noexcept_depth;
+                                }
+
+                                advanced =
+                                    advance();
+
+                                if (!succeeded(advanced)) {
+                                    return advanced;
+                                }
+
+                                if (noexcept_depth == 0) {
+                                    break;
+                                }
+                            }
+                        }
+
+                        continue;
+                    }
+
+                    if (!override_seen &&
+                        contextual("override")) {
+
+                        override_seen = true;
+
+                        const auto advanced =
+                            advance();
+
+                        if (!succeeded(advanced)) {
+                            return advanced;
+                        }
+
+                        continue;
+                    }
+
+                    if (!final_seen &&
+                        contextual("final")) {
+
+                        final_seen = true;
+
+                        const auto advanced =
+                            advance();
+
+                        if (!succeeded(advanced)) {
+                            return advanced;
+                        }
+
+                        continue;
+                    }
+
+                    break;
+                }
+
+                bool pure = false;
+
+                if (at(token_kind::assign)) {
+                    auto advanced =
+                        advance();
+
+                    if (!succeeded(advanced)) {
+                        return advanced;
+                    }
+
+                    if (at(token_kind::pp_number) &&
+                        token_text(current) == "0") {
+
+                        pure = true;
+                    }
+                    else if (!at(token_kind::kw_default) &&
+                             !at(token_kind::kw_delete)) {
+
+                        return fail(
+                            parser_failure_kind::unsupported,
+                            "Method declaration supports only '= 0', '= default', or '= delete'");
+                    }
+
+                    advanced =
+                        advance();
+
+                    if (!succeeded(advanced)) {
+                        return advanced;
+                    }
+                }
+
+                const bool contextual_virtual =
+                    override_seen ||
+                    final_seen ||
+                    pure;
+
+                if (contextual_virtual &&
+                    !virtual_prefix &&
+                    !base_polymorphic) {
+
+                    return fail(
+                        parser_failure_kind::semantic,
+                        "override/final/pure method requires a polymorphic base or explicit virtual");
+                }
+
+                if (virtual_prefix ||
+                    contextual_virtual) {
+
+                    declares_virtual = true;
+                }
+
+                if (!at(token_kind::semicolon)) {
+                    return fail(
+                        parser_failure_kind::unsupported,
+                        "CXX-CLASS-ABI-V1 stores method declarations only; method bodies are not implemented");
+                }
+
+                return advance();
+            };
 
         auto access =
             default_access(kind);
@@ -2469,10 +2831,52 @@ private:
                 }
             }
 
+            bool virtual_prefix = false;
+
+            if (at(token_kind::kw_virtual)) {
+                virtual_prefix = true;
+
+                status = advance();
+                if (!succeeded(status)) {
+                    return status;
+                }
+            }
+
+            if (at(token_kind::tilde)) {
+                status = advance();
+                if (!succeeded(status)) {
+                    return status;
+                }
+
+                if (!at(token_kind::identifier) ||
+                    current.identifier !=
+                        record_name) {
+
+                    return fail(
+                        parser_failure_kind::syntax,
+                        "Destructor name must match its record");
+                }
+
+                status = advance();
+                if (!succeeded(status)) {
+                    return status;
+                }
+
+                status =
+                    parse_method_tail(
+                        virtual_prefix);
+
+                if (!succeeded(status)) {
+                    return status;
+                }
+
+                continue;
+            }
+
             if (at(token_kind::kw_static)) {
                 return fail(
                     parser_failure_kind::unsupported,
-                    "Static data members are not part of the current instance-member Graph slice");
+                    "Static data members and static methods are not part of the current instance ABI slice");
             }
 
             type_ref member_type;
@@ -2486,6 +2890,24 @@ private:
 
             if (!succeeded(status)) {
                 return status;
+            }
+
+            if (at(token_kind::l_paren)) {
+                status =
+                    parse_method_tail(
+                        virtual_prefix);
+
+                if (!succeeded(status)) {
+                    return status;
+                }
+
+                continue;
+            }
+
+            if (virtual_prefix) {
+                return fail(
+                    parser_failure_kind::syntax,
+                    "virtual must declare a member function");
             }
 
             const auto name =
@@ -2621,7 +3043,9 @@ private:
                 handle,
                 kind,
                 members,
-                construction);
+                construction,
+                bases,
+                declares_virtual);
 
         if (!succeeded(status)) {
             return fail(
@@ -3531,6 +3955,7 @@ private:
 
     std::vector<declarator_modifier> declarator_modifiers;
     std::vector<endpoint_path_step> endpoint_steps;
+    std::vector<base_record> record_bases;
     std::vector<member_record> record_members;
     std::vector<pending_construction> record_pending;
     std::vector<constructor_operation> record_operations;

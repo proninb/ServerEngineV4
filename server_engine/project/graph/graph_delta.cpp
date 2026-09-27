@@ -1340,6 +1340,7 @@ server_status graph_delta::declare_record(
 
             patch->value = {
                 {},
+                {},
                 graph_type_kind::record,
                 kind,
                 0,
@@ -1362,6 +1363,7 @@ server_status graph_delta::declare_record(
             }
 
             types[index] = {
+                {},
                 {},
                 graph_type_kind::record,
                 kind,
@@ -1394,6 +1396,7 @@ server_status graph_delta::declare_record(
 
     try {
         types.push_back({
+            {},
             {},
             graph_type_kind::record,
             kind,
@@ -1465,9 +1468,10 @@ server_status graph_delta::clear_definition(
     }
 
     entry.members = {};
+    entry.bases = {};
     entry.flags &=
         static_cast<std::uint16_t>(
-            ~graph_type_defined);
+            ~graph_type_flag_mask);
 
     if (type_value.value() <=
         baseline_type_count) {
@@ -1658,6 +1662,8 @@ server_status graph_delta::define_record(
     if (entry.defined()) {
         if (entry.record_kind !=
             kind ||
+            entry.bases.count != 0 ||
+            entry.polymorphic() ||
             entry.members.count !=
                 definition.size()) {
 
@@ -1763,6 +1769,11 @@ server_status graph_delta::define_record(
         static_cast<std::uint32_t>(
             definition.size()),
     };
+
+    entry.bases = {};
+    entry.flags &=
+        static_cast<std::uint16_t>(
+            ~graph_type_polymorphic);
 
     entry.record_kind =
         kind;

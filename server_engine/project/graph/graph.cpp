@@ -69,6 +69,17 @@ namespace {
     return left_union == right_union;
 }
 
+[[nodiscard]] bool valid_member_access(
+    graph_member_access access) noexcept {
+
+    return access ==
+            graph_member_access::public_access ||
+        access ==
+            graph_member_access::protected_access ||
+        access ==
+            graph_member_access::private_access;
+}
+
 [[nodiscard]] bool valid_derived_kind(
     derived_type_kind kind) noexcept {
 
@@ -372,6 +383,7 @@ server_status graph::declare_record(
     try {
         types.push_back({
             {},
+            {},
             graph_type_kind::record,
             kind,
             0,
@@ -415,7 +427,9 @@ server_status graph::define_record(
     type_handle type,
     graph_record_kind kind,
     std::span<const member_record> definition,
-    std::span<const construction_value> construction_values) noexcept {
+    std::span<const construction_value> construction_values,
+    std::span<const base_record> bases_value,
+    bool declares_virtual) noexcept {
 
     auto* entry =
         contains(type)
@@ -429,9 +443,60 @@ server_status graph::define_record(
             entry->record_kind,
             kind) ||
         (!construction_values.empty() &&
-         construction_values.size() != definition.size())) {
+         construction_values.size() != definition.size()) ||
+        (kind ==
+             graph_record_kind::union_type &&
+         (!bases_value.empty() ||
+          declares_virtual))) {
 
         return server_status::project_configuration_invalid;
+    }
+
+    bool polymorphic_value =
+        declares_virtual;
+
+    for (std::size_t index = 0;
+         index < bases_value.size();
+         ++index) {
+
+        const auto& base =
+            bases_value[index];
+
+        const auto* base_entry =
+            find(base.type);
+
+        if (!base.type ||
+            base.type == type ||
+            base_entry == nullptr ||
+            !base_entry->defined() ||
+            base_entry->kind !=
+                graph_type_kind::record ||
+            base_entry->record_kind ==
+                graph_record_kind::union_type ||
+            !valid_member_access(
+                base.access) ||
+            (base.flags &
+                ~graph_base_flag_mask) != 0 ||
+            base.reserved != 0) {
+
+            return server_status::project_configuration_invalid;
+        }
+
+        for (std::size_t previous = 0;
+             previous < index;
+             ++previous) {
+
+            if (bases_value[previous].type ==
+                base.type) {
+
+                return server_status::
+                    project_configuration_invalid;
+            }
+        }
+
+        polymorphic_value =
+            polymorphic_value ||
+            base_entry->polymorphic();
     }
 
     for (std::size_t index = 0;
@@ -439,7 +504,9 @@ server_status graph::define_record(
          ++index) {
 
         if (!definition[index].name ||
-            !contains(definition[index].type)) {
+            !contains(definition[index].type) ||
+            !valid_member_access(
+                definition[index].access)) {
 
             return server_status::project_configuration_invalid;
         }
@@ -492,8 +559,35 @@ server_status graph::define_record(
     }
 
     if (entry->defined()) {
-        if (entry->record_kind != kind) {
+        if (entry->record_kind != kind ||
+            entry->polymorphic() !=
+                polymorphic_value) {
+
             return server_status::project_configuration_invalid;
+        }
+
+        const auto existing_bases =
+            bases(type);
+
+        if (existing_bases.size() !=
+            bases_value.size()) {
+
+            return server_status::project_configuration_invalid;
+        }
+
+        for (std::size_t index = 0;
+             index < existing_bases.size();
+             ++index) {
+
+            if (existing_bases[index].type !=
+                    bases_value[index].type ||
+                existing_bases[index].access !=
+                    bases_value[index].access ||
+                existing_bases[index].flags !=
+                    bases_value[index].flags) {
+
+                return server_status::project_configuration_invalid;
+            }
         }
 
         const auto existing =
@@ -541,15 +635,27 @@ server_status graph::define_record(
     if (member_records.size() > maximum ||
         definition.size() > maximum ||
         definition.size() >
-            maximum - member_records.size()) {
+            maximum - member_records.size() ||
+        base_records.size() > maximum ||
+        bases_value.size() > maximum ||
+        bases_value.size() >
+            maximum - base_records.size()) {
 
         return server_status::io_error;
     }
 
-    const auto old_count =
+    const auto old_member_count =
         member_records.size();
 
+    const auto old_base_count =
+        base_records.size();
+
     try {
+        base_records.insert(
+            base_records.end(),
+            bases_value.begin(),
+            bases_value.end());
+
         member_records.insert(
             member_records.end(),
             definition.begin(),
@@ -567,18 +673,39 @@ server_status graph::define_record(
         }
     }
     catch (...) {
-        member_records.resize(old_count);
-        member_construction.resize(old_count);
+        base_records.resize(
+            old_base_count);
+
+        member_records.resize(
+            old_member_count);
+
+        member_construction.resize(
+            old_member_count);
+
         return server_status::io_error;
     }
 
+    entry->bases = {
+        static_cast<std::uint32_t>(
+            old_base_count),
+        static_cast<std::uint32_t>(
+            bases_value.size()),
+    };
+
     entry->members = {
-        static_cast<std::uint32_t>(old_count),
-        static_cast<std::uint32_t>(definition.size()),
+        static_cast<std::uint32_t>(
+            old_member_count),
+        static_cast<std::uint32_t>(
+            definition.size()),
     };
 
     entry->record_kind = kind;
     entry->flags |= graph_type_defined;
+
+    if (polymorphic_value) {
+        entry->flags |=
+            graph_type_polymorphic;
+    }
 
     return server_status::success;
 }
@@ -1123,6 +1250,51 @@ server_status graph::derive(
         output = {};
         return server_status::io_error;
     }
+}
+
+std::span<const base_record> graph::bases(
+    type_handle type) const noexcept {
+
+    const auto* entry =
+        find(type);
+
+    if (entry == nullptr ||
+        !entry->defined() ||
+        entry->bases.count == 0) {
+
+        return {};
+    }
+
+    const auto begin =
+        static_cast<std::size_t>(
+            entry->bases.begin);
+
+    const auto count =
+        static_cast<std::size_t>(
+            entry->bases.count);
+
+    if (begin > base_records.size() ||
+        count >
+            base_records.size() - begin) {
+
+        return {};
+    }
+
+    return {
+        base_records.data() + begin,
+        count,
+    };
+}
+
+bool graph::polymorphic(
+    type_handle type) const noexcept {
+
+    const auto* entry =
+        find(type);
+
+    return entry != nullptr &&
+        entry->defined() &&
+        entry->polymorphic();
 }
 
 std::span<const member_record> graph::members(

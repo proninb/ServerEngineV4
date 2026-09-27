@@ -23,12 +23,12 @@
 
 namespace cw::server {
 
-inline constexpr std::uint32_t compiled_project_format_version = 8;
+inline constexpr std::uint32_t compiled_project_format_version = 9;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;
 
-inline constexpr std::size_t compiled_project_directory_count = 27;
+inline constexpr std::size_t compiled_project_directory_count = 28;
 
 inline constexpr std::size_t
 compiled_project_directory_entry_size = 32;
@@ -69,6 +69,7 @@ enum class compiled_project_section : std::uint32_t {
     endpoint_paths = 25,
     endpoint_path_steps = 26,
     endpoint_path_index = 27,
+    bases = 28,
 };
 
 enum class compiled_project_image_result : std::uint8_t {
@@ -161,6 +162,13 @@ public:
                     members).count);
     }
 
+    [[nodiscard]] std::size_t base_count() const noexcept {
+        return static_cast<std::size_t>(
+            section(
+                compiled_project_section::
+                    bases).count);
+    }
+
     [[nodiscard]] std::size_t derived_type_count() const noexcept {
         return static_cast<std::size_t>(
             section(
@@ -221,6 +229,10 @@ public:
 
     [[nodiscard]] identity_ref identity(
         type_handle handle) const noexcept;
+
+    [[nodiscard]] bool base_at(
+        std::size_t index,
+        base_record& output) const noexcept;
 
     [[nodiscard]] type_handle find_type(
         identity_ref identity) const noexcept;
