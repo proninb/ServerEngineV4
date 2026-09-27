@@ -3194,6 +3194,8 @@ compiled_project_view::verify_contents() const noexcept {
     // Cold audit marks ownership once so overlap/orphan validation stays O(n).
     std::vector<std::uint8_t> member_owners;
     std::vector<std::uint8_t> base_owners;
+    std::vector<std::uint32_t> direct_base_seen;
+    std::vector<std::uint8_t> inheritance_state;
 
     try {
         member_owners.assign(
@@ -3204,6 +3206,14 @@ compiled_project_view::verify_contents() const noexcept {
         base_owners.assign(
             static_cast<std::size_t>(
                 bases.count),
+            0);
+
+        direct_base_seen.assign(
+            type_count_value,
+            0);
+
+        inheritance_state.assign(
+            type_count_value,
             0);
     }
     catch (...) {
@@ -3284,6 +3294,10 @@ compiled_project_view::verify_contents() const noexcept {
                 invalid_image;
         }
 
+        const auto direct_base_marker =
+            static_cast<std::uint32_t>(
+                index + 1);
+
         bool inherited_polymorphic = false;
 
         for (std::uint32_t local = 0;
@@ -3333,6 +3347,22 @@ compiled_project_view::verify_contents() const noexcept {
                 return compiled_project_image_result::
                     invalid_image;
             }
+
+            const auto base_slot =
+                static_cast<std::size_t>(
+                    base.type.value() - 1);
+
+            if (direct_base_seen[
+                    base_slot] ==
+                direct_base_marker) {
+
+                return compiled_project_image_result::
+                    invalid_image;
+            }
+
+            direct_base_seen[
+                base_slot] =
+                    direct_base_marker;
 
             inherited_polymorphic =
                 inherited_polymorphic ||
@@ -3454,6 +3484,124 @@ compiled_project_view::verify_contents() const noexcept {
                         invalid_image;
                 }
             }
+        }
+    }
+
+    struct inheritance_frame final {
+        type_handle type{};
+        std::uint32_t next = 0;
+    };
+
+    std::vector<inheritance_frame>
+        inheritance_stack;
+
+    try {
+        inheritance_stack.reserve(
+            type_count_value);
+    }
+    catch (...) {
+        return compiled_project_image_result::
+            failed;
+    }
+
+    for (std::size_t index = 0;
+         index <
+            type_count_value;
+         ++index) {
+
+        if (inheritance_state[index] != 0) {
+            continue;
+        }
+
+        const auto root =
+            type_at(index);
+
+        type_entry root_type;
+
+        if (!type(
+                root,
+                root_type)) {
+
+            return compiled_project_image_result::
+                invalid_image;
+        }
+
+        if (!root_type.defined()) {
+            inheritance_state[index] = 2;
+            continue;
+        }
+
+        inheritance_state[index] = 1;
+
+        inheritance_stack.push_back({
+            root,
+            0,
+        });
+
+        while (!inheritance_stack.empty()) {
+            auto& frame =
+                inheritance_stack.back();
+
+            type_entry current;
+
+            if (!type(
+                    frame.type,
+                    current) ||
+                !current.defined()) {
+
+                return compiled_project_image_result::
+                    invalid_image;
+            }
+
+            if (frame.next >=
+                current.bases.count) {
+
+                inheritance_state[
+                    frame.type.value() - 1] =
+                        2;
+
+                inheritance_stack.pop_back();
+                continue;
+            }
+
+            base_record base;
+
+            if (!base_at(
+                    static_cast<std::size_t>(
+                        current.bases.begin) +
+                        frame.next,
+                    base)) {
+
+                return compiled_project_image_result::
+                    invalid_image;
+            }
+
+            ++frame.next;
+
+            const auto base_slot =
+                static_cast<std::size_t>(
+                    base.type.value() - 1);
+
+            if (inheritance_state[
+                    base_slot] == 1) {
+
+                return compiled_project_image_result::
+                    invalid_image;
+            }
+
+            if (inheritance_state[
+                    base_slot] == 2) {
+
+                continue;
+            }
+
+            inheritance_state[
+                base_slot] = 1;
+
+            inheritance_stack.push_back({
+                base.type,
+                0,
+            });
         }
     }
 

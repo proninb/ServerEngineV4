@@ -98,6 +98,11 @@ public:
         std::size_t index,
         record_offset& output) const noexcept;
 
+    // index is type_entry.bases.begin + local direct-base index.
+    [[nodiscard]] bool base_offset(
+        std::size_t index,
+        record_offset& output) const noexcept;
+
     [[nodiscard]] bool object_offset(
         object_handle object,
         runtime_offset& output) const noexcept;
@@ -113,7 +118,8 @@ private:
         std::uint64_t size = 0;
         std::uint32_t alignment = 0;
         slot_state state = slot_state::empty;
-        std::uint8_t reserved[3]{};
+        bool empty_record = false;
+        std::uint8_t reserved[2]{};
     };
 
     static_assert(sizeof(layout_slot) == 16);
@@ -128,6 +134,7 @@ private:
     std::vector<layout_slot> type_slots;
     std::vector<layout_slot> derived_slots;
     std::vector<record_offset> member_offsets;
+    std::vector<record_offset> base_offsets;
     std::vector<runtime_offset> object_offsets;
 
     std::array<

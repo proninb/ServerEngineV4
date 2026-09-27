@@ -731,6 +731,64 @@ private:
     }
 
     [[nodiscard]] fixed_direct_materialization_result
+    canonical_bases(
+        const type_entry& type,
+        std::byte* base) noexcept {
+
+        for (std::uint32_t local = 0;
+             local <
+                 type.bases.count;
+             ++local) {
+
+            const auto global =
+                static_cast<std::size_t>(
+                    type.bases.begin) +
+                local;
+
+            base_record base_record_value;
+            record_offset offset = 0;
+
+            if (!project.base_at(
+                    global,
+                    base_record_value)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            if (base_record_value.virtual_base()) {
+                return fixed_direct_materialization_result::
+                    unsupported_type;
+            }
+
+            if (!layout.base_offset(
+                    global,
+                    offset)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            const auto materialized =
+                canonical_record(
+                    base_record_value.type,
+                    base +
+                        static_cast<std::size_t>(
+                            offset));
+
+            if (materialized !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return materialized;
+            }
+        }
+
+        return fixed_direct_materialization_result::
+            success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
     canonical_record(
         type_handle handle,
         std::byte* base) noexcept {
@@ -763,6 +821,20 @@ private:
 
             return fixed_direct_materialization_result::
                 invalid_input;
+        }
+
+        if (type.bases.count != 0) {
+            const auto bases_materialized =
+                canonical_bases(
+                    type,
+                    base);
+
+            if (bases_materialized !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return bases_materialized;
+            }
         }
 
         for (std::uint32_t local = 0;
@@ -1295,6 +1367,7 @@ private:
         empty = 0,
         seen,
         ready,
+        ready_bases,
     };
 
     struct record_plan final {
@@ -1340,8 +1413,10 @@ private:
             static_cast<std::size_t>(
                 record.begin);
 
-        if (record.state !=
-                record_plan_state::ready ||
+        if ((record.state !=
+                 record_plan_state::ready &&
+             record.state !=
+                 record_plan_state::ready_bases) ||
             local >=
                 record.count ||
             begin >
@@ -1356,6 +1431,80 @@ private:
         return &planned_members[
             begin +
             local];
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    normal_bases(
+        type_handle handle,
+        std::byte* base,
+        object_handle link_object) noexcept {
+
+        type_entry type;
+
+        if (!handle ||
+            !project.type(
+                handle,
+                type) ||
+            !type.defined() ||
+            type.kind !=
+                graph_type_kind::record) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        for (std::uint32_t local = 0;
+             local <
+                 type.bases.count;
+             ++local) {
+
+            const auto global =
+                static_cast<std::size_t>(
+                    type.bases.begin) +
+                local;
+
+            base_record base_record_value;
+            record_offset offset = 0;
+
+            if (!project.base_at(
+                    global,
+                    base_record_value)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            if (base_record_value.virtual_base()) {
+                return fixed_direct_materialization_result::
+                    unsupported_type;
+            }
+
+            if (!layout.base_offset(
+                    global,
+                    offset)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            const auto materialized =
+                normal_record(
+                    base_record_value.type,
+                    base +
+                        static_cast<std::size_t>(
+                            offset),
+                    link_object);
+
+            if (materialized !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return materialized;
+            }
+        }
+
+        return fixed_direct_materialization_result::
+            success;
     }
 
     [[nodiscard]] fixed_direct_materialization_result
@@ -1478,7 +1627,9 @@ private:
             type.members.count;
 
         output.state =
-            record_plan_state::ready;
+            type.bases.count == 0
+            ? record_plan_state::ready
+            : record_plan_state::ready_bases;
 
         return fixed_direct_materialization_result::
             success;
@@ -1501,7 +1652,9 @@ private:
         }
 
         if (record->state ==
-            record_plan_state::ready) {
+                record_plan_state::ready ||
+            record->state ==
+                record_plan_state::ready_bases) {
 
             return fixed_direct_materialization_result::
                 success;
@@ -1664,6 +1817,21 @@ private:
                 invalid_input;
         }
 
+        if (type.bases.count != 0) {
+            const auto bases_materialized =
+                normal_bases(
+                    handle,
+                    base,
+                    link_object);
+
+            if (bases_materialized !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return bases_materialized;
+            }
+        }
+
         for (std::uint32_t local = 0;
              local <
                  type.members.count;
@@ -1795,6 +1963,27 @@ private:
                 link_object,
                 *record);
 
+        case record_plan_state::ready_bases: {
+            const auto bases_materialized =
+                normal_bases(
+                    handle,
+                    base,
+                    link_object);
+
+            if (bases_materialized !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return bases_materialized;
+            }
+
+            return normal_record_planned(
+                handle,
+                base,
+                link_object,
+                *record);
+        }
+
         case record_plan_state::seen: {
             const auto prepared =
                 prepare_record_plan(
@@ -1806,6 +1995,23 @@ private:
                     success) {
 
                 return prepared;
+            }
+
+            if (record->state ==
+                record_plan_state::ready_bases) {
+
+                const auto bases_materialized =
+                    normal_bases(
+                        handle,
+                        base,
+                        link_object);
+
+                if (bases_materialized !=
+                    fixed_direct_materialization_result::
+                        success) {
+
+                    return bases_materialized;
+                }
             }
 
             return normal_record_planned(

@@ -381,6 +381,16 @@ void test_class_abi_persistence(
 
     runtime_layout layout;
 
+#if defined(_WIN32)
+    tests.expect(
+        prepare_runtime_layout(
+            view,
+            abi,
+            layout) ==
+            runtime_layout_result::
+                success,
+        "Runtime class ABI derives compiler-validated Windows layout");
+#else
     tests.expect(
         prepare_runtime_layout(
             view,
@@ -388,7 +398,8 @@ void test_class_abi_persistence(
             layout) ==
             runtime_layout_result::
                 unsupported_type,
-        "Runtime class ABI remains fail-closed until V1B physical layout");
+        "non-Windows class ABI remains fail-closed without compiler oracle");
+#endif
 }
 
 void test_endpoint_path_persistence(
@@ -1789,6 +1800,324 @@ void rewrite_section_crc(
 
     rewrite_directory_crc(
         image);
+}
+
+
+void test_class_abi_multiple_base_persistence(
+    test_state& tests) {
+
+    compiled_fixture fixture;
+
+    string_id a_name;
+    string_id b_name;
+    string_id c_name;
+    string_id d_name;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.strings.intern(
+                    "MultiA",
+                    a_name)) &&
+            succeeded(
+                fixture.strings.intern(
+                    "MultiB",
+                    b_name)) &&
+            succeeded(
+                fixture.strings.intern(
+                    "MultiC",
+                    c_name)) &&
+            succeeded(
+                fixture.strings.intern(
+                    "MultiD",
+                    d_name)),
+            "prepare multiple-base persistence strings")) {
+
+        return;
+    }
+
+    identity_ref a_identity;
+    identity_ref b_identity;
+    identity_ref c_identity;
+    identity_ref d_identity;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    a_name,
+                    identity_kind::type,
+                    a_identity)) &&
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    b_name,
+                    identity_kind::type,
+                    b_identity)) &&
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    c_name,
+                    identity_kind::type,
+                    c_identity)) &&
+            succeeded(
+                fixture.identities.resolve(
+                    fixture.identities.root(),
+                    d_name,
+                    identity_kind::type,
+                    d_identity)),
+            "prepare multiple-base persistence identities")) {
+
+        return;
+    }
+
+    type_handle a;
+    type_handle b;
+    type_handle c;
+    type_handle d;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.declare_record(
+                    a_identity,
+                    graph_record_kind::struct_type,
+                    a)) &&
+            succeeded(
+                fixture.G.declare_record(
+                    b_identity,
+                    graph_record_kind::struct_type,
+                    b)) &&
+            succeeded(
+                fixture.G.declare_record(
+                    c_identity,
+                    graph_record_kind::struct_type,
+                    c)) &&
+            succeeded(
+                fixture.G.declare_record(
+                    d_identity,
+                    graph_record_kind::struct_type,
+                    d)),
+            "declare multiple-base persistence records")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.define_record(
+                    a,
+                    graph_record_kind::struct_type,
+                    {})),
+            "define multiple-base root")) {
+
+        return;
+    }
+
+    const std::array<base_record, 1>
+        b_bases{{
+            {
+                a,
+                graph_member_access::public_access,
+                0,
+                0,
+            },
+        }};
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.define_record(
+                    b,
+                    graph_record_kind::struct_type,
+                    {},
+                    {},
+                    b_bases)),
+            "define first inheritance edge")) {
+
+        return;
+    }
+
+    const std::array<base_record, 1>
+        c_bases{{
+            {
+                b,
+                graph_member_access::public_access,
+                0,
+                0,
+            },
+        }};
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.define_record(
+                    c,
+                    graph_record_kind::struct_type,
+                    {},
+                    {},
+                    c_bases)),
+            "define second inheritance edge")) {
+
+        return;
+    }
+
+    const std::array<base_record, 2>
+        d_bases{{
+            {
+                a,
+                graph_member_access::public_access,
+                0,
+                0,
+            },
+            {
+                b,
+                graph_member_access::protected_access,
+                0,
+                0,
+            },
+        }};
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.define_record(
+                    d,
+                    graph_record_kind::class_type,
+                    {},
+                    {},
+                    d_bases)),
+            "G preserves multiple direct bases")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            succeeded(
+                fixture.sources.finalize(
+                    fixture.files.size(),
+                    fixture.identities,
+                    fixture.G)),
+            "finalize multiple-base persistence Source Map")) {
+
+        return;
+    }
+
+    compiled_test_image image;
+
+    if (!tests.expect(
+            build_test_compiled_image(
+                fixture,
+                image) ==
+                compiled_project_image_result::success,
+            "encode multiple-base persistence image")) {
+
+        return;
+    }
+
+    compiled_project_view view;
+
+    if (!tests.expect(
+            view.bind(
+                image.bytes) ==
+                compiled_project_image_result::success &&
+            view.verify_contents() ==
+                compiled_project_image_result::success,
+            "cold audit accepts valid multiple-base G")) {
+
+        return;
+    }
+
+    type_entry persisted_b;
+    type_entry persisted_c;
+    type_entry persisted_d;
+    base_record d_base0;
+    base_record d_base1;
+
+    if (!tests.expect(
+            view.type(
+                b,
+                persisted_b) &&
+            view.type(
+                c,
+                persisted_c) &&
+            view.type(
+                d,
+                persisted_d) &&
+            persisted_d.bases.count == 2 &&
+            view.base_at(
+                persisted_d.bases.begin,
+                d_base0) &&
+            view.base_at(
+                static_cast<std::size_t>(
+                    persisted_d.bases.begin) +
+                    1,
+                d_base1) &&
+            d_base0.type == a &&
+            d_base1.type == b,
+            "compiled G preserves ordered 0..N direct bases")) {
+
+        return;
+    }
+
+    auto cyclic =
+        image.bytes;
+
+    const auto bases_offset =
+        section_offset(
+            cyclic,
+            compiled_project_section::bases);
+
+    write_u32(
+        cyclic.data() +
+            bases_offset +
+            static_cast<std::size_t>(
+                persisted_b.bases.begin) *
+                sizeof(base_record) +
+            offsetof(
+                base_record,
+                type),
+        c.value());
+
+    rewrite_section_crc(
+        cyclic,
+        compiled_project_section::bases);
+
+    compiled_project_view cyclic_view;
+
+    tests.expect(
+        cyclic_view.bind(
+            cyclic) ==
+                compiled_project_image_result::success &&
+        cyclic_view.verify_contents() ==
+            compiled_project_image_result::invalid_image,
+        "cold audit rejects persisted inheritance cycle");
+
+    auto duplicate =
+        image.bytes;
+
+    write_u32(
+        duplicate.data() +
+            section_offset(
+                duplicate,
+                compiled_project_section::bases) +
+            (static_cast<std::size_t>(
+                 persisted_d.bases.begin) +
+             1) *
+                sizeof(base_record) +
+            offsetof(
+                base_record,
+                type),
+        a.value());
+
+    rewrite_section_crc(
+        duplicate,
+        compiled_project_section::bases);
+
+    compiled_project_view duplicate_view;
+
+    tests.expect(
+        duplicate_view.bind(
+            duplicate) ==
+                compiled_project_image_result::success &&
+        duplicate_view.verify_contents() ==
+            compiled_project_image_result::invalid_image,
+        "cold audit rejects duplicate direct base");
 }
 
 void test_round_trip(
@@ -4961,6 +5290,996 @@ void test_windows_x86_target_runtime(
         "windows-x86 rejects Runtime range reserved for construction markers");
 }
 
+
+void test_windows_class_abi_runtime(
+    test_state& tests) {
+
+    compiled_fixture fixture;
+
+    string_id a_type_name;
+    string_id b_type_name;
+    string_id c_type_name;
+    string_id d_type_name;
+    string_id reference_base_name;
+    string_id reference_derived_name;
+    string_id own_vfptr_base_name;
+    string_id own_vfptr_derived_name;
+    string_id a_name;
+    string_id b_name;
+    string_id c_name;
+    string_id d_name;
+    string_id out_name;
+    string_id in_name;
+    string_id tail_name;
+    string_id own_base_member_name;
+    string_id own_member_name;
+    string_id d_object_name;
+    string_id reference_object_name;
+    string_id own_vfptr_object_name;
+
+    const auto intern =
+        [&](std::string_view value,
+            string_id& output) {
+
+            return succeeded(
+                fixture.strings.intern(
+                    value,
+                    output));
+        };
+
+    if (!tests.expect(
+            intern("ClassAbiA", a_type_name) &&
+            intern("ClassAbiB", b_type_name) &&
+            intern("ClassAbiC", c_type_name) &&
+            intern("ClassAbiD", d_type_name) &&
+            intern("ClassAbiReferenceBase", reference_base_name) &&
+            intern("ClassAbiReferenceDerived", reference_derived_name) &&
+            intern("ClassAbiOwnVfptrBase", own_vfptr_base_name) &&
+            intern("ClassAbiOwnVfptrDerived", own_vfptr_derived_name) &&
+            intern("a", a_name) &&
+            intern("b", b_name) &&
+            intern("c", c_name) &&
+            intern("d", d_name) &&
+            intern("out", out_name) &&
+            intern("in", in_name) &&
+            intern("tail", tail_name) &&
+            intern("base_value", own_base_member_name) &&
+            intern("own_value", own_member_name) &&
+            intern("class_abi_d", d_object_name) &&
+            intern("class_abi_reference", reference_object_name) &&
+            intern("class_abi_own_vfptr", own_vfptr_object_name),
+            "prepare Windows class ABI Runtime strings")) {
+
+        return;
+    }
+
+    const auto declare_type =
+        [&](string_id name,
+            type_handle& output) {
+
+            identity_ref identity;
+
+            return
+                succeeded(
+                    fixture.identities.resolve(
+                        fixture.identities.root(),
+                        name,
+                        identity_kind::type,
+                        identity)) &&
+                succeeded(
+                    fixture.G.declare_record(
+                        identity,
+                        graph_record_kind::struct_type,
+                        output));
+        };
+
+    type_handle a;
+    type_handle b;
+    type_handle c;
+    type_handle d;
+    type_handle reference_base;
+    type_handle reference_derived;
+    type_handle own_vfptr_base;
+    type_handle own_vfptr_derived;
+
+    if (!tests.expect(
+            declare_type(a_type_name, a) &&
+            declare_type(b_type_name, b) &&
+            declare_type(c_type_name, c) &&
+            declare_type(d_type_name, d) &&
+            declare_type(reference_base_name, reference_base) &&
+            declare_type(reference_derived_name, reference_derived) &&
+            declare_type(own_vfptr_base_name, own_vfptr_base) &&
+            declare_type(own_vfptr_derived_name, own_vfptr_derived),
+            "declare Windows class ABI Runtime records")) {
+
+        return;
+    }
+
+    const auto integer =
+        fixture.G.intrinsic(
+            intrinsic_type::signed_int);
+
+    const auto real =
+        fixture.G.intrinsic(
+            intrinsic_type::double_type);
+
+    type_ref integer_reference;
+
+    if (!tests.expect(
+            integer &&
+            real &&
+            succeeded(
+                fixture.G.derive(
+                    integer,
+                    derived_type_kind::lvalue_reference,
+                    0,
+                    integer_reference)),
+            "prepare Windows class ABI Runtime value types")) {
+
+        return;
+    }
+
+    const std::array<member_record, 1> a_members{{
+        {
+            a_name,
+            integer,
+            graph_member_access::public_access,
+        },
+    }};
+
+    const std::array<member_record, 1> b_members{{
+        {
+            b_name,
+            integer,
+            graph_member_access::public_access,
+        },
+    }};
+
+    const std::array<member_record, 1> c_members{{
+        {
+            c_name,
+            real,
+            graph_member_access::public_access,
+        },
+    }};
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.define_record(
+                    a,
+                    graph_record_kind::struct_type,
+                    a_members)) &&
+            succeeded(
+                fixture.G.define_record(
+                    b,
+                    graph_record_kind::struct_type,
+                    b_members,
+                    {},
+                    {},
+                    true)) &&
+            succeeded(
+                fixture.G.define_record(
+                    c,
+                    graph_record_kind::struct_type,
+                    c_members,
+                    {},
+                    {},
+                    true)),
+            "define Windows class ABI direct bases")) {
+
+        return;
+    }
+
+    const std::array<base_record, 3> d_bases{{
+        {
+            a,
+            graph_member_access::public_access,
+            0,
+            0,
+        },
+        {
+            b,
+            graph_member_access::public_access,
+            0,
+            0,
+        },
+        {
+            c,
+            graph_member_access::public_access,
+            0,
+            0,
+        },
+    }};
+
+    const std::array<member_record, 1> d_members{{
+        {
+            d_name,
+            integer,
+            graph_member_access::public_access,
+        },
+    }};
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.define_record(
+                    d,
+                    graph_record_kind::struct_type,
+                    d_members,
+                    {},
+                    d_bases)),
+            "define Windows class ABI multiple inheritance")) {
+
+        return;
+    }
+
+    const std::array<member_record, 2> reference_members{{
+        {
+            out_name,
+            integer,
+            graph_member_access::public_access,
+        },
+        {
+            in_name,
+            integer_reference,
+            graph_member_access::public_access,
+        },
+    }};
+
+    const std::array<construction_value, 2>
+        reference_construction{{
+            {},
+            construction_value::member_binding(1),
+        }};
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.define_record(
+                    reference_base,
+                    graph_record_kind::struct_type,
+                    reference_members,
+                    reference_construction)),
+            "define native-reference base record")) {
+
+        return;
+    }
+
+    const std::array<base_record, 1> reference_bases{{
+        {
+            reference_base,
+            graph_member_access::public_access,
+            0,
+            0,
+        },
+    }};
+
+    const std::array<member_record, 1>
+        reference_derived_members{{
+            {
+                tail_name,
+                integer,
+                graph_member_access::public_access,
+            },
+        }};
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.define_record(
+                    reference_derived,
+                    graph_record_kind::struct_type,
+                    reference_derived_members,
+                    {},
+                    reference_bases)),
+            "define native-reference derived record")) {
+
+        return;
+    }
+
+    const std::array<member_record, 1>
+        own_vfptr_base_members{{
+            {
+                own_base_member_name,
+                integer,
+                graph_member_access::public_access,
+            },
+        }};
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.define_record(
+                    own_vfptr_base,
+                    graph_record_kind::struct_type,
+                    own_vfptr_base_members)),
+            "define own-vfptr non-polymorphic base")) {
+
+        return;
+    }
+
+    const std::array<base_record, 1> own_vfptr_bases{{
+        {
+            own_vfptr_base,
+            graph_member_access::public_access,
+            0,
+            0,
+        },
+    }};
+
+    const std::array<member_record, 1> own_vfptr_members{{
+        {
+            own_member_name,
+            real,
+            graph_member_access::public_access,
+        },
+    }};
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.define_record(
+                    own_vfptr_derived,
+                    graph_record_kind::struct_type,
+                    own_vfptr_members,
+                    {},
+                    own_vfptr_bases,
+                    true)),
+            "define own-vfptr aligned derived record")) {
+
+        return;
+    }
+
+    const auto add_object =
+        [&](string_id name,
+            type_handle type,
+            object_handle& output) {
+
+            identity_ref identity;
+
+            return
+                succeeded(
+                    fixture.identities.resolve(
+                        fixture.identities.root(),
+                        name,
+                        identity_kind::object,
+                        identity)) &&
+                succeeded(
+                    fixture.G.add_object(
+                        identity,
+                        fixture.G.named(type),
+                        output));
+        };
+
+    object_handle d_object;
+    object_handle reference_object;
+    object_handle own_vfptr_object;
+
+    if (!tests.expect(
+            add_object(d_object_name, d, d_object) &&
+            add_object(
+                reference_object_name,
+                reference_derived,
+                reference_object) &&
+            add_object(
+                own_vfptr_object_name,
+                own_vfptr_derived,
+                own_vfptr_object),
+            "add Windows class ABI Runtime objects")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            succeeded(
+                fixture.sources.finalize(
+                    fixture.files.size(),
+                    fixture.identities,
+                    fixture.G)),
+            "finalize Windows class ABI Runtime Source Map")) {
+
+        return;
+    }
+
+    compiled_test_image image;
+
+    if (!tests.expect(
+            build_test_compiled_image(
+                fixture,
+                image) ==
+                compiled_project_image_result::success,
+            "encode Windows class ABI Runtime image")) {
+
+        return;
+    }
+
+    compiled_project_view view;
+
+    if (!tests.expect(
+            view.bind(
+                image.bytes) ==
+                compiled_project_image_result::success &&
+            view.verify_contents() ==
+                compiled_project_image_result::success,
+            "bind and audit Windows class ABI Runtime image")) {
+
+        return;
+    }
+
+    type_entry persisted_d;
+    type_entry persisted_reference_base;
+    type_entry persisted_reference_derived;
+    type_entry persisted_own_vfptr_derived;
+
+    if (!tests.expect(
+            view.type(d, persisted_d) &&
+            view.type(
+                reference_base,
+                persisted_reference_base) &&
+            view.type(
+                reference_derived,
+                persisted_reference_derived) &&
+            view.type(
+                own_vfptr_derived,
+                persisted_own_vfptr_derived),
+            "read Windows class ABI Runtime type records")) {
+
+        return;
+    }
+
+    const auto check_layout =
+        [&](abi_target target,
+            std::uint64_t d_size,
+            std::uint32_t d_alignment,
+            record_offset a_base,
+            record_offset b_base,
+            record_offset c_base,
+            record_offset d_member,
+            std::uint64_t reference_base_size,
+            std::uint32_t reference_base_alignment,
+            record_offset reference_in,
+            record_offset reference_tail,
+            record_offset own_base,
+            record_offset own_member) {
+
+            const server_abi_configuration abi{
+                target,
+                8,
+            };
+
+            runtime_layout layout;
+
+            if (!tests.expect(
+                    prepare_runtime_layout(
+                        view,
+                        abi,
+                        layout) ==
+                        runtime_layout_result::success,
+                    "derive Windows class ABI Runtime layout")) {
+
+                return;
+            }
+
+            runtime_value_layout d_layout;
+            runtime_value_layout reference_base_layout;
+            runtime_value_layout reference_derived_layout;
+            runtime_value_layout own_vfptr_layout;
+
+            record_offset observed_a = 0;
+            record_offset observed_b = 0;
+            record_offset observed_c = 0;
+            record_offset observed_d = 0;
+            record_offset observed_reference_base = 0;
+            record_offset observed_reference_in = 0;
+            record_offset observed_reference_tail = 0;
+            record_offset observed_own_base = 0;
+            record_offset observed_own_member = 0;
+
+            if (!tests.expect(
+                    layout.type(
+                        d,
+                        d_layout) &&
+                    layout.type(
+                        reference_base,
+                        reference_base_layout) &&
+                    layout.type(
+                        reference_derived,
+                        reference_derived_layout) &&
+                    layout.type(
+                        own_vfptr_derived,
+                        own_vfptr_layout) &&
+                    layout.base_offset(
+                        static_cast<std::size_t>(
+                            persisted_d.bases.begin),
+                        observed_a) &&
+                    layout.base_offset(
+                        static_cast<std::size_t>(
+                            persisted_d.bases.begin) +
+                            1,
+                        observed_b) &&
+                    layout.base_offset(
+                        static_cast<std::size_t>(
+                            persisted_d.bases.begin) +
+                            2,
+                        observed_c) &&
+                    layout.member_offset(
+                        static_cast<std::size_t>(
+                            persisted_d.members.begin),
+                        observed_d) &&
+                    layout.base_offset(
+                        static_cast<std::size_t>(
+                            persisted_reference_derived.bases.begin),
+                        observed_reference_base) &&
+                    layout.member_offset(
+                        static_cast<std::size_t>(
+                            persisted_reference_base.members.begin) +
+                            1,
+                        observed_reference_in) &&
+                    layout.member_offset(
+                        static_cast<std::size_t>(
+                            persisted_reference_derived.members.begin),
+                        observed_reference_tail) &&
+                    layout.base_offset(
+                        static_cast<std::size_t>(
+                            persisted_own_vfptr_derived.bases.begin),
+                        observed_own_base) &&
+                    layout.member_offset(
+                        static_cast<std::size_t>(
+                            persisted_own_vfptr_derived.members.begin),
+                        observed_own_member),
+                    "query Windows class ABI base/member offsets")) {
+
+                return;
+            }
+
+            tests.expect(
+                d_layout.size ==
+                    d_size &&
+                d_layout.alignment ==
+                    d_alignment &&
+                observed_a ==
+                    a_base &&
+                observed_b ==
+                    b_base &&
+                observed_c ==
+                    c_base &&
+                observed_d ==
+                    d_member,
+                "multiple inheritance matches MSVC compiler oracle");
+
+            tests.expect(
+                reference_base_layout.size ==
+                    reference_base_size &&
+                reference_base_layout.alignment ==
+                    reference_base_alignment &&
+                observed_reference_base == 0 &&
+                observed_reference_in ==
+                    reference_in &&
+                observed_reference_tail ==
+                    reference_tail,
+                "native-reference base layout matches target ABI");
+
+            tests.expect(
+                own_vfptr_layout.size == 24 &&
+                own_vfptr_layout.alignment == 8 &&
+                observed_own_base ==
+                    own_base &&
+                observed_own_member ==
+                    own_member,
+                "own vfptr aligns base region by complete record alignment");
+
+#if defined(_WIN32)
+            std::vector<std::byte> runtime;
+
+            try {
+                runtime.assign(
+                    static_cast<std::size_t>(
+                        layout.size()),
+                    std::byte{0xcc});
+            }
+            catch (...) {
+                tests.expect(
+                    false,
+                    "allocate class ABI Runtime image");
+                return;
+            }
+
+            constexpr std::uint64_t target_base =
+                0x20000000ull;
+
+            if (!tests.expect(
+                    materialize_fixed_direct(
+                        view,
+                        layout,
+                        abi,
+                        target_base,
+                        runtime) ==
+                        fixed_direct_materialization_result::
+                            success,
+                    "materialize recursive class ABI base subobjects")) {
+
+                return;
+            }
+
+            runtime_offset object_offset = 0;
+
+            if (!tests.expect(
+                    layout.object_offset(
+                        reference_object,
+                        object_offset),
+                    "query native-reference derived object offset")) {
+
+                return;
+            }
+
+            const auto slot_offset =
+                object_offset +
+                observed_reference_base +
+                observed_reference_in;
+
+            const auto referent_offset =
+                object_offset +
+                observed_reference_base;
+
+            if (target ==
+                abi_target::windows_x86) {
+
+                std::uint32_t observed = 0;
+
+                std::memcpy(
+                    &observed,
+                    runtime.data() +
+                        static_cast<std::size_t>(
+                            slot_offset),
+                    sizeof(observed));
+
+                tests.expect(
+                    observed ==
+                        static_cast<std::uint32_t>(
+                            target_base +
+                            referent_offset),
+                    "Win32 inherited reference binds inside base subobject");
+            }
+            else {
+                std::uint64_t observed = 0;
+
+                std::memcpy(
+                    &observed,
+                    runtime.data() +
+                        static_cast<std::size_t>(
+                            slot_offset),
+                    sizeof(observed));
+
+                tests.expect(
+                    observed ==
+                        target_base +
+                        referent_offset,
+                    "x64 inherited reference binds inside base subobject");
+            }
+#endif
+        };
+
+    check_layout(
+        abi_target::windows_x64,
+        40,
+        8,
+        32,
+        0,
+        16,
+        36,
+        16,
+        8,
+        8,
+        16,
+        8,
+        16);
+
+    check_layout(
+        abi_target::windows_x86,
+        32,
+        8,
+        24,
+        0,
+        8,
+        28,
+        8,
+        4,
+        4,
+        8,
+        8,
+        16);
+
+    const server_abi_configuration posix_abi{
+        abi_target::posix_x64,
+        8,
+    };
+
+    runtime_layout posix_layout;
+
+    tests.expect(
+        prepare_runtime_layout(
+            view,
+            posix_abi,
+            posix_layout) ==
+            runtime_layout_result::
+                unsupported_type,
+        "class inheritance remains fail-closed for unverified POSIX ABI");
+
+    const server_abi_configuration windows_abi{
+        abi_target::windows_x64,
+        8,
+    };
+
+    const auto d_base_slot =
+        static_cast<std::size_t>(
+            persisted_d.bases.begin);
+
+    {
+        auto duplicate =
+            image.bytes;
+
+        write_u32(
+            duplicate.data() +
+                section_offset(
+                    duplicate,
+                    compiled_project_section::bases) +
+                (d_base_slot + 1) *
+                    sizeof(base_record) +
+                offsetof(
+                    base_record,
+                    type),
+            a.value());
+
+        rewrite_section_crc(
+            duplicate,
+            compiled_project_section::bases);
+
+        compiled_project_view duplicate_view;
+        runtime_layout duplicate_layout;
+
+        tests.expect(
+            duplicate_view.bind(
+                duplicate) ==
+                    compiled_project_image_result::
+                        success &&
+            prepare_runtime_layout(
+                duplicate_view,
+                windows_abi,
+                duplicate_layout) ==
+                    runtime_layout_result::
+                        invalid_input,
+            "Runtime hot path rejects duplicate direct bases without cold audit");
+    }
+
+    {
+        auto cyclic =
+            image.bytes;
+
+        write_u32(
+            cyclic.data() +
+                section_offset(
+                    cyclic,
+                    compiled_project_section::bases) +
+                d_base_slot *
+                    sizeof(base_record) +
+                offsetof(
+                    base_record,
+                    type),
+            d.value());
+
+        rewrite_section_crc(
+            cyclic,
+            compiled_project_section::bases);
+
+        compiled_project_view cyclic_view;
+        runtime_layout cyclic_layout;
+
+        tests.expect(
+            cyclic_view.bind(
+                cyclic) ==
+                    compiled_project_image_result::
+                        success &&
+            prepare_runtime_layout(
+                cyclic_view,
+                windows_abi,
+                cyclic_layout) ==
+                    runtime_layout_result::
+                        invalid_input,
+            "Runtime hot path rejects inheritance cycles without cold audit");
+    }
+
+    {
+        auto virtual_base =
+            image.bytes;
+
+        auto* flags =
+            virtual_base.data() +
+            section_offset(
+                virtual_base,
+                compiled_project_section::bases) +
+            d_base_slot *
+                sizeof(base_record) +
+            offsetof(
+                base_record,
+                flags);
+
+        *flags =
+            static_cast<std::byte>(
+                graph_base_virtual);
+
+        rewrite_section_crc(
+            virtual_base,
+            compiled_project_section::bases);
+
+        compiled_project_view virtual_view;
+        runtime_layout virtual_layout;
+
+        tests.expect(
+            virtual_view.bind(
+                virtual_base) ==
+                    compiled_project_image_result::
+                        success &&
+            prepare_runtime_layout(
+                virtual_view,
+                windows_abi,
+                virtual_layout) ==
+                    runtime_layout_result::
+                        unsupported_type,
+            "Runtime hot path keeps virtual inheritance fail-closed");
+    }
+
+    compiled_fixture empty_fixture;
+
+    string_id empty_name;
+    string_id derived_name;
+    string_id value_name;
+    string_id object_name;
+
+    if (!tests.expect(
+            succeeded(
+                empty_fixture.strings.intern(
+                    "EmptyBase",
+                    empty_name)) &&
+            succeeded(
+                empty_fixture.strings.intern(
+                    "EmptyDerived",
+                    derived_name)) &&
+            succeeded(
+                empty_fixture.strings.intern(
+                    "value",
+                    value_name)) &&
+            succeeded(
+                empty_fixture.strings.intern(
+                    "empty_object",
+                    object_name)),
+            "prepare EBO fail-closed strings")) {
+
+        return;
+    }
+
+    identity_ref empty_identity;
+    identity_ref derived_identity;
+    identity_ref object_identity;
+
+    if (!tests.expect(
+            succeeded(
+                empty_fixture.identities.resolve(
+                    empty_fixture.identities.root(),
+                    empty_name,
+                    identity_kind::type,
+                    empty_identity)) &&
+            succeeded(
+                empty_fixture.identities.resolve(
+                    empty_fixture.identities.root(),
+                    derived_name,
+                    identity_kind::type,
+                    derived_identity)) &&
+            succeeded(
+                empty_fixture.identities.resolve(
+                    empty_fixture.identities.root(),
+                    object_name,
+                    identity_kind::object,
+                    object_identity)),
+            "prepare EBO fail-closed identities")) {
+
+        return;
+    }
+
+    type_handle empty_base;
+    type_handle empty_derived;
+
+    if (!tests.expect(
+            succeeded(
+                empty_fixture.G.declare_record(
+                    empty_identity,
+                    graph_record_kind::struct_type,
+                    empty_base)) &&
+            succeeded(
+                empty_fixture.G.declare_record(
+                    derived_identity,
+                    graph_record_kind::struct_type,
+                    empty_derived)) &&
+            succeeded(
+                empty_fixture.G.define_record(
+                    empty_base,
+                    graph_record_kind::struct_type,
+                    {})),
+            "define empty base")) {
+
+        return;
+    }
+
+    const std::array<base_record, 1> empty_bases{{
+        {
+            empty_base,
+            graph_member_access::public_access,
+            0,
+            0,
+        },
+    }};
+
+    const std::array<member_record, 1> empty_derived_members{{
+        {
+            value_name,
+            empty_fixture.G.intrinsic(
+                intrinsic_type::signed_int),
+            graph_member_access::public_access,
+        },
+    }};
+
+    object_handle empty_object;
+
+    if (!tests.expect(
+            succeeded(
+                empty_fixture.G.define_record(
+                    empty_derived,
+                    graph_record_kind::struct_type,
+                    empty_derived_members,
+                    {},
+                    empty_bases)) &&
+            succeeded(
+                empty_fixture.G.add_object(
+                    object_identity,
+                    empty_fixture.G.named(
+                        empty_derived),
+                    empty_object)) &&
+            succeeded(
+                empty_fixture.sources.finalize(
+                    empty_fixture.files.size(),
+                    empty_fixture.identities,
+                    empty_fixture.G)),
+            "prepare EBO fail-closed Runtime graph")) {
+
+        return;
+    }
+
+    compiled_test_image empty_image;
+
+    if (!tests.expect(
+            build_test_compiled_image(
+                empty_fixture,
+                empty_image) ==
+                compiled_project_image_result::success,
+            "encode EBO fail-closed image")) {
+
+        return;
+    }
+
+    compiled_project_view empty_view;
+
+    runtime_layout empty_layout;
+
+    tests.expect(
+        empty_view.bind(
+            empty_image.bytes) ==
+                compiled_project_image_result::success &&
+        empty_view.verify_contents() ==
+                compiled_project_image_result::success &&
+        prepare_runtime_layout(
+            empty_view,
+            windows_abi,
+            empty_layout) ==
+                runtime_layout_result::
+                    unsupported_type,
+        "empty-base optimization remains fail-closed in V1B");
+}
+
 void test_runtime_layout_tail_alignment(
     test_state& tests) {
 
@@ -5850,6 +7169,9 @@ int main() {
         test_class_abi_persistence(
             tests);
 
+        test_class_abi_multiple_base_persistence(
+            tests);
+
         test_endpoint_path_persistence(
             tests);
 
@@ -5909,6 +7231,9 @@ int main() {
             tests,
             fixture,
             first);
+
+        test_windows_class_abi_runtime(
+            tests);
 
         test_runtime_layout_tail_alignment(
             tests);

@@ -439,6 +439,126 @@ overlap the construction-time pending-link marker range.
 This is a Runtime construction contract and does not change `compiled.bin` or
 the semantic G representation.
 
+### MSVC class ABI compiler oracle
+
+`CXX-CLASS-ABI-V1B` does not infer C++ inheritance layout from documentation or
+from the Server process architecture. Before the Runtime layout backend changes,
+the repository builds one standalone source with the installed MSVC compiler in
+both Visual Studio target platforms:
+
+```text
+Win32
+x64
+```
+
+For every platform it measures the same cases under:
+
+```text
+pack 1
+pack 2
+pack 4
+pack 8
+pack 16
+```
+
+The oracle records compiler-produced `sizeof`, `alignof`, direct-base
+offsets, base-member offsets, derived-member offset, and array stride. Its
+matrix covers both single and non-virtual multiple inheritance:
+
+```text
+ordinary single inheritance
+alignment/padding
+base tail padding
+polymorphic base
+derived class introducing virtual dispatch
+derived class introducing virtual dispatch after an over-aligned base
+derived class introducing virtual dispatch with an over-aligned own member
+override/final
+virtual destructor
+pure-virtual base with concrete derived class
+empty-base optimization boundary
+vfptr-only base
+polymorphic root with an aligned data member
+multi-level inheritance
+native reference member inside a base subobject
+ordinary multiple inheritance
+multiple inheritance with alignment pressure
+polymorphic first base
+polymorphic second base
+two polymorphic bases
+derived class introducing virtual dispatch over two non-polymorphic bases
+three direct bases with the polymorphic primary declared in the middle
+three direct bases with two polymorphic bases
+```
+
+Offsets are measured from real compiler-generated objects and base conversions;
+`offsetof` is not used for non-standard-layout classes. The oracle intentionally
+does not depend on `runtime_layout`, so it cannot validate an implementation
+against itself.
+
+Run it with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tests\run_msvc_class_abi_oracle.ps1 `
+    -ResultPath build\msvc-class-abi-oracle-v1b3.csv
+```
+
+The result path must not already exist. The runner configures dedicated
+`build-oracle-x64` and `build-oracle-win32` directories, builds only
+`ServerEngineV4MsvcClassAbiOracle`, and combines exactly 115 rows per
+architecture into one CSV. The schema carries three explicit base columns so
+declaration identity and compiler-selected physical base order can be compared
+directly.
+
+The final V1B.3 discriminator uses a Win32 class that introduces its own vfptr
+while its direct base is 4-byte aligned and its own member is 8-byte aligned.
+This isolates whether MSVC aligns the post-vfptr base region by the bases alone
+or by the complete class alignment before Runtime layout rules are frozen.
+
+Semantic G and `compiled.bin` preserve an ordered `graph_range` of 0..N direct
+bases. Multiple inheritance is therefore not a Graph-format restriction.
+The current source parser remains intentionally narrower and still rejects
+multiple inheritance until its frontend slice is widened.
+
+Cold `compiled.bin` verification validates the general 0..N base graph in
+`O(T + E)`: direct bases must be unique and the inheritance graph must be
+acyclic. No handle ordering, sort, or hash lookup is required.
+
+Virtual-base metadata remains part of the semantic base record for future ABI
+work. Current source parsing and Runtime physical layout remain fail-closed for
+virtual inheritance. The empty-base row is also an oracle boundary only until
+an explicit EBO layout stage is accepted.
+
+### Windows C++ class ABI Runtime layout
+
+`CXX-CLASS-ABI-V1B` installs the compiler-validated physical backend for
+`windows-x86` and `windows-x64`. Semantic G remains ABI-independent and keeps
+direct bases in declaration order. Runtime derives one construction-only
+`record_offset` per persisted `base_record`; no physical base or member offset
+is persisted in `compiled.bin`.
+
+For a non-empty, non-virtual record, Runtime first resolves all direct base and
+own-member layouts and computes the packed complete-record alignment. If a
+polymorphic direct base exists, the first polymorphic base in declaration order
+is the MSVC primary base at offset zero. Remaining polymorphic bases are placed
+in declaration order, followed by non-polymorphic bases in declaration order.
+If there is no polymorphic base but the record is polymorphic, Runtime reserves
+one target-width vfptr at offset zero and aligns the following base region by
+the complete-record alignment. Otherwise bases begin at offset zero in
+declaration order. Own members follow all base subobjects.
+
+Base placement always advances by the full `sizeof(base)`; base tail padding is
+not reused. Effective base/member/vfptr alignment is bounded by the configured
+pack. Empty-base optimization and virtual inheritance remain fail-closed.
+Polymorphic storage is physical layout only: vfptr bytes remain zero from the
+Runtime clear, so virtual calls, RTTI/dynamic_cast, dynamic `typeid`, and
+virtual destruction are outside the Runtime contract.
+
+Materialization recursively constructs direct base subobjects at their derived
+`base_offsets` before constructing the current record's own members. The same
+top-level object identity is preserved through base recursion so native
+reference-member construction remains within the final object image.
+
 The selected mode changes physical materialization, not semantic G. There is no
 second semantic build stage and no second Graph.
 

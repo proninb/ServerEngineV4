@@ -237,6 +237,21 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
     endif()
 endif()
 
+if(MSVC)
+    add_executable(
+        ServerEngineV4MsvcClassAbiOracle
+        EXCLUDE_FROM_ALL
+        tests/msvc_class_abi_oracle.cpp
+    )
+
+    target_compile_options(
+        ServerEngineV4MsvcClassAbiOracle
+        PRIVATE
+        /W4
+        /permissive-
+    )
+endif()
+
 include(CTest)
 
 if(BUILD_TESTING)

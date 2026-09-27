@@ -555,6 +555,674 @@ private:
         return runtime_layout_result::invalid_input;
     }
 
+    [[nodiscard]] runtime_layout_result
+    resolve_windows_class_record(
+        const type_entry& type,
+        runtime_layout::layout_slot& slot,
+        runtime_value_layout& value) noexcept {
+
+        value = {};
+
+        if (abi.target !=
+                abi_target::windows_x86 &&
+            abi.target !=
+                abi_target::windows_x64) {
+
+            return runtime_layout_result::
+                unsupported_type;
+        }
+
+        abi_properties properties;
+
+        if (!abi_layout_properties(
+                abi.target,
+                properties)) {
+
+            return runtime_layout_result::
+                invalid_input;
+        }
+
+        const auto base_begin =
+            static_cast<std::size_t>(
+                type.bases.begin);
+
+        const auto base_count =
+            static_cast<std::size_t>(
+                type.bases.count);
+
+        if (base_begin >
+                output.base_offsets.size() ||
+            base_count >
+                output.base_offsets.size() -
+                    base_begin) {
+
+            return runtime_layout_result::
+                invalid_input;
+        }
+
+        std::uint32_t base_mark = 0;
+
+        if (base_count > 1) {
+            try {
+                if (base_marks.size() !=
+                    output.type_slots.size()) {
+
+                    base_marks.assign(
+                        output.type_slots.size(),
+                        0);
+
+                    base_mark_generation = 0;
+                }
+            }
+            catch (...) {
+                return runtime_layout_result::
+                    failed;
+            }
+
+            ++base_mark_generation;
+
+            if (base_mark_generation == 0) {
+                std::fill(
+                    base_marks.begin(),
+                    base_marks.end(),
+                    0);
+
+                base_mark_generation = 1;
+            }
+
+            base_mark =
+                base_mark_generation;
+
+            for (std::uint32_t local = 0;
+                 local <
+                     type.bases.count;
+                 ++local) {
+
+                base_record base;
+
+                if (!project.base_at(
+                        base_begin +
+                            local,
+                        base) ||
+                    !base.type ||
+                    base.type.value() >
+                        output.type_slots.size()) {
+
+                    return runtime_layout_result::
+                        invalid_input;
+                }
+
+                if (base.virtual_base()) {
+                    return runtime_layout_result::
+                        unsupported_type;
+                }
+
+                auto& mark =
+                    base_marks[
+                        base.type.value() - 1];
+
+                if (mark == base_mark) {
+                    return runtime_layout_result::
+                        invalid_input;
+                }
+
+                mark = base_mark;
+            }
+        }
+
+        constexpr std::uint32_t no_primary =
+            (std::numeric_limits<std::uint32_t>::max)();
+
+        std::uint32_t primary_local =
+            no_primary;
+
+        std::uint32_t record_alignment = 1;
+
+        for (std::uint32_t local = 0;
+             local <
+                 type.bases.count;
+             ++local) {
+
+            const auto global =
+                base_begin +
+                local;
+
+            if (output.base_offsets[
+                    global] !=
+                invalid_record_offset) {
+
+                return runtime_layout_result::
+                    invalid_input;
+            }
+
+            base_record base;
+
+            if (!project.base_at(
+                    global,
+                    base)) {
+
+                return runtime_layout_result::
+                    invalid_input;
+            }
+
+            if (base.virtual_base()) {
+                return runtime_layout_result::
+                    unsupported_type;
+            }
+
+            if (!base.type ||
+                base.type.value() >
+                    output.type_slots.size()) {
+
+                return runtime_layout_result::
+                    invalid_input;
+            }
+
+            runtime_value_layout base_layout;
+
+            const auto resolved =
+                resolve_record(
+                    base.type,
+                    base_layout);
+
+            if (resolved !=
+                runtime_layout_result::success) {
+
+                return resolved;
+            }
+
+            if (!base.type ||
+                base.type.value() >
+                    output.type_slots.size() ||
+                output.type_slots[
+                    base.type.value() - 1].
+                        empty_record) {
+
+                return runtime_layout_result::
+                    unsupported_type;
+            }
+
+            const auto effective_alignment =
+                (std::min)(
+                    base_layout.alignment,
+                    abi.pack);
+
+            if (effective_alignment == 0) {
+                return runtime_layout_result::
+                    invalid_input;
+            }
+
+            record_alignment =
+                (std::max)(
+                    record_alignment,
+                    effective_alignment);
+
+            type_entry base_type;
+
+            if (!project.type(
+                    base.type,
+                    base_type) ||
+                !base_type.defined() ||
+                base_type.kind !=
+                    graph_type_kind::record ||
+                base_type.record_kind ==
+                    graph_record_kind::union_type) {
+
+                return runtime_layout_result::
+                    invalid_input;
+            }
+
+            if (base_type.polymorphic() &&
+                primary_local ==
+                    no_primary) {
+
+                primary_local = local;
+            }
+        }
+
+        for (std::uint32_t local = 0;
+             local <
+                 type.members.count;
+             ++local) {
+
+            const auto global =
+                static_cast<std::size_t>(
+                    type.members.begin) +
+                local;
+
+            if (global >=
+                    output.member_offsets.size() ||
+                output.member_offsets[
+                    global] !=
+                    invalid_record_offset) {
+
+                return runtime_layout_result::
+                    invalid_input;
+            }
+
+            member_record member;
+
+            if (!project.member_at(
+                    global,
+                    member)) {
+
+                return runtime_layout_result::
+                    invalid_input;
+            }
+
+            runtime_value_layout member_layout;
+
+            const auto resolved =
+                resolve(
+                    member.type,
+                    member_layout);
+
+            if (resolved !=
+                runtime_layout_result::success) {
+
+                return resolved;
+            }
+
+            const auto effective_alignment =
+                (std::min)(
+                    member_layout.alignment,
+                    abi.pack);
+
+            if (effective_alignment == 0) {
+                return runtime_layout_result::
+                    invalid_input;
+            }
+
+            record_alignment =
+                (std::max)(
+                    record_alignment,
+                    effective_alignment);
+        }
+
+        const auto has_primary =
+            primary_local !=
+                no_primary;
+
+        if (has_primary &&
+            !type.polymorphic()) {
+
+            return runtime_layout_result::
+                invalid_input;
+        }
+
+        const auto own_vfptr =
+            type.polymorphic() &&
+            !has_primary;
+
+        if (own_vfptr) {
+            const auto vfptr_alignment =
+                (std::min)(
+                    properties.pointer_alignment,
+                    abi.pack);
+
+            if (vfptr_alignment == 0) {
+                return runtime_layout_result::
+                    invalid_input;
+            }
+
+            record_alignment =
+                (std::max)(
+                    record_alignment,
+                    vfptr_alignment);
+        }
+
+        std::uint64_t cursor = 0;
+
+        const auto place_base =
+            [&](std::uint32_t local)
+                -> runtime_layout_result {
+
+                if (local >=
+                    type.bases.count) {
+
+                    return runtime_layout_result::
+                        invalid_input;
+                }
+
+                const auto global =
+                    base_begin +
+                    local;
+
+                if (output.base_offsets[
+                        global] !=
+                    invalid_record_offset) {
+
+                    return runtime_layout_result::
+                        invalid_input;
+                }
+
+                base_record base;
+
+                if (!project.base_at(
+                        global,
+                        base)) {
+
+                    return runtime_layout_result::
+                        invalid_input;
+                }
+
+                if (base.virtual_base()) {
+                    return runtime_layout_result::
+                        unsupported_type;
+                }
+
+                runtime_value_layout base_layout;
+
+                const auto resolved =
+                    resolve_record(
+                        base.type,
+                        base_layout);
+
+                if (resolved !=
+                    runtime_layout_result::success) {
+
+                    return resolved;
+                }
+
+                const auto effective_alignment =
+                    (std::min)(
+                        base_layout.alignment,
+                        abi.pack);
+
+                std::uint64_t aligned = 0;
+
+                if (!align_up(
+                        cursor,
+                        effective_alignment,
+                        aligned)) {
+
+                    return runtime_layout_result::
+                        overflow;
+                }
+
+                if (aligned >=
+                    invalid_record_offset) {
+
+                    return runtime_layout_result::
+                        overflow;
+                }
+
+                output.base_offsets[
+                    global] =
+                        static_cast<record_offset>(
+                            aligned);
+
+                if (!add_u64(
+                        aligned,
+                        base_layout.size,
+                        cursor)) {
+
+                    return runtime_layout_result::
+                        overflow;
+                }
+
+                return runtime_layout_result::
+                    success;
+            };
+
+        if (has_primary) {
+            const auto primary_global =
+                base_begin +
+                primary_local;
+
+            base_record primary;
+            runtime_value_layout primary_layout;
+
+            if (!project.base_at(
+                    primary_global,
+                    primary)) {
+
+                return runtime_layout_result::
+                    invalid_input;
+            }
+
+            if (primary.virtual_base()) {
+                return runtime_layout_result::
+                    unsupported_type;
+            }
+
+            const auto primary_resolved =
+                resolve_record(
+                    primary.type,
+                    primary_layout);
+
+            if (primary_resolved !=
+                    runtime_layout_result::success ||
+                output.base_offsets[
+                    primary_global] !=
+                    invalid_record_offset) {
+
+                return primary_resolved !=
+                        runtime_layout_result::success
+                    ? primary_resolved
+                    : runtime_layout_result::
+                        invalid_input;
+            }
+
+            output.base_offsets[
+                primary_global] = 0;
+
+            cursor =
+                primary_layout.size;
+
+            for (std::uint32_t local = 0;
+                 local <
+                     type.bases.count;
+                 ++local) {
+
+                if (local ==
+                    primary_local) {
+
+                    continue;
+                }
+
+                base_record base;
+                type_entry base_type;
+
+                if (!project.base_at(
+                        base_begin +
+                            local,
+                        base) ||
+                    !project.type(
+                        base.type,
+                        base_type) ||
+                    !base_type.defined()) {
+
+                    return runtime_layout_result::
+                        invalid_input;
+                }
+
+                if (!base_type.polymorphic()) {
+                    continue;
+                }
+
+                const auto placed =
+                    place_base(local);
+
+                if (placed !=
+                    runtime_layout_result::success) {
+
+                    return placed;
+                }
+            }
+
+            for (std::uint32_t local = 0;
+                 local <
+                     type.bases.count;
+                 ++local) {
+
+                base_record base;
+                type_entry base_type;
+
+                if (!project.base_at(
+                        base_begin +
+                            local,
+                        base) ||
+                    !project.type(
+                        base.type,
+                        base_type) ||
+                    !base_type.defined()) {
+
+                    return runtime_layout_result::
+                        invalid_input;
+                }
+
+                if (base_type.polymorphic()) {
+                    continue;
+                }
+
+                const auto placed =
+                    place_base(local);
+
+                if (placed !=
+                    runtime_layout_result::success) {
+
+                    return placed;
+                }
+            }
+        }
+        else {
+            if (own_vfptr) {
+                if (!align_up(
+                        properties.pointer_size,
+                        record_alignment,
+                        cursor)) {
+
+                    return runtime_layout_result::
+                        overflow;
+                }
+            }
+
+            for (std::uint32_t local = 0;
+                 local <
+                     type.bases.count;
+                 ++local) {
+
+                const auto placed =
+                    place_base(local);
+
+                if (placed !=
+                    runtime_layout_result::success) {
+
+                    return placed;
+                }
+            }
+        }
+
+        for (std::uint32_t local = 0;
+             local <
+                 type.members.count;
+             ++local) {
+
+            const auto global =
+                static_cast<std::size_t>(
+                    type.members.begin) +
+                local;
+
+            member_record member;
+
+            if (!project.member_at(
+                    global,
+                    member)) {
+
+                return runtime_layout_result::
+                    invalid_input;
+            }
+
+            runtime_value_layout member_layout;
+
+            const auto resolved =
+                resolve(
+                    member.type,
+                    member_layout);
+
+            if (resolved !=
+                runtime_layout_result::success) {
+
+                return resolved;
+            }
+
+            const auto effective_alignment =
+                (std::min)(
+                    member_layout.alignment,
+                    abi.pack);
+
+            std::uint64_t aligned = 0;
+
+            if (!align_up(
+                    cursor,
+                    effective_alignment,
+                    aligned)) {
+
+                return runtime_layout_result::
+                    overflow;
+            }
+
+            if (aligned >=
+                invalid_record_offset) {
+
+                return runtime_layout_result::
+                    overflow;
+            }
+
+            output.member_offsets[
+                global] =
+                    static_cast<record_offset>(
+                        aligned);
+
+            if (!add_u64(
+                    aligned,
+                    member_layout.size,
+                    cursor)) {
+
+                return runtime_layout_result::
+                    overflow;
+            }
+        }
+
+        if (cursor == 0) {
+            cursor = 1;
+        }
+
+        std::uint64_t final_size = 0;
+
+        if (!align_up(
+                cursor,
+                record_alignment,
+                final_size) ||
+            final_size >
+                (std::numeric_limits<record_offset>::max)()) {
+
+            return runtime_layout_result::
+                overflow;
+        }
+
+        slot.size =
+            final_size;
+
+        slot.alignment =
+            record_alignment;
+
+        slot.empty_record = false;
+
+        slot.state =
+            runtime_layout::slot_state::ready;
+
+        value = {
+            final_size,
+            record_alignment,
+            0,
+        };
+
+        return runtime_layout_result::
+            success;
+    }
+
     [[nodiscard]] runtime_layout_result resolve_record(
         type_handle handle,
         runtime_value_layout& value) noexcept {
@@ -605,22 +1273,6 @@ private:
             return runtime_layout_result::unsupported_type;
         }
 
-        // CXX-CLASS-ABI-V1A persists semantic class metadata but does not yet
-        // guess physical C++ ABI offsets. Until the compiler-validated backend
-        // is installed, any base class or polymorphic record fails closed.
-        if (type.bases.count != 0 ||
-            type.polymorphic()) {
-
-            return runtime_layout_result::unsupported_type;
-        }
-
-        slot.state =
-            runtime_layout::slot_state::visiting;
-
-        std::uint64_t cursor = 0;
-        std::uint64_t union_size = 0;
-        std::uint32_t record_alignment = 1;
-
         const auto is_union =
             type.record_kind ==
                 graph_record_kind::union_type;
@@ -631,11 +1283,40 @@ private:
             type.record_kind !=
                 graph_record_kind::class_type) {
 
-            slot.state =
-                runtime_layout::slot_state::empty;
+            return runtime_layout_result::invalid_input;
+        }
+
+        if (is_union &&
+            (type.bases.count != 0 ||
+             type.polymorphic())) {
 
             return runtime_layout_result::invalid_input;
         }
+
+        slot.state =
+            runtime_layout::slot_state::visiting;
+
+        if (type.bases.count != 0 ||
+            type.polymorphic()) {
+
+            const auto result =
+                resolve_windows_class_record(
+                    type,
+                    slot,
+                    value);
+
+            if (result !=
+                runtime_layout_result::success) {
+
+                slot = {};
+            }
+
+            return result;
+        }
+
+        std::uint64_t cursor = 0;
+        std::uint64_t union_size = 0;
+        std::uint32_t record_alignment = 1;
 
         for (std::uint32_t local = 0;
              local < type.members.count;
@@ -649,9 +1330,7 @@ private:
             if (global >=
                 output.member_offsets.size()) {
 
-                slot.state =
-                    runtime_layout::slot_state::empty;
-
+                slot = {};
                 return runtime_layout_result::invalid_input;
             }
 
@@ -663,9 +1342,7 @@ private:
             if (member_offset !=
                 invalid_record_offset) {
 
-                slot.state =
-                    runtime_layout::slot_state::empty;
-
+                slot = {};
                 return runtime_layout_result::invalid_input;
             }
 
@@ -676,9 +1353,7 @@ private:
                         global),
                     member)) {
 
-                slot.state =
-                    runtime_layout::slot_state::empty;
-
+                slot = {};
                 return runtime_layout_result::invalid_input;
             }
 
@@ -692,9 +1367,7 @@ private:
             if (resolved !=
                 runtime_layout_result::success) {
 
-                slot.state =
-                    runtime_layout::slot_state::empty;
-
+                slot = {};
                 return resolved;
             }
 
@@ -704,9 +1377,7 @@ private:
                     abi.pack);
 
             if (effective_alignment == 0) {
-                slot.state =
-                    runtime_layout::slot_state::empty;
-
+                slot = {};
                 return runtime_layout_result::invalid_input;
             }
 
@@ -733,18 +1404,14 @@ private:
                     effective_alignment,
                     aligned)) {
 
-                slot.state =
-                    runtime_layout::slot_state::empty;
-
+                slot = {};
                 return runtime_layout_result::overflow;
             }
 
             if (aligned >=
                 invalid_record_offset) {
 
-                slot.state =
-                    runtime_layout::slot_state::empty;
-
+                slot = {};
                 return runtime_layout_result::overflow;
             }
 
@@ -757,9 +1424,7 @@ private:
                     member_layout.size,
                     cursor)) {
 
-                slot.state =
-                    runtime_layout::slot_state::empty;
-
+                slot = {};
                 return runtime_layout_result::overflow;
             }
         }
@@ -782,9 +1447,7 @@ private:
             final_size >
                 (std::numeric_limits<record_offset>::max)()) {
 
-            slot.state =
-                runtime_layout::slot_state::empty;
-
+            slot = {};
             return runtime_layout_result::overflow;
         }
 
@@ -793,6 +1456,10 @@ private:
 
         slot.alignment =
             record_alignment;
+
+        slot.empty_record =
+            !is_union &&
+            type.members.count == 0;
 
         slot.state =
             runtime_layout::slot_state::ready;
@@ -1006,12 +1673,18 @@ private:
     const compiled_project_view& project;
     const server_abi_configuration& abi;
     runtime_layout& output;
+
+    // Allocated lazily only when a reachable record has multiple direct bases.
+    // Generation marks reject duplicate direct bases without sort/hash/O(B^2).
+    std::vector<std::uint32_t> base_marks;
+    std::uint32_t base_mark_generation = 0;
 };
 
 void runtime_layout::reset() noexcept {
     type_slots.clear();
     derived_slots.clear();
     member_offsets.clear();
+    base_offsets.clear();
     object_offsets.clear();
 
     unconnected_intrinsic_offsets.fill(
@@ -1242,6 +1915,26 @@ bool runtime_layout::member_offset(
     return true;
 }
 
+bool runtime_layout::base_offset(
+    std::size_t index,
+    record_offset& output_value) const noexcept {
+
+    output_value = 0;
+
+    if (index >=
+            base_offsets.size() ||
+        base_offsets[index] ==
+            invalid_record_offset) {
+
+        return false;
+    }
+
+    output_value =
+        base_offsets[index];
+
+    return true;
+}
+
 bool runtime_layout::object_offset(
     object_handle object,
     runtime_offset& output_value) const noexcept {
@@ -1294,6 +1987,10 @@ runtime_layout_result prepare_runtime_layout(
 
         output.member_offsets.assign(
             project.member_count(),
+            invalid_record_offset);
+
+        output.base_offsets.assign(
+            project.base_count(),
             invalid_record_offset);
 
         output.object_offsets.resize(
