@@ -1,17 +1,17 @@
 /*
- * command_queue implementation.
+ * request_queue implementation.
  *
- * The mutex protects only control-plane command traffic. Runtime execution
+ * The mutex protects only control-plane request traffic. Runtime execution
  * must never depend on this queue.
  */
-#include "command_queue.hpp"
+#include "request_queue.hpp"
 
 #include <utility>
 
 namespace cw::server {
 
-// Publishes one command atomically with respect to the queue and wakes one consumer.
-void command_queue::push(server_command_request request) {
+// Publishes one request atomically with respect to the queue and wakes one consumer.
+void request_queue::push(server_request_message request) {
     {
         // Hold the lock only for the FIFO mutation.
         std::lock_guard lock(mutex);
@@ -23,7 +23,7 @@ void command_queue::push(server_command_request request) {
 }
 
 // Sleeps until work exists, then transfers ownership of the oldest queued command.
-server_command_request command_queue::wait_pop() {
+server_request_message request_queue::wait_pop() {
     std::unique_lock lock(mutex);
 
     // Predicate handles spurious condition_variable wakeups.

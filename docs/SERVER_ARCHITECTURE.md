@@ -76,7 +76,7 @@ main
            |
            +-- server_configuration
            |    `-- one process-wide ABI + Runtime/SHM policy
-           +-- command_queue
+           +-- request_queue
            +-- communication
            |    |
            |    +-- console endpoint, only when configured
@@ -160,8 +160,8 @@ It contains only Server process configuration types and loading/parsing logic.
 `communication/` owns common transport-neutral communication contracts:
 
 ```text
-server_command
-command_queue
+server_request
+request_queue
 communication
 ```
 
@@ -266,18 +266,58 @@ This avoids creating or destroying an incomplete PIMPL type and keeps native
 Windows/POSIX state fully isolated inside its backend.
 
 
-## Command execution result
+## Transport-neutral Server request boundary
+
+Communication transports own framing, parsing, and presentation only. They
+translate console syntax, TCP/JSON, or any future protocol into the same
+`server_request` representation and publish a `server_request_message` to the
+single `request_queue`.
+
+```text
+Console                     TCP/JSON                    future transport
+   |                           |                              |
+   | parse                     | parse                        |
+   +---------------------------+------------------------------+
+                               |
+                        server_request
+                               |
+                         request_queue
+                               |
+                         server::execute()
+                               |
+              +----------------+----------------+
+              |                                 |
+         lifecycle                        future Runtime
+     LOAD/PUBLISH/BUILD/...          control/query/subscription
+```
+
+`server::execute()` owns Server semantics. Transport implementations must not
+implement lifecycle or Runtime behavior and must not expose JSON/TCP types to
+the Server core.
+
+`server_request_origin` is the direct, non-owning reply destination carried by
+the queued envelope. It is not part of the semantic request payload and requires
+no endpoint lookup. A future TCP session may therefore correlate and serialize
+its own protocol request identifiers without reusing the process-local
+`operation_id`.
+
+The current `server_request_kind` set remains the implemented lifecycle subset.
+Runtime control/query/subscription request kinds are added only when their
+Server services are implemented; this boundary deliberately does not invent
+their payload representation early.
+
+## Request execution result
 
 ```text
 communication endpoint
         |
         v
-server_command_request
-|- server_command
+server_request_message
+|- server_request
 `- direct origin callback
         |
         v
-command_queue
+request_queue
         |
         v
 Server/control thread
@@ -286,7 +326,7 @@ Server/control thread
 server::execute()
         |
         v
-server_command_result
+server_response
 |- operation_id
 |- server_status
 `- diagnostic_collection
@@ -301,10 +341,10 @@ originating endpoint
 Invariants:
 
 1. Server/control thread is the sole lifecycle owner.
-2. `server::execute()` performs lifecycle behavior only and does not format or print.
-3. One external command creates exactly one `operation_id` and one `diagnostic_collection`.
-4. `server_command_result` owns the complete operation result.
-5. `server_command_request::origin` is direct and non-owning; no endpoint lookup is performed.
+2. `server::execute()` owns transport-neutral Server request semantics and does not format or print.
+3. One external request creates exactly one `operation_id` and one `diagnostic_collection`.
+4. `server_response` owns the complete operation result.
+5. `server_request_message::origin` is direct and non-owning; no endpoint lookup is performed.
 6. No virtual response hierarchy or shared ownership is used.
 7. SHUTDOWN result is presented before communication endpoints are stopped.
 8. Failed LOAD, BUILD, or REBUILD leaves Server UNLOADED.

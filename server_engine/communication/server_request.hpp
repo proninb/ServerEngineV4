@@ -1,8 +1,8 @@
 /*
- * Internal transport-neutral Server command representation.
+ * Internal transport-neutral Server request representation.
  *
- * External transports must translate their syntax into this representation
- * before lifecycle execution. Transport code never owns lifecycle behavior.
+ * External transports translate their syntax/protocol into this representation
+ * before Server execution. Transport code never owns Server semantics.
  */
 #pragma once
 
@@ -10,8 +10,8 @@
 
 namespace cw::server {
 
-// Server lifecycle commands currently accepted by the control layer.
-enum class server_command_kind {
+// Server request kinds currently accepted by the control layer.
+enum class server_request_kind {
     // Restore one persisted Project while the Server is UNLOADED.
     load,
 
@@ -31,10 +31,10 @@ enum class server_command_kind {
     shutdown,
 };
 
-// Fully parsed command published by a communication endpoint.
-struct server_command {
-    // Operation selected by the external command.
-    server_command_kind kind = server_command_kind::shutdown;
+// Fully parsed transport-neutral request published by a communication endpoint.
+struct server_request {
+    // Operation selected by the external request.
+    server_request_kind kind = server_request_kind::shutdown;
 
     // Project entry path used by LOAD/PUBLISH/BUILD/REBUILD; empty for UNLOAD/SHUTDOWN.
     std::filesystem::path path;

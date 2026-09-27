@@ -86,7 +86,7 @@
     <ClCompile Include="server_engine\diagnostics\diagnostic_source_cache.cpp" />
     <ClCompile Include="server_engine\json\json_parser.cpp" />
     <ClCompile Include="server_engine\configuration\server_configuration_loader.cpp" />
-    <ClCompile Include="server_engine\communication\command_queue.cpp" />
+    <ClCompile Include="server_engine\communication\request_queue.cpp" />
     <ClCompile Include="server_engine\communication\communication.cpp" />
     <ClCompile Include="server_engine\communication\console\console_input_windows.cpp" />
     <ClCompile Include="server_engine\communication\console\server_console.cpp" />
@@ -158,11 +158,11 @@
     <ClInclude Include="server_engine\json\json_writer.hpp" />
     <ClInclude Include="server_engine\configuration\server_configuration.hpp" />
     <ClInclude Include="server_engine\configuration\server_configuration_loader.hpp" />
-    <ClInclude Include="server_engine\communication\command_queue.hpp" />
+    <ClInclude Include="server_engine\communication\request_queue.hpp" />
     <ClInclude Include="server_engine\communication\communication.hpp" />
-    <ClInclude Include="server_engine\communication\server_command.hpp" />
-    <ClInclude Include="server_engine\communication\server_command_request.hpp" />
-    <ClInclude Include="server_engine\communication\server_command_result.hpp" />
+    <ClInclude Include="server_engine\communication\server_request.hpp" />
+    <ClInclude Include="server_engine\communication\server_request_message.hpp" />
+    <ClInclude Include="server_engine\communication\server_response.hpp" />
     <ClInclude Include="server_engine\communication\console\console_input.hpp" />
     <ClInclude Include="server_engine\communication\console\server_console.hpp" />
     <ClInclude Include="server_engine\project\project.hpp" />

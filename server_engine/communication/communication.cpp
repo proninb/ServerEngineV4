@@ -11,7 +11,7 @@ namespace cw::server {
 // Materializes exactly the endpoint set declared by server.json.
 server_status communication::start(
     const communication_configuration& configuration,
-    command_queue& commands) {
+    request_queue& requests) {
 
     // Make repeated start() calls deterministic by discarding prior endpoint state.
     stop();
@@ -27,7 +27,7 @@ server_status communication::start(
         // console is currently the only implemented endpoint type.
         auto console = std::make_unique<server_console>();
 
-        if (!console->start(commands)) {
+        if (!console->start(requests)) {
             stop();
             return server_status::communication_start_failed;
         }

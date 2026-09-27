@@ -1,5 +1,5 @@
 /*
- * Result of one externally visible Server command.
+ * Transport-neutral response produced for one Server request.
  */
 #pragma once
 
@@ -9,8 +9,8 @@
 
 namespace cw::server {
 
-// Complete result of one command execution.
-struct server_command_result {
+// Common response envelope for one request execution.
+struct server_response {
     // Process-local operation identity.
     operation_id operation;
 

@@ -11,7 +11,7 @@
  *   EXIT        (alias of SHUTDOWN)
  *
  * Parsing is intentionally small at this architecture step. Successful parses
- * publish transport-neutral server_command values to command_queue.
+ * publish transport-neutral server_request values to request_queue.
  */
 
 #include "server_console.hpp"
@@ -39,7 +39,7 @@ server_console::~server_console() {
     stop();
 }
 
-bool server_console::start(command_queue& queue) {
+bool server_console::start(request_queue& queue) {
     if (running.exchange(true)) {
         return true;
     }
@@ -49,7 +49,7 @@ bool server_console::start(command_queue& queue) {
         return false;
     }
 
-    commands = &queue;
+    requests = &queue;
     thread = std::jthread([this] { run(); });
     return true;
 }
@@ -66,7 +66,7 @@ void server_console::stop() noexcept {
     }
 
     input.close();
-    commands = nullptr;
+    requests = nullptr;
 }
 
 void server_console::run() {
@@ -92,7 +92,7 @@ void server_console::run() {
                 continue;
             }
 
-            publish({server_command_kind::load, std::move(path)});
+            publish({server_request_kind::load, std::move(path)});
         } else if (verb == "PUBLISH") {
             std::string path;
             std::getline(stream >> std::ws, path);
@@ -102,7 +102,7 @@ void server_console::run() {
                 continue;
             }
 
-            publish({server_command_kind::publish, std::move(path)});
+            publish({server_request_kind::publish, std::move(path)});
         } else if (verb == "BUILD") {
             std::string path;
             std::getline(stream >> std::ws, path);
@@ -112,9 +112,9 @@ void server_console::run() {
                 continue;
             }
 
-            publish({server_command_kind::build, std::move(path)});
+            publish({server_request_kind::build, std::move(path)});
         } else if (verb == "UNLOAD") {
-            publish({server_command_kind::unload, {}});
+            publish({server_request_kind::unload, {}});
         } else if (verb == "REBUILD") {
             std::string path;
             std::getline(stream >> std::ws, path);
@@ -124,9 +124,9 @@ void server_console::run() {
                 continue;
             }
 
-            publish({server_command_kind::rebuild, std::move(path)});
+            publish({server_request_kind::rebuild, std::move(path)});
         } else if (verb == "SHUTDOWN" || verb == "EXIT") {
-            publish({server_command_kind::shutdown, {}});
+            publish({server_request_kind::shutdown, {}});
             return;
         } else {
             std::cout << "Unknown command: " << verb << '\n';
@@ -135,32 +135,32 @@ void server_console::run() {
 }
 
 void server_console::publish(
-    server_command command) {
+    server_request value) {
 
-    server_command_request request;
-    request.command =
-        std::move(command);
+    server_request_message message;
+    message.request =
+        std::move(value);
 
-    request.origin =
-        server_command_origin{
+    message.origin =
+        server_request_origin{
             this,
             &server_console::present_result,
         };
 
-    commands->push(
-        std::move(request));
+    requests->push(
+        std::move(message));
 }
 
 void server_console::present_result(
     void* context,
-    const server_command_result& result) {
+    const server_response& result) {
 
     static_cast<server_console*>(context)
         ->present(result);
 }
 
 void server_console::present(
-    const server_command_result& result) {
+    const server_response& result) {
 
     if (!result.diagnostics.empty()) {
         format_diagnostics(

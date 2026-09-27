@@ -8,7 +8,7 @@
 
 #include "../configuration/server_configuration.hpp"
 #include "../server_status.hpp"
-#include "command_queue.hpp"
+#include "request_queue.hpp"
 #include "console/server_console.hpp"
 
 #include <memory>
@@ -23,7 +23,7 @@ public:
     // Startup is fail-closed: failure stops endpoints already created in this call.
     [[nodiscard]] server_status start(
         const communication_configuration& configuration,
-        command_queue& commands);
+        request_queue& requests);
 
     // Stops every owned endpoint and releases all communication resources.
     void stop() noexcept;

@@ -1,14 +1,14 @@
 /*
- * Server lifecycle controller.
+ * Server request dispatcher and lifecycle controller.
  *
- * server owns mode routing and publication. Each Project mode owns its own
- * temporary pipeline state; there is no universal Project construction context.
- * All lifecycle commands execute on the Server control thread.
+ * server owns transport-neutral request dispatch plus Project lifecycle routing.
+ * Each Project mode owns its own temporary pipeline state; there is no universal
+ * Project construction context. All requests execute on the Server control thread.
  */
 #pragma once
 
-#include "communication/server_command.hpp"
-#include "communication/server_command_result.hpp"
+#include "communication/server_request.hpp"
+#include "communication/server_response.hpp"
 #include "diagnostics/diagnostic_collection.hpp"
 #include "operation.hpp"
 #include "server_context.hpp"
@@ -28,8 +28,8 @@ public:
 
     [[nodiscard]] int run();
 
-    [[nodiscard]] server_command_result execute(
-        const server_command& command);
+    [[nodiscard]] server_response execute(
+        const server_request& command);
 
     // Fast persisted-state restore. No Project/source construction checks.
     [[nodiscard]] server_status load(

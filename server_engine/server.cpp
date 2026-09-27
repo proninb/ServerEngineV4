@@ -1,7 +1,7 @@
 /*
- * Server lifecycle implementation.
+ * Server request dispatch and lifecycle implementation.
  *
- * Every externally visible lifecycle action owns one operation_id and one
+ * Every externally visible Server request owns one operation_id and one
  * diagnostic_collection. Nested layers append to that same collection.
  */
 #include "server.hpp"
@@ -69,7 +69,7 @@ server_status server::start(
 
     status = context.communications.start(
         context.configuration.communication,
-        context.commands);
+        context.requests);
 
     if (!succeeded(status)) {
         const auto& descriptor =
@@ -130,14 +130,14 @@ server_status server::start(
 
 int server::run() {
     while (running) {
-        auto request =
-            context.commands.wait_pop();
+        auto message =
+            context.requests.wait_pop();
 
         auto result =
             execute(
-                request.command);
+                message.request);
 
-        request.origin.present(
+        message.origin.present(
             result);
     }
 
@@ -147,15 +147,15 @@ int server::run() {
     return 0;
 }
 
-server_command_result server::execute(
-    const server_command& command) {
+server_response server::execute(
+    const server_request& command) {
 
-    server_command_result result;
+    server_response result;
     result.operation =
         next_operation();
 
     switch (command.kind) {
-    case server_command_kind::load:
+    case server_request_kind::load:
         result.status =
             load(
                 command.path,
@@ -163,7 +163,7 @@ server_command_result server::execute(
                 result.diagnostics);
         break;
 
-    case server_command_kind::publish:
+    case server_request_kind::publish:
         result.status =
             publish(
                 command.path,
@@ -171,7 +171,7 @@ server_command_result server::execute(
                 result.diagnostics);
         break;
 
-    case server_command_kind::build:
+    case server_request_kind::build:
         result.status =
             build(
                 command.path,
@@ -179,14 +179,14 @@ server_command_result server::execute(
                 result.diagnostics);
         break;
 
-    case server_command_kind::unload:
+    case server_request_kind::unload:
         result.status =
             unload(
                 result.operation,
                 result.diagnostics);
         break;
 
-    case server_command_kind::rebuild:
+    case server_request_kind::rebuild:
         result.status =
             rebuild(
                 command.path,
@@ -194,7 +194,7 @@ server_command_result server::execute(
                 result.diagnostics);
         break;
 
-    case server_command_kind::shutdown:
+    case server_request_kind::shutdown:
         // Keep the originating endpoint alive until run() presents this result.
         running = false;
         result.status =

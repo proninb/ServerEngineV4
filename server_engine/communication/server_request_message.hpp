@@ -1,36 +1,36 @@
 /*
- * Queued Server command plus direct reply destination.
+ * Queued Server request plus direct reply destination.
  *
  * The origin is non-owning and performs no endpoint lookup.
  */
 #pragma once
 
-#include "server_command.hpp"
+#include "server_request.hpp"
 
 namespace cw::server {
 
-struct server_command_result;
+struct server_response;
 
-// Direct response target for one queued command.
-class server_command_origin final {
+// Direct response target for one queued request.
+class server_request_origin final {
 public:
     using present_function =
         void (*)(
             void* context,
-            const server_command_result& result);
+            const server_response& result);
 
-    constexpr server_command_origin() noexcept = default;
+    constexpr server_request_origin() noexcept = default;
 
-    constexpr server_command_origin(
+    constexpr server_request_origin(
         void* context,
         present_function present) noexcept
         : context(context),
           present_callback(present) {
     }
 
-    // Presents a completed command result to its originating endpoint.
+    // Presents a completed response to the originating endpoint.
     void present(
-        const server_command_result& result) const {
+        const server_response& result) const {
 
         if (present_callback != nullptr) {
             present_callback(
@@ -47,10 +47,10 @@ private:
     present_function present_callback = nullptr;
 };
 
-// Transport-neutral command request stored in command_queue.
-struct server_command_request {
-    server_command command;
-    server_command_origin origin;
+// Transport-neutral request envelope stored in request_queue.
+struct server_request_message {
+    server_request request;
+    server_request_origin origin;
 };
 
 }

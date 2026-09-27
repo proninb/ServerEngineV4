@@ -7,7 +7,7 @@
  */
 #pragma once
 
-#include "communication/command_queue.hpp"
+#include "communication/request_queue.hpp"
 #include "communication/communication.hpp"
 #include "configuration/server_configuration.hpp"
 #include "project/project.hpp"
@@ -30,7 +30,7 @@ public:
     std::filesystem::path configuration_directory;
 
     // Common ingress queue used by communication endpoint producers.
-    command_queue commands;
+    request_queue requests;
 
     // Owner of all endpoints materialized from configuration.communication.
     communication communications;

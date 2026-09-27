@@ -40,7 +40,7 @@ add_executable(ServerEngineV4
 
     server_engine/configuration/server_configuration_loader.cpp
 
-    server_engine/communication/command_queue.cpp
+    server_engine/communication/request_queue.cpp
     server_engine/communication/communication.cpp
 
     server_engine/communication/console/server_console.cpp
