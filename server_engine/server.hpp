@@ -10,6 +10,7 @@
 #include "communication/server_request.hpp"
 #include "communication/server_request_message.hpp"
 #include "communication/server_response.hpp"
+#include "communication/control/communication_control.hpp"
 #include "diagnostics/diagnostic_collection.hpp"
 #include "operation.hpp"
 #include "server_context.hpp"
@@ -66,6 +67,12 @@ private:
     // Applies Server Policy to a request entering from Communication.
     [[nodiscard]] server_response execute_message(
         const server_request_message& message);
+
+    void execute_login(login_control_message& message);
+    void execute_connection_close(connection_close_control_message& message) noexcept;
+    void execute_client(client_control_message& message);
+
+    [[nodiscard]] project_state current_project_state() const noexcept;
 
     [[nodiscard]] operation_id next_operation() noexcept;
 

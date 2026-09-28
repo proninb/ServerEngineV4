@@ -55,6 +55,9 @@ add_executable(ServerEngineV4
     server_engine/communication/request_queue.cpp
     server_engine/communication/communication.cpp
     server_engine/communication/session/client_session.cpp
+    server_engine/communication/connection/outbound_channel.cpp
+    server_engine/communication/connection/subscription_registration.cpp
+    server_engine/communication/connection/communication_connection.cpp
 
     server_engine/communication/console/server_console.cpp
 
@@ -557,6 +560,67 @@ if(BUILD_TESTING)
     endif()
 
     add_test(NAME client_session COMMAND ServerEngineV4ClientSessionTests)
+
+    add_executable(ServerEngineV4CommunicationProtocolTests
+        tests/communication_protocol_tests.cpp
+    )
+
+    target_include_directories(ServerEngineV4CommunicationProtocolTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(ServerEngineV4CommunicationProtocolTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4CommunicationProtocolTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(NAME communication_protocol COMMAND ServerEngineV4CommunicationProtocolTests)
+
+    add_executable(ServerEngineV4CommunicationConnectionCoreTests
+        tests/communication_connection_core_tests.cpp
+        server_engine/communication/session/client_session.cpp
+        server_engine/communication/connection/outbound_channel.cpp
+        server_engine/communication/connection/subscription_registration.cpp
+        server_engine/communication/connection/communication_connection.cpp
+        server_engine/diagnostics/diagnostic_collection.cpp
+        server_engine/diagnostics/diagnostic_source_cache.cpp
+    )
+
+    target_include_directories(ServerEngineV4CommunicationConnectionCoreTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(ServerEngineV4CommunicationConnectionCoreTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4CommunicationConnectionCoreTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(NAME communication_connection_core COMMAND ServerEngineV4CommunicationConnectionCoreTests)
+
+    add_executable(ServerEngineV4CommunicationControlTests
+        tests/communication_control_tests.cpp
+        server_engine/communication/request_queue.cpp
+        server_engine/communication/session/client_session.cpp
+        server_engine/communication/connection/outbound_channel.cpp
+        server_engine/communication/connection/subscription_registration.cpp
+        server_engine/communication/connection/communication_connection.cpp
+        server_engine/diagnostics/diagnostic_collection.cpp
+        server_engine/diagnostics/diagnostic_source_cache.cpp
+    )
+
+    target_include_directories(ServerEngineV4CommunicationControlTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(ServerEngineV4CommunicationControlTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4CommunicationControlTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(NAME communication_control COMMAND ServerEngineV4CommunicationControlTests)
 
 
     add_executable(ServerEngineV4EntraJwtTests

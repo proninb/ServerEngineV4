@@ -6,6 +6,9 @@
  */
 #include "communication.hpp"
 
+#include <algorithm>
+#include <string>
+
 namespace cw::server {
 
 // Materializes exactly the endpoint set declared by server.json.
@@ -51,6 +54,104 @@ void communication::stop() noexcept {
     }
 
     consoles.clear();
+
+    for (auto* connection : connections) {
+        (void)connection->begin_close();
+        connection->teardown_subscriptions();
+    }
+
+    connections.clear();
+}
+
+bool communication::register_connection(
+    communication_connection& connection) {
+
+    const auto duplicate =
+        std::find_if(
+            connections.begin(),
+            connections.end(),
+            [&connection](const communication_connection* current) {
+                return current == &connection ||
+                    current->id() == connection.id();
+            });
+
+    if (duplicate != connections.end()) {
+        return false;
+    }
+
+    connections.push_back(&connection);
+    return true;
+}
+
+void communication::unregister_connection(
+    client_session_id id) noexcept {
+
+    const auto position =
+        std::find_if(
+            connections.begin(),
+            connections.end(),
+            [id](const communication_connection* connection) {
+                return connection->id() == id;
+            });
+
+    if (position == connections.end()) {
+        return;
+    }
+
+    (*position)->teardown_subscriptions();
+    connections.erase(position);
+}
+
+void communication::publish_server_state(
+    project_state old_state,
+    project_state new_state) {
+
+    if (old_state == new_state) {
+        return;
+    }
+
+    for (auto* connection : connections) {
+        if (connection->logged_in()) {
+            (void)connection->enqueue_server_state(
+                old_state,
+                new_state);
+        }
+    }
+}
+
+std::size_t communication::route_client(
+    const communication_connection& sender,
+    const client_message& message) {
+
+    if (!sender.logged_in() || sender.closing()) {
+        return 0;
+    }
+
+    std::size_t routed = 0;
+    const std::string from(sender.login_name());
+
+    for (auto* connection : connections) {
+        if (!connection->logged_in() || connection->closing()) {
+            continue;
+        }
+
+        if (!message.login.empty() &&
+            connection->login_name() != message.login) {
+            continue;
+        }
+
+        client_action action;
+        action.from = from;
+        action.arg = message.arg;
+        action.parameters = message.parameters;
+
+        if (connection->enqueue_client_action(
+                std::move(action))) {
+            ++routed;
+        }
+    }
+
+    return routed;
 }
 
 }

@@ -175,12 +175,13 @@ void server_console::publish(
             &server_console::present_result,
         };
 
-    requests->push(
+    (void)requests->push(
         std::move(message));
 }
 
 void server_console::present_result(
     void* context,
+    request_id,
     const server_response& result) {
 
     static_cast<server_console*>(context)

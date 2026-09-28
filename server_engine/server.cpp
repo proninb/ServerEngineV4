@@ -221,7 +221,7 @@ int server::run() {
             break;
         }
 
-        server_request_message message;
+        communication_control_message message;
 
         if (!context.requests.wait_pop_until(
                 context.lease.expires_at(),
@@ -238,18 +238,131 @@ int server::run() {
             break;
         }
 
-        auto result =
-            execute_message(
-                message);
+        if (auto* request =
+                std::get_if<server_request_message>(&message)) {
 
-        message.origin.present(
-            result);
+            const auto old_state =
+                current_project_state();
+
+            auto result =
+                execute_message(*request);
+
+            request->origin.present(result);
+
+            const auto new_state =
+                current_project_state();
+
+            context.communications.publish_server_state(
+                old_state,
+                new_state);
+        } else if (auto* login =
+                       std::get_if<login_control_message>(&message)) {
+
+            execute_login(*login);
+        } else if (auto* close =
+                       std::get_if<connection_close_control_message>(&message)) {
+
+            execute_connection_close(*close);
+        } else if (auto* client =
+                       std::get_if<client_control_message>(&message)) {
+
+            execute_client(*client);
+        }
     }
 
     // SHUTDOWN result has already been presented to its originating endpoint.
     shutdown();
 
     return 0;
+}
+
+project_state server::current_project_state() const noexcept {
+    return context.project
+        ? project_state::loaded
+        : project_state::unloaded;
+}
+
+void server::execute_login(
+    login_control_message& message) {
+
+    if (message.connection == nullptr) {
+        return;
+    }
+
+    server_response result;
+    result.operation = next_operation();
+
+    const auto login =
+        message.connection->commit_login(
+            message.name);
+
+    if (login != client_session_login_result::success ||
+        !context.communications.register_connection(
+            *message.connection)) {
+
+        result.status =
+            server_status::communication_invalid_request;
+
+        (void)message.connection->enqueue_response(
+            message.request,
+            result);
+        return;
+    }
+
+    result.payload =
+        server_response_payload_kind::state;
+
+    result.state.project =
+        current_project_state();
+
+    result.status =
+        server_status::success;
+
+    (void)message.connection->enqueue_response(
+        message.request,
+        result);
+}
+
+void server::execute_connection_close(
+    connection_close_control_message& message) noexcept {
+
+    if (message.connection == nullptr) {
+        return;
+    }
+
+    (void)message.connection->begin_close();
+
+    context.communications.unregister_connection(
+        message.connection->id());
+}
+
+void server::execute_client(
+    client_control_message& message) {
+
+    if (message.connection == nullptr) {
+        return;
+    }
+
+    server_response result;
+    result.operation = next_operation();
+
+    if (!message.connection->logged_in() ||
+        message.connection->closing()) {
+
+        result.status =
+            server_status::communication_invalid_request;
+    } else {
+        (void)context.communications.route_client(
+            *message.connection,
+            message.message);
+
+        result.status =
+            server_status::success;
+    }
+
+    (void)message.connection->enqueue_response(
+        message.request,
+        result);
 }
 
 server_response server::execute_message(
@@ -332,9 +445,7 @@ server_response server::execute(
         result.payload =
             server_response_payload_kind::state;
         result.state.project =
-            context.project
-                ? project_state::loaded
-                : project_state::unloaded;
+            current_project_state();
         result.status =
             server_status::success;
         break;
@@ -645,6 +756,7 @@ server_status server::unload(
 
 void server::shutdown() noexcept {
     running = false;
+    context.requests.stop_accepting_and_discard();
     context.communications.stop();
     context.project.reset();
     context.authentication.stop();

@@ -7,7 +7,7 @@
  */
 #pragma once
 
-#include "server_request_message.hpp"
+#include "control/communication_control.hpp"
 
 #include <chrono>
 #include <condition_variable>
@@ -20,15 +20,19 @@ namespace cw::server {
 class request_queue final {
 public:
     // Publishes one complete request message and wakes the waiting Server control thread.
-    void push(server_request_message request);
+    // Returns false after shutdown has stopped request acceptance.
+    [[nodiscard]] bool push(communication_control_message request);
+
+    // Rejects future input and destroys queued-but-not-started requests.
+    void stop_accepting_and_discard() noexcept;
 
     // Blocks without spinning until a request is available, then removes and returns it.
-    [[nodiscard]] server_request_message wait_pop();
+    [[nodiscard]] communication_control_message wait_pop();
 
     // Waits until work arrives or the absolute control-plane deadline is reached.
     [[nodiscard]] bool wait_pop_until(
         std::chrono::system_clock::time_point deadline,
-        server_request_message& output);
+        communication_control_message& output);
 
 private:
     // Protects queue mutation and inspection performed by producers/consumer.
@@ -38,7 +42,9 @@ private:
     std::condition_variable condition;
 
     // FIFO preserves external request arrival order at this synchronization boundary.
-    std::queue<server_request_message> queue;
+    std::queue<communication_control_message> queue;
+
+    bool accepting = true;
 };
 
 }

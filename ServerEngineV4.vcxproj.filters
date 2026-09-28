@@ -31,6 +31,15 @@
     <Filter Include="server_engine\communication\session">
       <UniqueIdentifier>{5A195B64-A35D-45E3-8C41-0D0674F739D2}</UniqueIdentifier>
     </Filter>
+    <Filter Include="server_engine\communication\connection">
+      <UniqueIdentifier>{E91A55E2-55EC-409B-A42A-5CA42AF86BD2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="server_engine\communication\protocol">
+      <UniqueIdentifier>{9D7ED3C9-84DE-4C90-91ED-42EA8DF6EA71}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="server_engine\communication\control">
+      <UniqueIdentifier>{63F31450-6BCB-45E1-A932-60D39A93D7E3}</UniqueIdentifier>
+    </Filter>
     <Filter Include="server_engine\communication\console">
       <UniqueIdentifier>{44444444-4444-4444-4444-444444444444}</UniqueIdentifier>
     </Filter>
@@ -159,6 +168,15 @@
     </ClCompile>
     <ClCompile Include="server_engine\communication\session\client_session.cpp">
       <Filter>server_engine\communication\session</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\communication\connection\outbound_channel.cpp">
+      <Filter>server_engine\communication\connection</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\communication\connection\subscription_registration.cpp">
+      <Filter>server_engine\communication\connection</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\communication\connection\communication_connection.cpp">
+      <Filter>server_engine\communication\connection</Filter>
     </ClCompile>
 
     <ClCompile Include="server_engine\communication\console\console_input_windows.cpp">
@@ -411,8 +429,17 @@
     <ClInclude Include="server_engine\authentication\crypto\nsa_sha256_verifier.hpp">
       <Filter>server_engine\authentication\crypto</Filter>
     </ClInclude>
+    <ClInclude Include="server_engine\communication\request_id.hpp">
+      <Filter>server_engine\communication</Filter>
+    </ClInclude>
     <ClInclude Include="server_engine\communication\nequest_identity.hpp">
       <Filter>server_engine\communication</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\communication\protocol\protocol_contract.hpp">
+      <Filter>server_engine\communication\protocol</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\communication\control\communication_control.hpp">
+      <Filter>server_engine\communication\control</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\communication\nequest_queue.hpp">
       <Filter>server_engine\communication</Filter>
@@ -431,6 +458,18 @@
     </ClInclude>
     <ClInclude Include="server_engine\communication\session\client_session.hpp">
       <Filter>server_engine\communication\session</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\communication\connection\connection_lifetime.hpp">
+      <Filter>server_engine\communication\connection</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\communication\connection\outbound_channel.hpp">
+      <Filter>server_engine\communication\connection</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\communication\connection\subscription_registration.hpp">
+      <Filter>server_engine\communication\connection</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\communication\connection\communication_connection.hpp">
+      <Filter>server_engine\communication\connection</Filter>
     </ClInclude>
 
     <ClInclude Include="server_engine\communication\console\console_input.hpp">
@@ -617,6 +656,9 @@
     </None>
 
     <None Include="docs\SERVER_ARCHITECTURE.md">
+      <Filter>docs</Filter>
+    </None>
+    <None Include="docs\COMMUNICATION_PROTOCOL.md">
       <Filter>docs</Filter>
     </None>
     <None Include="docs\DIAGNOSTICS.md">

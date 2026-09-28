@@ -73,6 +73,9 @@ enum class server_status {
     runtime_query_invalid,
     runtime_query_not_found,
 
+    // Communication/session request violates the protocol state contract.
+    communication_invalid_request,
+
     // One or more configured communication endpoints could not start.
     communication_start_failed,
 };

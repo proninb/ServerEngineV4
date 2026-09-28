@@ -39,6 +39,7 @@ private:
     // Direct reply callback used by server_request_origin.
     static void present_result(
         void* context,
+        request_id request,
         const server_response& result);
 
     // Presents one completed request response.

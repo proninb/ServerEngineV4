@@ -5,8 +5,12 @@
  */
 #pragma once
 
+#include "connection/connection_lifetime.hpp"
+#include "request_id.hpp"
 #include "request_identity.hpp"
 #include "server_request.hpp"
+
+#include <utility>
 
 namespace cw::server {
 
@@ -18,16 +22,27 @@ public:
     using present_function =
         void (*)(
             void* context,
+            request_id request,
             const server_response& result);
 
-    constexpr server_request_origin() noexcept = default;
+    server_request_origin() noexcept = default;
 
-    constexpr server_request_origin(
+    server_request_origin(
         void* context,
-        present_function present) noexcept
+        present_function present,
+        request_id request = {},
+        connection_lifetime_token lifetime = {}) noexcept
         : context(context),
-          present_callback(present) {
+          present_callback(present),
+          request(request),
+          lifetime(std::move(lifetime)) {
     }
+
+    server_request_origin(server_request_origin&&) noexcept = default;
+    server_request_origin& operator=(server_request_origin&&) noexcept = default;
+
+    server_request_origin(const server_request_origin&) = delete;
+    server_request_origin& operator=(const server_request_origin&) = delete;
 
     // Presents a completed response to the originating endpoint.
     void present(
@@ -36,6 +51,7 @@ public:
         if (present_callback != nullptr) {
             present_callback(
                 context,
+                request,
                 result);
         }
     }
@@ -46,6 +62,11 @@ private:
 
     // Endpoint-specific direct presentation callback.
     present_function present_callback = nullptr;
+
+    request_id request;
+
+    // Keeps the response target alive until the queued request is destroyed.
+    connection_lifetime_token lifetime;
 };
 
 // Transport-neutral request envelope stored in request_queue.
