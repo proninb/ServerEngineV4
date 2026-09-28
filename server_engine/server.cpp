@@ -23,6 +23,9 @@
 namespace cw::server {
 namespace {
 
+inline constexpr auto shutdown_ack_timeout =
+    std::chrono::milliseconds{2000};
+
 [[nodiscard]] std::filesystem::path resolve(
     const std::filesystem::path& base,
     const std::filesystem::path& path) {
@@ -150,7 +153,9 @@ server_status server::start(
 
     status = context.communications.start(
         context.configuration.communication,
-        context.requests);
+        context.requests,
+        context.mode,
+        context.lease.limits().max_connections);
 
     if (!succeeded(status)) {
         const auto& descriptor =
@@ -247,7 +252,21 @@ int server::run() {
             auto result =
                 execute_message(*request);
 
+            if (request->request.kind ==
+                server_request_kind::shutdown) {
+
+                request->origin.arm_written();
+            }
+
             request->origin.present(result);
+
+            if (request->request.kind ==
+                server_request_kind::shutdown) {
+
+                static_cast<void>(
+                    request->origin.wait_written(
+                        shutdown_ack_timeout));
+            }
 
             const auto new_state =
                 current_project_state();

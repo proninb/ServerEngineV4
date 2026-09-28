@@ -103,6 +103,8 @@
     <ClCompile Include="server_engine\communication\connection\outbound_channel.cpp" />
     <ClCompile Include="server_engine\communication\connection\subscription_registration.cpp" />
     <ClCompile Include="server_engine\communication\connection\communication_connection.cpp" />
+    <ClCompile Include="server_engine\communication\protocol\json_protocol.cpp" />
+    <ClCompile Include="server_engine\communication\tcp\tcp_endpoint.cpp" />
     <ClCompile Include="server_engine\communication\console\console_input_windows.cpp" />
     <ClCompile Include="server_engine\communication\console\server_console.cpp" />
     <ClCompile Include="server_engine\project\project.cpp" />
@@ -190,6 +192,8 @@
     <ClInclude Include="server_engine\communication\request_id.hpp" />
     <ClInclude Include="server_engine\communication\nequest_identity.hpp" />
     <ClInclude Include="server_engine\communication\protocol\protocol_contract.hpp" />
+    <ClInclude Include="server_engine\communication\protocol\json_protocol.hpp" />
+    <ClInclude Include="server_engine\communication\tcp\tcp_endpoint.hpp" />
     <ClInclude Include="server_engine\communication\control\communication_control.hpp" />
     <ClInclude Include="server_engine\communication\nequest_queue.hpp" />
     <ClInclude Include="server_engine\communication\communication.hpp" />

@@ -65,6 +65,28 @@ bool outbound_channel::wait_next(
     return true;
 }
 
+bool outbound_channel::try_next(
+    outbound_write& output) {
+
+    std::lock_guard lock(mutex);
+
+    if (is_closing || queue.empty()) {
+        return false;
+    }
+
+    output.connection_sequence =
+        next_sequence++;
+
+    output.message =
+        std::move(queue.front());
+
+    bytes -=
+        output.message.estimated_bytes;
+
+    queue.pop_front();
+    return true;
+}
+
 void outbound_channel::mark_written(
     std::uint64_t connection_sequence) noexcept {
 

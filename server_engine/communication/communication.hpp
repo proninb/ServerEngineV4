@@ -11,7 +11,11 @@
 #include "request_queue.hpp"
 #include "connection/communication_connection.hpp"
 #include "console/server_console.hpp"
+#include "tcp/tcp_endpoint.hpp"
+#include "../server_mode.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <memory>
 #include <vector>
@@ -25,7 +29,9 @@ public:
     // Startup is fail-closed: failure stops endpoints already created in this call.
     [[nodiscard]] server_status start(
         const communication_configuration& configuration,
-        request_queue& requests);
+        request_queue& requests,
+        server_mode mode,
+        std::uint32_t max_connections);
 
     // Stops every owned endpoint and releases all communication resources.
     void stop() noexcept;
@@ -45,6 +51,10 @@ private:
     // Owned console endpoints. Empty when no console transport is configured.
     // Future transport types receive their own owned collections/backends.
     std::vector<std::unique_ptr<server_console>> consoles;
+
+    std::vector<std::unique_ptr<tcp_endpoint>> tcp_endpoints;
+    tcp_connection_gate tcp_gate;
+    std::atomic_uint64_t next_session_id = 1;
 
     // Raw pointers are valid while registered: transport ownership or an in-flight
     // close control item keeps each connection object alive. Server thread only.

@@ -80,20 +80,28 @@ communication_connection_owner::operator bool() const noexcept {
 communication_connection_owner
 communication_connection::create(
     client_session_id id,
-    std::size_t outbound_byte_limit) {
+    std::size_t outbound_byte_limit,
+    void* notify_context,
+    transport_notify_function notify) {
 
     return communication_connection_owner{
         new communication_connection{
             id,
             outbound_byte_limit,
+            notify_context,
+            notify,
         },
     };
 }
 
 communication_connection::communication_connection(
     client_session_id id,
-    std::size_t outbound_byte_limit)
+    std::size_t outbound_byte_limit,
+    void* value_notify_context,
+    transport_notify_function value_notify)
     : session(id),
+      notify_context(value_notify_context),
+      notify_callback(value_notify),
       outbound(outbound_byte_limit) {
 }
 
@@ -108,6 +116,16 @@ bool communication_connection::logged_in() const noexcept {
 
 std::string_view communication_connection::login_name() const noexcept {
     return session.name();
+}
+
+bool communication_connection::make_request_identity(
+    request_identity& identity) const {
+
+    if (!logged_in()) {
+        return false;
+    }
+
+    return session.make_request_identity(identity);
 }
 
 client_session_login_result communication_connection::commit_login(
@@ -179,7 +197,8 @@ std::size_t communication_connection::estimate_response_bytes(
 
 bool communication_connection::enqueue_response(
     request_id request,
-    const server_response& result) {
+    const server_response& result,
+    bool release_request_id) {
 
     outbound_message message;
     message.estimated_bytes =
@@ -189,6 +208,7 @@ bool communication_connection::enqueue_response(
         protocol_response{
             request,
             result,
+            release_request_id,
         };
 
     if (!outbound.enqueue(std::move(message))) {
@@ -196,6 +216,7 @@ bool communication_connection::enqueue_response(
         return false;
     }
 
+    notify_transport();
     return true;
 }
 
@@ -220,6 +241,7 @@ bool communication_connection::enqueue_server_state(
         return false;
     }
 
+    notify_transport();
     return true;
 }
 
@@ -244,6 +266,7 @@ bool communication_connection::enqueue_client_action(
         return false;
     }
 
+    notify_transport();
     return true;
 }
 
@@ -265,6 +288,7 @@ bool communication_connection::enqueue_subscription_data(
         return false;
     }
 
+    notify_transport();
     return true;
 }
 
@@ -279,7 +303,30 @@ bool communication_connection::wait_next(
             std::get_if<protocol_response>(
                 &output.message.payload)) {
 
-        release_request(response->request);
+        if (response->release_request_id) {
+            release_request(
+                response->request);
+        }
+    }
+
+    return true;
+}
+
+bool communication_connection::try_next(
+    outbound_write& output) {
+
+    if (!outbound.try_next(output)) {
+        return false;
+    }
+
+    if (const auto* response =
+            std::get_if<protocol_response>(
+                &output.message.payload)) {
+
+        if (response->release_request_id) {
+            release_request(
+                response->request);
+        }
     }
 
     return true;
@@ -300,6 +347,98 @@ bool communication_connection::wait_until_written(
         timeout);
 }
 
+void communication_connection::mark_written(
+    const outbound_write& output) noexcept {
+
+    outbound.mark_written(
+        output.connection_sequence);
+
+    const auto* response =
+        std::get_if<protocol_response>(
+            &output.message.payload);
+
+    if (response == nullptr) {
+        return;
+    }
+
+    bool notify = false;
+
+    {
+        std::lock_guard lock(
+            written_mutex);
+
+        if (awaited_written_request ==
+            response->request) {
+
+            awaited_written = true;
+            notify = true;
+        }
+    }
+
+    if (notify) {
+        written_condition.notify_all();
+    }
+}
+
+void communication_connection::arm_response_write_wait(
+    request_id request) noexcept {
+
+    std::lock_guard lock(
+        written_mutex);
+
+    awaited_written_request = request;
+    awaited_written = false;
+}
+
+void communication_connection::arm_response_write_wait(
+    void* context,
+    request_id request) noexcept {
+
+    static_cast<communication_connection*>(
+        context)->arm_response_write_wait(
+            request);
+}
+
+bool communication_connection::wait_response_written(
+    request_id request,
+    std::chrono::milliseconds timeout) {
+
+    std::unique_lock lock(
+        written_mutex);
+
+    written_condition.wait_for(
+        lock,
+        timeout,
+        [this, request] {
+            return
+                (awaited_written_request == request &&
+                 awaited_written) ||
+                closing();
+        });
+
+    const bool completed =
+        awaited_written_request == request &&
+        awaited_written;
+
+    if (awaited_written_request == request) {
+        awaited_written_request = {};
+        awaited_written = false;
+    }
+
+    return completed;
+}
+
+bool communication_connection::wait_response_written(
+    void* context,
+    request_id request,
+    std::chrono::milliseconds timeout) {
+
+    return static_cast<communication_connection*>(
+        context)->wait_response_written(
+            request,
+            timeout);
+}
+
 bool communication_connection::begin_close() noexcept {
     const auto first =
         !close_started.exchange(
@@ -307,6 +446,8 @@ bool communication_connection::begin_close() noexcept {
             std::memory_order_acq_rel);
 
     (void)outbound.close();
+    written_condition.notify_all();
+    notify_transport();
     return first;
 }
 
@@ -394,6 +535,13 @@ void communication_connection::present_response(
     (void)connection.enqueue_response(
         request,
         result);
+}
+
+void communication_connection::notify_transport() noexcept {
+    if (notify_callback != nullptr) {
+        notify_callback(
+            notify_context);
+    }
 }
 
 void communication_connection::retain() noexcept {

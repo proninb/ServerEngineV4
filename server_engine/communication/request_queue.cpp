@@ -38,19 +38,23 @@ void request_queue::stop_accepting_and_discard() noexcept {
     condition.notify_all();
 }
 
-// Sleeps until work exists, then transfers ownership of the oldest queued command.
-communication_control_message request_queue::wait_pop() {
+// Sleeps until work exists or shutdown stops request acceptance.
+bool request_queue::wait_pop(
+    communication_control_message& output) {
+
     std::unique_lock lock(mutex);
 
-    // Predicate handles spurious condition_variable wakeups.
     condition.wait(lock, [this] {
-        return !queue.empty();
+        return !queue.empty() || !accepting;
     });
 
-    auto request = std::move(queue.front());
-    queue.pop();
+    if (queue.empty()) {
+        return false;
+    }
 
-    return request;
+    output = std::move(queue.front());
+    queue.pop();
+    return true;
 }
 
 bool request_queue::wait_pop_until(

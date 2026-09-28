@@ -15,6 +15,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -26,9 +27,14 @@ namespace cw::server {
 
 class communication_connection final {
 public:
+    using transport_notify_function =
+        void (*)(void* context) noexcept;
+
     static communication_connection_owner create(
         client_session_id id,
-        std::size_t outbound_byte_limit);
+        std::size_t outbound_byte_limit,
+        void* notify_context = nullptr,
+        transport_notify_function notify = nullptr);
 
     communication_connection(const communication_connection&) = delete;
     communication_connection& operator=(const communication_connection&) = delete;
@@ -38,6 +44,9 @@ public:
 
     // Server-control-thread only. Name is immutable after successful LOGIN.
     [[nodiscard]] std::string_view login_name() const noexcept;
+
+    [[nodiscard]] bool make_request_identity(
+        request_identity& identity) const;
 
     // Server-control-thread only.
     [[nodiscard]] client_session_login_result commit_login(
@@ -54,7 +63,8 @@ public:
     // Cheap/non-blocking Server completion path: enqueue only.
     [[nodiscard]] bool enqueue_response(
         request_id request,
-        const server_response& result);
+        const server_response& result,
+        bool release_request_id = true);
 
     // Server-control-thread routing paths.
     [[nodiscard]] bool enqueue_server_state(
@@ -67,8 +77,26 @@ public:
 
     // Single writer. connection_sequence is assigned by outbound_channel.
     [[nodiscard]] bool wait_next(outbound_write& output);
+    [[nodiscard]] bool try_next(outbound_write& output);
 
     void mark_written(std::uint64_t connection_sequence) noexcept;
+    void mark_written(const outbound_write& output) noexcept;
+
+    void arm_response_write_wait(
+        request_id request) noexcept;
+
+    static void arm_response_write_wait(
+        void* context,
+        request_id request) noexcept;
+
+    [[nodiscard]] bool wait_response_written(
+        request_id request,
+        std::chrono::milliseconds timeout);
+
+    static bool wait_response_written(
+        void* context,
+        request_id request,
+        std::chrono::milliseconds timeout);
 
     [[nodiscard]] bool wait_until_written(
         std::uint64_t connection_sequence,
@@ -106,7 +134,9 @@ private:
 
     communication_connection(
         client_session_id id,
-        std::size_t outbound_byte_limit);
+        std::size_t outbound_byte_limit,
+        void* notify_context,
+        transport_notify_function notify);
 
     ~communication_connection() = default;
 
@@ -115,6 +145,8 @@ private:
 
     [[nodiscard]] static std::size_t estimate_response_bytes(
         const server_response& result) noexcept;
+
+    void notify_transport() noexcept;
 
     friend class connection_lifetime_token;
     friend class communication_connection_owner;
@@ -125,7 +157,15 @@ private:
     std::atomic_bool login_committed = false;
     std::atomic_bool close_started = false;
 
+    void* notify_context = nullptr;
+    transport_notify_function notify_callback = nullptr;
+
     outbound_channel outbound;
+
+    mutable std::mutex written_mutex;
+    std::condition_variable written_condition;
+    request_id awaited_written_request;
+    bool awaited_written = false;
 
     mutable std::mutex request_mutex;
     std::unordered_set<std::uint64_t> outstanding_requests;

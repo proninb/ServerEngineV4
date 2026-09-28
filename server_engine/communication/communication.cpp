@@ -14,20 +14,52 @@ namespace cw::server {
 // Materializes exactly the endpoint set declared by server.json.
 server_status communication::start(
     const communication_configuration& configuration,
-    request_queue& requests) {
+    request_queue& requests,
+    server_mode mode,
+    std::uint32_t max_connections) {
 
     // Make repeated start() calls deterministic by discarding prior endpoint state.
     stop();
 
+    const auto effective_limit =
+        mode == server_mode::demo
+            ? 1u
+            : max_connections;
+
+    tcp_gate.reset(effective_limit);
+    next_session_id.store(1, std::memory_order_release);
+
+    const auto demo_lifetime =
+        mode == server_mode::demo
+            ? std::chrono::minutes{5}
+            : std::chrono::steady_clock::duration::zero();
+
     for (const auto& endpoint : configuration.endpoints) {
-        // TCP belongs to the configuration contract but its backend is not part
-        // of this V4 step. Fail instead of silently dropping the endpoint.
         if (endpoint.transport == transport_kind::tcp) {
-            stop();
-            return server_status::unsupported;
+            if (endpoint.protocol != "json") {
+                stop();
+                return server_status::unsupported;
+            }
+
+            auto tcp =
+                std::make_unique<tcp_endpoint>();
+
+            if (!tcp->start(
+                    endpoint,
+                    requests,
+                    tcp_gate,
+                    next_session_id,
+                    demo_lifetime)) {
+
+                stop();
+                return server_status::communication_start_failed;
+            }
+
+            tcp_endpoints.push_back(
+                std::move(tcp));
+            continue;
         }
 
-        // console is currently the only implemented endpoint type.
         auto console = std::make_unique<server_console>();
 
         if (!console->start(requests)) {
@@ -40,7 +72,9 @@ server_status communication::start(
 
     // Until another backend exists, a running Server needs at least one usable
     // command ingress path.
-    if (consoles.empty()) {
+    if (consoles.empty() &&
+        tcp_endpoints.empty()) {
+
         return server_status::communication_start_failed;
     }
 
@@ -53,14 +87,19 @@ void communication::stop() noexcept {
         console->stop();
     }
 
-    consoles.clear();
-
     for (auto* connection : connections) {
         (void)connection->begin_close();
         connection->teardown_subscriptions();
     }
 
     connections.clear();
+
+    for (auto& tcp : tcp_endpoints) {
+        tcp->stop();
+    }
+
+    tcp_endpoints.clear();
+    consoles.clear();
 }
 
 bool communication::register_connection(

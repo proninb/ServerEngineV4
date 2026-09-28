@@ -26,8 +26,9 @@ public:
     // Rejects future input and destroys queued-but-not-started requests.
     void stop_accepting_and_discard() noexcept;
 
-    // Blocks without spinning until a request is available, then removes and returns it.
-    [[nodiscard]] communication_control_message wait_pop();
+    // Blocks until work arrives or request acceptance is stopped.
+    [[nodiscard]] bool wait_pop(
+        communication_control_message& output);
 
     // Waits until work arrives or the absolute control-plane deadline is reached.
     [[nodiscard]] bool wait_pop_until(

@@ -149,6 +149,51 @@ int main() {
     late.status = server_status::success;
     origin.present(late);
 
+    auto barrier =
+        communication_connection::create(
+            client_session_id{3},
+            4096);
+
+    if (!barrier->reserve_request(request_id{21}) ||
+        !barrier->reserve_request(request_id{22})) {
+
+        return 15;
+    }
+
+    barrier->arm_response_write_wait(
+        request_id{21});
+
+    server_response barrier_response;
+
+    if (!barrier->enqueue_response(
+            request_id{21},
+            barrier_response) ||
+        !barrier->enqueue_response(
+            request_id{22},
+            barrier_response)) {
+
+        return 16;
+    }
+
+    outbound_write barrier_first;
+    outbound_write barrier_second;
+
+    if (!barrier->try_next(barrier_first) ||
+        !barrier->try_next(barrier_second)) {
+
+        return 17;
+    }
+
+    barrier->mark_written(barrier_first);
+    barrier->mark_written(barrier_second);
+
+    if (!barrier->wait_response_written(
+            request_id{21},
+            std::chrono::milliseconds{10})) {
+
+        return 18;
+    }
+
     auto bounded =
         communication_connection::create(
             client_session_id{2},

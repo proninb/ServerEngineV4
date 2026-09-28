@@ -68,5 +68,11 @@ int main() {
         return 5;
     }
 
+    communication_control_message stopped_output;
+
+    if (queue.wait_pop(stopped_output)) {
+        return 6;
+    }
+
     return 0;
 }

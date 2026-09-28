@@ -23,6 +23,7 @@ namespace cw::server {
 struct protocol_response final {
     request_id request;
     server_response result;
+    bool release_request_id = true;
 };
 
 struct subscription_data final {
@@ -56,6 +57,9 @@ public:
 
     // Single-writer API. Sequence is assigned here, never by producers.
     [[nodiscard]] bool wait_next(outbound_write& output);
+
+    // Single-writer non-blocking dequeue used by socket event loops.
+    [[nodiscard]] bool try_next(outbound_write& output);
 
     void mark_written(std::uint64_t connection_sequence) noexcept;
 

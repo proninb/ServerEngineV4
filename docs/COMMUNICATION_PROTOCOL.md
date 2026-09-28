@@ -90,3 +90,43 @@ registry and tears down publisher subscription registrations.
 
 Server shutdown stops request acceptance and destroys queued-but-not-started
 control items without execution; their lifetime tokens are released by destruction.
+
+
+## TCP JSON Transport V1
+
+TCP uses a four-byte unsigned big-endian payload length followed by one UTF-8
+JSON object. The V1 maximum JSON payload is 1 MiB. Zero-length or oversized
+frames close the connection.
+
+The TCP endpoint uses one non-blocking socket event loop for all connections of
+that endpoint. It is the single writer for each connection; there is no thread
+per client. Outbound enqueue wakes that event loop.
+
+Wire requests use `request_id`, uppercase `command`, and optional `arguments`.
+Supported V1 commands are LOGIN, LOAD, PUBLISH, BUILD, UNLOAD, REBUILD,
+GET_STATE, GET_VALUE, SHUTDOWN, and CLIENT. CLIENT `parameters` is Base64.
+
+Every outbound JSON object contains `sequence`. Responses additionally contain
+`request_id` and boolean `status`; payload and diagnostics are emitted only when
+present. Async actions use `action`.
+
+The aggregate active TCP connection limit is shared across all configured TCP
+endpoints. FULL uses the active lease `max_connections`; DEMO uses one active TCP
+connection and closes it after five minutes. Console does not consume this limit.
+
+SHUTDOWN waits up to two seconds for the initiating TCP response to complete its
+local socket write. Timeout or transport failure does not prevent Server shutdown.
+
+
+### TCP JSON V1 audit invariants
+
+The wire schema is fail-closed. At the top level only `request_id`, `command`,
+and the optional object `arguments` are accepted. A second `arguments` object,
+unknown top-level objects, unknown scalar fields, and deeper nesting are rejected.
+
+The SHUTDOWN write barrier is armed before its response is enqueued. Completion
+is sticky for that one awaited response until the Server consumes the barrier,
+so a later response write cannot overwrite the completion observation.
+
+Stopping request acceptance wakes both queue wait APIs. An empty stopped queue
+returns failure; it never synthesizes a Server request.

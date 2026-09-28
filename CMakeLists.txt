@@ -58,6 +58,8 @@ add_executable(ServerEngineV4
     server_engine/communication/connection/outbound_channel.cpp
     server_engine/communication/connection/subscription_registration.cpp
     server_engine/communication/connection/communication_connection.cpp
+    server_engine/communication/protocol/json_protocol.cpp
+    server_engine/communication/tcp/tcp_endpoint.cpp
 
     server_engine/communication/console/server_console.cpp
 
@@ -110,7 +112,7 @@ if(WIN32)
         server_engine/project/construction/execution_lanes_windows.cpp
     )
 
-    target_link_libraries(ServerEngineV4 PRIVATE bcrypt crypt32 ncrypt winhttp)
+    target_link_libraries(ServerEngineV4 PRIVATE bcrypt crypt32 ncrypt winhttp ws2_32)
 else()
     find_package(Threads REQUIRED)
 
@@ -178,6 +180,7 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
             crypt32
             ncrypt
             winhttp
+            ws2_32
         )
     else()
         target_link_libraries(
@@ -244,6 +247,7 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
             crypt32
             ncrypt
             winhttp
+            ws2_32
         )
         target_link_libraries(
             ServerEngineV4RuntimeLookupBenchmark
@@ -253,6 +257,7 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
             crypt32
             ncrypt
             winhttp
+            ws2_32
         )
     else()
         target_link_libraries(
@@ -621,6 +626,26 @@ if(BUILD_TESTING)
     endif()
 
     add_test(NAME communication_control COMMAND ServerEngineV4CommunicationControlTests)
+
+    add_executable(ServerEngineV4TcpJsonProtocolTests
+        tests/tcp_json_protocol_tests.cpp
+        server_engine/communication/protocol/json_protocol.cpp
+        server_engine/json/json_parser.cpp
+        server_engine/diagnostics/diagnostic_collection.cpp
+        server_engine/diagnostics/diagnostic_source_cache.cpp
+    )
+
+    target_include_directories(ServerEngineV4TcpJsonProtocolTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(ServerEngineV4TcpJsonProtocolTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4TcpJsonProtocolTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(NAME tcp_json_protocol COMMAND ServerEngineV4TcpJsonProtocolTests)
 
 
     add_executable(ServerEngineV4EntraJwtTests
