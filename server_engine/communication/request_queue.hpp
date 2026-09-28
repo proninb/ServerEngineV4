@@ -9,6 +9,7 @@
 
 #include "server_request_message.hpp"
 
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <queue>
@@ -23,6 +24,11 @@ public:
 
     // Blocks without spinning until a request is available, then removes and returns it.
     [[nodiscard]] server_request_message wait_pop();
+
+    // Waits until work arrives or the absolute control-plane deadline is reached.
+    [[nodiscard]] bool wait_pop_until(
+        std::chrono::system_clock::time_point deadline,
+        server_request_message& output);
 
 private:
     // Protects queue mutation and inspection performed by producers/consumer.

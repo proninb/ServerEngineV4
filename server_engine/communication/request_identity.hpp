@@ -21,11 +21,9 @@ enum class request_origin_kind : std::uint8_t {
 struct request_identity final {
     request_origin_kind origin = request_origin_kind::internal;
 
-    // Logical client/application family for TCP sessions.
+    // Logical client/application name established by LOGIN.
+    // Names are deliberately non-unique across active sessions.
     std::string name;
-
-    // Optional specialization within the client/application family.
-    std::string subid;
 };
 
 }

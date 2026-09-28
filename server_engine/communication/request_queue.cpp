@@ -37,4 +37,25 @@ server_request_message request_queue::wait_pop() {
     return request;
 }
 
+bool request_queue::wait_pop_until(
+    std::chrono::system_clock::time_point deadline,
+    server_request_message& output) {
+
+    std::unique_lock lock(mutex);
+
+    if (!condition.wait_until(
+            lock,
+            deadline,
+            [this] {
+                return !queue.empty();
+            })) {
+
+        return false;
+    }
+
+    output = std::move(queue.front());
+    queue.pop();
+    return true;
+}
+
 }

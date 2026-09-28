@@ -3,6 +3,7 @@
  */
 #include "authentication.hpp"
 
+
 namespace cw::server {
 
 server_status authentication_service::start(

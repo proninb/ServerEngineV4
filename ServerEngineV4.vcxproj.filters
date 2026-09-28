@@ -19,11 +19,17 @@
     <Filter Include="server_engine\authentication\crypto">
       <UniqueIdentifier>{A8908878-5D10-4D45-A880-60CC827F79A2}</UniqueIdentifier>
     </Filter>
+    <Filter Include="server_engine\server_identity">
+      <UniqueIdentifier>{9B9E1682-5D05-4A29-98A9-E6E34960CF90}</UniqueIdentifier>
+    </Filter>
     <Filter Include="server_engine\authentication">
       <UniqueIdentifier>{7CF7AAE4-2A7C-4E2D-BD9D-7E9A4CF3C4A1}</UniqueIdentifier>
     </Filter>
     <Filter Include="server_engine\communication">
       <UniqueIdentifier>{33333333-3333-3333-3333-333333333333}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="server_engine\communication\session">
+      <UniqueIdentifier>{5A195B64-A35D-45E3-8C41-0D0674F739D2}</UniqueIdentifier>
     </Filter>
     <Filter Include="server_engine\communication\console">
       <UniqueIdentifier>{44444444-4444-4444-4444-444444444444}</UniqueIdentifier>
@@ -64,7 +70,7 @@
     <Filter Include="server_engine\project\persistence">
       <UniqueIdentifier>{F6666666-6666-6666-6666-666666666666}</UniqueIdentifier>
     </Filter>
-    <Filter Include="server_engine\project\runtime">
+    <Filter Include="server_engine\project\nuntime">
       <UniqueIdentifier>{A7777777-7777-7777-7777-777777777777}</UniqueIdentifier>
     </Filter>
     <Filter Include="tests">
@@ -88,7 +94,7 @@
     <ClCompile Include="server_engine\filesystem_path.cpp">
       <Filter>server_engine</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\read_only_file_mapping.cpp">
+    <ClCompile Include="server_engine\nead_only_file_mapping.cpp">
       <Filter>server_engine</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\writable_file_mapping.cpp">
@@ -121,6 +127,18 @@
     <ClCompile Include="server_engine\license\server_license_loader.cpp">
       <Filter>server_engine\license</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\license\server_lease.cpp">
+      <Filter>server_engine\license</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\license\server_lease_loader.cpp">
+      <Filter>server_engine\license</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\server_identity\server_identity.cpp">
+      <Filter>server_engine\server_identity</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\server_identity\microsoft_entra_server_identity_windows.cpp">
+      <Filter>server_engine\server_identity</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\authentication\authentication.cpp">
       <Filter>server_engine\authentication</Filter>
     </ClCompile>
@@ -130,14 +148,17 @@
     <ClCompile Include="server_engine\authentication\entra_jwt.cpp">
       <Filter>server_engine\authentication</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\authentication\crypto\rsa_sha256_verifier_windows.cpp">
+    <ClCompile Include="server_engine\authentication\crypto\nsa_sha256_verifier_windows.cpp">
       <Filter>server_engine\authentication\crypto</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\communication\request_queue.cpp">
+    <ClCompile Include="server_engine\communication\nequest_queue.cpp">
       <Filter>server_engine\communication</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\communication\communication.cpp">
       <Filter>server_engine\communication</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\communication\session\client_session.cpp">
+      <Filter>server_engine\communication\session</Filter>
     </ClCompile>
 
     <ClCompile Include="server_engine\communication\console\console_input_windows.cpp">
@@ -153,17 +174,17 @@
     <ClCompile Include="server_engine\project\abi\abi_layout.cpp">
       <Filter>server_engine\project\abi</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\project\runtime\runtime_layout.cpp">
-      <Filter>server_engine\project\runtime</Filter>
+    <ClCompile Include="server_engine\project\nuntime\nuntime_layout.cpp">
+      <Filter>server_engine\project\nuntime</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\project\runtime\runtime_query.cpp">
-      <Filter>server_engine\project\runtime</Filter>
+    <ClCompile Include="server_engine\project\nuntime\nuntime_query.cpp">
+      <Filter>server_engine\project\nuntime</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\project\runtime\fixed_direct_materializer.cpp">
-      <Filter>server_engine\project\runtime</Filter>
+    <ClCompile Include="server_engine\project\nuntime\fixed_direct_materializer.cpp">
+      <Filter>server_engine\project\nuntime</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\project\runtime\project_runtime.cpp">
-      <Filter>server_engine\project\runtime</Filter>
+    <ClCompile Include="server_engine\project\nuntime\project_runtime.cpp">
+      <Filter>server_engine\project\nuntime</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\project\string\string_table.cpp">
       <Filter>server_engine\project\string</Filter>
@@ -273,13 +294,16 @@
     <ClInclude Include="server_engine\server_policy.hpp">
       <Filter>server_engine</Filter>
     </ClInclude>
+    <ClInclude Include="server_engine\server_mode.hpp">
+      <Filter>server_engine</Filter>
+    </ClInclude>
     <ClInclude Include="server_engine\server_state.hpp">
       <Filter>server_engine</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\filesystem_path.hpp">
       <Filter>server_engine</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\read_only_file_mapping.hpp">
+    <ClInclude Include="server_engine\nead_only_file_mapping.hpp">
       <Filter>server_engine</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\writable_file_mapping.hpp">
@@ -363,6 +387,18 @@
     <ClInclude Include="server_engine\license\server_license_loader.hpp">
       <Filter>server_engine\license</Filter>
     </ClInclude>
+    <ClInclude Include="server_engine\license\server_lease.hpp">
+      <Filter>server_engine\license</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\license\server_lease_loader.hpp">
+      <Filter>server_engine\license</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\server_identity\server_identity.hpp">
+      <Filter>server_engine\server_identity</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\server_identity\microsoft_entra_server_identity.hpp">
+      <Filter>server_engine\server_identity</Filter>
+    </ClInclude>
     <ClInclude Include="server_engine\authentication\authentication.hpp">
       <Filter>server_engine\authentication</Filter>
     </ClInclude>
@@ -372,13 +408,13 @@
     <ClInclude Include="server_engine\authentication\entra_jwt.hpp">
       <Filter>server_engine\authentication</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\authentication\crypto\rsa_sha256_verifier.hpp">
+    <ClInclude Include="server_engine\authentication\crypto\nsa_sha256_verifier.hpp">
       <Filter>server_engine\authentication\crypto</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\communication\request_identity.hpp">
+    <ClInclude Include="server_engine\communication\nequest_identity.hpp">
       <Filter>server_engine\communication</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\communication\request_queue.hpp">
+    <ClInclude Include="server_engine\communication\nequest_queue.hpp">
       <Filter>server_engine\communication</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\communication\communication.hpp">
@@ -392,6 +428,9 @@
     </ClInclude>
     <ClInclude Include="server_engine\communication\server_response.hpp">
       <Filter>server_engine\communication</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\communication\session\client_session.hpp">
+      <Filter>server_engine\communication\session</Filter>
     </ClInclude>
 
     <ClInclude Include="server_engine\communication\console\console_input.hpp">
@@ -407,17 +446,17 @@
     <ClInclude Include="server_engine\project\abi\abi_layout.hpp">
       <Filter>server_engine\project\abi</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\project\runtime\runtime_layout.hpp">
-      <Filter>server_engine\project\runtime</Filter>
+    <ClInclude Include="server_engine\project\nuntime\nuntime_layout.hpp">
+      <Filter>server_engine\project\nuntime</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\project\runtime\runtime_query.hpp">
-      <Filter>server_engine\project\runtime</Filter>
+    <ClInclude Include="server_engine\project\nuntime\nuntime_query.hpp">
+      <Filter>server_engine\project\nuntime</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\project\runtime\fixed_direct_materializer.hpp">
-      <Filter>server_engine\project\runtime</Filter>
+    <ClInclude Include="server_engine\project\nuntime\fixed_direct_materializer.hpp">
+      <Filter>server_engine\project\nuntime</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\project\runtime\project_runtime.hpp">
-      <Filter>server_engine\project\runtime</Filter>
+    <ClInclude Include="server_engine\project\nuntime\project_runtime.hpp">
+      <Filter>server_engine\project\nuntime</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\project_lifecycle_context.hpp">
       <Filter>server_engine\project</Filter>

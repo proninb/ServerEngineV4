@@ -14,6 +14,33 @@
 
 namespace cw::server {
 
+enum class server_identity_mode : std::uint8_t {
+    none,
+    microsoft_entra,
+};
+
+enum class server_identity_certificate_store : std::uint8_t {
+    current_user,
+    local_machine,
+};
+
+struct microsoft_entra_server_identity_configuration final {
+    std::string tenant_id;
+    std::string client_id;
+    std::string scope;
+    std::string certificate_thumbprint;
+    server_identity_certificate_store certificate_store =
+        server_identity_certificate_store::current_user;
+};
+
+struct server_identity_configuration final {
+    server_identity_mode mode = server_identity_mode::none;
+
+    // Required exactly when mode=microsoft_entra.
+    std::optional<microsoft_entra_server_identity_configuration>
+        microsoft_entra;
+};
+
 // Selects the process-level Authentication provider boundary.
 enum class authentication_mode : std::uint8_t {
     none,
@@ -170,13 +197,17 @@ struct server_settings_configuration final {
 
 // Process-level configuration loaded before communication and Project lifecycle begin.
 struct server_configuration {
-    // server.json schema version. Current schema value is 8.
+    // server.json schema version. Current schema value is 9.
+    // Version 8 remains accepted as the pre-Server-identity schema.
     std::uint32_t version = 0;
 
     // Required process-wide low-level Server settings.
     server_settings_configuration settings;
 
-    // Required process-level Authentication policy.
+    // Outbound identity of this Server process. Version 8 defaults to none.
+    server_identity_configuration server_identity;
+
+    // Required process-level Authentication policy for incoming clients.
     authentication_configuration authentication;
 
     // Required communication endpoint configuration.

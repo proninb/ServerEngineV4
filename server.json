@@ -1,6 +1,6 @@
 {
   // Server configuration schema version.
-  "version": 8,
+  "version": 9,
 
   // Process-wide low-level Server settings.
   "settings": {
@@ -29,6 +29,20 @@
       "database": "database.bin",
       "compiled": "compiled.bin"
     }
+  },
+
+  // Outbound identity of the Server process.
+  "server_identity": {
+    "mode": "none"
+
+    // "mode": "microsoft_entra",
+    // "microsoft_entra": {
+    //   "tenant_id": "<tenant-id>",
+    //   "client_id": "<ServerEngine daemon app client-id>",
+    //   "scope": "api://<license-service-app-id>/.default",
+    //   "certificate_thumbprint": "<40 hex SHA-1 thumbprint>",
+    //   "certificate_store": "current_user"
+    // }
   },
 
   // Authentication is initialized before Communication.

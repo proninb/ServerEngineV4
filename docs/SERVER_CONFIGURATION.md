@@ -13,7 +13,7 @@ The JSON parser supports:
 
 ```jsonc
 {
-  "version": 8,
+  "version": 9,
 
   "settings": {
     "abi": {
@@ -250,6 +250,44 @@ settings.files entries must use distinct file names
 The current implementation already wires `settings.files.manifest` into
 `project_configuration_manifest_store`.
 
+## Server Identity
+
+`server_identity` is the outbound identity of the Server process. It is
+independent from incoming Client Authentication and from Project identity.
+
+```jsonc
+"server_identity": {
+  "mode": "none"
+}
+```
+
+Microsoft Entra confidential-client mode:
+
+```jsonc
+"server_identity": {
+  "mode": "microsoft_entra",
+  "microsoft_entra": {
+    "tenant_id": "<tenant-id>",
+    "client_id": "<ServerEngine daemon app client-id>",
+    "scope": "api://<license-service-app-id>/.default",
+    "certificate_thumbprint": "<40 hex SHA-1 thumbprint>",
+    "certificate_store": "current_user"
+  }
+}
+```
+
+On Windows the Server reads the certificate from the Windows `MY` store,
+requires an accessible CNG private key, creates a PS256 client assertion, and
+requests an app-only token from the tenant-specific Microsoft Entra v2 token
+endpoint. The assertion carries the certificate SHA-256 thumbprint in
+`x5t#S256`.
+
+The scope must end with `/.default`. The returned access token is retained in
+process memory only. It is not a Server license and is not persisted.
+
+V1 acquires the token during startup. Token renewal and the License Service
+exchange are subsequent slices.
+
 ## Server License
 
 `server.license` is a required Server-level file located beside `server.json`.
@@ -269,6 +307,32 @@ this limit.
 
 V1 validates structure, expiration, and limits. Cryptographic signature
 verification is intentionally reserved for a later license-security slice.
+
+## Server Lease
+
+`server.lease` is the short-lived runtime authorization layer above the
+longer-lived `server.license` entitlement.
+
+```jsonc
+{
+  "version": 1,
+  "lease_id": "<opaque lease id>",
+  "not_before": "2026-09-28T00:00:00Z",
+  "expires_at": "2026-09-28T12:00:00Z",
+  "max_connections": 32
+}
+```
+
+At startup the lease must be active, expire no later than `server.license`, and
+may only narrow `max_connections`.
+
+The Server control thread waits against the lease expiration deadline. When the
+lease expires, an idle standalone Server leaves the run loop and shuts down.
+
+V1 is an enforcement foundation, not the final security boundary:
+`server.lease` is not yet cryptographically signed and is not yet acquired from
+the License Service. The next slice is Microsoft Entra Server identity + signed
+lease acquisition/renewal.
 
 ## Authentication
 
@@ -564,8 +628,24 @@ no console thread
 no console input backend
 ```
 
-TCP/JSON remains a configuration contract but its backend is not implemented in
-the current architecture stage. Configuring it fails explicitly.
+TCP/JSON remains a configuration contract but its socket backend is not implemented
+in the current architecture stage. Configuring it still fails explicitly.
+
+The transport-neutral Client Session core is implemented independently of the
+future TCP backend:
+
+```text
+accepted TCP connection
+    -> client_session(session_id)
+    -> LOGIN
+    -> Authentication
+    -> authenticated session
+    -> ordinary Server requests
+```
+
+LOGIN is not queued as a Server request. Before LOGIN succeeds, the session
+cannot emit a `request_identity`. `session_id` is unique per active connection;
+`name + subid` is deliberately non-unique.
 
 ## Configuration Ownership Boundary
 

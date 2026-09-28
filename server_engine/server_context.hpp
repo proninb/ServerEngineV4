@@ -13,7 +13,10 @@
 #include "configuration/server_configuration.hpp"
 #include "project/project.hpp"
 #include "license/server_license.hpp"
+#include "license/server_lease.hpp"
+#include "server_mode.hpp"
 #include "server_policy.hpp"
+#include "server_identity/server_identity.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -32,11 +35,20 @@ public:
     // Parent directory used as the base for relative Server-owned paths.
     std::filesystem::path configuration_directory;
 
-    // Validated process-level server.license state.
+    // Validated long-lived server.license entitlement.
     server_license license;
+
+    // Outbound process identity used to authenticate this Server to services.
+    server_identity_service identity;
+
+    // Short-lived runtime authorization that may narrow server.license limits.
+    server_lease lease;
 
     // Process-level Authentication subsystem. Starts before Communication.
     authentication_service authentication;
+
+    // FULL after successful Server Authentication; DEMO otherwise.
+    server_mode mode = server_mode::full;
 
     // Central access policy for requests entering from Communication.
     server_policy policy;

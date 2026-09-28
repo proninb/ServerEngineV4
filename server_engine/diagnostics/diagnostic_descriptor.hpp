@@ -104,6 +104,54 @@ inline constexpr diagnostic_descriptor license_expired{
     "server.license has expired",
 };
 
+inline constexpr diagnostic_descriptor server_lease_read_failed{
+    diagnostic_id{1124},
+    diagnostic_domain::license,
+    diagnostic_severity::fatal,
+    "license.lease_read_failed",
+    "server.lease could not be read",
+};
+
+inline constexpr diagnostic_descriptor server_lease_invalid{
+    diagnostic_id{1125},
+    diagnostic_domain::license,
+    diagnostic_severity::fatal,
+    "license.lease_invalid",
+    "server.lease is invalid",
+};
+
+inline constexpr diagnostic_descriptor server_lease_not_active{
+    diagnostic_id{1126},
+    diagnostic_domain::license,
+    diagnostic_severity::fatal,
+    "license.lease_not_active",
+    "server.lease is not active yet",
+};
+
+inline constexpr diagnostic_descriptor server_lease_expired{
+    diagnostic_id{1127},
+    diagnostic_domain::license,
+    diagnostic_severity::fatal,
+    "license.lease_expired",
+    "server.lease has expired",
+};
+
+inline constexpr diagnostic_descriptor server_identity_start_failed{
+    diagnostic_id{1171},
+    diagnostic_domain::server,
+    diagnostic_severity::fatal,
+    "server.identity_start_failed",
+    "Server identity could not be established",
+};
+
+inline constexpr diagnostic_descriptor server_identity_unsupported{
+    diagnostic_id{1172},
+    diagnostic_domain::server,
+    diagnostic_severity::fatal,
+    "server.identity_unsupported",
+    "Server identity provider is not implemented on this platform",
+};
+
 // Authentication subsystem could not initialize the configured provider.
 inline constexpr diagnostic_descriptor authentication_start_failed{
     diagnostic_id{1151},
@@ -120,6 +168,15 @@ inline constexpr diagnostic_descriptor authentication_unsupported_mode{
     diagnostic_severity::error,
     "authentication.unsupported_mode",
     "Authentication mode is not implemented",
+};
+
+// Authentication could not establish FULL operation; Server continues in DEMO.
+inline constexpr diagnostic_descriptor server_demo_mode{
+    diagnostic_id{1003},
+    diagnostic_domain::server,
+    diagnostic_severity::warning,
+    "server.demo_mode",
+    "Server is running in DEMO mode",
 };
 
 // Server Policy rejected a request from its presented origin/client identity.

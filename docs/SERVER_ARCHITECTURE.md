@@ -182,6 +182,70 @@ consumes this validated limit when connection admission is implemented.
 V1 deliberately does not claim cryptographic authenticity for `server.license`.
 Signature/envelope verification is a separate licensing-security slice.
 
+## Server identity
+
+Server identity is separate from incoming Client Authentication:
+
+```text
+Server identity
+    proves the Server process to an outbound service
+
+Client Authentication
+    proves a remote client to ServerEngine
+```
+
+Microsoft Entra Server identity uses the confidential-client/client-credentials
+model with a certificate. The access token is memory-only and is intended to
+authenticate the Server to the License Service; it is not itself the Server
+license.
+
+Startup direction is now:
+
+```text
+server.json
+    -> server.license
+    -> Server identity
+    -> server.lease
+    -> Authentication
+    -> Communication
+    -> optional Project startup
+```
+
+The next licensing slice replaces the development/local lease source with a
+License Service exchange authenticated by this Server identity.
+
+## Server runtime lease
+
+Server licensing now has two lifetimes:
+
+```text
+server.license
+    long-lived entitlement ceiling
+
+server.lease
+    short-lived runtime authorization
+```
+
+The lease is Server-level and Project-independent. It may only narrow limits
+from `server.license`. The Server control loop uses lease expiration as an
+absolute wait deadline, so a standalone idle Server cannot continue indefinitely
+after the lease expires.
+
+Current V1 deliberately does not fake remote security. Signature verification,
+Microsoft Entra daemon/server identity, License Service acquisition, renewal,
+grace policy, and concurrent-Server accounting are the next slice.
+
+Target:
+
+```text
+ServerEngine
+    -> Microsoft Entra Server identity
+    -> License Service
+    -> signed short-lived server.lease
+    -> local verification/enforcement
+    -> renew before expiration
+```
+
 ## Current Server startup boundary
 
 The current startup sequence is:
@@ -950,7 +1014,7 @@ against itself.
 Run it with:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tests\run_msvc_class_abi_oracle.ps1 `
+powershell -ExecutionPolicy Bypass -File .\tests\nun_msvc_class_abi_oracle.ps1 `
     -ResultPath build\msvc-class-abi-oracle-v1b3.csv
 ```
 
@@ -1205,6 +1269,47 @@ than inside G or inside individual DAG nodes.
 Construction provenance is produced directly by Parser/Semantic and persisted
 mmap-native in `compiled.bin`. BUILD-only semantic presence is persisted beside
 the physical topology in `source.bin`.
+
+
+## Client Session boundary
+
+```text
+TCP accept
+    -> client_session(session_id)
+    -> LOGIN(name)
+    -> logged_in
+    -> ordinary Server requests
+```
+
+LOGIN carries no credential. It is not Authentication and never enters
+`request_queue`. `session_id` is unique per active connection; `name` is
+deliberately non-unique.
+
+Process-level Authentication selects Server mode:
+
+```text
+success -> FULL
+failure/unavailable -> DEMO
+```
+
+Policy:
+
+```text
+FULL
+    all commands for all logged-in clients
+
+DEMO
+    max active TCP connections = 1
+    client name is unrestricted
+    LOAD / UNLOAD / read/runtime work allowed
+    PUBLISH / BUILD / REBUILD denied
+```
+
+DEMO allows one active TCP connection total and runs for five minutes. Client
+`name` remains application metadata and does not participate in licensing or
+authorization. The current slice implements mode selection and command policy.
+Connection-count and timed shutdown enforcement belong to the TCP
+accept/run-loop slice because the TCP backend does not exist yet.
 
 ## Project lifecycle state machine
 

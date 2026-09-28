@@ -43,6 +43,10 @@ add_executable(ServerEngineV4
 
     server_engine/license/server_license.cpp
     server_engine/license/server_license_loader.cpp
+    server_engine/license/server_lease.cpp
+    server_engine/license/server_lease_loader.cpp
+
+    server_engine/server_identity/server_identity.cpp
 
     server_engine/authentication/authentication.cpp
     server_engine/authentication/microsoft_entra.cpp
@@ -50,6 +54,7 @@ add_executable(ServerEngineV4
 
     server_engine/communication/request_queue.cpp
     server_engine/communication/communication.cpp
+    server_engine/communication/session/client_session.cpp
 
     server_engine/communication/console/server_console.cpp
 
@@ -96,16 +101,18 @@ add_executable(ServerEngineV4
 
 if(WIN32)
     target_sources(ServerEngineV4 PRIVATE
+        server_engine/server_identity/microsoft_entra_server_identity_windows.cpp
         server_engine/authentication/crypto/rsa_sha256_verifier_windows.cpp
         server_engine/communication/console/console_input_windows.cpp
         server_engine/project/construction/execution_lanes_windows.cpp
     )
 
-    target_link_libraries(ServerEngineV4 PRIVATE bcrypt)
+    target_link_libraries(ServerEngineV4 PRIVATE bcrypt crypt32 ncrypt winhttp)
 else()
     find_package(Threads REQUIRED)
 
     target_sources(ServerEngineV4 PRIVATE
+        server_engine/server_identity/microsoft_entra_server_identity_unsupported.cpp
         server_engine/authentication/crypto/rsa_sha256_verifier_unsupported.cpp
         server_engine/communication/console/console_input_posix.cpp
         server_engine/project/construction/execution_lanes_posix.cpp
@@ -165,6 +172,9 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
             PRIVATE
             Psapi
             bcrypt
+            crypt32
+            ncrypt
+            winhttp
         )
     else()
         target_link_libraries(
@@ -228,12 +238,18 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
             PRIVATE
             Psapi
             bcrypt
+            crypt32
+            ncrypt
+            winhttp
         )
         target_link_libraries(
             ServerEngineV4RuntimeLookupBenchmark
             PRIVATE
             Psapi
             bcrypt
+            crypt32
+            ncrypt
+            winhttp
         )
     else()
         target_link_libraries(
@@ -419,6 +435,28 @@ if(BUILD_TESTING)
         COMMAND ServerEngineV4ServerLicenseTests
     )
 
+    add_executable(ServerEngineV4ServerLeaseTests
+        tests/server_lease_tests.cpp
+        server_engine/license/server_license.cpp
+        server_engine/license/server_lease.cpp
+        server_engine/license/server_lease_loader.cpp
+        server_engine/json/json_parser.cpp
+        server_engine/diagnostics/diagnostic_collection.cpp
+        server_engine/diagnostics/diagnostic_source_cache.cpp
+    )
+
+    target_include_directories(ServerEngineV4ServerLeaseTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(ServerEngineV4ServerLeaseTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4ServerLeaseTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(NAME server_lease COMMAND ServerEngineV4ServerLeaseTests)
+
     add_executable(ServerEngineV4ServerPolicyTests
         tests/server_policy_tests.cpp
         server_engine/server_policy.cpp
@@ -439,20 +477,86 @@ if(BUILD_TESTING)
         COMMAND ServerEngineV4ServerPolicyTests
     )
 
+    add_executable(ServerEngineV4ServerIdentityTests
+        tests/server_identity_tests.cpp
+        server_engine/server_identity/server_identity.cpp
+    )
+
+    if(WIN32)
+        target_sources(ServerEngineV4ServerIdentityTests PRIVATE
+            server_engine/server_identity/microsoft_entra_server_identity_windows.cpp
+            server_engine/json/json_parser.cpp
+        )
+        target_link_libraries(ServerEngineV4ServerIdentityTests PRIVATE
+            bcrypt
+            crypt32
+            ncrypt
+            winhttp
+        )
+    else()
+        target_sources(ServerEngineV4ServerIdentityTests PRIVATE
+            server_engine/server_identity/microsoft_entra_server_identity_unsupported.cpp
+        )
+    endif()
+
+    target_include_directories(ServerEngineV4ServerIdentityTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(ServerEngineV4ServerIdentityTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4ServerIdentityTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(NAME server_identity COMMAND ServerEngineV4ServerIdentityTests)
+
     add_executable(ServerEngineV4AuthenticationTests
         tests/authentication_tests.cpp
         server_engine/authentication/authentication.cpp
         server_engine/authentication/microsoft_entra.cpp
+        server_engine/authentication/entra_jwt.cpp
         server_engine/json/json_parser.cpp
     )
+
+    if(WIN32)
+        target_sources(ServerEngineV4AuthenticationTests PRIVATE
+            server_engine/authentication/crypto/rsa_sha256_verifier_windows.cpp
+        )
+        target_link_libraries(ServerEngineV4AuthenticationTests PRIVATE bcrypt)
+    else()
+        target_sources(ServerEngineV4AuthenticationTests PRIVATE
+            server_engine/authentication/crypto/rsa_sha256_verifier_unsupported.cpp
+        )
+    endif()
+
     target_include_directories(ServerEngineV4AuthenticationTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+
     if(MSVC)
         target_compile_options(ServerEngineV4AuthenticationTests PRIVATE /W4 /permissive-)
     else()
         target_compile_options(ServerEngineV4AuthenticationTests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
+
     add_test(NAME authentication COMMAND ServerEngineV4AuthenticationTests)
+
+    add_executable(ServerEngineV4ClientSessionTests
+        tests/client_session_tests.cpp
+        server_engine/communication/session/client_session.cpp
+    )
+
+    target_include_directories(ServerEngineV4ClientSessionTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(ServerEngineV4ClientSessionTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4ClientSessionTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(NAME client_session COMMAND ServerEngineV4ClientSessionTests)
 
 
     add_executable(ServerEngineV4EntraJwtTests

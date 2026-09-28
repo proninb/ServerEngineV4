@@ -379,10 +379,72 @@ int main() {
         if (!expect_invalid(
                 result,
                 diagnostics::configuration_unsupported_version.id,
-                "unsupported server configuration version; expected version 8")) {
+                "unsupported server configuration version; expected version 8 or 9")) {
 
             cleanup();
             std::cerr << "schema version validation failed\n";
+            return 1;
+        }
+    }
+
+
+    {
+        auto text =
+            configuration(
+                "8",
+                "    \"shm\": {\n"
+                "      \"mode\": \"fixed_direct\",\n"
+                "      \"name\": \"CW.ServerEngineV4.Project\",\n"
+                "      \"fixed_base_address\": \"0x0000010000000000\"\n"
+                "    },\n");
+
+        const auto version_position =
+            text.find("\"version\": 8");
+
+        const auto authentication_position =
+            text.find("  \"authentication\":");
+
+        if (version_position == std::string::npos ||
+            authentication_position == std::string::npos) {
+
+            cleanup();
+            std::cerr << "version 9 Server identity fixture construction failed\n";
+            return 1;
+        }
+
+        text.replace(
+            version_position,
+            std::string("\"version\": 8").size(),
+            "\"version\": 9");
+
+        text.insert(
+            authentication_position,
+            "  \"server_identity\": {\n"
+            "    \"mode\": \"microsoft_entra\",\n"
+            "    \"microsoft_entra\": {\n"
+            "      \"tenant_id\": \"tenant.example\",\n"
+            "      \"client_id\": \"11111111-2222-3333-4444-555555555555\",\n"
+            "      \"scope\": \"api://license-service/.default\",\n"
+            "      \"certificate_thumbprint\": \"00112233445566778899AABBCCDDEEFF00112233\",\n"
+            "      \"certificate_store\": \"current_user\"\n"
+            "    }\n"
+            "  },\n");
+
+        const auto result =
+            load(
+                path,
+                text);
+
+        if (!succeeded(result.status) ||
+            result.value.version != 9 ||
+            result.value.server_identity.mode !=
+                server_identity_mode::microsoft_entra ||
+            !result.value.server_identity.microsoft_entra ||
+            result.value.server_identity.microsoft_entra->scope !=
+                "api://license-service/.default") {
+
+            cleanup();
+            std::cerr << "version 9 Microsoft Entra Server identity configuration failed\n";
             return 1;
         }
     }

@@ -32,6 +32,8 @@ enum class schema_context : std::uint8_t {
     abi,
     shm,
     files,
+    server_identity,
+    server_identity_microsoft_entra,
     authentication,
     authentication_external,
     communication,
@@ -58,10 +60,16 @@ enum class schema_field : std::uint8_t {
     source_save,
     database,
     compiled,
+    server_identity,
+    microsoft_entra,
     authentication,
     external,
     provider,
     tenant_id,
+    client_id,
+    scope,
+    certificate_thumbprint,
+    certificate_store,
     audience,
     communication,
     project,
@@ -137,6 +145,8 @@ struct schema_frame {
     case schema_context::abi: return "settings.abi";
     case schema_context::shm: return "settings.shm";
     case schema_context::files: return "settings.files";
+    case schema_context::server_identity: return "server_identity";
+    case schema_context::server_identity_microsoft_entra: return "server_identity.microsoft_entra";
     case schema_context::authentication: return "authentication";
     case schema_context::authentication_external: return "authentication.external";
     case schema_context::communication: return "communication";
@@ -253,6 +263,40 @@ public:
 
             stack.push_back({
                 schema_context::files,
+                schema_field::none,
+                0,
+            });
+            return;
+        }
+
+        if (parent.context ==
+                schema_context::root &&
+            parent.field ==
+                schema_field::server_identity) {
+
+            stack.back().field =
+                schema_field::none;
+
+            stack.push_back({
+                schema_context::server_identity,
+                schema_field::none,
+                0,
+            });
+            return;
+        }
+
+        if (parent.context ==
+                schema_context::server_identity &&
+            parent.field ==
+                schema_field::microsoft_entra) {
+
+            stack.back().field =
+                schema_field::none;
+
+            configuration.server_identity.microsoft_entra.emplace();
+
+            stack.push_back({
+                schema_context::server_identity_microsoft_entra,
                 schema_field::none,
                 0,
             });
@@ -401,6 +445,24 @@ public:
                 return;
             }
 
+            if (configuration.version == 9 &&
+                !seen(frame, schema_field::server_identity)) {
+
+                fail(
+                    schema_failure::missing_required_field,
+                    "server configuration version 9 requires server_identity");
+                return;
+            }
+
+            if (configuration.version == 8 &&
+                seen(frame, schema_field::server_identity)) {
+
+                fail(
+                    schema_failure::invalid_value,
+                    "server_identity requires server configuration version 9");
+                return;
+            }
+
             root_completed = true;
             break;
 
@@ -463,6 +525,46 @@ public:
 
         case schema_context::files:
             if (!validate_files(frame)) {
+                return;
+            }
+            break;
+
+        case schema_context::server_identity:
+            if (!seen(frame, schema_field::mode)) {
+                fail(
+                    schema_failure::missing_required_field,
+                    "server_identity requires mode");
+                return;
+            }
+
+            if (configuration.server_identity.mode ==
+                    server_identity_mode::microsoft_entra) {
+
+                if (!seen(frame, schema_field::microsoft_entra)) {
+                    fail(
+                        schema_failure::missing_required_field,
+                        "server_identity mode=microsoft_entra requires server_identity.microsoft_entra");
+                    return;
+                }
+            }
+            else if (seen(frame, schema_field::microsoft_entra)) {
+                fail(
+                    schema_failure::invalid_value,
+                    "server_identity.microsoft_entra is valid only when mode=microsoft_entra");
+                return;
+            }
+            break;
+
+        case schema_context::server_identity_microsoft_entra:
+            if (!seen(frame, schema_field::tenant_id) ||
+                !seen(frame, schema_field::client_id) ||
+                !seen(frame, schema_field::scope) ||
+                !seen(frame, schema_field::certificate_thumbprint) ||
+                !seen(frame, schema_field::certificate_store)) {
+
+                fail(
+                    schema_failure::missing_required_field,
+                    "server_identity.microsoft_entra requires tenant_id, client_id, scope, certificate_thumbprint, and certificate_store");
                 return;
             }
             break;
@@ -741,6 +843,14 @@ public:
             read_files(field, value);
             break;
 
+        case schema_context::server_identity:
+            read_server_identity(field, value);
+            break;
+
+        case schema_context::server_identity_microsoft_entra:
+            read_server_identity_microsoft_entra(field, value);
+            break;
+
         case schema_context::authentication:
             read_authentication(field, value);
             break;
@@ -828,6 +938,7 @@ private:
         case schema_context::root:
             if (key == "version") return schema_field::version;
             if (key == "settings") return schema_field::settings;
+            if (key == "server_identity") return schema_field::server_identity;
             if (key == "authentication") return schema_field::authentication;
             if (key == "communication") return schema_field::communication;
             if (key == "project") return schema_field::project;
@@ -859,6 +970,19 @@ private:
             if (key == "source_save") return schema_field::source_save;
             if (key == "database") return schema_field::database;
             if (key == "compiled") return schema_field::compiled;
+            break;
+
+        case schema_context::server_identity:
+            if (key == "mode") return schema_field::mode;
+            if (key == "microsoft_entra") return schema_field::microsoft_entra;
+            break;
+
+        case schema_context::server_identity_microsoft_entra:
+            if (key == "tenant_id") return schema_field::tenant_id;
+            if (key == "client_id") return schema_field::client_id;
+            if (key == "scope") return schema_field::scope;
+            if (key == "certificate_thumbprint") return schema_field::certificate_thumbprint;
+            if (key == "certificate_store") return schema_field::certificate_store;
             break;
 
         case schema_context::authentication:
@@ -928,10 +1052,12 @@ private:
             return;
         }
 
-        if (version != 8) {
+        if (version != 8 &&
+            version != 9) {
+
             fail(
                 schema_failure::unsupported_version,
-                "unsupported server configuration version; expected version 8");
+                "unsupported server configuration version; expected version 8 or 9");
             return;
         }
 
@@ -999,6 +1125,166 @@ private:
         fail(
             schema_failure::invalid_structure,
             "invalid abi scalar field");
+    }
+
+
+    void read_server_identity(
+        schema_field field,
+        json_value_view value) {
+
+        if (field != schema_field::mode) {
+            fail(
+                schema_failure::invalid_structure,
+                "invalid server_identity scalar field");
+            return;
+        }
+
+        std::string mode;
+
+        if (!value.get(mode)) {
+            fail(
+                schema_failure::wrong_type,
+                "server_identity.mode must be a string");
+            return;
+        }
+
+        if (mode == "none") {
+            configuration.server_identity.mode =
+                server_identity_mode::none;
+            return;
+        }
+
+        if (mode == "microsoft_entra") {
+            configuration.server_identity.mode =
+                server_identity_mode::microsoft_entra;
+            return;
+        }
+
+        fail(
+            schema_failure::invalid_value,
+            "server_identity.mode must be none or microsoft_entra");
+    }
+
+    void read_server_identity_microsoft_entra(
+        schema_field field,
+        json_value_view value) {
+
+        if (!configuration.server_identity.microsoft_entra) {
+            fail(
+                schema_failure::invalid_structure,
+                "server_identity.microsoft_entra object is not active");
+            return;
+        }
+
+        auto& entra =
+            *configuration.server_identity.microsoft_entra;
+
+        switch (field) {
+        case schema_field::tenant_id:
+            if (!value.get(entra.tenant_id) ||
+                entra.tenant_id.empty()) {
+
+                fail(
+                    schema_failure::wrong_type,
+                    "server_identity.microsoft_entra.tenant_id must be a non-empty string");
+            }
+            return;
+
+        case schema_field::client_id:
+            if (!value.get(entra.client_id) ||
+                entra.client_id.empty()) {
+
+                fail(
+                    schema_failure::wrong_type,
+                    "server_identity.microsoft_entra.client_id must be a non-empty string");
+            }
+            return;
+
+        case schema_field::scope: {
+            if (!value.get(entra.scope) ||
+                entra.scope.empty()) {
+
+                fail(
+                    schema_failure::wrong_type,
+                    "server_identity.microsoft_entra.scope must be a non-empty string");
+                return;
+            }
+
+            constexpr std::string_view suffix =
+                "/.default";
+
+            if (entra.scope.size() < suffix.size() ||
+                entra.scope.compare(
+                    entra.scope.size() - suffix.size(),
+                    suffix.size(),
+                    suffix) != 0) {
+
+                fail(
+                    schema_failure::invalid_value,
+                    "server_identity.microsoft_entra.scope must end with /.default");
+            }
+            return;
+        }
+
+        case schema_field::certificate_thumbprint:
+            if (!value.get(entra.certificate_thumbprint) ||
+                entra.certificate_thumbprint.size() != 40) {
+
+                fail(
+                    schema_failure::invalid_value,
+                    "server_identity.microsoft_entra.certificate_thumbprint must contain 40 hexadecimal SHA-1 characters");
+                return;
+            }
+
+            for (const auto ch : entra.certificate_thumbprint) {
+                const bool hex =
+                    (ch >= '0' && ch <= '9') ||
+                    (ch >= 'a' && ch <= 'f') ||
+                    (ch >= 'A' && ch <= 'F');
+
+                if (!hex) {
+                    fail(
+                        schema_failure::invalid_value,
+                        "server_identity.microsoft_entra.certificate_thumbprint must contain 40 hexadecimal SHA-1 characters");
+                    return;
+                }
+            }
+            return;
+
+        case schema_field::certificate_store: {
+            std::string store;
+
+            if (!value.get(store)) {
+                fail(
+                    schema_failure::wrong_type,
+                    "server_identity.microsoft_entra.certificate_store must be a string");
+                return;
+            }
+
+            if (store == "current_user") {
+                entra.certificate_store =
+                    server_identity_certificate_store::current_user;
+                return;
+            }
+
+            if (store == "local_machine") {
+                entra.certificate_store =
+                    server_identity_certificate_store::local_machine;
+                return;
+            }
+
+            fail(
+                schema_failure::invalid_value,
+                "server_identity.microsoft_entra.certificate_store must be current_user or local_machine");
+            return;
+        }
+
+        default:
+            fail(
+                schema_failure::invalid_structure,
+                "invalid server_identity.microsoft_entra scalar field");
+            return;
+        }
     }
 
     void read_authentication(

@@ -34,6 +34,21 @@ enum class server_status {
     // server.license is no longer valid at Server startup time.
     license_expired,
 
+    // server.lease could not be opened/read.
+    server_lease_read_failed,
+
+    // server.lease violates its structural, time, or limit contract.
+    server_lease_invalid,
+
+    // server.lease is not valid yet.
+    server_lease_not_active,
+
+    // server.lease expired at startup or while the Server was running.
+    server_lease_expired,
+
+    // Server process identity initialization or token acquisition failed.
+    server_identity_start_failed,
+
     // Authentication subsystem/provider initialization failed.
     authentication_start_failed,
 

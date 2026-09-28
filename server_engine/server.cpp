@@ -10,6 +10,7 @@
 #include "diagnostics/diagnostic_builder.hpp"
 #include "diagnostics/diagnostic_descriptor.hpp"
 #include "license/server_license_loader.hpp"
+#include "license/server_lease_loader.hpp"
 #include "project/project_build.hpp"
 #include "project/project_load.hpp"
 #include "project/project_publish.hpp"
@@ -82,30 +83,69 @@ server_status server::start(
         return status;
     }
 
-    status = context.authentication.start(
-        context.configuration.authentication,
-        context.configuration_directory);
+    status = context.identity.start(
+        context.configuration.server_identity,
+        std::chrono::system_clock::now());
 
     if (!succeeded(status)) {
         const auto& descriptor =
             status == server_status::unsupported
-                ? diagnostics::authentication_unsupported_mode
-                : diagnostics::authentication_start_failed;
+                ? diagnostics::server_identity_unsupported
+                : diagnostics::server_identity_start_failed;
 
         diagnostics.emit(
             diagnostic(
                 descriptor,
                 operation)
                 .detail(
-                    context.authentication.detail().empty()
-                        ? (status == server_status::unsupported
-                            ? "Configured Authentication mode has no provider backend"
-                            : "Failed to start Authentication subsystem")
-                        : std::string(context.authentication.detail()))
+                    context.identity.detail().empty()
+                        ? "Failed to establish Server identity"
+                        : std::string(context.identity.detail()))
                 .build());
 
-        context.authentication.stop();
+        context.identity.stop();
+        context.license.clear();
         return status;
+    }
+
+    status = load_server_lease(
+        context.configuration_directory /
+            "server.lease",
+        std::chrono::system_clock::now(),
+        context.license,
+        operation,
+        diagnostics,
+        context.lease);
+
+    if (!succeeded(status)) {
+        context.identity.stop();
+        context.license.clear();
+        return status;
+    }
+
+    status = context.authentication.start(
+        context.configuration.authentication,
+        context.configuration_directory);
+
+    if (succeeded(status)) {
+        context.mode =
+            server_mode::full;
+    } else {
+        const auto detail =
+            context.authentication.detail().empty()
+                ? std::string("Authentication unavailable")
+                : std::string(context.authentication.detail());
+
+        context.authentication.stop();
+        context.mode =
+            server_mode::demo;
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::server_demo_mode,
+                operation)
+                .detail(detail)
+                .build());
     }
 
     status = context.communications.start(
@@ -129,6 +169,7 @@ server_status server::start(
                 .build());
 
         context.authentication.stop();
+        context.identity.stop();
         return status;
     }
 
@@ -172,8 +213,30 @@ server_status server::start(
 
 int server::run() {
     while (running) {
-        auto message =
-            context.requests.wait_pop();
+        const auto now =
+            std::chrono::system_clock::now();
+
+        if (!context.lease.valid_at(now)) {
+            running = false;
+            break;
+        }
+
+        server_request_message message;
+
+        if (!context.requests.wait_pop_until(
+                context.lease.expires_at(),
+                message)) {
+
+            running = false;
+            break;
+        }
+
+        if (!context.lease.valid_at(
+                std::chrono::system_clock::now())) {
+
+            running = false;
+            break;
+        }
 
         auto result =
             execute_message(
@@ -193,7 +256,7 @@ server_response server::execute_message(
     const server_request_message& message) {
 
     if (context.policy.allows(
-            message.identity,
+            context.mode,
             message.request.kind)) {
 
         return execute(
@@ -585,6 +648,8 @@ void server::shutdown() noexcept {
     context.communications.stop();
     context.project.reset();
     context.authentication.stop();
+    context.lease.clear();
+    context.identity.stop();
     context.license.clear();
 }
 
