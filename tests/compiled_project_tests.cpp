@@ -3,6 +3,9 @@
 #include "project/runtime/fixed_direct_materializer.hpp"
 #include "project/runtime/runtime_layout.hpp"
 #include "project/runtime/runtime_query.hpp"
+#include "project/runtime/runtime_ic.hpp"
+#include "project/runtime/runtime_ic_codec.hpp"
+#include "project/runtime/runtime_ic_snapshot.hpp"
 #include "project/file/file_context.hpp"
 #include "project/graph/graph_delta.hpp"
 #include "project/source/source_map.hpp"
@@ -2765,6 +2768,823 @@ void test_runtime_query(
             value) ==
             runtime_query_result::unsupported_type,
         "GET_VALUE rejects aggregate leaf");
+}
+
+
+void test_runtime_ic_cross_generation(
+    test_state& tests,
+    const compiled_fixture& first_fixture,
+    const compiled_test_image& first_image) {
+
+#if defined(_WIN32)
+    const server_abi_configuration abi{
+        abi_target::windows_x64,
+        8,
+    };
+#else
+    const server_abi_configuration abi{
+        abi_target::posix_x64,
+        8,
+    };
+#endif
+
+    const auto prepare_runtime =
+        [&](const compiled_test_image& image,
+            compiled_project_view& view,
+            runtime_binding_index& bindings,
+            std::vector<std::byte>& runtime) {
+
+            if (view.bind(
+                    image.bytes) !=
+                    compiled_project_image_result::success) {
+
+                return false;
+            }
+
+            runtime_layout layout;
+
+            if (!fixed_direct_host_compatible(
+                    abi) ||
+                prepare_runtime_layout(
+                    view,
+                    abi,
+                    layout) !=
+                    runtime_layout_result::success) {
+
+                return false;
+            }
+
+            try {
+                runtime.assign(
+                    static_cast<std::size_t>(
+                        layout.size()),
+                    std::byte{0xcc});
+            }
+            catch (...) {
+                return false;
+            }
+
+            if (materialize_fixed_direct(
+                    view,
+                    layout,
+                    abi,
+                    runtime) !=
+                    fixed_direct_materialization_result::
+                        success) {
+
+                return false;
+            }
+
+            return layout.release_bindings(
+                bindings);
+        };
+
+    compiled_project_view first_view;
+    runtime_binding_index first_bindings;
+    std::vector<std::byte> first_runtime;
+
+    if (!tests.expect(
+            prepare_runtime(
+                first_image,
+                first_view,
+                first_bindings,
+                first_runtime),
+            "prepare G1 Runtime IC fixture")) {
+
+        return;
+    }
+
+    const std::array<std::string_view, 2>
+        left_object{{
+            "demo",
+            "left",
+        }};
+
+    const std::array<std::string_view, 1>
+        value_member{{
+            "value",
+        }};
+
+    const runtime_ic_path_view left_value{
+        left_object,
+        value_member,
+    };
+
+    runtime_ic_scalar_target first_target;
+    runtime_ic_scalar_value snapshot;
+
+    if (!tests.expect(
+            resolve_runtime_ic_scalar(
+                first_view,
+                first_bindings,
+                first_runtime.size(),
+                left_value,
+                first_target) ==
+                    runtime_ic_result::success &&
+            snapshot_runtime_ic_scalar(
+                first_view,
+                first_bindings,
+                first_runtime,
+                left_value,
+                snapshot) ==
+                    runtime_ic_result::success &&
+            snapshot.type ==
+                intrinsic_type::signed_int &&
+            snapshot.size == sizeof(std::int32_t),
+            "SNAP IC resolves G1 semantic scalar")) {
+
+        return;
+    }
+
+    std::int32_t snapped = 0;
+
+    std::memcpy(
+        &snapped,
+        snapshot.bytes.data(),
+        sizeof(snapped));
+
+    if (!tests.expect(
+            snapped == 42,
+            "SNAP IC reads G1 Runtime value")) {
+
+        return;
+    }
+
+    compiled_fixture second_fixture;
+
+    string_id prefix_name;
+    identity_ref prefix_identity;
+    object_handle prefix_object;
+
+    if (!tests.expect(
+            succeeded(
+                second_fixture.strings.intern(
+                    "__ic_generation_prefix",
+                    prefix_name)) &&
+            succeeded(
+                second_fixture.identities.resolve(
+                    second_fixture.identities.root(),
+                    prefix_name,
+                    identity_kind::object,
+                    prefix_identity)) &&
+            succeeded(
+                second_fixture.G.add_object(
+                    prefix_identity,
+                    second_fixture.G.intrinsic(
+                        intrinsic_type::signed_int),
+                    prefix_object,
+                    graph_object_non_default_initializer,
+                    construction_value::constant(
+                        construction_kind::signed_integer,
+                        99))),
+            "prepare G2 slot-shift prefix")) {
+
+        return;
+    }
+
+    if (!build_fixture(
+            tests,
+            second_fixture)) {
+
+        return;
+    }
+
+    compiled_test_image second_image;
+
+    if (!tests.expect(
+            build_test_compiled_image(
+                second_fixture,
+                second_image) ==
+                compiled_project_image_result::success,
+            "build G2 Runtime IC image")) {
+
+        return;
+    }
+
+    compiled_project_view second_view;
+    runtime_binding_index second_bindings;
+    std::vector<std::byte> second_runtime;
+
+    if (!tests.expect(
+            prepare_runtime(
+                second_image,
+                second_view,
+                second_bindings,
+                second_runtime),
+            "prepare G2 Runtime IC fixture")) {
+
+        return;
+    }
+
+    runtime_ic_scalar_target second_target;
+
+    if (!tests.expect(
+            resolve_runtime_ic_scalar(
+                second_view,
+                second_bindings,
+                second_runtime.size(),
+                left_value,
+                second_target) ==
+                    runtime_ic_result::success,
+            "RESET IC resolves same semantic scalar in G2")) {
+
+        return;
+    }
+
+    tests.expect(
+        first_fixture.left.value() !=
+                second_fixture.left.value() &&
+            first_fixture.left_name.value() !=
+                second_fixture.left_name.value(),
+        "IC semantic identity does not depend on G-local slots");
+
+    // Runtime offsets are layout results, not semantic identity. A generation
+    // change may move a value, but equal offsets are also valid by coincidence.
+    // The RESET below is the actual proof that IC resolution uses current G2
+    // bindings rather than any persisted G1 Runtime offset.
+
+    const std::int32_t changed = 5;
+
+    std::memcpy(
+        second_runtime.data() +
+            static_cast<std::size_t>(
+                second_target.offset),
+        &changed,
+        sizeof(changed));
+
+    if (!tests.expect(
+            reset_runtime_ic_scalar(
+                second_view,
+                second_bindings,
+                second_runtime,
+                left_value,
+                snapshot) ==
+                runtime_ic_result::success,
+            "RESET IC applies G1 value through current G2 bindings")) {
+
+        return;
+    }
+
+    runtime_ic_scalar_value observed;
+
+    if (!tests.expect(
+            snapshot_runtime_ic_scalar(
+                second_view,
+                second_bindings,
+                second_runtime,
+                left_value,
+                observed) ==
+                runtime_ic_result::success,
+            "read G2 value after RESET IC")) {
+
+        return;
+    }
+
+    std::int32_t restored = 0;
+
+    std::memcpy(
+        &restored,
+        observed.bytes.data(),
+        sizeof(restored));
+
+    tests.expect(
+        restored == 42,
+        "RESET IC restores G1 value into G2 Runtime");
+
+    std::memcpy(
+        second_runtime.data() +
+            static_cast<std::size_t>(
+                second_target.offset),
+        &changed,
+        sizeof(changed));
+
+    auto incompatible = snapshot;
+    incompatible.type =
+        intrinsic_type::unsigned_int;
+
+    tests.expect(
+        reset_runtime_ic_scalar(
+            second_view,
+            second_bindings,
+            second_runtime,
+            left_value,
+            incompatible) ==
+            runtime_ic_result::type_mismatch,
+        "RESET IC rejects incompatible G2 type before write");
+
+    std::int32_t unchanged = 0;
+
+    std::memcpy(
+        &unchanged,
+        second_runtime.data() +
+            static_cast<std::size_t>(
+                second_target.offset),
+        sizeof(unchanged));
+
+    tests.expect(
+        unchanged == changed,
+        "failed RESET IC leaves Runtime value unchanged");
+
+    const std::array<std::string_view, 2>
+        right_object{{
+            "demo",
+            "right",
+        }};
+
+    const std::array<std::string_view, 1>
+        peer_member{{
+            "peer",
+        }};
+
+    runtime_ic_scalar_value reference_value;
+
+    tests.expect(
+        snapshot_runtime_ic_scalar(
+            second_view,
+            second_bindings,
+            second_runtime,
+            {
+                right_object,
+                peer_member,
+            },
+            reference_value) ==
+            runtime_ic_result::unsupported_type,
+        "SNAP IC never persists native reference slots");
+
+    const std::array<std::string_view, 2>
+        scalar_object{{
+            "demo",
+            "scalar",
+        }};
+
+    runtime_ic_scalar_value scalar_value;
+
+    if (!tests.expect(
+            snapshot_runtime_ic_scalar(
+                second_view,
+                second_bindings,
+                second_runtime,
+                {
+                    scalar_object,
+                    {},
+                },
+                scalar_value) ==
+                    runtime_ic_result::success,
+            "SNAP IC supports scalar objects")) {
+
+        return;
+    }
+
+    std::int32_t scalar = 0;
+
+    std::memcpy(
+        &scalar,
+        scalar_value.bytes.data(),
+        sizeof(scalar));
+
+    tests.expect(
+        scalar == 7,
+        "SNAP IC reads scalar-object value");
+}
+
+
+
+void test_runtime_ic_codec(
+    test_state& tests) {
+
+    const std::array<std::string_view, 2>
+        left_object{{
+            "demo",
+            "left",
+        }};
+
+    const std::array<std::string_view, 1>
+        value_member{{
+            "value",
+        }};
+
+    const std::array<std::string_view, 2>
+        scalar_object{{
+            "demo",
+            "scalar",
+        }};
+
+    runtime_ic_scalar_value left_value;
+    left_value.type =
+        intrinsic_type::signed_int;
+    left_value.size =
+        sizeof(std::int32_t);
+
+    const std::int32_t left_number = 42;
+
+    std::memcpy(
+        left_value.bytes.data(),
+        &left_number,
+        sizeof(left_number));
+
+    runtime_ic_scalar_value scalar_value;
+    scalar_value.type =
+        intrinsic_type::signed_int;
+    scalar_value.size =
+        sizeof(std::int32_t);
+
+    const std::int32_t scalar_number = 7;
+
+    std::memcpy(
+        scalar_value.bytes.data(),
+        &scalar_number,
+        sizeof(scalar_number));
+
+    const std::array<runtime_ic_record_source, 2>
+        records{{
+            {
+                {
+                    left_object,
+                    value_member,
+                },
+                left_value,
+            },
+            {
+                {
+                    scalar_object,
+                    {},
+                },
+                scalar_value,
+            },
+        }};
+
+    runtime_ic_binary_plan plan;
+
+    if (!tests.expect(
+            prepare_runtime_ic_binary(
+                records,
+                plan) ==
+                    runtime_ic_codec_result::success &&
+            plan.size() != 0 &&
+            plan.string_count() == 4 &&
+            plan.component_count() == 5 &&
+            plan.record_count() == 2,
+            "prepare canonical binary IC layout")) {
+
+        return;
+    }
+
+    std::vector<std::byte> image;
+
+    try {
+        image.assign(
+            plan.size(),
+            std::byte{0});
+    }
+    catch (...) {
+        tests.expect(
+            false,
+            "allocate binary IC image");
+        return;
+    }
+
+    if (!tests.expect(
+            encode_runtime_ic_binary(
+                records,
+                plan,
+                image) ==
+                runtime_ic_codec_result::success,
+            "encode binary IC image")) {
+
+        return;
+    }
+
+    runtime_ic_binary_view view;
+
+    if (!tests.expect(
+            view.bind(image) ==
+                    runtime_ic_codec_result::success &&
+            view.string_count() == 4 &&
+            view.component_count() == 5 &&
+            view.record_count() == 2,
+            "bind mmap-style binary IC view")) {
+
+        return;
+    }
+
+    runtime_ic_binary_record_view first;
+
+    if (!tests.expect(
+            view.record(
+                0,
+                first) &&
+            first.object_count == 2 &&
+            first.member_count == 1 &&
+            first.type ==
+                intrinsic_type::signed_int &&
+            first.value.size() ==
+                sizeof(std::int32_t),
+            "read binary IC record without reconstruction")) {
+
+        return;
+    }
+
+    tests.expect(
+        view.string(
+            view.component(
+                first.object_begin)) ==
+                "demo" &&
+        view.string(
+            view.component(
+                first.object_begin + 1)) ==
+                "left" &&
+        view.string(
+            view.component(
+                first.member_begin)) ==
+                "value",
+        "binary IC uses file-local string IDs");
+
+    std::int32_t observed = 0;
+
+    std::memcpy(
+        &observed,
+        first.value.data(),
+        sizeof(observed));
+
+    tests.expect(
+        observed == left_number,
+        "binary IC preserves scalar bytes");
+
+    auto corrupted = image;
+    corrupted.back() ^=
+        std::byte{1};
+
+    runtime_ic_binary_view invalid;
+
+    tests.expect(
+        invalid.bind(
+            corrupted) ==
+            runtime_ic_codec_result::
+                invalid_image,
+        "binary IC rejects payload CRC corruption");
+
+    std::string text;
+
+    if (!tests.expect(
+            encode_runtime_ic_text(
+                records,
+                text) ==
+                    runtime_ic_codec_result::success &&
+            text ==
+                "::demo::left.value = 42\n"
+                "::demo::scalar = 7\n",
+            "encode canonical text IC")) {
+
+        return;
+    }
+
+    struct parse_state final {
+        std::array<std::string_view, 2> paths{};
+        std::array<std::string_view, 2> values{};
+        std::size_t count = 0;
+    } parsed;
+
+    const auto callback =
+        +[](void* context,
+            std::string_view path,
+            std::string_view value) noexcept {
+
+            auto& state =
+                *static_cast<parse_state*>(
+                    context);
+
+            if (state.count >=
+                state.paths.size()) {
+
+                return false;
+            }
+
+            state.paths[state.count] =
+                path;
+
+            state.values[state.count] =
+                value;
+
+            ++state.count;
+            return true;
+        };
+
+    std::size_t error_line = 0;
+
+    if (!tests.expect(
+            parse_runtime_ic_text(
+                text,
+                &parsed,
+                callback,
+                &error_line) ==
+                    runtime_ic_codec_result::success &&
+            error_line == 0 &&
+            parsed.count == 2 &&
+            parsed.paths[0] ==
+                "::demo::left.value" &&
+            parsed.values[0] == "42" &&
+            parsed.paths[1] ==
+                "::demo::scalar" &&
+            parsed.values[1] == "7",
+            "parse text IC without document reconstruction")) {
+
+        return;
+    }
+
+    runtime_ic_scalar_value parsed_value;
+
+    if (!tests.expect(
+            parse_runtime_ic_text_scalar(
+                intrinsic_type::signed_int,
+                sizeof(std::int32_t),
+                parsed.values[0],
+                parsed_value) ==
+                    runtime_ic_codec_result::success,
+            "parse text IC scalar against current target type")) {
+
+        return;
+    }
+
+    std::int32_t parsed_number = 0;
+
+    std::memcpy(
+        &parsed_number,
+        parsed_value.bytes.data(),
+        sizeof(parsed_number));
+
+    tests.expect(
+        parsed_number == left_number,
+        "text IC scalar round-trips");
+
+    parsed = {};
+    error_line = 0;
+
+    tests.expect(
+        parse_runtime_ic_text(
+            "::demo::left.value = 42\n"
+            "broken\n",
+            &parsed,
+            callback,
+            &error_line) ==
+                runtime_ic_codec_result::
+                    invalid_image &&
+        parsed.count == 1 &&
+        error_line == 2,
+        "text IC reports malformed line");
+}
+
+
+
+void test_runtime_ic_snapshot(
+    test_state& tests,
+    const compiled_test_image& image) {
+
+    compiled_project_view view;
+
+    if (!tests.expect(
+            view.bind(
+                image.bytes) ==
+                compiled_project_image_result::success,
+            "bind Runtime IC snapshot image")) {
+
+        return;
+    }
+
+#if defined(_WIN32)
+    const server_abi_configuration abi{
+        abi_target::windows_x64,
+        8,
+    };
+#else
+    const server_abi_configuration abi{
+        abi_target::posix_x64,
+        8,
+    };
+#endif
+
+    runtime_layout layout;
+
+    if (!tests.expect(
+            prepare_runtime_layout(
+                view,
+                abi,
+                layout) ==
+                runtime_layout_result::success,
+            "prepare Runtime IC snapshot layout")) {
+
+        return;
+    }
+
+    std::vector<std::byte> runtime(
+        static_cast<std::size_t>(
+            layout.size()),
+        std::byte{0xcc});
+
+    if (!tests.expect(
+            materialize_fixed_direct(
+                view,
+                layout,
+                abi,
+                runtime) ==
+                fixed_direct_materialization_result::success,
+            "materialize Runtime IC snapshot")) {
+
+        return;
+    }
+
+    runtime_binding_index bindings;
+
+    if (!tests.expect(
+            layout.release_bindings(
+                bindings),
+            "publish Runtime IC snapshot bindings")) {
+
+        return;
+    }
+
+    runtime_ic_snapshot snapshot;
+
+    if (!tests.expect(
+            snapshot_runtime_ic_project(
+                view,
+                bindings,
+                runtime,
+                snapshot) ==
+                    runtime_ic_snapshot_result::success,
+            "traverse whole Project Runtime IC snapshot")) {
+
+        return;
+    }
+
+    const auto records =
+        snapshot.records();
+
+    if (!tests.expect(
+            snapshot.stats().objects == 3 &&
+            snapshot.stats().scalars == 3 &&
+            snapshot.stats().skipped_structural == 2 &&
+            snapshot.stats().skipped_unaddressable == 0 &&
+            records.size() == 3,
+            "Runtime IC snapshot selects semantic scalar leaves")) {
+
+        return;
+    }
+
+    std::string text;
+
+    if (!tests.expect(
+            encode_runtime_ic_text(
+                records,
+                text) ==
+                    runtime_ic_codec_result::success,
+            "encode whole Project Runtime IC snapshot")) {
+
+        return;
+    }
+
+    tests.expect(
+        text ==
+            "::demo::left.value = 42\n"
+            "::demo::right.value = 42\n"
+            "::demo::scalar = 7\n",
+        "Runtime IC snapshot is deterministic semantic order");
+
+    runtime_ic_binary_plan plan;
+
+    if (!tests.expect(
+            prepare_runtime_ic_binary(
+                records,
+                plan) ==
+                    runtime_ic_codec_result::success,
+            "prepare whole Project binary Runtime IC")) {
+
+        return;
+    }
+
+    std::vector<std::byte> binary(
+        plan.size(),
+        std::byte{0});
+
+    if (!tests.expect(
+            encode_runtime_ic_binary(
+                records,
+                plan,
+                binary) ==
+                    runtime_ic_codec_result::success,
+            "encode whole Project binary Runtime IC")) {
+
+        return;
+    }
+
+    runtime_ic_binary_view binary_view;
+
+    tests.expect(
+        binary_view.bind(
+            binary) ==
+                runtime_ic_codec_result::success &&
+        binary_view.record_count() ==
+            records.size(),
+        "whole Project binary Runtime IC is mmap-readable");
 }
 
 
@@ -7364,6 +8184,18 @@ int main() {
             first);
 
         test_runtime_query(
+            tests,
+            first);
+
+        test_runtime_ic_cross_generation(
+            tests,
+            fixture,
+            first);
+
+        test_runtime_ic_codec(
+            tests);
+
+        test_runtime_ic_snapshot(
             tests,
             first);
 
