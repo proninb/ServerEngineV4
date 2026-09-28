@@ -29,6 +29,7 @@ endif()
 add_executable(ServerEngineV4
     server_engine/main.cpp
     server_engine/server.cpp
+    server_engine/server_policy.cpp
     server_engine/filesystem_path.cpp
     server_engine/read_only_file_mapping.cpp
     server_engine/writable_file_mapping.cpp
@@ -39,6 +40,8 @@ add_executable(ServerEngineV4
     server_engine/json/json_parser.cpp
 
     server_engine/configuration/server_configuration_loader.cpp
+
+    server_engine/authentication/authentication.cpp
 
     server_engine/communication/request_queue.cpp
     server_engine/communication/communication.cpp
@@ -379,6 +382,39 @@ if(BUILD_TESTING)
         NAME server_configuration
         COMMAND ServerEngineV4ServerConfigurationTests
     )
+
+    add_executable(ServerEngineV4ServerPolicyTests
+        tests/server_policy_tests.cpp
+        server_engine/server_policy.cpp
+    )
+
+    target_include_directories(ServerEngineV4ServerPolicyTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(ServerEngineV4ServerPolicyTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4ServerPolicyTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(
+        NAME server_policy
+        COMMAND ServerEngineV4ServerPolicyTests
+    )
+
+    add_executable(ServerEngineV4AuthenticationTests
+        tests/authentication_tests.cpp
+        server_engine/authentication/authentication.cpp
+    )
+    target_include_directories(ServerEngineV4AuthenticationTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+    if(MSVC)
+        target_compile_options(ServerEngineV4AuthenticationTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4AuthenticationTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME authentication COMMAND ServerEngineV4AuthenticationTests)
 
     add_executable(ServerEngineV4Tests
         tests/compiled_project_tests.cpp

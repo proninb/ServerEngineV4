@@ -77,6 +77,33 @@ inline constexpr diagnostic_descriptor configuration_unsupported_version{
     "Server configuration version is unsupported",
 };
 
+// Authentication subsystem could not initialize the configured provider.
+inline constexpr diagnostic_descriptor authentication_start_failed{
+    diagnostic_id{1151},
+    diagnostic_domain::authentication,
+    diagnostic_severity::error,
+    "authentication.start_failed",
+    "Authentication subsystem could not be started",
+};
+
+// Configuration requests an Authentication mode whose provider is not implemented.
+inline constexpr diagnostic_descriptor authentication_unsupported_mode{
+    diagnostic_id{1152},
+    diagnostic_domain::authentication,
+    diagnostic_severity::error,
+    "authentication.unsupported_mode",
+    "Authentication mode is not implemented",
+};
+
+// Server Policy rejected a request from its presented origin/client identity.
+inline constexpr diagnostic_descriptor server_policy_denied{
+    diagnostic_id{1002},
+    diagnostic_domain::server,
+    diagnostic_severity::error,
+    "server.policy_denied",
+    "Server Policy denied the request",
+};
+
 // A configured communication endpoint could not be started.
 inline constexpr diagnostic_descriptor communication_start_failed{
     diagnostic_id{1201},

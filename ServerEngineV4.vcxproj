@@ -77,6 +77,7 @@
   <ItemGroup>
     <ClCompile Include="server_engine\main.cpp" />
     <ClCompile Include="server_engine\server.cpp" />
+    <ClCompile Include="server_engine\server_policy.cpp" />
     <ClCompile Include="server_engine\filesystem_path.cpp" />
     <ClCompile Include="server_engine\read_only_file_mapping.cpp" />
     <ClCompile Include="server_engine\writable_file_mapping.cpp" />
@@ -86,6 +87,7 @@
     <ClCompile Include="server_engine\diagnostics\diagnostic_source_cache.cpp" />
     <ClCompile Include="server_engine\json\json_parser.cpp" />
     <ClCompile Include="server_engine\configuration\server_configuration_loader.cpp" />
+    <ClCompile Include="server_engine\authentication\authentication.cpp" />
     <ClCompile Include="server_engine\communication\request_queue.cpp" />
     <ClCompile Include="server_engine\communication\communication.cpp" />
     <ClCompile Include="server_engine\communication\console\console_input_windows.cpp" />
@@ -133,6 +135,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="server_engine\server.hpp" />
+    <ClInclude Include="server_engine\server_policy.hpp" />
     <ClInclude Include="server_engine\server_state.hpp" />
     <ClInclude Include="server_engine\filesystem_path.hpp" />
     <ClInclude Include="server_engine\read_only_file_mapping.hpp" />
@@ -160,6 +163,8 @@
     <ClInclude Include="server_engine\json\json_writer.hpp" />
     <ClInclude Include="server_engine\configuration\server_configuration.hpp" />
     <ClInclude Include="server_engine\configuration\server_configuration_loader.hpp" />
+    <ClInclude Include="server_engine\authentication\authentication.hpp" />
+    <ClInclude Include="server_engine\communication\request_identity.hpp" />
     <ClInclude Include="server_engine\communication\request_queue.hpp" />
     <ClInclude Include="server_engine\communication\communication.hpp" />
     <ClInclude Include="server_engine\communication\server_request.hpp" />

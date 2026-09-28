@@ -32,6 +32,9 @@ using namespace cw::server;
         "      \"compiled\": \"compiled.bin\"\n"
         "    }\n"
         "  },\n"
+        "  \"authentication\": {\n"
+        "    \"mode\": \"none\"\n"
+        "  },\n"
         "  \"communication\": {\n"
         "    \"endpoints\": [\n"
         "      {\n"
@@ -138,7 +141,7 @@ int main() {
             load(
                 path,
                 configuration(
-                    "6",
+                    "7",
                     "    \"shm\": {\n"
                     "      \"mode\": \"fixed_direct\",\n"
                     "      \"name\": \"CW.ServerEngineV4.Project\",\n"
@@ -146,7 +149,7 @@ int main() {
                     "    },\n"));
 
         if (!succeeded(result.status) ||
-            result.value.version != 6 ||
+            result.value.version != 7 ||
             result.value.settings.shm.mode !=
                 shm_runtime_mode::fixed_direct ||
             result.value.settings.shm.name !=
@@ -165,7 +168,7 @@ int main() {
             load(
                 path,
                 configuration(
-                    "6",
+                    "7",
                     "    \"shm\": {\n"
                     "      \"mode\": \"fixed_direct\",\n"
                     "      \"name\": \"CW.ServerEngineV4.Project.X86\",\n"
@@ -190,7 +193,7 @@ int main() {
             load(
                 path,
                 configuration(
-                    "6",
+                    "7",
                     "    \"shm\": {\n"
                     "      \"mode\": \"relocatable_transfer\",\n"
                     "      \"name\": \"CW.ServerEngineV4.Project\"\n"
@@ -214,7 +217,7 @@ int main() {
             load(
                 path,
                 configuration(
-                    "6",
+                    "7",
                     ""));
 
         if (!expect_invalid(
@@ -233,7 +236,7 @@ int main() {
             load(
                 path,
                 configuration(
-                    "6",
+                    "7",
                     "    \"shm\": {\n"
                     "      \"mode\": \"fixed_direct\",\n"
                     "      \"fixed_base_address\": \"0x0000010000000000\"\n"
@@ -255,7 +258,7 @@ int main() {
             load(
                 path,
                 configuration(
-                    "6",
+                    "7",
                     "    \"shm\": {\n"
                     "      \"mode\": \"fixed_direct\",\n"
                     "      \"name\": \"CW.ServerEngineV4.Project\"\n"
@@ -277,7 +280,7 @@ int main() {
             load(
                 path,
                 configuration(
-                    "6",
+                    "7",
                     "    \"shm\": {\n"
                     "      \"mode\": \"relocatable_transfer\",\n"
                     "      \"name\": \"CW.ServerEngineV4.Project\",\n"
@@ -300,7 +303,7 @@ int main() {
             load(
                 path,
                 configuration(
-                    "6",
+                    "7",
                     "    \"shm\": {\n"
                     "      \"mode\": \"relocatable_transfer\",\n"
                     "      \"name\": \"bad/name\"\n"
@@ -322,7 +325,7 @@ int main() {
             load(
                 path,
                 configuration(
-                    "6",
+                    "7",
                     "    \"shm\": {\n"
                     "      \"mode\": \"fixed_direct\",\n"
                     "      \"name\": \"CW.ServerEngineV4.Project\",\n"
@@ -345,7 +348,7 @@ int main() {
             load(
                 path,
                 configuration(
-                    "6",
+                    "7",
                     "    \"shm\": {\n"
                     "      \"mode\": \"other\",\n"
                     "      \"name\": \"CW.ServerEngineV4.Project\"\n"
@@ -376,7 +379,7 @@ int main() {
         if (!expect_invalid(
                 result,
                 diagnostics::configuration_unsupported_version.id,
-                "unsupported server configuration version; expected version 6")) {
+                "unsupported server configuration version; expected version 7")) {
 
             cleanup();
             std::cerr << "schema version validation failed\n";

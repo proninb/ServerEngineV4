@@ -1,6 +1,6 @@
 {
   // Server configuration schema version.
-  "version": 6,
+  "version": 7,
 
   // Process-wide low-level Server settings.
   "settings": {
@@ -29,6 +29,12 @@
       "database": "database.bin",
       "compiled": "compiled.bin"
     }
+  },
+
+  // Authentication is initialized before Communication.
+  // none | contract | external
+  "authentication": {
+    "mode": "none"
   },
 
   // Only listed endpoints are created.

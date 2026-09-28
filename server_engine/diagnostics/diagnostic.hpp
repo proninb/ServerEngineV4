@@ -82,6 +82,9 @@ enum class diagnostic_domain : std::uint8_t {
     // Process configuration.
     configuration,
 
+    // Authentication subsystem lifecycle/provider.
+    authentication,
+
     // Communication endpoint lifecycle or protocol.
     communication,
 

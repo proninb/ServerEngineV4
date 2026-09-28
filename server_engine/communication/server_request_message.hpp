@@ -5,6 +5,7 @@
  */
 #pragma once
 
+#include "request_identity.hpp"
 #include "server_request.hpp"
 
 namespace cw::server {
@@ -50,6 +51,11 @@ private:
 // Transport-neutral request envelope stored in request_queue.
 struct server_request_message {
     server_request request;
+
+    // Origin/application metadata evaluated by Server Policy.
+    request_identity identity;
+
+    // Direct response destination; not used for access decisions.
     server_request_origin origin;
 };
 

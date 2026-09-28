@@ -68,6 +68,29 @@ server_status server::start(
         return status;
     }
 
+    status = context.authentication.start(
+        context.configuration.authentication);
+
+    if (!succeeded(status)) {
+        const auto& descriptor =
+            status == server_status::unsupported
+                ? diagnostics::authentication_unsupported_mode
+                : diagnostics::authentication_start_failed;
+
+        diagnostics.emit(
+            diagnostic(
+                descriptor,
+                operation)
+                .detail(
+                    status == server_status::unsupported
+                        ? "Configured Authentication mode has no provider backend"
+                        : "Failed to start Authentication subsystem")
+                .build());
+
+        context.authentication.stop();
+        return status;
+    }
+
     status = context.communications.start(
         context.configuration.communication,
         context.requests);
@@ -88,6 +111,7 @@ server_status server::start(
                         : "Failed to start configured communication endpoints")
                 .build());
 
+        context.authentication.stop();
         return status;
     }
 
@@ -135,8 +159,8 @@ int server::run() {
             context.requests.wait_pop();
 
         auto result =
-            execute(
-                message.request);
+            execute_message(
+                message);
 
         message.origin.present(
             result);
@@ -146,6 +170,35 @@ int server::run() {
     shutdown();
 
     return 0;
+}
+
+server_response server::execute_message(
+    const server_request_message& message) {
+
+    if (context.policy.allows(
+            message.identity,
+            message.request.kind)) {
+
+        return execute(
+            message.request);
+    }
+
+    server_response result;
+    result.operation =
+        next_operation();
+    result.status =
+        server_status::access_denied;
+
+    result.diagnostics.emit(
+        diagnostic(
+            diagnostics::server_policy_denied,
+            result.operation)
+            .detail(
+                "Request is not allowed for this origin/client identity")
+            .build());
+
+    result.diagnostics.sort_deterministic();
+    return result;
 }
 
 server_response server::execute(
@@ -514,6 +567,7 @@ void server::shutdown() noexcept {
     running = false;
     context.communications.stop();
     context.project.reset();
+    context.authentication.stop();
 }
 
 

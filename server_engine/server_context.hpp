@@ -7,10 +7,12 @@
  */
 #pragma once
 
+#include "authentication/authentication.hpp"
 #include "communication/request_queue.hpp"
 #include "communication/communication.hpp"
 #include "configuration/server_configuration.hpp"
 #include "project/project.hpp"
+#include "server_policy.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -28,6 +30,12 @@ public:
 
     // Parent directory used as the base for relative Server-owned paths.
     std::filesystem::path configuration_directory;
+
+    // Process-level Authentication subsystem. Starts before Communication.
+    authentication_service authentication;
+
+    // Central access policy for requests entering from Communication.
+    server_policy policy;
 
     // Common ingress queue used by communication endpoint producers.
     request_queue requests;

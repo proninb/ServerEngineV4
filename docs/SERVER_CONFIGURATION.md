@@ -13,7 +13,7 @@ The JSON parser supports:
 
 ```jsonc
 {
-  "version": 6,
+  "version": 7,
 
   "settings": {
     "abi": {
@@ -33,6 +33,10 @@ The JSON parser supports:
       "database": "database.bin",
       "compiled": "compiled.bin"
     }
+  },
+
+  "authentication": {
+    "mode": "none"
   },
 
   "communication": {
@@ -245,6 +249,29 @@ settings.files entries must use distinct file names
 
 The current implementation already wires `settings.files.manifest` into
 `project_configuration_manifest_store`.
+
+## Authentication
+
+`authentication` is required process-level Server configuration.
+
+```jsonc
+"authentication": {
+  "mode": "none"
+}
+```
+
+Modes are `none`, `contract`, and `external`.
+
+Authentication is initialized after `server.json` validation and before
+Communication starts. `none` is an explicit successful initialization.
+`contract` reserves the Server-owned Authentication Contract boundary without
+constraining provider storage to local or remote. `external` reserves delegation
+to an external identity provider.
+
+This slice defines only Server lifecycle ownership. LOGIN, Client Session
+identity, credentials, tokens, roles, permissions, and provider-specific
+configuration are intentionally deferred. Until their provider slices exist,
+`contract` and `external` fail closed during Server startup.
 
 ## Project Startup
 

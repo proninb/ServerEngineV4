@@ -13,6 +13,9 @@
     <Filter Include="server_engine\json">
       <UniqueIdentifier>{88888888-8888-8888-8888-888888888888}</UniqueIdentifier>
     </Filter>
+    <Filter Include="server_engine\authentication">
+      <UniqueIdentifier>{7CF7AAE4-2A7C-4E2D-BD9D-7E9A4CF3C4A1}</UniqueIdentifier>
+    </Filter>
     <Filter Include="server_engine\communication">
       <UniqueIdentifier>{33333333-3333-3333-3333-333333333333}</UniqueIdentifier>
     </Filter>
@@ -73,6 +76,9 @@
     <ClCompile Include="server_engine\server.cpp">
       <Filter>server_engine</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\server_policy.cpp">
+      <Filter>server_engine</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\filesystem_path.cpp">
       <Filter>server_engine</Filter>
     </ClCompile>
@@ -103,6 +109,9 @@
       <Filter>server_engine\configuration</Filter>
     </ClCompile>
 
+    <ClCompile Include="server_engine\authentication\authentication.cpp">
+      <Filter>server_engine\authentication</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\communication\request_queue.cpp">
       <Filter>server_engine\communication</Filter>
     </ClCompile>
@@ -240,6 +249,9 @@
     <ClInclude Include="server_engine\server.hpp">
       <Filter>server_engine</Filter>
     </ClInclude>
+    <ClInclude Include="server_engine\server_policy.hpp">
+      <Filter>server_engine</Filter>
+    </ClInclude>
     <ClInclude Include="server_engine\server_state.hpp">
       <Filter>server_engine</Filter>
     </ClInclude>
@@ -324,6 +336,12 @@
       <Filter>server_engine\configuration</Filter>
     </ClInclude>
 
+    <ClInclude Include="server_engine\authentication\authentication.hpp">
+      <Filter>server_engine\authentication</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\communication\request_identity.hpp">
+      <Filter>server_engine\communication</Filter>
+    </ClInclude>
     <ClInclude Include="server_engine\communication\request_queue.hpp">
       <Filter>server_engine\communication</Filter>
     </ClInclude>

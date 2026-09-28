@@ -8,6 +8,7 @@
 #pragma once
 
 #include "communication/server_request.hpp"
+#include "communication/server_request_message.hpp"
 #include "communication/server_response.hpp"
 #include "diagnostics/diagnostic_collection.hpp"
 #include "operation.hpp"
@@ -62,6 +63,10 @@ public:
     void shutdown() noexcept;
 
 private:
+    // Applies Server Policy to a request entering from Communication.
+    [[nodiscard]] server_response execute_message(
+        const server_request_message& message);
+
     [[nodiscard]] operation_id next_operation() noexcept;
 
     server_context context;

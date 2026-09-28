@@ -32,6 +32,7 @@ enum class schema_context : std::uint8_t {
     abi,
     shm,
     files,
+    authentication,
     communication,
     endpoints,
     endpoint,
@@ -56,6 +57,7 @@ enum class schema_field : std::uint8_t {
     source_save,
     database,
     compiled,
+    authentication,
     communication,
     project,
     logging,
@@ -130,6 +132,7 @@ struct schema_frame {
     case schema_context::abi: return "settings.abi";
     case schema_context::shm: return "settings.shm";
     case schema_context::files: return "settings.files";
+    case schema_context::authentication: return "authentication";
     case schema_context::communication: return "communication";
     case schema_context::endpoints: return "communication.endpoints";
     case schema_context::endpoint: return "communication.endpoints[]";
@@ -253,6 +256,22 @@ public:
         if (parent.context ==
                 schema_context::root &&
             parent.field ==
+                schema_field::authentication) {
+
+            stack.back().field =
+                schema_field::none;
+
+            stack.push_back({
+                schema_context::authentication,
+                schema_field::none,
+                0,
+            });
+            return;
+        }
+
+        if (parent.context ==
+                schema_context::root &&
+            parent.field ==
                 schema_field::communication) {
 
             stack.back().field =
@@ -349,11 +368,12 @@ public:
         case schema_context::root:
             if (!seen(frame, schema_field::version) ||
                 !seen(frame, schema_field::settings) ||
+                !seen(frame, schema_field::authentication) ||
                 !seen(frame, schema_field::communication)) {
 
                 fail(
                     schema_failure::missing_required_field,
-                    "server configuration requires version, settings, and communication");
+                    "server configuration requires version, settings, authentication, and communication");
                 return;
             }
 
@@ -419,6 +439,15 @@ public:
 
         case schema_context::files:
             if (!validate_files(frame)) {
+                return;
+            }
+            break;
+
+        case schema_context::authentication:
+            if (!seen(frame, schema_field::mode)) {
+                fail(
+                    schema_failure::missing_required_field,
+                    "authentication requires mode");
                 return;
             }
             break;
@@ -659,6 +688,10 @@ public:
             read_files(field, value);
             break;
 
+        case schema_context::authentication:
+            read_authentication(field, value);
+            break;
+
         case schema_context::endpoint:
             read_endpoint(field, value);
             break;
@@ -738,6 +771,7 @@ private:
         case schema_context::root:
             if (key == "version") return schema_field::version;
             if (key == "settings") return schema_field::settings;
+            if (key == "authentication") return schema_field::authentication;
             if (key == "communication") return schema_field::communication;
             if (key == "project") return schema_field::project;
             if (key == "logging") return schema_field::logging;
@@ -768,6 +802,10 @@ private:
             if (key == "source_save") return schema_field::source_save;
             if (key == "database") return schema_field::database;
             if (key == "compiled") return schema_field::compiled;
+            break;
+
+        case schema_context::authentication:
+            if (key == "mode") return schema_field::mode;
             break;
 
         case schema_context::communication:
@@ -826,10 +864,10 @@ private:
             return;
         }
 
-        if (version != 6) {
+        if (version != 7) {
             fail(
                 schema_failure::unsupported_version,
-                "unsupported server configuration version; expected version 6");
+                "unsupported server configuration version; expected version 7");
             return;
         }
 
@@ -897,6 +935,49 @@ private:
         fail(
             schema_failure::invalid_structure,
             "invalid abi scalar field");
+    }
+
+    void read_authentication(
+        schema_field field,
+        json_value_view value) {
+
+        if (field != schema_field::mode) {
+            fail(
+                schema_failure::invalid_structure,
+                "invalid authentication scalar field");
+            return;
+        }
+
+        std::string mode;
+
+        if (!value.get(mode)) {
+            fail(
+                schema_failure::wrong_type,
+                "authentication.mode must be a string");
+            return;
+        }
+
+        if (mode == "none") {
+            configuration.authentication.mode =
+                authentication_mode::none;
+            return;
+        }
+
+        if (mode == "contract") {
+            configuration.authentication.mode =
+                authentication_mode::contract;
+            return;
+        }
+
+        if (mode == "external") {
+            configuration.authentication.mode =
+                authentication_mode::external;
+            return;
+        }
+
+        fail(
+            schema_failure::invalid_value,
+            "authentication.mode must be none, contract, or external");
     }
 
     void read_shm(

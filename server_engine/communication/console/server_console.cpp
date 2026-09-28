@@ -166,6 +166,9 @@ void server_console::publish(
     message.request =
         std::move(value);
 
+    message.identity.origin =
+        request_origin_kind::console;
+
     message.origin =
         server_request_origin{
             this,

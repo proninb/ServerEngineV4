@@ -14,6 +14,18 @@
 
 namespace cw::server {
 
+// Selects the process-level Authentication provider boundary.
+enum class authentication_mode : std::uint8_t {
+    none,
+    contract,
+    external,
+};
+
+// Process-level Authentication configuration.
+struct authentication_configuration final {
+    authentication_mode mode = authentication_mode::none;
+};
+
 // Supported command ingress transport kinds.
 enum class transport_kind {
     // Interactive application console using stdin/stdout.
@@ -142,11 +154,14 @@ struct server_settings_configuration final {
 
 // Process-level configuration loaded before communication and Project lifecycle begin.
 struct server_configuration {
-    // server.json schema version. Current schema value is 6.
+    // server.json schema version. Current schema value is 7.
     std::uint32_t version = 0;
 
     // Required process-wide low-level Server settings.
     server_settings_configuration settings;
+
+    // Required process-level Authentication policy.
+    authentication_configuration authentication;
 
     // Required communication endpoint configuration.
     communication_configuration communication;

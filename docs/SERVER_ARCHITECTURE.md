@@ -76,6 +76,7 @@ main
            |
            +-- server_configuration
            |    `-- one process-wide ABI + Runtime/SHM policy
+           +-- authentication
            +-- request_queue
            +-- communication
            |    |
@@ -154,6 +155,87 @@ There is no universal `builder_context`.
 The directory name is `configuration`, not `config`.
 
 It contains only Server process configuration types and loading/parsing logic.
+
+## Authentication lifecycle
+
+Authentication is Server process state, not Project state and not yet a Client
+Session contract.
+
+```text
+server.start()
+    -> load/validate server.json
+    -> authentication.start()
+    -> communication.start()
+    -> optional Project startup
+```
+
+Modes are `none`, `contract`, and `external`. `none` initializes successfully
+without a provider. `contract` and `external` fail closed until their provider
+implementations are defined.
+
+Communication never starts before Authentication initialization succeeds.
+Shutdown stops Communication before Authentication.
+
+## Server Policy
+
+Server Policy is the single process-level access gate between Communication
+request identity and Server request execution.
+
+```text
+Communication request
+    |
+    +-- origin = internal | console | tcp
+    +-- TCP: name + optional subid
+    |
+    v
+Server Policy
+    |
+    +-- denied -> transport-neutral access_denied response
+    |
+    `-- allowed -> server::execute()
+```
+
+Authentication and Server Policy are separate:
+
+```text
+Authentication
+    establishes/validates identity
+
+Server Policy
+    decides whether that identity may submit a Server request
+
+Server
+    executes the request semantics
+```
+
+The first frozen policy rule is Project lifecycle access:
+
+```text
+LOAD
+PUBLISH
+BUILD
+REBUILD
+UNLOAD
+```
+
+Allowed origins:
+
+```text
+internal
+console
+tcp: name="Studio", subid="Studio"
+```
+
+Other TCP identities, including `Studio/HMI`, `Studio/Viewer`, and arbitrary
+custom clients, are denied Project lifecycle access.
+
+This restriction is enforced at the Communication -> Server boundary. Project
+lifecycle functions themselves do not know about Console, TCP, Studio, LOGIN,
+or authentication.
+
+Access rules for GET_STATE, GET_VALUE, SHUTDOWN, Runtime commands,
+subscriptions, and client messaging are intentionally not changed by this
+slice; they are frozen separately.
 
 ## Communication directory
 
@@ -313,6 +395,76 @@ copied. Runtime Query does not re-run ABI layout rules.
 Mutating requests (`RUN`, `FREEZE`, `STEP`, `SET`, `RESET_IC`, `SNAP_IC`) are
 not part of this slice. They require Runtime Controller / Runtime Command Queue
 semantics and must not become direct Server-control-thread writes.
+
+## Client LOGIN identity contract
+
+Client application identity is deliberately small and transport-neutral.
+
+```text
+LOGIN
+    name
+    subid?      optional
+    authentication_data?   mode/provider-specific, defined later
+```
+
+`name` is required. It identifies the logical client/application name used by
+the Server communication domain.
+
+`subid` is optional. It refines one client family without adding Server-side
+client-type enums.
+
+Examples:
+
+```text
+name="Studio", subid="HMI"
+name="Studio", subid="Viewer"
+name="Studio", subid="Studio"
+
+name="Recorder"
+name="PythonClient"
+name="MyApi"
+```
+
+The Server does not define an enum for Studio/HMI/Viewer/custom. New client
+families and Studio sub-applications therefore do not require a Server protocol
+or C++ enum change.
+
+`name` and `subid` are client/application identity, not authenticated user
+identity and not authorization state.
+
+```text
+session_id
+    unique active Session identity
+
+name + optional subid
+    non-unique logical client/application identity
+
+Authentication
+    determines whether the connection may authenticate according to the
+    configured Server Authentication mode/provider
+
+Authorization
+    is a separate future policy domain
+```
+
+Multiple simultaneous Sessions may use identical `name` and `subid`.
+Only `session_id` is unique among active Sessions.
+
+Authentication mode does not change the base LOGIN identity shape:
+
+```text
+authentication.mode = none
+    LOGIN(name, subid?) requires no provider-specific authentication data
+
+authentication.mode = contract
+    LOGIN keeps name/subid and carries Contract-provider authentication data
+
+authentication.mode = external
+    LOGIN keeps name/subid and carries External-provider authentication data
+```
+
+The exact provider-specific authentication payload and JSON wire encoding are
+not frozen by this contract.
 
 ## Request execution result
 

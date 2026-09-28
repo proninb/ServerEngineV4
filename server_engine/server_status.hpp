@@ -22,8 +22,14 @@ enum class server_status {
     // Required file or stream I/O failed.
     io_error,
 
-    // Requested transport or operation is known but not implemented yet.
+    // Requested transport, provider, or operation is known but not implemented yet.
     unsupported,
+
+    // Authentication subsystem/provider initialization failed.
+    authentication_start_failed,
+
+    // Request origin/client identity is not allowed to submit this operation.
+    access_denied,
 
     // LOAD was requested while another Project is already active.
     project_already_loaded,
