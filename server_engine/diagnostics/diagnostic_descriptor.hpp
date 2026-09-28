@@ -342,6 +342,38 @@ inline constexpr diagnostic_descriptor project_runtime_failed{
     "Project Runtime/SHM publication failed",
 };
 
+inline constexpr diagnostic_descriptor runtime_query_invalid{
+    diagnostic_id{3001},
+    diagnostic_domain::runtime,
+    diagnostic_severity::error,
+    "runtime.query_invalid",
+    "Runtime query is invalid",
+};
+
+inline constexpr diagnostic_descriptor runtime_query_not_found{
+    diagnostic_id{3002},
+    diagnostic_domain::runtime,
+    diagnostic_severity::error,
+    "runtime.query_not_found",
+    "Runtime query target was not found",
+};
+
+inline constexpr diagnostic_descriptor runtime_query_unsupported{
+    diagnostic_id{3003},
+    diagnostic_domain::runtime,
+    diagnostic_severity::error,
+    "runtime.query_unsupported",
+    "Runtime query target type is not supported",
+};
+
+inline constexpr diagnostic_descriptor runtime_query_failed{
+    diagnostic_id{3004},
+    diagnostic_domain::runtime,
+    diagnostic_severity::error,
+    "runtime.query_failed",
+    "Runtime query could not read a valid Runtime value",
+};
+
 } // namespace diagnostics
 
 }

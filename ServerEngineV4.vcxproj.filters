@@ -126,6 +126,9 @@
     <ClCompile Include="server_engine\project\runtime\runtime_layout.cpp">
       <Filter>server_engine\project\runtime</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\project\runtime\runtime_query.cpp">
+      <Filter>server_engine\project\runtime</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\project\runtime\fixed_direct_materializer.cpp">
       <Filter>server_engine\project\runtime</Filter>
     </ClCompile>
@@ -235,6 +238,9 @@
 
   <ItemGroup>
     <ClInclude Include="server_engine\server.hpp">
+      <Filter>server_engine</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\server_state.hpp">
       <Filter>server_engine</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\filesystem_path.hpp">
@@ -348,6 +354,9 @@
       <Filter>server_engine\project\abi</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\runtime\runtime_layout.hpp">
+      <Filter>server_engine\project\runtime</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\runtime\runtime_query.hpp">
       <Filter>server_engine\project\runtime</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\runtime\fixed_direct_materializer.hpp">

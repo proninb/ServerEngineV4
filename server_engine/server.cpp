@@ -13,6 +13,7 @@
 #include "project/project_load.hpp"
 #include "project/project_publish.hpp"
 #include "project/project_rebuild.hpp"
+#include "project/runtime/runtime_query.hpp"
 
 #include <memory>
 
@@ -148,17 +149,17 @@ int server::run() {
 }
 
 server_response server::execute(
-    const server_request& command) {
+    const server_request& request) {
 
     server_response result;
     result.operation =
         next_operation();
 
-    switch (command.kind) {
+    switch (request.kind) {
     case server_request_kind::load:
         result.status =
             load(
-                command.path,
+                request.path,
                 result.operation,
                 result.diagnostics);
         break;
@@ -166,7 +167,7 @@ server_response server::execute(
     case server_request_kind::publish:
         result.status =
             publish(
-                command.path,
+                request.path,
                 result.operation,
                 result.diagnostics);
         break;
@@ -174,7 +175,7 @@ server_response server::execute(
     case server_request_kind::build:
         result.status =
             build(
-                command.path,
+                request.path,
                 result.operation,
                 result.diagnostics);
         break;
@@ -189,10 +190,123 @@ server_response server::execute(
     case server_request_kind::rebuild:
         result.status =
             rebuild(
-                command.path,
+                request.path,
                 result.operation,
                 result.diagnostics);
         break;
+
+    case server_request_kind::get_state:
+        result.payload =
+            server_response_payload_kind::state;
+        result.state.project =
+            context.project
+                ? project_state::loaded
+                : project_state::unloaded;
+        result.status =
+            server_status::success;
+        break;
+
+    case server_request_kind::get_value: {
+        if (!context.project) {
+            result.diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_not_loaded,
+                    result.operation)
+                    .detail(
+                        "GET_VALUE requires an active Project")
+                    .build());
+
+            result.status =
+                server_status::project_not_loaded;
+            break;
+        }
+
+        const auto bytes =
+            context.project->shm().bytes();
+
+        const auto logical_size =
+            static_cast<std::size_t>(
+                context.project->runtime_size());
+
+        if (logical_size > bytes.size()) {
+            result.diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_query_failed,
+                    result.operation)
+                    .detail(request.name)
+                    .build());
+
+            result.status =
+                server_status::project_runtime_failed;
+            break;
+        }
+
+        runtime_value value;
+
+        const auto queried =
+            get_runtime_value(
+                context.project->compiled(),
+                context.project->runtime_bindings(),
+                bytes.first(logical_size),
+                request.name,
+                value);
+
+        switch (queried) {
+        case runtime_query_result::success:
+            result.payload =
+                server_response_payload_kind::runtime_value;
+            result.value = value;
+            result.status =
+                server_status::success;
+            break;
+
+        case runtime_query_result::invalid_input:
+            result.diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_query_invalid,
+                    result.operation)
+                    .detail(request.name)
+                    .build());
+            result.status =
+                server_status::runtime_query_invalid;
+            break;
+
+        case runtime_query_result::not_found:
+            result.diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_query_not_found,
+                    result.operation)
+                    .detail(request.name)
+                    .build());
+            result.status =
+                server_status::runtime_query_not_found;
+            break;
+
+        case runtime_query_result::unsupported_type:
+            result.diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_query_unsupported,
+                    result.operation)
+                    .detail(request.name)
+                    .build());
+            result.status =
+                server_status::unsupported;
+            break;
+
+        case runtime_query_result::invalid_runtime:
+            result.diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_query_failed,
+                    result.operation)
+                    .detail(request.name)
+                    .build());
+            result.status =
+                server_status::project_runtime_failed;
+            break;
+        }
+
+        break;
+    }
 
     case server_request_kind::shutdown:
         // Keep the originating endpoint alive until run() presents this result.

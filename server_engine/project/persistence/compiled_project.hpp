@@ -23,12 +23,12 @@
 
 namespace cw::server {
 
-inline constexpr std::uint32_t compiled_project_format_version = 9;
+inline constexpr std::uint32_t compiled_project_format_version = 10;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;
 
-inline constexpr std::size_t compiled_project_directory_count = 28;
+inline constexpr std::size_t compiled_project_directory_count = 29;
 
 inline constexpr std::size_t
 compiled_project_directory_entry_size = 32;
@@ -70,6 +70,7 @@ enum class compiled_project_section : std::uint32_t {
     endpoint_path_steps = 26,
     endpoint_path_index = 27,
     bases = 28,
+    member_name_index = 29,
 };
 
 enum class compiled_project_image_result : std::uint8_t {
@@ -269,6 +270,8 @@ public:
         std::uint32_t local_member,
         construction_value& output) const noexcept;
 
+    // Persisted O(1) lookup from (type, name) to the type-local
+    // member index. The hash table is a read accelerator over members.
     [[nodiscard]] member_index find_member(
         type_handle type,
         string_id name) const noexcept;

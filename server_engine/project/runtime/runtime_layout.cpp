@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <utility>
 
 namespace cw::server {
 namespace {
@@ -1935,6 +1936,77 @@ bool runtime_layout::base_offset(
     return true;
 }
 
+bool runtime_binding_index::object_offset(
+    object_handle object,
+    runtime_offset& output_value) const noexcept {
+
+    output_value = 0;
+
+    if (!object ||
+        object.value() > object_offsets.size()) {
+
+        return false;
+    }
+
+    output_value =
+        object_offsets[object.value() - 1];
+
+    return true;
+}
+
+bool runtime_binding_index::member_offset(
+    std::size_t index,
+    record_offset& output_value) const noexcept {
+
+    output_value = 0;
+
+    if (index >= member_offsets.size() ||
+        member_offsets[index] == invalid_record_offset) {
+
+        return false;
+    }
+
+    output_value = member_offsets[index];
+    return true;
+}
+
+bool runtime_binding_index::base_offset(
+    std::size_t index,
+    record_offset& output_value) const noexcept {
+
+    output_value = 0;
+
+    if (index >= base_offsets.size() ||
+        base_offsets[index] == invalid_record_offset) {
+
+        return false;
+    }
+
+    output_value = base_offsets[index];
+    return true;
+}
+
+bool runtime_binding_index::intrinsic_size(
+    intrinsic_type type,
+    std::uint8_t& output_value) const noexcept {
+
+    output_value = 0;
+
+    const auto index =
+        static_cast<std::size_t>(
+            type);
+
+    if (index == 0 ||
+        index >= intrinsic_sizes.size() ||
+        intrinsic_sizes[index] == 0) {
+
+        return false;
+    }
+
+    output_value = intrinsic_sizes[index];
+    return true;
+}
+
 bool runtime_layout::object_offset(
     object_handle object,
     runtime_offset& output_value) const noexcept {
@@ -1951,6 +2023,63 @@ bool runtime_layout::object_offset(
     output_value =
         object_offsets[
             object.value() - 1];
+
+    return true;
+}
+
+bool runtime_layout::release_bindings(
+    runtime_binding_index& output) noexcept {
+
+    if (!prepared_value) {
+        return false;
+    }
+
+    output.intrinsic_sizes.fill(0);
+
+    for (std::size_t index = 1;
+         index < output.intrinsic_sizes.size();
+         ++index) {
+
+        const auto type =
+            static_cast<intrinsic_type>(index);
+
+        runtime_value_layout value;
+
+        const auto resolved =
+            intrinsic_layout(
+                type,
+                target_value,
+                value);
+
+        if (resolved ==
+            runtime_layout_result::unsupported_type) {
+
+            continue;
+        }
+
+        if (resolved !=
+                runtime_layout_result::success ||
+            value.size == 0 ||
+            value.size >
+                (std::numeric_limits<
+                    std::uint8_t>::max)()) {
+
+            return false;
+        }
+
+        output.intrinsic_sizes[index] =
+            static_cast<std::uint8_t>(
+                value.size);
+    }
+
+    output.object_offsets =
+        std::move(object_offsets);
+
+    output.member_offsets =
+        std::move(member_offsets);
+
+    output.base_offsets =
+        std::move(base_offsets);
 
     return true;
 }

@@ -5,9 +5,17 @@
 
 #include "../diagnostics/diagnostic_collection.hpp"
 #include "../operation.hpp"
+#include "../project/runtime/runtime_query.hpp"
+#include "../server_state.hpp"
 #include "../server_status.hpp"
 
 namespace cw::server {
+
+enum class server_response_payload_kind : std::uint8_t {
+    none = 0,
+    state,
+    runtime_value,
+};
 
 // Common response envelope for one request execution.
 struct server_response {
@@ -17,7 +25,13 @@ struct server_response {
     // Control-flow result.
     server_status status = server_status::success;
 
-    // Diagnostics produced by this command only.
+    server_response_payload_kind payload =
+        server_response_payload_kind::none;
+
+    server_state_snapshot state;
+    runtime_value value;
+
+    // Diagnostics produced by this request only.
     diagnostic_collection diagnostics;
 };
 

@@ -42,6 +42,51 @@ struct runtime_value_layout final {
 
 static_assert(sizeof(runtime_value_layout) == 16);
 
+// Minimal resident address sidecar used by read-only Runtime queries.
+class runtime_binding_index final {
+public:
+    runtime_binding_index() = default;
+
+    runtime_binding_index(const runtime_binding_index&) = delete;
+    runtime_binding_index& operator=(const runtime_binding_index&) = delete;
+
+    runtime_binding_index(runtime_binding_index&&) noexcept = default;
+    runtime_binding_index& operator=(runtime_binding_index&&) noexcept = default;
+
+    [[nodiscard]] bool object_offset(
+        object_handle object,
+        runtime_offset& output) const noexcept;
+
+    [[nodiscard]] bool member_offset(
+        std::size_t index,
+        record_offset& output) const noexcept;
+
+    [[nodiscard]] bool base_offset(
+        std::size_t index,
+        record_offset& output) const noexcept;
+
+    [[nodiscard]] bool intrinsic_size(
+        intrinsic_type type,
+        std::uint8_t& output) const noexcept;
+
+private:
+    static constexpr std::size_t
+    intrinsic_slot_count =
+        static_cast<std::size_t>(
+            intrinsic_type::nullptr_type) + 1;
+
+    std::array<
+        std::uint8_t,
+        intrinsic_slot_count>
+        intrinsic_sizes{};
+
+    std::vector<runtime_offset> object_offsets;
+    std::vector<record_offset> member_offsets;
+    std::vector<record_offset> base_offsets;
+
+    friend class runtime_layout;
+};
+
 // Construction-only dense layout workspace.
 //
 // Handles remain Graph slots; the workspace therefore uses direct array
@@ -106,6 +151,9 @@ public:
     [[nodiscard]] bool object_offset(
         object_handle object,
         runtime_offset& output) const noexcept;
+
+    [[nodiscard]] bool release_bindings(
+        runtime_binding_index& output) noexcept;
 
 private:
     enum class slot_state : std::uint8_t {

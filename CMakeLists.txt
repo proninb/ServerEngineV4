@@ -48,6 +48,7 @@ add_executable(ServerEngineV4
     server_engine/project/project.cpp
     server_engine/project/abi/abi_layout.cpp
     server_engine/project/runtime/runtime_layout.cpp
+    server_engine/project/runtime/runtime_query.cpp
     server_engine/project/runtime/fixed_direct_materializer.cpp
     server_engine/project/runtime/project_runtime.cpp
     server_engine/project/string/string_table.cpp
@@ -190,9 +191,20 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
         benchmarks/runtime_benchmark.cpp
         ${SERVER_ENGINE_V4_BENCHMARK_SOURCES}
     )
+# RUNTIME-LOOKUP-PROFILE-V1: benchmark-only target. Production code is unchanged.
+    add_executable(
+        ServerEngineV4RuntimeLookupBenchmark
+        benchmarks/runtime_lookup_benchmark.cpp
+        ${SERVER_ENGINE_V4_BENCHMARK_SOURCES}
+    )
 
     target_include_directories(
         ServerEngineV4RuntimeBenchmark
+        PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+    target_include_directories(
+        ServerEngineV4RuntimeLookupBenchmark
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
     )
@@ -203,9 +215,19 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
             PRIVATE
             Psapi
         )
+        target_link_libraries(
+            ServerEngineV4RuntimeLookupBenchmark
+            PRIVATE
+            Psapi
+        )
     else()
         target_link_libraries(
             ServerEngineV4RuntimeBenchmark
+            PRIVATE
+            Threads::Threads
+        )
+        target_link_libraries(
+            ServerEngineV4RuntimeLookupBenchmark
             PRIVATE
             Threads::Threads
         )
@@ -213,6 +235,11 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
         if(NOT APPLE)
             target_link_libraries(
                 ServerEngineV4RuntimeBenchmark
+                PRIVATE
+                rt
+            )
+            target_link_libraries(
+                ServerEngineV4RuntimeLookupBenchmark
                 PRIVATE
                 rt
             )
@@ -226,6 +253,12 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
             /W4
             /permissive-
         )
+        target_compile_options(
+            ServerEngineV4RuntimeLookupBenchmark
+            PRIVATE
+            /W4
+            /permissive-
+        )
     else()
         target_compile_options(
             ServerEngineV4RuntimeBenchmark
@@ -234,6 +267,14 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
             -Wextra
             -Wpedantic
         )
+        target_compile_options(
+            ServerEngineV4RuntimeLookupBenchmark
+            PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+
     endif()
 endif()
 
@@ -342,6 +383,7 @@ if(BUILD_TESTING)
     add_executable(ServerEngineV4Tests
         tests/compiled_project_tests.cpp
         server_engine/project/runtime/runtime_layout.cpp
+        server_engine/project/runtime/runtime_query.cpp
         server_engine/project/runtime/fixed_direct_materializer.cpp
         server_engine/project/abi/abi_layout.cpp
         server_engine/read_only_file_mapping.cpp

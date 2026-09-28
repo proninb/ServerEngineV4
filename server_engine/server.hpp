@@ -29,7 +29,7 @@ public:
     [[nodiscard]] int run();
 
     [[nodiscard]] server_response execute(
-        const server_request& command);
+        const server_request& request);
 
     // Fast persisted-state restore. No Project/source construction checks.
     [[nodiscard]] server_status load(

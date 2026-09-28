@@ -40,6 +40,9 @@ enum class server_status {
     // Native Runtime layout or final Project SHM publication failed.
     project_runtime_failed,
 
+    runtime_query_invalid,
+    runtime_query_not_found,
+
     // One or more configured communication endpoints could not start.
     communication_start_failed,
 };

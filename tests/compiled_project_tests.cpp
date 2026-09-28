@@ -2,6 +2,7 @@
 #include "project/persistence/crc64_ecma.hpp"
 #include "project/runtime/fixed_direct_materializer.hpp"
 #include "project/runtime/runtime_layout.hpp"
+#include "project/runtime/runtime_query.hpp"
 #include "project/file/file_context.hpp"
 #include "project/graph/graph_delta.hpp"
 #include "project/source/source_map.hpp"
@@ -2244,8 +2245,15 @@ void test_round_trip(
         view.find_member(
             fixture.type,
             fixture.value_name) ==
-            fixture.value_member,
-        "zero-based member index preservation");
+            fixture.value_member &&
+        view.find_member(
+            fixture.type,
+            fixture.peer_name) ==
+            fixture.peer_member &&
+        !view.find_member(
+            fixture.type,
+            fixture.scalar_name),
+        "persisted member-name index preserves zero-based lookup");
 
     member_record member_value;
 
@@ -2630,6 +2638,134 @@ void test_direct_mmap_encoding(
         "remove direct compiled mmap test file");
 }
 
+
+
+void test_runtime_query(
+    test_state& tests,
+    const compiled_test_image& image) {
+
+    compiled_project_view view;
+
+    if (!tests.expect(
+            view.bind(
+                image.bytes) ==
+                compiled_project_image_result::success,
+            "bind Runtime query image")) {
+
+        return;
+    }
+
+#if defined(_WIN32)
+    const server_abi_configuration abi{
+        abi_target::windows_x64,
+        8,
+    };
+#else
+    const server_abi_configuration abi{
+        abi_target::posix_x64,
+        8,
+    };
+#endif
+
+    runtime_layout layout;
+
+    if (!tests.expect(
+            prepare_runtime_layout(
+                view,
+                abi,
+                layout) ==
+                runtime_layout_result::success,
+            "prepare Runtime query layout")) {
+
+        return;
+    }
+
+    std::vector<std::byte> runtime(
+        static_cast<std::size_t>(
+            layout.size()),
+        std::byte{0xcc});
+
+    if (!tests.expect(
+            materialize_fixed_direct(
+                view,
+                layout,
+                abi,
+                runtime) ==
+                fixed_direct_materialization_result::success,
+            "materialize Runtime query image")) {
+
+        return;
+    }
+
+    runtime_binding_index bindings;
+
+    if (!tests.expect(
+            layout.release_bindings(
+                bindings),
+            "publish Runtime query bindings")) {
+
+        return;
+    }
+
+    const auto expect_value =
+        [&](std::string_view name,
+            std::uint64_t expected,
+            std::string_view label) {
+
+            runtime_value value;
+
+            tests.expect(
+                get_runtime_value(
+                    view,
+                    bindings,
+                    runtime,
+                    name,
+                    value) ==
+                    runtime_query_result::success &&
+                value.type ==
+                    intrinsic_type::signed_int &&
+                value.size == 4 &&
+                value.bits == expected,
+                label);
+        };
+
+    expect_value(
+        "demo::left.value",
+        42,
+        "GET_VALUE resolves direct member");
+
+    expect_value(
+        "demo::right.peer",
+        42,
+        "GET_VALUE follows native reference");
+
+    expect_value(
+        "demo::scalar",
+        7,
+        "GET_VALUE resolves scalar object");
+
+    runtime_value value;
+
+    tests.expect(
+        get_runtime_value(
+            view,
+            bindings,
+            runtime,
+            "demo::missing.value",
+            value) ==
+            runtime_query_result::not_found,
+        "GET_VALUE reports missing object");
+
+    tests.expect(
+        get_runtime_value(
+            view,
+            bindings,
+            runtime,
+            "demo::left",
+            value) ==
+            runtime_query_result::unsupported_type,
+        "GET_VALUE rejects aggregate leaf");
+}
 
 
 void test_fixed_direct_arrays(
@@ -7225,6 +7361,10 @@ int main() {
         test_runtime_layout(
             tests,
             fixture,
+            first);
+
+        test_runtime_query(
+            tests,
             first);
 
         test_windows_x86_target_runtime(

@@ -385,6 +385,18 @@ void write_u64(
         : value;
 }
 
+[[nodiscard]] std::uint64_t member_hash(
+    type_handle type,
+    string_id name) noexcept {
+
+    const auto key =
+        (static_cast<std::uint64_t>(
+             type.value()) << 32) |
+        name.value();
+
+    return mix64(key);
+}
+
 [[nodiscard]] std::uint64_t derived_hash(
     type_ref child,
     derived_type_kind kind,
@@ -634,6 +646,7 @@ void write_u64(
     case compiled_project_section::derived_index:
     case compiled_project_section::link_target_index:
     case compiled_project_section::endpoint_path_index:
+    case compiled_project_section::member_name_index:
         return index_record_size;
     }
 
@@ -1050,6 +1063,12 @@ compiled_project_view::bind(
                 compiled_project_section::
                     member_construction)];
 
+    const auto& member_name_index =
+        candidate[
+            section_index(
+                compiled_project_section::
+                    member_name_index)];
+
     const auto& derived_types =
         candidate[
             section_index(
@@ -1138,6 +1157,10 @@ compiled_project_view::bind(
                 ? identity_count - 1
                 : 0);
 
+    const auto expected_member_index_count =
+        index_capacity(
+            members.count);
+
     const auto expected_derived_index_count =
         index_capacity(
             derived_types.count);
@@ -1173,6 +1196,7 @@ compiled_project_view::bind(
             (std::numeric_limits<std::uint32_t>::max)() ||
         expected_string_index_count == 0 ||
         expected_identity_index_count == 0 ||
+        expected_member_index_count == 0 ||
         expected_derived_index_count == 0 ||
         expected_link_target_index_count == 0 ||
         expected_endpoint_path_index_count == 0 ||
@@ -1196,6 +1220,8 @@ compiled_project_view::bind(
             (std::numeric_limits<std::uint32_t>::max)() ||
         members.count !=
             construction.count ||
+        member_name_index.count !=
+            expected_member_index_count ||
         derived_index.count !=
             expected_derived_index_count ||
         objects.count !=
@@ -2106,24 +2132,90 @@ member_index compiled_project_view::find_member(
         return {};
     }
 
-    for (std::uint32_t index = 0;
-         index <
-            type_record.members.count;
-         ++index) {
+    const auto& index =
+        section(
+            compiled_project_section::
+                member_name_index);
 
-        member_record value;
+    if (index.count == 0 ||
+        (index.count &
+            (index.count - 1)) != 0) {
 
-        const auto member_value =
-            member_from_raw(index);
+        return {};
+    }
 
-        if (member(
-                type_value,
-                member_value,
-                value) &&
-            value.name == name) {
+    const auto hash =
+        member_hash(
+            type_value,
+            name);
 
-            return member_value;
+    const auto fingerprint =
+        identity_fingerprint(
+            hash);
+
+    const auto mask =
+        index.count - 1;
+
+    auto position =
+        hash &
+        mask;
+
+    const auto member_begin =
+        static_cast<std::uint64_t>(
+            type_record.members.begin);
+
+    const auto member_end =
+        member_begin +
+        type_record.members.count;
+
+    for (std::uint64_t probe = 0;
+         probe < index.count;
+         ++probe) {
+
+        const auto* slot =
+            index.data +
+            static_cast<std::size_t>(
+                position) *
+                index_record_size;
+
+        const auto raw =
+            read_u32(
+                slot + 4);
+
+        if (raw == 0) {
+            return {};
         }
+
+        if (read_u32(slot) ==
+            fingerprint) {
+
+            const auto global =
+                static_cast<std::uint64_t>(
+                    raw - 1);
+
+            member_record value;
+
+            if (global >=
+                    member_begin &&
+                global <
+                    member_end &&
+                member_at(
+                    static_cast<std::size_t>(
+                        global),
+                    value) &&
+                value.name ==
+                    name) {
+
+                return member_from_raw(
+                    static_cast<std::uint32_t>(
+                        global -
+                        member_begin));
+            }
+        }
+
+        position =
+            (position + 1) &
+            mask;
     }
 
     return {};
@@ -3425,6 +3517,10 @@ compiled_project_view::verify_contents() const noexcept {
                     handle,
                     member_value,
                     member_record_value) ||
+                find_member(
+                    handle,
+                    member_record_value.name) !=
+                    member_value ||
                 !construction(
                     handle,
                     member_value,
@@ -3621,6 +3717,58 @@ compiled_project_view::verify_contents() const noexcept {
             return compiled_project_image_result::
                 invalid_image;
         }
+    }
+
+    const auto& member_lookup =
+        section(
+            compiled_project_section::
+                member_name_index);
+
+    std::uint64_t indexed_members = 0;
+
+    for (std::uint64_t index = 0;
+         index <
+            member_lookup.count;
+         ++index) {
+
+        const auto* slot =
+            member_lookup.data +
+            static_cast<std::size_t>(
+                index) *
+                index_record_size;
+
+        const auto fingerprint =
+            read_u32(slot);
+
+        const auto raw =
+            read_u32(
+                slot + 4);
+
+        if (raw == 0) {
+            if (fingerprint != 0) {
+                return compiled_project_image_result::
+                    invalid_image;
+            }
+
+            continue;
+        }
+
+        if (fingerprint == 0 ||
+            raw >
+                members.count) {
+
+            return compiled_project_image_result::
+                invalid_image;
+        }
+
+        ++indexed_members;
+    }
+
+    if (indexed_members !=
+        members.count) {
+
+        return compiled_project_image_result::
+            invalid_image;
     }
 
     if (members.count !=
@@ -4450,6 +4598,10 @@ prepare_compiled_project_layout(const string_table &strings,
                 ? identity_count - 1
                 : 0);
 
+    const auto member_index_count =
+        index_capacity(
+            member_count);
+
     const auto derived_index_count =
         index_capacity(
             derived_count);
@@ -4464,6 +4616,7 @@ prepare_compiled_project_layout(const string_table &strings,
 
     if (string_index_count == 0 ||
         identity_index_count == 0 ||
+        member_index_count == 0 ||
         derived_index_count == 0 ||
         link_target_index_count == 0 ||
         endpoint_path_index_count == 0) {
@@ -4592,6 +4745,11 @@ prepare_compiled_project_layout(const string_table &strings,
             compiled_project_section::bases,
             base_record_size,
             base_count,
+        },
+        {
+            compiled_project_section::member_name_index,
+            index_record_size,
+            member_index_count,
         },
     }};
 
@@ -4731,6 +4889,10 @@ encode_compiled_project_image(const string_table &strings,
 
     clear_section(
         compiled_project_section::
+            member_name_index);
+
+    clear_section(
+        compiled_project_section::
             derived_index);
 
     clear_section(
@@ -4823,6 +4985,11 @@ encode_compiled_project_image(const string_table &strings,
             compiled_project_section::
                 identity_index);
 
+    const auto member_index_count =
+        count(
+            compiled_project_section::
+                member_name_index);
+
     const auto derived_index_count =
         count(
             compiled_project_section::
@@ -4867,7 +5034,10 @@ encode_compiled_project_image(const string_table &strings,
         assign_count !=
             assigns.size() ||
         assign_bytes_count !=
-            assigns.byte_size()) {
+            assigns.byte_size() ||
+        member_index_count !=
+            index_capacity(
+                member_count)) {
 
         return compiled_project_image_result::
             invalid_state;
@@ -5358,6 +5528,134 @@ encode_compiled_project_image(const string_table &strings,
                 initial_record + 12,
                 static_cast<std::uint32_t>(
                     initial.kind));
+        }
+    }
+
+    // Persisted O(1) (type, member-name) lookup index. The payload stores
+    // global member slot + 1 so zero remains the empty hash-table sentinel.
+    {
+        auto* index_out =
+            section_data(
+                compiled_project_section::
+                    member_name_index);
+
+        const auto member_entries =
+            G.member_entries();
+
+        const auto mask =
+            member_index_count - 1;
+
+        for (std::size_t type_index = 0;
+             type_index <
+                type_entries.size();
+             ++type_index) {
+
+            const auto& type_value =
+                type_entries[
+                    type_index];
+
+            if (!type_value.defined()) {
+                continue;
+            }
+
+            if (type_value.members.begin >
+                    member_entries.size() ||
+                type_value.members.count >
+                    member_entries.size() -
+                        type_value.members.begin) {
+
+                return compiled_project_image_result::
+                    invalid_state;
+            }
+
+            const auto type =
+                G.find_type(
+                    type_identities[
+                        type_index]);
+
+            if (!type) {
+                return compiled_project_image_result::
+                    invalid_state;
+            }
+
+            for (std::uint32_t local = 0;
+                 local <
+                    type_value.members.count;
+                 ++local) {
+
+                const auto global =
+                    static_cast<std::size_t>(
+                        type_value.members.begin) +
+                    local;
+
+                const auto& member_value =
+                    member_entries[
+                        global];
+
+                const auto hash =
+                    member_hash(
+                        type,
+                        member_value.name);
+
+                const auto fingerprint =
+                    identity_fingerprint(
+                        hash);
+
+                auto position =
+                    hash &
+                    mask;
+
+                for (;;) {
+                    auto* slot =
+                        index_out +
+                        static_cast<std::size_t>(
+                            position) *
+                            index_record_size;
+
+                    const auto raw =
+                        read_u32(
+                            slot + 4);
+
+                    if (raw == 0) {
+                        write_u32(
+                            slot,
+                            fingerprint);
+
+                        write_u32(
+                            slot + 4,
+                            static_cast<std::uint32_t>(
+                                global + 1));
+
+                        break;
+                    }
+
+                    if (read_u32(slot) ==
+                            fingerprint) {
+
+                        const auto existing_global =
+                            static_cast<std::size_t>(
+                                raw - 1);
+
+                        if (existing_global >=
+                                type_value.members.begin &&
+                            existing_global <
+                                static_cast<std::size_t>(
+                                    type_value.members.begin) +
+                                type_value.members.count &&
+                            member_entries[
+                                existing_global].name ==
+                                    member_value.name) {
+
+                            return compiled_project_image_result::
+                                invalid_state;
+                        }
+                    }
+
+                    position =
+                        (position + 1) &
+                        mask;
+                }
+            }
         }
     }
 

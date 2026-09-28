@@ -287,8 +287,8 @@ Console                     TCP/JSON                    future transport
                                |
               +----------------+----------------+
               |                                 |
-         lifecycle                        future Runtime
-     LOAD/PUBLISH/BUILD/...          control/query/subscription
+         lifecycle                        Runtime Query V1
+     LOAD/PUBLISH/BUILD/...          GET_STATE / GET_VALUE
 ```
 
 `server::execute()` owns Server semantics. Transport implementations must not
@@ -301,10 +301,18 @@ no endpoint lookup. A future TCP session may therefore correlate and serialize
 its own protocol request identifiers without reusing the process-local
 `operation_id`.
 
-The current `server_request_kind` set remains the implemented lifecycle subset.
-Runtime control/query/subscription request kinds are added only when their
-Server services are implemented; this boundary deliberately does not invent
-their payload representation early.
+The first Runtime query slice adds `GET_STATE` and `GET_VALUE`.
+
+`GET_VALUE` resolves semantic identity/member names through mmap-native
+`compiled.bin`, translates Graph slots through resident `runtime_binding_index`,
+and reads the final FIXED_DIRECT Runtime image. The resident index contains only
+published physical binding facts: dense object/member/base offsets and intrinsic
+byte sizes. `runtime_layout` itself remains construction-only and G is never
+copied. Runtime Query does not re-run ABI layout rules.
+
+Mutating requests (`RUN`, `FREEZE`, `STEP`, `SET`, `RESET_IC`, `SNAP_IC`) are
+not part of this slice. They require Runtime Controller / Runtime Command Queue
+semantics and must not become direct Server-control-thread writes.
 
 ## Request execution result
 

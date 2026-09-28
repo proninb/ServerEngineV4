@@ -7,6 +7,8 @@
  *   BUILD <project-path>
  *   UNLOAD
  *   REBUILD <project-path>
+ *   GET_STATE
+ *   GET_VALUE <qualified-object[.member...]>
  *   SHUTDOWN
  *   EXIT        (alias of SHUTDOWN)
  *
@@ -125,6 +127,29 @@ void server_console::run() {
             }
 
             publish({server_request_kind::rebuild, std::move(path)});
+        } else if (verb == "GET_STATE") {
+            publish({
+                server_request_kind::get_state,
+                {},
+                {},
+            });
+        } else if (verb == "GET_VALUE") {
+            std::string name;
+            std::getline(
+                stream >> std::ws,
+                name);
+
+            if (name.empty()) {
+                std::cout
+                    << "GET_VALUE requires a Runtime name\n";
+                continue;
+            }
+
+            publish({
+                server_request_kind::get_value,
+                {},
+                std::move(name),
+            });
         } else if (verb == "SHUTDOWN" || verb == "EXIT") {
             publish({server_request_kind::shutdown, {}});
             return;
@@ -170,9 +195,39 @@ void server_console::present(
 
     if (!succeeded(result.status)) {
         std::cerr
-            << "Command failed: "
+            << "Request failed: "
             << static_cast<int>(result.status)
             << '\n';
+
+        return;
+    }
+
+    switch (result.payload) {
+    case server_response_payload_kind::none:
+        break;
+
+    case server_response_payload_kind::state:
+        std::cout
+            << "STATE "
+            << (result.state.project ==
+                    project_state::loaded
+                ? "LOADED"
+                : "UNLOADED")
+            << '\n';
+        break;
+
+    case server_response_payload_kind::runtime_value:
+        std::cout
+            << "VALUE type="
+            << static_cast<unsigned>(
+                result.value.type)
+            << " size="
+            << static_cast<unsigned>(
+                result.value.size)
+            << " bits="
+            << result.value.bits
+            << '\n';
+        break;
     }
 }
 

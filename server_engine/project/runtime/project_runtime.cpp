@@ -325,6 +325,26 @@ server_status create_resident_project(
             : server_status::project_runtime_failed;
     }
 
+    const auto runtime_size =
+        layout.size();
+
+    runtime_binding_index bindings;
+
+    if (!layout.release_bindings(
+            bindings)) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_runtime_failed,
+                operation)
+                .file(project_path)
+                .detail(
+                    "Cannot publish Runtime binding index")
+                .build());
+
+        return server_status::project_runtime_failed;
+    }
+
     try {
         output =
             std::make_unique<project>(
@@ -332,7 +352,8 @@ server_status create_resident_project(
                 std::move(compiled_mapping),
                 compiled,
                 std::move(shared_memory),
-                layout.size());
+                std::move(bindings),
+                runtime_size);
     }
     catch (...) {
         diagnostics.emit(

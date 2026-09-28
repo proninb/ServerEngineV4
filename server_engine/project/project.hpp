@@ -7,6 +7,7 @@
 #pragma once
 
 #include "persistence/compiled_project.hpp"
+#include "runtime/runtime_layout.hpp"
 #include "../fixed_shared_memory.hpp"
 #include "../read_only_file_mapping.hpp"
 
@@ -23,6 +24,7 @@ public:
         read_only_file_mapping&& compiled_mapping,
         compiled_project_view compiled,
         fixed_shared_memory&& shared_memory,
+        runtime_binding_index&& runtime_bindings,
         std::uint64_t runtime_size);
 
     [[nodiscard]] const std::filesystem::path& path() const noexcept {
@@ -41,11 +43,17 @@ public:
         return runtime_size_value;
     }
 
+    [[nodiscard]] const runtime_binding_index&
+    runtime_bindings() const noexcept {
+        return runtime_bindings_value;
+    }
+
 private:
     std::filesystem::path project_path;
     read_only_file_mapping compiled_mapping;
     compiled_project_view compiled_view;
     fixed_shared_memory shared_memory;
+    runtime_binding_index runtime_bindings_value;
     std::uint64_t runtime_size_value = 0;
 };
 

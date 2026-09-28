@@ -7,6 +7,7 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
 
 namespace cw::server {
 
@@ -27,6 +28,12 @@ enum class server_request_kind {
     // Full source construction plus fresh BUILD acceleration while UNLOADED.
     rebuild,
 
+    // Read the current observable Server/Project state.
+    get_state,
+
+    // Read one scalar value from the committed Runtime view.
+    get_value,
+
     // Stop communication, release Project ownership, and exit server.run().
     shutdown,
 };
@@ -36,8 +43,11 @@ struct server_request {
     // Operation selected by the external request.
     server_request_kind kind = server_request_kind::shutdown;
 
-    // Project entry path used by LOAD/PUBLISH/BUILD/REBUILD; empty for UNLOAD/SHUTDOWN.
+    // Project entry path used by LOAD/PUBLISH/BUILD/REBUILD.
     std::filesystem::path path;
+
+    // Query target used by GET_VALUE.
+    std::string name;
 };
 
 }
