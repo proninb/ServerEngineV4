@@ -33,6 +33,7 @@ enum class schema_context : std::uint8_t {
     shm,
     files,
     authentication,
+    authentication_external,
     communication,
     endpoints,
     endpoint,
@@ -58,6 +59,10 @@ enum class schema_field : std::uint8_t {
     database,
     compiled,
     authentication,
+    external,
+    provider,
+    tenant_id,
+    audience,
     communication,
     project,
     logging,
@@ -133,6 +138,7 @@ struct schema_frame {
     case schema_context::shm: return "settings.shm";
     case schema_context::files: return "settings.files";
     case schema_context::authentication: return "authentication";
+    case schema_context::authentication_external: return "authentication.external";
     case schema_context::communication: return "communication";
     case schema_context::endpoints: return "communication.endpoints";
     case schema_context::endpoint: return "communication.endpoints[]";
@@ -263,6 +269,24 @@ public:
 
             stack.push_back({
                 schema_context::authentication,
+                schema_field::none,
+                0,
+            });
+            return;
+        }
+
+        if (parent.context ==
+                schema_context::authentication &&
+            parent.field ==
+                schema_field::external) {
+
+            stack.back().field =
+                schema_field::none;
+
+            configuration.authentication.external.emplace();
+
+            stack.push_back({
+                schema_context::authentication_external,
                 schema_field::none,
                 0,
             });
@@ -448,6 +472,35 @@ public:
                 fail(
                     schema_failure::missing_required_field,
                     "authentication requires mode");
+                return;
+            }
+
+            if (configuration.authentication.mode ==
+                    authentication_mode::external) {
+
+                if (!seen(frame, schema_field::external)) {
+                    fail(
+                        schema_failure::missing_required_field,
+                        "authentication mode=external requires authentication.external");
+                    return;
+                }
+            }
+            else if (seen(frame, schema_field::external)) {
+                fail(
+                    schema_failure::invalid_value,
+                    "authentication.external is valid only when mode=external");
+                return;
+            }
+            break;
+
+        case schema_context::authentication_external:
+            if (!seen(frame, schema_field::provider) ||
+                !seen(frame, schema_field::tenant_id) ||
+                !seen(frame, schema_field::audience)) {
+
+                fail(
+                    schema_failure::missing_required_field,
+                    "authentication.external requires provider, tenant_id, and audience");
                 return;
             }
             break;
@@ -692,6 +745,10 @@ public:
             read_authentication(field, value);
             break;
 
+        case schema_context::authentication_external:
+            read_authentication_external(field, value);
+            break;
+
         case schema_context::endpoint:
             read_endpoint(field, value);
             break;
@@ -806,6 +863,13 @@ private:
 
         case schema_context::authentication:
             if (key == "mode") return schema_field::mode;
+            if (key == "external") return schema_field::external;
+            break;
+
+        case schema_context::authentication_external:
+            if (key == "provider") return schema_field::provider;
+            if (key == "tenant_id") return schema_field::tenant_id;
+            if (key == "audience") return schema_field::audience;
             break;
 
         case schema_context::communication:
@@ -864,10 +928,10 @@ private:
             return;
         }
 
-        if (version != 7) {
+        if (version != 8) {
             fail(
                 schema_failure::unsupported_version,
-                "unsupported server configuration version; expected version 7");
+                "unsupported server configuration version; expected version 8");
             return;
         }
 
@@ -978,6 +1042,71 @@ private:
         fail(
             schema_failure::invalid_value,
             "authentication.mode must be none, contract, or external");
+    }
+
+    void read_authentication_external(
+        schema_field field,
+        json_value_view value) {
+
+        if (!configuration.authentication.external) {
+            fail(
+                schema_failure::invalid_structure,
+                "authentication.external object is not active");
+            return;
+        }
+
+        auto& external =
+            *configuration.authentication.external;
+
+        switch (field) {
+        case schema_field::provider: {
+            std::string provider;
+
+            if (!value.get(provider)) {
+                fail(
+                    schema_failure::wrong_type,
+                    "authentication.external.provider must be a string");
+                return;
+            }
+
+            if (provider != "microsoft_entra") {
+                fail(
+                    schema_failure::invalid_value,
+                    "authentication.external.provider must be microsoft_entra");
+                return;
+            }
+
+            external.provider =
+                external_authentication_provider::microsoft_entra;
+            return;
+        }
+
+        case schema_field::tenant_id:
+            if (!value.get(external.tenant_id) ||
+                external.tenant_id.empty()) {
+
+                fail(
+                    schema_failure::wrong_type,
+                    "authentication.external.tenant_id must be a non-empty string");
+            }
+            return;
+
+        case schema_field::audience:
+            if (!value.get(external.audience) ||
+                external.audience.empty()) {
+
+                fail(
+                    schema_failure::wrong_type,
+                    "authentication.external.audience must be a non-empty string");
+            }
+            return;
+
+        default:
+            fail(
+                schema_failure::invalid_structure,
+                "invalid authentication.external scalar field");
+            return;
+        }
     }
 
     void read_shm(

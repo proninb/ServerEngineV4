@@ -77,6 +77,33 @@ inline constexpr diagnostic_descriptor configuration_unsupported_version{
     "Server configuration version is unsupported",
 };
 
+// server.license could not be opened/read.
+inline constexpr diagnostic_descriptor license_read_failed{
+    diagnostic_id{1121},
+    diagnostic_domain::license,
+    diagnostic_severity::fatal,
+    "license.read_failed",
+    "server.license could not be read",
+};
+
+// server.license violates the supported structural/value contract.
+inline constexpr diagnostic_descriptor license_invalid{
+    diagnostic_id{1122},
+    diagnostic_domain::license,
+    diagnostic_severity::fatal,
+    "license.invalid",
+    "server.license is invalid",
+};
+
+// server.license expiration has been reached.
+inline constexpr diagnostic_descriptor license_expired{
+    diagnostic_id{1123},
+    diagnostic_domain::license,
+    diagnostic_severity::fatal,
+    "license.expired",
+    "server.license has expired",
+};
+
 // Authentication subsystem could not initialize the configured provider.
 inline constexpr diagnostic_descriptor authentication_start_failed{
     diagnostic_id{1151},

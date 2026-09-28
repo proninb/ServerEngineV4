@@ -9,12 +9,14 @@
 #include "configuration/server_configuration_loader.hpp"
 #include "diagnostics/diagnostic_builder.hpp"
 #include "diagnostics/diagnostic_descriptor.hpp"
+#include "license/server_license_loader.hpp"
 #include "project/project_build.hpp"
 #include "project/project_load.hpp"
 #include "project/project_publish.hpp"
 #include "project/project_rebuild.hpp"
 #include "project/runtime/runtime_query.hpp"
 
+#include <chrono>
 #include <memory>
 
 namespace cw::server {
@@ -68,8 +70,21 @@ server_status server::start(
         return status;
     }
 
+    status = load_server_license(
+        context.configuration_directory /
+            "server.license",
+        std::chrono::system_clock::now(),
+        operation,
+        diagnostics,
+        context.license);
+
+    if (!succeeded(status)) {
+        return status;
+    }
+
     status = context.authentication.start(
-        context.configuration.authentication);
+        context.configuration.authentication,
+        context.configuration_directory);
 
     if (!succeeded(status)) {
         const auto& descriptor =
@@ -82,9 +97,11 @@ server_status server::start(
                 descriptor,
                 operation)
                 .detail(
-                    status == server_status::unsupported
-                        ? "Configured Authentication mode has no provider backend"
-                        : "Failed to start Authentication subsystem")
+                    context.authentication.detail().empty()
+                        ? (status == server_status::unsupported
+                            ? "Configured Authentication mode has no provider backend"
+                            : "Failed to start Authentication subsystem")
+                        : std::string(context.authentication.detail()))
                 .build());
 
         context.authentication.stop();
@@ -568,6 +585,7 @@ void server::shutdown() noexcept {
     context.communications.stop();
     context.project.reset();
     context.authentication.stop();
+    context.license.clear();
 }
 
 

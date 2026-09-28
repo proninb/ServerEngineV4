@@ -25,6 +25,15 @@ enum class server_status {
     // Requested transport, provider, or operation is known but not implemented yet.
     unsupported,
 
+    // server.license could not be opened/read.
+    license_read_failed,
+
+    // server.license violates the supported format/limits contract.
+    license_invalid,
+
+    // server.license is no longer valid at Server startup time.
+    license_expired,
+
     // Authentication subsystem/provider initialization failed.
     authentication_start_failed,
 

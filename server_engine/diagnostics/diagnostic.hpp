@@ -82,6 +82,9 @@ enum class diagnostic_domain : std::uint8_t {
     // Process configuration.
     configuration,
 
+    // Server licensing/startup entitlement.
+    license,
+
     // Authentication subsystem lifecycle/provider.
     authentication,
 

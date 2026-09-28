@@ -1,6 +1,6 @@
 {
   // Server configuration schema version.
-  "version": 7,
+  "version": 8,
 
   // Process-wide low-level Server settings.
   "settings": {
@@ -35,6 +35,14 @@
   // none | contract | external
   "authentication": {
     "mode": "none"
+
+    // Microsoft Entra:
+    // "mode": "external",
+    // "external": {
+    //   "provider": "microsoft_entra",
+    //   "tenant_id": "<tenant-id>",
+    //   "audience": "<ServerEngine API client-id>"
+    // }
   },
 
   // Only listed endpoints are created.

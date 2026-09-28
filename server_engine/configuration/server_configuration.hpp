@@ -21,9 +21,25 @@ enum class authentication_mode : std::uint8_t {
     external,
 };
 
+enum class external_authentication_provider : std::uint8_t {
+    microsoft_entra,
+};
+
+// Microsoft Entra single-tenant validation configuration.
+struct external_authentication_configuration final {
+    external_authentication_provider provider =
+        external_authentication_provider::microsoft_entra;
+
+    std::string tenant_id;
+    std::string audience;
+};
+
 // Process-level Authentication configuration.
 struct authentication_configuration final {
     authentication_mode mode = authentication_mode::none;
+
+    // Required exactly when mode=external.
+    std::optional<external_authentication_configuration> external;
 };
 
 // Supported command ingress transport kinds.
@@ -154,7 +170,7 @@ struct server_settings_configuration final {
 
 // Process-level configuration loaded before communication and Project lifecycle begin.
 struct server_configuration {
-    // server.json schema version. Current schema value is 7.
+    // server.json schema version. Current schema value is 8.
     std::uint32_t version = 0;
 
     // Required process-wide low-level Server settings.

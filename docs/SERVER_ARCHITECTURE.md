@@ -156,6 +156,257 @@ The directory name is `configuration`, not `config`.
 
 It contains only Server process configuration types and loading/parsing logic.
 
+## Server License
+
+`server.license` is required process-level Server state. It is independent from
+Project files and from Authentication.
+
+```text
+load/validate server.json
+    -> load/validate server.license
+    -> start Authentication
+    -> start Communication
+    -> optional Project startup
+```
+
+V1 contains `version`, `expires_at`, and `max_connections`.
+
+`expires_at` uses UTC `YYYY-MM-DDTHH:MM:SSZ`. Startup fails closed when the file
+is missing, malformed, unsupported, expired, or has an invalid connection
+limit.
+
+`max_connections` is the licensed maximum number of simultaneously active TCP
+client connections. Console endpoints are not counted. The TCP/session slice
+consumes this validated limit when connection admission is implemented.
+
+V1 deliberately does not claim cryptographic authenticity for `server.license`.
+Signature/envelope verification is a separate licensing-security slice.
+
+## Current Server startup boundary
+
+The current startup sequence is:
+
+```text
+server.start()
+    -> load + validate server.json
+    -> load + validate server.license
+    -> Authentication.start()
+    -> Communication.start()
+    -> optional Project startup
+```
+
+The order is architectural:
+
+- `server.license` is Server-level state and is independent from Project state.
+- Authentication must be ready before Communication can accept remote clients.
+- Communication is stopped before Authentication during shutdown.
+- Project startup remains optional and occurs only after Server infrastructure is ready.
+
+A failure in configuration, license validation, Authentication startup, or
+Communication startup fails closed.
+
+## Server License
+
+`server.license` is required process-level Server state. It is not part of
+`project.json` and is not an Authentication credential store.
+
+V1 contract:
+
+```text
+server.license
+    version
+    expires_at
+    max_connections
+```
+
+`expires_at` is a UTC startup validity boundary using:
+
+```text
+YYYY-MM-DDTHH:MM:SSZ
+```
+
+`max_connections` is the licensed maximum number of simultaneously active TCP
+Client Sessions. Console does not consume this limit.
+
+The current V1 validates file structure, expiration, and limits. Cryptographic
+license signing/verification is intentionally a separate future security slice;
+the current code must not be described as providing tamper-resistant licensing.
+
+## Authentication ownership
+
+Authentication is Server-level, not Project-level.
+
+Supported modes:
+
+```text
+none
+contract
+external
+```
+
+Meaning:
+
+```text
+none
+    Authentication explicitly disabled.
+    Startup succeeds without a provider.
+
+contract
+    Server-owned Authentication Contract boundary.
+    Provider implementation is not yet present and fails closed.
+
+external
+    Delegated external identity provider.
+    Microsoft Entra is the currently implemented provider.
+```
+
+Authentication and Authorization remain separate:
+
+```text
+Authentication
+    establishes/verifies identity
+
+Server Policy
+    decides which established identity/origin may submit a request
+
+Server
+    executes request semantics
+```
+
+Neither Project nor Runtime owns Authentication.
+
+## Microsoft Entra provider
+
+For Microsoft Entra:
+
+```text
+server.json
+    authentication.mode = external
+    authentication.external.provider = microsoft_entra
+    authentication.external.tenant_id
+    authentication.external.audience
+```
+
+Provider startup uses local validation material:
+
+```text
+server.json
+    |
+    v
+entra.cache
+    |
+    +-- tenant_id
+    +-- audience
+    +-- issuer
+    +-- jwks_uri
+    +-- retrieved_at
+    `-- signing keys
+            kid
+            kty
+            alg
+            n
+            e
+            issuer
+    |
+    v
+resident Microsoft Entra provider state
+```
+
+`entra.cache` is validation material only. It does not persist Client access
+tokens or refresh tokens.
+
+The startup contract is deliberately autonomous:
+
+```text
+valid matching cache
+    -> provider may start without live Microsoft connectivity
+
+missing / malformed / mismatched cache
+    -> fail closed
+```
+
+Live OIDC metadata/JWKS refresh and signing-key rollover are separate provider
+maintenance work. Authentication startup is not equivalent to a live Microsoft
+availability check.
+
+## Microsoft Entra JWT validation
+
+ENTRA-JWT-V1 validates one Microsoft Entra access token locally against the
+resident provider configuration and cached signing keys.
+
+Validation path:
+
+```text
+access token
+    -> three-part JWT structure
+    -> decode JOSE header
+    -> alg == RS256
+    -> kid
+    -> cached RSA signing key
+    -> RSASSA-PKCS1-v1_5 / SHA-256 signature
+    -> decode claims
+    -> exact issuer
+    -> exact configured audience
+    -> exact tenant id
+    -> exp
+    -> optional nbf
+    -> authenticated token identity
+```
+
+The resulting transport-independent identity contains available token values:
+
+```text
+tenant_id   <- tid
+subject     <- sub
+object_id   <- oid
+client_id   <- azp, or appid for the supported token shape
+```
+
+Token validation does not create a Client Session and does not authorize a
+Server request. Those responsibilities remain separate.
+
+Cryptography is behind a narrow platform boundary:
+
+```text
+authentication/crypto/rsa_sha256_verifier.hpp
+
+Windows
+    -> CNG / BCrypt
+
+non-Windows
+    -> currently fail closed with crypto_unavailable
+```
+
+ServerEngine does not contain a private RSA implementation and does not add
+OpenSSL to the Windows path.
+
+## Next Communication slice
+
+With Authentication and access-token validation in place, the next boundary is:
+
+```text
+TCP connection
+    -> Client Session
+         session_id
+         name
+         optional subid
+         authentication state
+    -> LOGIN
+         name
+         optional subid
+         provider authentication data
+    -> Authentication
+    -> authenticated Client Session
+    -> Server Policy
+    -> Server request dispatch
+```
+
+The future Client Session admission path consumes
+`server.license.max_connections`.
+
+`name + subid` identifies a logical client/application category and is not
+unique. `session_id` is the unique active connection identity.
+
 ## Authentication lifecycle
 
 Authentication is Server process state, not Project state and not yet a Client

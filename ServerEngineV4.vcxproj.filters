@@ -13,6 +13,12 @@
     <Filter Include="server_engine\json">
       <UniqueIdentifier>{88888888-8888-8888-8888-888888888888}</UniqueIdentifier>
     </Filter>
+    <Filter Include="server_engine\license">
+      <UniqueIdentifier>{0E6B18C8-CCF2-4C56-8F13-6411989F70B2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="server_engine\authentication\crypto">
+      <UniqueIdentifier>{A8908878-5D10-4D45-A880-60CC827F79A2}</UniqueIdentifier>
+    </Filter>
     <Filter Include="server_engine\authentication">
       <UniqueIdentifier>{7CF7AAE4-2A7C-4E2D-BD9D-7E9A4CF3C4A1}</UniqueIdentifier>
     </Filter>
@@ -109,8 +115,23 @@
       <Filter>server_engine\configuration</Filter>
     </ClCompile>
 
+    <ClCompile Include="server_engine\license\server_license.cpp">
+      <Filter>server_engine\license</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\license\server_license_loader.cpp">
+      <Filter>server_engine\license</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\authentication\authentication.cpp">
       <Filter>server_engine\authentication</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\authentication\microsoft_entra.cpp">
+      <Filter>server_engine\authentication</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\authentication\entra_jwt.cpp">
+      <Filter>server_engine\authentication</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\authentication\crypto\rsa_sha256_verifier_windows.cpp">
+      <Filter>server_engine\authentication\crypto</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\communication\request_queue.cpp">
       <Filter>server_engine\communication</Filter>
@@ -336,8 +357,23 @@
       <Filter>server_engine\configuration</Filter>
     </ClInclude>
 
+    <ClInclude Include="server_engine\license\server_license.hpp">
+      <Filter>server_engine\license</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\license\server_license_loader.hpp">
+      <Filter>server_engine\license</Filter>
+    </ClInclude>
     <ClInclude Include="server_engine\authentication\authentication.hpp">
       <Filter>server_engine\authentication</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\authentication\microsoft_entra.hpp">
+      <Filter>server_engine\authentication</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\authentication\entra_jwt.hpp">
+      <Filter>server_engine\authentication</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\authentication\crypto\rsa_sha256_verifier.hpp">
+      <Filter>server_engine\authentication\crypto</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\communication\request_identity.hpp">
       <Filter>server_engine\communication</Filter>

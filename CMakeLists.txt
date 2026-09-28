@@ -41,7 +41,12 @@ add_executable(ServerEngineV4
 
     server_engine/configuration/server_configuration_loader.cpp
 
+    server_engine/license/server_license.cpp
+    server_engine/license/server_license_loader.cpp
+
     server_engine/authentication/authentication.cpp
+    server_engine/authentication/microsoft_entra.cpp
+    server_engine/authentication/entra_jwt.cpp
 
     server_engine/communication/request_queue.cpp
     server_engine/communication/communication.cpp
@@ -91,13 +96,17 @@ add_executable(ServerEngineV4
 
 if(WIN32)
     target_sources(ServerEngineV4 PRIVATE
+        server_engine/authentication/crypto/rsa_sha256_verifier_windows.cpp
         server_engine/communication/console/console_input_windows.cpp
         server_engine/project/construction/execution_lanes_windows.cpp
     )
+
+    target_link_libraries(ServerEngineV4 PRIVATE bcrypt)
 else()
     find_package(Threads REQUIRED)
 
     target_sources(ServerEngineV4 PRIVATE
+        server_engine/authentication/crypto/rsa_sha256_verifier_unsupported.cpp
         server_engine/communication/console/console_input_posix.cpp
         server_engine/project/construction/execution_lanes_posix.cpp
     )
@@ -155,6 +164,7 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
             ServerEngineV4PublishBenchmark
             PRIVATE
             Psapi
+            bcrypt
         )
     else()
         target_link_libraries(
@@ -217,11 +227,13 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
             ServerEngineV4RuntimeBenchmark
             PRIVATE
             Psapi
+            bcrypt
         )
         target_link_libraries(
             ServerEngineV4RuntimeLookupBenchmark
             PRIVATE
             Psapi
+            bcrypt
         )
     else()
         target_link_libraries(
@@ -383,6 +395,30 @@ if(BUILD_TESTING)
         COMMAND ServerEngineV4ServerConfigurationTests
     )
 
+    add_executable(ServerEngineV4ServerLicenseTests
+        tests/server_license_tests.cpp
+        server_engine/license/server_license.cpp
+        server_engine/license/server_license_loader.cpp
+        server_engine/json/json_parser.cpp
+        server_engine/diagnostics/diagnostic_collection.cpp
+        server_engine/diagnostics/diagnostic_source_cache.cpp
+    )
+
+    target_include_directories(ServerEngineV4ServerLicenseTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(ServerEngineV4ServerLicenseTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4ServerLicenseTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(
+        NAME server_license
+        COMMAND ServerEngineV4ServerLicenseTests
+    )
+
     add_executable(ServerEngineV4ServerPolicyTests
         tests/server_policy_tests.cpp
         server_engine/server_policy.cpp
@@ -406,6 +442,8 @@ if(BUILD_TESTING)
     add_executable(ServerEngineV4AuthenticationTests
         tests/authentication_tests.cpp
         server_engine/authentication/authentication.cpp
+        server_engine/authentication/microsoft_entra.cpp
+        server_engine/json/json_parser.cpp
     )
     target_include_directories(ServerEngineV4AuthenticationTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
@@ -415,6 +453,37 @@ if(BUILD_TESTING)
         target_compile_options(ServerEngineV4AuthenticationTests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME authentication COMMAND ServerEngineV4AuthenticationTests)
+
+
+    add_executable(ServerEngineV4EntraJwtTests
+        tests/entra_jwt_tests.cpp
+        server_engine/authentication/microsoft_entra.cpp
+        server_engine/authentication/entra_jwt.cpp
+        server_engine/json/json_parser.cpp
+    )
+
+    if(WIN32)
+        target_sources(ServerEngineV4EntraJwtTests PRIVATE
+            server_engine/authentication/crypto/rsa_sha256_verifier_windows.cpp
+        )
+        target_link_libraries(ServerEngineV4EntraJwtTests PRIVATE bcrypt)
+    else()
+        target_sources(ServerEngineV4EntraJwtTests PRIVATE
+            server_engine/authentication/crypto/rsa_sha256_verifier_unsupported.cpp
+        )
+    endif()
+
+    target_include_directories(ServerEngineV4EntraJwtTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(ServerEngineV4EntraJwtTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4EntraJwtTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(NAME entra_jwt COMMAND ServerEngineV4EntraJwtTests)
 
     add_executable(ServerEngineV4Tests
         tests/compiled_project_tests.cpp

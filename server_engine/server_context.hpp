@@ -12,6 +12,7 @@
 #include "communication/communication.hpp"
 #include "configuration/server_configuration.hpp"
 #include "project/project.hpp"
+#include "license/server_license.hpp"
 #include "server_policy.hpp"
 
 #include <filesystem>
@@ -30,6 +31,9 @@ public:
 
     // Parent directory used as the base for relative Server-owned paths.
     std::filesystem::path configuration_directory;
+
+    // Validated process-level server.license state.
+    server_license license;
 
     // Process-level Authentication subsystem. Starts before Communication.
     authentication_service authentication;

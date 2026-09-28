@@ -1,0 +1,11 @@
+{
+  // Server license format version.
+  "version": 1,
+
+  // UTC expiration. V1 requires YYYY-MM-DDTHH:MM:SSZ.
+  "expires_at": "2099-12-31T23:59:59Z",
+
+  // Maximum simultaneously active TCP client connections.
+  // Console endpoints do not count against this limit.
+  "max_connections": 32
+}

@@ -13,7 +13,7 @@ The JSON parser supports:
 
 ```jsonc
 {
-  "version": 7,
+  "version": 8,
 
   "settings": {
     "abi": {
@@ -250,9 +250,31 @@ settings.files entries must use distinct file names
 The current implementation already wires `settings.files.manifest` into
 `project_configuration_manifest_store`.
 
+## Server License
+
+`server.license` is a required Server-level file located beside `server.json`.
+It is not configured inside `server.json`.
+
+```jsonc
+{
+  "version": 1,
+  "expires_at": "2099-12-31T23:59:59Z",
+  "max_connections": 32
+}
+```
+
+`expires_at` is a UTC startup-expiration boundary. `max_connections` is the
+maximum active TCP client connection count; Console endpoints do not consume
+this limit.
+
+V1 validates structure, expiration, and limits. Cryptographic signature
+verification is intentionally reserved for a later license-security slice.
+
 ## Authentication
 
 `authentication` is required process-level Server configuration.
+
+### Disabled
 
 ```jsonc
 "authentication": {
@@ -260,18 +282,132 @@ The current implementation already wires `settings.files.manifest` into
 }
 ```
 
-Modes are `none`, `contract`, and `external`.
+`none` explicitly disables Authentication and initializes successfully.
 
-Authentication is initialized after `server.json` validation and before
-Communication starts. `none` is an explicit successful initialization.
-`contract` reserves the Server-owned Authentication Contract boundary without
-constraining provider storage to local or remote. `external` reserves delegation
-to an external identity provider.
+### Server-owned contract
 
-This slice defines only Server lifecycle ownership. LOGIN, Client Session
-identity, credentials, tokens, roles, permissions, and provider-specific
-configuration are intentionally deferred. Until their provider slices exist,
-`contract` and `external` fail closed during Server startup.
+```jsonc
+"authentication": {
+  "mode": "contract"
+}
+```
+
+`contract` reserves the Server-owned Authentication Contract boundary. The
+provider implementation is not yet present, so this mode currently fails
+closed during Server startup.
+
+### Microsoft Entra
+
+```jsonc
+"authentication": {
+  "mode": "external",
+  "external": {
+    "provider": "microsoft_entra",
+    "tenant_id": "<tenant-id>",
+    "audience": "<ServerEngine API application/client-id>"
+  }
+}
+```
+
+For `mode=external`, the `external` object is required. For all other modes it
+is forbidden.
+
+Current supported external provider:
+
+```text
+microsoft_entra
+```
+
+Required Microsoft Entra fields:
+
+```text
+provider
+tenant_id
+audience
+```
+
+The Server loads `entra.cache` from the directory containing `server.json`.
+
+Current cache contract:
+
+```jsonc
+{
+  "version": 1,
+  "tenant_id": "<tenant-id>",
+  "audience": "<ServerEngine API application/client-id>",
+  "issuer": "<tenant-specific issuer>",
+  "jwks_uri": "<Microsoft JWKS URI>",
+  "retrieved_at": "<cache retrieval timestamp>",
+  "keys": [
+    {
+      "kid": "<key id>",
+      "kty": "RSA",
+      "alg": "RS256",
+      "n": "<base64url RSA modulus>",
+      "e": "<base64url RSA exponent>",
+      "issuer": "<issuer, when present>"
+    }
+  ]
+}
+```
+
+The configured `tenant_id` and `audience` must match the cache. The signing-key
+set must be non-empty. Unsupported key types/algorithms fail closed.
+
+`entra.cache` contains public validation material only. Client access tokens and
+refresh tokens are never persisted there.
+
+A valid local cache allows autonomous Server startup without live Microsoft
+connectivity. A missing, malformed, or mismatched cache fails Authentication
+startup. Live metadata/JWKS refresh is not implemented in the current slice.
+
+### Access-token validation
+
+Microsoft Entra access tokens are validated locally after provider startup:
+
+```text
+JWT structure
+alg == RS256
+kid
+RSA/SHA-256 signature
+iss
+aud
+tid
+exp
+nbf, when present
+```
+
+The validator produces token identity values from:
+
+```text
+tid
+sub
+oid
+azp / appid
+```
+
+Windows uses CNG/BCrypt for RS256 verification. The current non-Windows crypto
+backend intentionally fails closed with `crypto_unavailable`.
+
+JWT validation is independent from TCP framing, Client Session, LOGIN, and
+Server Policy. Those layers consume the Authentication result but do not own
+token semantics.
+
+### Startup order
+
+Authentication starts only after both `server.json` and `server.license` have
+been validated:
+
+```text
+server.json
+    -> server.license
+    -> Authentication
+    -> Communication
+    -> optional Project startup
+```
+
+Communication is therefore never opened before Authentication reaches its
+configured ready state.
 
 ## Project Startup
 
