@@ -3805,6 +3805,67 @@ void test_runtime_ic_reset(
                 },
                 changed) ==
                     runtime_ic_result::success,
+            "mutate Runtime before filtered binary RESET")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            reset_runtime_ic_binary(
+                view,
+                bindings,
+                runtime,
+                binary_view,
+                &reset_stats,
+                reset_ic_options::variables) ==
+                    runtime_ic_reset_result::success &&
+            reset_stats.records == 0 &&
+            reset_stats.bytes == 0 &&
+            get_runtime_value(
+                view,
+                bindings,
+                runtime,
+                "demo::left.value",
+                observed) ==
+                    runtime_query_result::success &&
+            observed.bits == 99,
+            "RESET variables option preserves variable values")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            reset_runtime_ic_binary(
+                view,
+                bindings,
+                runtime,
+                binary_view,
+                &reset_stats) ==
+                    runtime_ic_reset_result::success &&
+            get_runtime_value(
+                view,
+                bindings,
+                runtime,
+                "demo::left.value",
+                observed) ==
+                    runtime_query_result::success &&
+            observed.bits == 42,
+            "unfiltered binary RESET restores preserved variable")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            reset_runtime_ic_scalar(
+                view,
+                bindings,
+                runtime,
+                {
+                    left_object,
+                    value_member,
+                },
+                changed) ==
+                    runtime_ic_result::success,
             "mutate Runtime before text RESET")) {
 
         return;

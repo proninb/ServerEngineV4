@@ -17,6 +17,69 @@
 
 namespace cw::server {
 
+enum class snap_ic_options : std::uint8_t {
+    none = 0x00,
+};
+
+// RESET option bits exclude categories from update.
+// A set bit preserves that category in the current Runtime.
+enum class reset_ic_options : std::uint8_t {
+    none = 0x00,
+    constants = 0x01,
+    variables = 0x02,
+    defaults = 0x04,
+};
+
+inline constexpr std::uint8_t reset_ic_options_mask =
+    static_cast<std::uint8_t>(
+        reset_ic_options::constants) |
+    static_cast<std::uint8_t>(
+        reset_ic_options::variables) |
+    static_cast<std::uint8_t>(
+        reset_ic_options::defaults);
+
+[[nodiscard]] constexpr reset_ic_options operator|(
+    reset_ic_options left,
+    reset_ic_options right) noexcept {
+
+    return static_cast<reset_ic_options>(
+        static_cast<std::uint8_t>(left) |
+        static_cast<std::uint8_t>(right));
+}
+
+[[nodiscard]] constexpr reset_ic_options operator&(
+    reset_ic_options left,
+    reset_ic_options right) noexcept {
+
+    return static_cast<reset_ic_options>(
+        static_cast<std::uint8_t>(left) &
+        static_cast<std::uint8_t>(right));
+}
+
+constexpr reset_ic_options& operator|=(
+    reset_ic_options& left,
+    reset_ic_options right) noexcept {
+
+    left = left | right;
+    return left;
+}
+
+[[nodiscard]] constexpr bool has_option(
+    reset_ic_options value,
+    reset_ic_options option) noexcept {
+
+    return (value & option) !=
+        reset_ic_options::none;
+}
+
+[[nodiscard]] constexpr bool valid_reset_ic_options(
+    reset_ic_options value) noexcept {
+
+    return (
+        static_cast<std::uint8_t>(value) &
+        ~reset_ic_options_mask) == 0;
+}
+
 enum class runtime_ic_result : std::uint8_t {
     success = 0,
     invalid_input,
@@ -34,6 +97,9 @@ struct runtime_ic_path_view final {
 inline constexpr std::uint8_t runtime_ic_target_const =
     0x01u;
 
+inline constexpr std::uint8_t runtime_ic_target_default =
+    0x02u;
+
 struct runtime_ic_scalar_target final {
     runtime_offset offset = 0;
     intrinsic_type type = intrinsic_type::none;
@@ -42,6 +108,10 @@ struct runtime_ic_scalar_target final {
 
     [[nodiscard]] constexpr bool constant() const noexcept {
         return (flags & runtime_ic_target_const) != 0;
+    }
+
+    [[nodiscard]] constexpr bool default_value() const noexcept {
+        return (flags & runtime_ic_target_default) != 0;
     }
 };
 

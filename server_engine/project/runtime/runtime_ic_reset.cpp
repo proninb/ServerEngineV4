@@ -45,13 +45,41 @@ enum class binary_member_search_result : std::uint8_t {
 struct binary_resolved_member final {
     runtime_offset offset = 0;
     type_ref type{};
+    bool default_value = false;
 };
 
 struct binary_resolve_state final {
     runtime_offset offset = 0;
     type_ref type{};
     bool constant = false;
+    bool default_value = false;
 };
+
+[[nodiscard]] bool reset_target_excluded(
+    const runtime_ic_scalar_target& target,
+    reset_ic_options options) noexcept {
+
+    if (has_option(
+            options,
+            reset_ic_options::constants) &&
+        target.constant()) {
+
+        return true;
+    }
+
+    if (has_option(
+            options,
+            reset_ic_options::variables) &&
+        !target.constant()) {
+
+        return true;
+    }
+
+    return has_option(
+               options,
+               reset_ic_options::defaults) &&
+        target.default_value();
+}
 
 [[nodiscard]] bool add_runtime_offset(
     runtime_offset left,
@@ -149,11 +177,16 @@ find_binary_member_recursive(
         member) {
 
         member_record record;
+        construction_value construction;
 
         if (!project.member(
                 type,
                 member,
-                record)) {
+                record) ||
+            !project.construction(
+                type,
+                member,
+                construction)) {
 
             return binary_member_search_result::invalid;
         }
@@ -177,6 +210,8 @@ find_binary_member_recursive(
                 member_offset);
 
         output.type = record.type;
+        output.default_value =
+            construction == construction_value{};
 
         return binary_member_search_result::found;
     }
@@ -474,6 +509,8 @@ resolve_binary_object(
     output.offset = offset;
     output.type = entry.type;
     output.constant = false;
+    output.default_value =
+        !entry.non_default_initializer();
 
     return runtime_ic_reset_result::success;
 }
@@ -551,6 +588,8 @@ resolve_binary_member_step(
 
     state.offset = location;
     state.type = member.type;
+    state.default_value =
+        member.default_value;
 
     return runtime_ic_reset_result::success;
 }
@@ -562,9 +601,12 @@ finish_binary_scalar(
     std::uint64_t runtime_size,
     const runtime_ic_binary_record_view& record,
     binary_resolve_state state,
-    runtime_ic_scalar_target& output) noexcept {
+    reset_ic_options options,
+    runtime_ic_scalar_target& output,
+    bool& excluded) noexcept {
 
     output = {};
+    excluded = false;
 
     if (!strip_binary_cv(
             project,
@@ -607,6 +649,29 @@ finish_binary_scalar(
         return runtime_ic_reset_result::invalid_runtime;
     }
 
+    output.offset = state.offset;
+    output.type = intrinsic;
+    output.size = size;
+
+    if (state.constant) {
+        output.flags |=
+            runtime_ic_target_const;
+    }
+
+    if (state.default_value) {
+        output.flags |=
+            runtime_ic_target_default;
+    }
+
+    excluded =
+        reset_target_excluded(
+            output,
+            options);
+
+    if (excluded) {
+        return runtime_ic_reset_result::success;
+    }
+
     if (record.value.empty() ||
         record.value.size() >
             runtime_ic_scalar_value{}.
@@ -619,15 +684,6 @@ finish_binary_scalar(
         record.value.size() != size) {
 
         return runtime_ic_reset_result::type_mismatch;
-    }
-
-    output.offset = state.offset;
-    output.type = intrinsic;
-    output.size = size;
-
-    if (state.constant) {
-        output.flags |=
-            runtime_ic_target_const;
     }
 
     return runtime_ic_reset_result::success;
@@ -745,14 +801,8 @@ void publish_binary_stats(
     std::span<std::byte> runtime,
     runtime_ic_path_view path,
     const runtime_ic_scalar_value& value,
-    reset_plan& plan) noexcept {
-
-    if (value.type == intrinsic_type::none ||
-        value.size == 0 ||
-        value.size > value.bytes.size()) {
-
-        return runtime_ic_reset_result::invalid_input;
-    }
+    reset_plan& plan,
+    reset_ic_options options) noexcept {
 
     runtime_ic_scalar_target target;
 
@@ -767,6 +817,20 @@ void publish_binary_stats(
 
     if (resolved != runtime_ic_result::success) {
         return map_result(resolved);
+    }
+
+    if (reset_target_excluded(
+            target,
+            options)) {
+
+        return runtime_ic_reset_result::success;
+    }
+
+    if (value.type == intrinsic_type::none ||
+        value.size == 0 ||
+        value.size > value.bytes.size()) {
+
+        return runtime_ic_reset_result::invalid_input;
     }
 
     if (target.type != value.type ||
@@ -997,6 +1061,9 @@ struct text_reset_context final {
     const runtime_binding_index& bindings;
     std::span<std::byte> runtime;
     reset_plan& plan;
+    reset_ic_options options =
+        reset_ic_options::none;
+    std::uint32_t records = 0;
 
     std::vector<std::string_view> object;
     std::vector<std::string_view> members;
@@ -1013,6 +1080,8 @@ struct text_reset_context final {
     auto& context =
         *static_cast<text_reset_context*>(
             raw);
+
+    ++context.records;
 
     if (!parse_text_path(
             path_text,
@@ -1044,6 +1113,13 @@ struct text_reset_context final {
         context.result =
             map_result(resolved);
         return false;
+    }
+
+    if (reset_target_excluded(
+            target,
+            context.options)) {
+
+        return true;
     }
 
     runtime_ic_scalar_value value;
@@ -1078,7 +1154,8 @@ struct text_reset_context final {
                 context.members,
             },
             value,
-            context.plan);
+            context.plan,
+            context.options);
 
     return context.result ==
         runtime_ic_reset_result::success;
@@ -1091,7 +1168,8 @@ runtime_ic_reset_result reset_runtime_ic_records(
     const runtime_binding_index& bindings,
     std::span<std::byte> runtime,
     std::span<const runtime_ic_record_source> records,
-    runtime_ic_reset_stats* stats) noexcept {
+    runtime_ic_reset_stats* stats,
+    reset_ic_options options) noexcept {
 
     if (stats != nullptr) {
         *stats = {};
@@ -1099,6 +1177,7 @@ runtime_ic_reset_result reset_runtime_ic_records(
 
     if (!project.valid() ||
         runtime.empty() ||
+        !valid_reset_ic_options(options) ||
         records.empty() ||
         records.size() >
             (std::numeric_limits<std::uint32_t>::max)()) {
@@ -1127,7 +1206,8 @@ runtime_ic_reset_result reset_runtime_ic_records(
                 runtime,
                 record.path,
                 record.value,
-                plan);
+                plan,
+                options);
 
         if (result !=
             runtime_ic_reset_result::success) {
@@ -1152,7 +1232,8 @@ runtime_ic_reset_result reset_runtime_ic_binary(
     const runtime_binding_index& bindings,
     std::span<std::byte> runtime,
     const runtime_ic_binary_view& image,
-    runtime_ic_reset_stats* stats) noexcept {
+    runtime_ic_reset_stats* stats,
+    reset_ic_options options) noexcept {
 
     if (stats != nullptr) {
         *stats = {};
@@ -1160,6 +1241,7 @@ runtime_ic_reset_result reset_runtime_ic_binary(
 
     if (!project.valid() ||
         runtime.empty() ||
+        !valid_reset_ic_options(options) ||
         !image.valid() ||
         image.record_count() == 0 ||
         image.record_count() >
@@ -1334,6 +1416,7 @@ runtime_ic_reset_result reset_runtime_ic_binary(
         }
 
         runtime_ic_scalar_target target;
+        bool excluded = false;
 
         const auto finished =
             finish_binary_scalar(
@@ -1343,7 +1426,9 @@ runtime_ic_reset_result reset_runtime_ic_binary(
                     runtime.size()),
                 record,
                 prefix_states.back(),
-                target);
+                options,
+                target,
+                excluded);
 
         if (finished !=
             runtime_ic_reset_result::success) {
@@ -1351,16 +1436,18 @@ runtime_ic_reset_result reset_runtime_ic_binary(
             return finished;
         }
 
-        const auto appended =
-            append_binary_write(
-                index,
-                target,
-                plan);
+        if (!excluded) {
+            const auto appended =
+                append_binary_write(
+                    index,
+                    target,
+                    plan);
 
-        if (appended !=
-            runtime_ic_reset_result::success) {
+            if (appended !=
+                runtime_ic_reset_result::success) {
 
-            return appended;
+                return appended;
+            }
         }
 
         previous_record = record;
@@ -1385,7 +1472,8 @@ runtime_ic_reset_result reset_runtime_ic_text(
     std::span<std::byte> runtime,
     std::string_view text,
     runtime_ic_reset_stats* stats,
-    std::size_t* error_line) noexcept {
+    std::size_t* error_line,
+    reset_ic_options options) noexcept {
 
     if (stats != nullptr) {
         *stats = {};
@@ -1397,6 +1485,7 @@ runtime_ic_reset_result reset_runtime_ic_text(
 
     if (!project.valid() ||
         runtime.empty() ||
+        !valid_reset_ic_options(options) ||
         text.empty()) {
 
         return runtime_ic_reset_result::
@@ -1410,6 +1499,7 @@ runtime_ic_reset_result reset_runtime_ic_text(
         bindings,
         runtime,
         plan,
+        options,
     };
 
     try {
@@ -1438,7 +1528,7 @@ runtime_ic_reset_result reset_runtime_ic_text(
             invalid_image;
     }
 
-    if (plan.writes.empty()) {
+    if (context.records == 0) {
         return runtime_ic_reset_result::
             invalid_input;
     }

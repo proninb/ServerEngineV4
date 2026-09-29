@@ -481,6 +481,7 @@ server_response server::execute(
         result.status =
             snap_ic(
                 request.path,
+                request.snap_options,
                 result.operation,
                 result.diagnostics);
         break;
@@ -489,6 +490,7 @@ server_response server::execute(
         result.status =
             reset_ic(
                 request.path,
+                request.reset_options,
                 result.operation,
                 result.diagnostics);
         break;
@@ -777,8 +779,19 @@ server_status server::rebuild(
 
 server_status server::snap_ic(
     const std::filesystem::path& ic_path,
+    snap_ic_options options,
     operation_id operation,
     diagnostic_collection& diagnostics) {
+
+    if (options != snap_ic_options::none) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::runtime_ic_invalid,
+                operation)
+                .detail("SNAP_IC options are invalid")
+                .build());
+        return server_status::runtime_ic_invalid;
+    }
 
     if (!context.project) {
         diagnostics.emit(
@@ -891,8 +904,19 @@ server_status server::snap_ic(
 
 server_status server::reset_ic(
     const std::filesystem::path& ic_path,
+    reset_ic_options options,
     operation_id operation,
     diagnostic_collection& diagnostics) {
+
+    if (!valid_reset_ic_options(options)) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::runtime_ic_invalid,
+                operation)
+                .detail("RESET_IC options are invalid")
+                .build());
+        return server_status::runtime_ic_invalid;
+    }
 
     if (!context.project) {
         diagnostics.emit(
@@ -987,7 +1011,9 @@ server_status server::reset_ic(
             runtime.first(
                 static_cast<std::size_t>(
                     logical_size)),
-            image);
+            image,
+            nullptr,
+            options);
 
     switch (reset) {
     case runtime_ic_reset_result::success:

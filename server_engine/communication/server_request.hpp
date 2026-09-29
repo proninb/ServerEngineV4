@@ -6,6 +6,9 @@
  */
 #pragma once
 
+#include "../project/runtime/runtime_ic.hpp"
+
+#include <cstdint>
 #include <filesystem>
 #include <string>
 
@@ -55,6 +58,12 @@ struct server_request {
 
     // Query target used by GET_VALUE.
     std::string name;
+
+    snap_ic_options snap_options =
+        snap_ic_options::none;
+
+    reset_ic_options reset_options =
+        reset_ic_options::none;
 };
 
 }

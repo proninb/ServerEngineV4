@@ -22,6 +22,45 @@ void present(void* context, request_id request, const server_response&) {
 }
 
 int main() {
+    static_assert(
+        static_cast<std::uint8_t>(
+            snap_ic_options::none) == 0x00);
+
+    static_assert(
+        static_cast<std::uint8_t>(
+            reset_ic_options::none) == 0x00);
+
+    static_assert(
+        static_cast<std::uint8_t>(
+            reset_ic_options::constants) == 0x01);
+
+    static_assert(
+        static_cast<std::uint8_t>(
+            reset_ic_options::variables) == 0x02);
+
+    static_assert(
+        static_cast<std::uint8_t>(
+            reset_ic_options::defaults) == 0x04);
+
+    constexpr auto excluded =
+        reset_ic_options::constants |
+        reset_ic_options::variables;
+
+    static_assert(
+        has_option(
+            excluded,
+            reset_ic_options::constants));
+
+    static_assert(
+        has_option(
+            excluded,
+            reset_ic_options::variables));
+
+    static_assert(
+        !has_option(
+            excluded,
+            reset_ic_options::defaults));
+
     if (request_id{}.valid() || !request_id{42}.valid()) return 1;
 
     capture value;

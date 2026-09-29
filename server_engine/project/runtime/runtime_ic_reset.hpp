@@ -40,7 +40,8 @@ reset_runtime_ic_records(
     const runtime_binding_index& bindings,
     std::span<std::byte> runtime,
     std::span<const runtime_ic_record_source> records,
-    runtime_ic_reset_stats* stats = nullptr) noexcept;
+    runtime_ic_reset_stats* stats = nullptr,
+    reset_ic_options options = reset_ic_options::none) noexcept;
 
 [[nodiscard]] runtime_ic_reset_result
 reset_runtime_ic_binary(
@@ -48,7 +49,8 @@ reset_runtime_ic_binary(
     const runtime_binding_index& bindings,
     std::span<std::byte> runtime,
     const runtime_ic_binary_view& image,
-    runtime_ic_reset_stats* stats = nullptr) noexcept;
+    runtime_ic_reset_stats* stats = nullptr,
+    reset_ic_options options = reset_ic_options::none) noexcept;
 
 [[nodiscard]] runtime_ic_reset_result
 reset_runtime_ic_text(
@@ -57,6 +59,7 @@ reset_runtime_ic_text(
     std::span<std::byte> runtime,
     std::string_view text,
     runtime_ic_reset_stats* stats = nullptr,
-    std::size_t* error_line = nullptr) noexcept;
+    std::size_t* error_line = nullptr,
+    reset_ic_options options = reset_ic_options::none) noexcept;
 
 }

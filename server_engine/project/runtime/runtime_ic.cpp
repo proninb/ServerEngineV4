@@ -16,6 +16,7 @@ enum class member_search_result : std::uint8_t {
 struct resolved_member final {
     runtime_offset offset = 0;
     type_ref type{};
+    bool default_value = false;
 };
 
 [[nodiscard]] bool add_offset(
@@ -111,11 +112,16 @@ struct resolved_member final {
         member) {
 
         member_record record;
+        construction_value construction;
 
         if (!project.member(
                 type,
                 member,
-                record)) {
+                record) ||
+            !project.construction(
+                type,
+                member,
+                construction)) {
 
             return member_search_result::invalid;
         }
@@ -139,6 +145,8 @@ struct resolved_member final {
                 member_offset);
 
         output.type = record.type;
+        output.default_value =
+            construction == construction_value{};
         return member_search_result::found;
     }
 
@@ -341,6 +349,8 @@ runtime_ic_result resolve_runtime_ic_scalar(
         object_record.type;
 
     bool constant = false;
+    bool default_value =
+        !object_record.non_default_initializer();
 
     for (const auto component :
          path.members) {
@@ -420,6 +430,8 @@ runtime_ic_result resolve_runtime_ic_scalar(
 
         offset = member_location;
         type = member.type;
+        default_value =
+            member.default_value;
     }
 
     if (!strip_cv(
@@ -470,6 +482,11 @@ runtime_ic_result resolve_runtime_ic_scalar(
     if (constant) {
         output.flags |=
             runtime_ic_target_const;
+    }
+
+    if (default_value) {
+        output.flags |=
+            runtime_ic_target_default;
     }
 
     return runtime_ic_result::success;
