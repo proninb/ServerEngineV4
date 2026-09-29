@@ -95,6 +95,7 @@ inline constexpr std::array diagnostic_descriptors{
     diagnostics::runtime_ic_type_mismatch,
     diagnostics::runtime_ic_failed,
     diagnostics::runtime_ic_io_failed,
+    diagnostics::runtime_state_invalid,
     diagnostics::project_startup_unsupported,
     diagnostics::project_invalid_json,
     diagnostics::project_invalid_configuration,

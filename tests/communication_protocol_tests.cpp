@@ -23,6 +23,38 @@ void present(void* context, request_id request, const server_response&) {
 
 int main() {
     static_assert(
+        project_state_can_run(
+            project_state::loaded));
+
+    static_assert(
+        project_state_can_run(
+            project_state::freeze));
+
+    static_assert(
+        !project_state_can_run(
+            project_state::run));
+
+    static_assert(
+        project_state_can_freeze(
+            project_state::run));
+
+    static_assert(
+        !project_state_can_freeze(
+            project_state::loaded));
+
+    static_assert(
+        project_state_can_unload(
+            project_state::loaded));
+
+    static_assert(
+        project_state_can_unload(
+            project_state::freeze));
+
+    static_assert(
+        !project_state_can_unload(
+            project_state::run));
+
+    static_assert(
         static_cast<std::uint8_t>(
             snap_ic_options::none) == 0x00);
 

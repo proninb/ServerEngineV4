@@ -198,6 +198,55 @@ int main() {
 
         const auto decoded =
             decode_json_request(
+                R"({"request_id":41,"command":"RUN"})",
+                request);
+
+        if (!decoded.ok() ||
+            request.kind !=
+                json_request_kind::server ||
+            std::get<server_request>(
+                request.payload).kind !=
+                server_request_kind::run) {
+
+            return 41;
+        }
+    }
+
+    {
+        json_request request;
+
+        const auto decoded =
+            decode_json_request(
+                R"({"request_id":42,"command":"FREEZE"})",
+                request);
+
+        if (!decoded.ok() ||
+            request.kind !=
+                json_request_kind::server ||
+            std::get<server_request>(
+                request.payload).kind !=
+                server_request_kind::freeze) {
+
+            return 42;
+        }
+    }
+
+    {
+        json_request request;
+
+        if (decode_json_request(
+                R"({"request_id":43,"command":"RUN","arguments":{"path":"x"}})",
+                request).ok()) {
+
+            return 43;
+        }
+    }
+
+    {
+        json_request request;
+
+        const auto decoded =
+            decode_json_request(
                 R"({"request_id":3,"command":"CLIENT","arguments":{"login":"","arg":"ping","parameters":"AQID"}})",
                 request);
 
@@ -284,6 +333,44 @@ int main() {
                 std::string::npos) {
 
             return 5;
+        }
+
+        response.state.project =
+            project_state::run;
+
+        message.message.payload =
+            protocol_response{
+                request_id{10},
+                response,
+            };
+
+        if (!encode_json_outbound(
+                message,
+                json) ||
+            json.find(
+                R"("state":"RUN")") ==
+                std::string::npos) {
+
+            return 44;
+        }
+
+        response.state.project =
+            project_state::freeze;
+
+        message.message.payload =
+            protocol_response{
+                request_id{11},
+                response,
+            };
+
+        if (!encode_json_outbound(
+                message,
+                json) ||
+            json.find(
+                R"("state":"FREEZE")") ==
+                std::string::npos) {
+
+            return 45;
         }
 
         std::string frame;

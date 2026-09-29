@@ -73,6 +73,14 @@ public:
         operation_id operation,
         diagnostic_collection& diagnostics);
 
+    [[nodiscard]] server_status run_project(
+        operation_id operation,
+        diagnostic_collection& diagnostics);
+
+    [[nodiscard]] server_status freeze_project(
+        operation_id operation,
+        diagnostic_collection& diagnostics);
+
     void shutdown() noexcept;
 
 private:
@@ -89,6 +97,8 @@ private:
     [[nodiscard]] operation_id next_operation() noexcept;
 
     server_context context;
+    project_state project_state_value =
+        project_state::unloaded;
     std::uint64_t next_operation_value = 1;
     bool running = false;
 };

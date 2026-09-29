@@ -304,9 +304,7 @@ int server::run() {
 }
 
 project_state server::current_project_state() const noexcept {
-    return context.project
-        ? project_state::loaded
-        : project_state::unloaded;
+    return project_state_value;
 }
 
 void server::execute_login(
@@ -495,6 +493,20 @@ server_response server::execute(
                 result.diagnostics);
         break;
 
+    case server_request_kind::run:
+        result.status =
+            run_project(
+                result.operation,
+                result.diagnostics);
+        break;
+
+    case server_request_kind::freeze:
+        result.status =
+            freeze_project(
+                result.operation,
+                result.diagnostics);
+        break;
+
     case server_request_kind::get_value: {
         if (!context.project) {
             result.diagnostics.emit(
@@ -642,11 +654,16 @@ server_status server::load(
 
     if (!succeeded(status)) {
         context.project.reset();
+        project_state_value =
+            project_state::unloaded;
         return status;
     }
 
     context.project =
         std::move(candidate);
+
+    project_state_value =
+        project_state::loaded;
 
     return server_status::success;
 }
@@ -684,11 +701,16 @@ server_status server::publish(
 
     if (!succeeded(status)) {
         context.project.reset();
+        project_state_value =
+            project_state::unloaded;
         return status;
     }
 
     context.project =
         std::move(candidate);
+
+    project_state_value =
+        project_state::loaded;
 
     return server_status::success;
 }
@@ -726,11 +748,16 @@ server_status server::build(
 
     if (!succeeded(status)) {
         context.project.reset();
+        project_state_value =
+            project_state::unloaded;
         return status;
     }
 
     context.project =
         std::move(candidate);
+
+    project_state_value =
+        project_state::loaded;
 
     return server_status::success;
 }
@@ -768,11 +795,16 @@ server_status server::rebuild(
 
     if (!succeeded(status)) {
         context.project.reset();
+        project_state_value =
+            project_state::unloaded;
         return status;
     }
 
     context.project =
         std::move(candidate);
+
+    project_state_value =
+        project_state::loaded;
 
     return server_status::success;
 }
@@ -1070,6 +1102,74 @@ server_status server::reset_ic(
     return server_status::runtime_ic_failed;
 }
 
+server_status server::run_project(
+    operation_id operation,
+    diagnostic_collection& diagnostics) {
+
+    if (!context.project) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_not_loaded,
+                operation)
+                .detail("RUN requires an active Project")
+                .build());
+
+        return server_status::project_not_loaded;
+    }
+
+    if (!project_state_can_run(
+            project_state_value)) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::runtime_state_invalid,
+                operation)
+                .detail("RUN requires LOADED or FREEZE")
+                .build());
+
+        return server_status::runtime_state_invalid;
+    }
+
+    project_state_value =
+        project_state::run;
+
+    return server_status::success;
+}
+
+server_status server::freeze_project(
+    operation_id operation,
+    diagnostic_collection& diagnostics) {
+
+    if (!context.project) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_not_loaded,
+                operation)
+                .detail("FREEZE requires an active Project")
+                .build());
+
+        return server_status::project_not_loaded;
+    }
+
+    if (!project_state_can_freeze(
+            project_state_value)) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::runtime_state_invalid,
+                operation)
+                .detail("FREEZE requires RUN")
+                .build());
+
+        return server_status::runtime_state_invalid;
+    }
+
+    project_state_value =
+        project_state::freeze;
+
+    return server_status::success;
+}
+
 server_status server::unload(
     operation_id operation,
     diagnostic_collection& diagnostics) {
@@ -1085,9 +1185,22 @@ server_status server::unload(
         return server_status::project_not_loaded;
     }
 
+    if (!project_state_can_unload(
+            project_state_value)) {
 
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::runtime_state_invalid,
+                operation)
+                .detail("UNLOAD requires LOADED or FREEZE")
+                .build());
+
+        return server_status::runtime_state_invalid;
+    }
 
     context.project.reset();
+    project_state_value =
+        project_state::unloaded;
 
     return server_status::success;
 }
@@ -1097,6 +1210,8 @@ void server::shutdown() noexcept {
     context.requests.stop_accepting_and_discard();
     context.communications.stop();
     context.project.reset();
+    project_state_value =
+        project_state::unloaded;
     context.authentication.stop();
     context.lease.clear();
     context.identity.stop();

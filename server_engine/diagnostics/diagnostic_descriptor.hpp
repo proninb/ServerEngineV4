@@ -525,6 +525,14 @@ inline constexpr diagnostic_descriptor runtime_ic_io_failed{
     "Runtime IC file I/O failed",
 };
 
+inline constexpr diagnostic_descriptor runtime_state_invalid{
+    diagnostic_id{3021},
+    diagnostic_domain::runtime,
+    diagnostic_severity::error,
+    "runtime.state_invalid",
+    "Runtime control request is invalid in the current Project state",
+};
+
 } // namespace diagnostics
 
 }

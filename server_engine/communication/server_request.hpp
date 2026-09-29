@@ -43,6 +43,12 @@ enum class server_request_kind {
     // Restore one semantic binary IC against the current G/Runtime bindings.
     reset_ic,
 
+    // Enter Runtime execution from LOADED/FREEZE.
+    run,
+
+    // Pause Runtime execution while preserving execution state.
+    freeze,
+
     // Stop communication, release Project ownership, and exit server.run().
     shutdown,
 };

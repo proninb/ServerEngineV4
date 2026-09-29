@@ -11,6 +11,8 @@
  *   GET_VALUE <qualified-object[.member...]>
  *   SNAP_IC <ic-path>
  *   RESET_IC [/options=<0..7>] <ic-path>
+ *   RUN
+ *   FREEZE
  *   SHUTDOWN
  *   EXIT        (alias of SHUTDOWN)
  *
@@ -239,6 +241,18 @@ void server_console::run() {
 
             publish(
                 std::move(request));
+        } else if (verb == "RUN") {
+            publish({
+                server_request_kind::run,
+                {},
+                {},
+            });
+        } else if (verb == "FREEZE") {
+            publish({
+                server_request_kind::freeze,
+                {},
+                {},
+            });
         } else if (verb == "GET_VALUE") {
             std::string name;
             std::getline(

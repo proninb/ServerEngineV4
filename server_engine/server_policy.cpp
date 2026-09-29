@@ -19,6 +19,8 @@ bool server_policy::is_demo_mutation(server_request_kind request) noexcept {
     case server_request_kind::build:
     case server_request_kind::rebuild:
     case server_request_kind::reset_ic:
+    case server_request_kind::run:
+    case server_request_kind::freeze:
         return true;
     case server_request_kind::load:
     case server_request_kind::unload:

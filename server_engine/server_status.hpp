@@ -78,6 +78,9 @@ enum class server_status {
     runtime_ic_type_mismatch,
     runtime_ic_failed,
 
+    // Runtime control request is not valid in the current project_state.
+    runtime_state_invalid,
+
     // Communication/session request violates the protocol state contract.
     communication_invalid_request,
 

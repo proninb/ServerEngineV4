@@ -16,6 +16,8 @@ int main() {
         server_request_kind::get_value,
         server_request_kind::snap_ic,
         server_request_kind::reset_ic,
+        server_request_kind::run,
+        server_request_kind::freeze,
         server_request_kind::shutdown,
     };
 
@@ -63,7 +65,13 @@ int main() {
             server_request_kind::rebuild) ||
         policy.allows(
             server_mode::demo,
-            server_request_kind::reset_ic)) {
+            server_request_kind::reset_ic) ||
+        policy.allows(
+            server_mode::demo,
+            server_request_kind::run) ||
+        policy.allows(
+            server_mode::demo,
+            server_request_kind::freeze)) {
 
         std::cerr << "DEMO project-construction denial failed\n";
         return 3;

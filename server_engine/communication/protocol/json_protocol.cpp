@@ -448,9 +448,18 @@ void append_integer(
 [[nodiscard]] const char* state_name(
     project_state state) noexcept {
 
-    return state == project_state::loaded
-        ? "LOADED"
-        : "UNLOADED";
+    switch (state) {
+    case project_state::unloaded:
+        return "UNLOADED";
+    case project_state::loaded:
+        return "LOADED";
+    case project_state::run:
+        return "RUN";
+    case project_state::freeze:
+        return "FREEZE";
+    }
+
+    return "UNLOADED";
 }
 
 void append_diagnostics(
@@ -780,6 +789,12 @@ json_decode_result decode_json_request(
             } else if (command == "RESET_IC") {
                 request.kind =
                     server_request_kind::reset_ic;
+            } else if (command == "RUN") {
+                request.kind =
+                    server_request_kind::run;
+            } else if (command == "FREEZE") {
+                request.kind =
+                    server_request_kind::freeze;
             } else if (command == "SHUTDOWN") {
                 request.kind =
                     server_request_kind::shutdown;
@@ -854,6 +869,8 @@ json_decode_result decode_json_request(
 
             case server_request_kind::unload:
             case server_request_kind::get_state:
+            case server_request_kind::run:
+            case server_request_kind::freeze:
             case server_request_kind::shutdown:
                 if (!only(
                         handler.seen,
