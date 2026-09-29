@@ -111,6 +111,8 @@
     <ClCompile Include="server_engine\project\abi\abi_layout.cpp" />
     <ClCompile Include="server_engine\project\nuntime\nuntime_layout.cpp" />
     <ClCompile Include="server_engine\project\nuntime\nuntime_query.cpp" />
+    <ClCompile Include="server_engine\project\nuntime\nuntime_ic.cpp" />
+    <ClCompile Include="server_engine\project\nuntime\nuntime_ic_codec.cpp" />
     <ClCompile Include="server_engine\project\nuntime\fixed_direct_materializer.cpp" />
     <ClCompile Include="server_engine\project\nuntime\project_runtime.cpp" />
     <ClCompile Include="server_engine\project\string\string_table.cpp" />
@@ -211,6 +213,8 @@
     <ClInclude Include="server_engine\project\abi\abi_layout.hpp" />
     <ClInclude Include="server_engine\project\nuntime\nuntime_layout.hpp" />
     <ClInclude Include="server_engine\project\nuntime\nuntime_query.hpp" />
+    <ClInclude Include="server_engine\project\nuntime\nuntime_ic.hpp" />
+    <ClInclude Include="server_engine\project\nuntime\nuntime_ic_codec.hpp" />
     <ClInclude Include="server_engine\project\nuntime\fixed_direct_materializer.hpp" />
     <ClInclude Include="server_engine\project\nuntime\project_runtime.hpp" />
     <ClInclude Include="server_engine\project\project_lifecycle_context.hpp" />

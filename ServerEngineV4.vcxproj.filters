@@ -207,6 +207,12 @@
     <ClCompile Include="server_engine\project\nuntime\nuntime_query.cpp">
       <Filter>server_engine\project\nuntime</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\project\nuntime\nuntime_ic.cpp">
+      <Filter>server_engine\project\nuntime</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\nuntime\nuntime_ic_codec.cpp">
+      <Filter>server_engine\project\nuntime</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\project\nuntime\fixed_direct_materializer.cpp">
       <Filter>server_engine\project\nuntime</Filter>
     </ClCompile>
@@ -504,6 +510,12 @@
       <Filter>server_engine\project\nuntime</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\nuntime\nuntime_query.hpp">
+      <Filter>server_engine\project\nuntime</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\nuntime\nuntime_ic.hpp">
+      <Filter>server_engine\project\nuntime</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\nuntime\nuntime_ic_codec.hpp">
       <Filter>server_engine\project\nuntime</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\nuntime\fixed_direct_materializer.hpp">

@@ -6,6 +6,7 @@
 #include "project/runtime/runtime_ic.hpp"
 #include "project/runtime/runtime_ic_codec.hpp"
 #include "project/runtime/runtime_ic_snapshot.hpp"
+#include "project/runtime/runtime_ic_reset.hpp"
 #include "project/file/file_context.hpp"
 #include "project/graph/graph_delta.hpp"
 #include "project/source/source_map.hpp"
@@ -3585,6 +3586,342 @@ void test_runtime_ic_snapshot(
         binary_view.record_count() ==
             records.size(),
         "whole Project binary Runtime IC is mmap-readable");
+}
+
+
+
+void test_runtime_ic_reset(
+    test_state& tests,
+    const compiled_test_image& image) {
+
+    compiled_project_view view;
+
+    if (!tests.expect(
+            view.bind(
+                image.bytes) ==
+                compiled_project_image_result::success,
+            "bind Runtime IC RESET image")) {
+
+        return;
+    }
+
+#if defined(_WIN32)
+    const server_abi_configuration abi{
+        abi_target::windows_x64,
+        8,
+    };
+#else
+    const server_abi_configuration abi{
+        abi_target::posix_x64,
+        8,
+    };
+#endif
+
+    runtime_layout layout;
+
+    if (!tests.expect(
+            prepare_runtime_layout(
+                view,
+                abi,
+                layout) ==
+                runtime_layout_result::success,
+            "prepare Runtime IC RESET layout")) {
+
+        return;
+    }
+
+    std::vector<std::byte> runtime(
+        static_cast<std::size_t>(
+            layout.size()),
+        std::byte{0xcc});
+
+    if (!tests.expect(
+            materialize_fixed_direct(
+                view,
+                layout,
+                abi,
+                runtime) ==
+                fixed_direct_materialization_result::success,
+            "materialize Runtime IC RESET image")) {
+
+        return;
+    }
+
+    runtime_binding_index bindings;
+
+    if (!tests.expect(
+            layout.release_bindings(
+                bindings),
+            "publish Runtime IC RESET bindings")) {
+
+        return;
+    }
+
+    runtime_ic_snapshot snapshot;
+
+    if (!tests.expect(
+            snapshot_runtime_ic_project(
+                view,
+                bindings,
+                runtime,
+                snapshot) ==
+                    runtime_ic_snapshot_result::success,
+            "capture Runtime IC RESET baseline")) {
+
+        return;
+    }
+
+    runtime_ic_binary_plan binary_plan;
+
+    if (!tests.expect(
+            prepare_runtime_ic_binary(
+                snapshot.records(),
+                binary_plan) ==
+                    runtime_ic_codec_result::success,
+            "prepare Runtime IC RESET binary baseline")) {
+
+        return;
+    }
+
+    std::vector<std::byte> binary(
+        binary_plan.size(),
+        std::byte{0});
+
+    if (!tests.expect(
+            encode_runtime_ic_binary(
+                snapshot.records(),
+                binary_plan,
+                binary) ==
+                    runtime_ic_codec_result::success,
+            "encode Runtime IC RESET binary baseline")) {
+
+        return;
+    }
+
+    runtime_ic_binary_view binary_view;
+
+    if (!tests.expect(
+            binary_view.bind(
+                binary) ==
+                    runtime_ic_codec_result::success,
+            "bind Runtime IC RESET binary baseline")) {
+
+        return;
+    }
+
+    std::string text;
+
+    if (!tests.expect(
+            encode_runtime_ic_text(
+                snapshot.records(),
+                text) ==
+                    runtime_ic_codec_result::success,
+            "encode Runtime IC RESET text baseline")) {
+
+        return;
+    }
+
+    const std::array<std::string_view, 2>
+        left_object{{
+            "demo",
+            "left",
+        }};
+
+    const std::array<std::string_view, 1>
+        value_member{{
+            "value",
+        }};
+
+    runtime_ic_scalar_value changed;
+    changed.type =
+        intrinsic_type::signed_int;
+    changed.size =
+        sizeof(std::int32_t);
+
+    const std::int32_t changed_number = 99;
+
+    std::memcpy(
+        changed.bytes.data(),
+        &changed_number,
+        sizeof(changed_number));
+
+    if (!tests.expect(
+            reset_runtime_ic_scalar(
+                view,
+                bindings,
+                runtime,
+                {
+                    left_object,
+                    value_member,
+                },
+                changed) ==
+                    runtime_ic_result::success,
+            "mutate Runtime before binary RESET")) {
+
+        return;
+    }
+
+    runtime_ic_reset_stats reset_stats;
+
+    if (!tests.expect(
+            reset_runtime_ic_binary(
+                view,
+                bindings,
+                runtime,
+                binary_view,
+                &reset_stats) ==
+                    runtime_ic_reset_result::success &&
+            reset_stats.records == 3 &&
+            reset_stats.bytes == 12,
+            "binary RESET validates then applies whole IC")) {
+
+        return;
+    }
+
+    runtime_value observed;
+
+    if (!tests.expect(
+            get_runtime_value(
+                view,
+                bindings,
+                runtime,
+                "demo::left.value",
+                observed) ==
+                    runtime_query_result::success &&
+            observed.bits == 42,
+            "binary RESET restores Runtime value")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            reset_runtime_ic_scalar(
+                view,
+                bindings,
+                runtime,
+                {
+                    left_object,
+                    value_member,
+                },
+                changed) ==
+                    runtime_ic_result::success,
+            "mutate Runtime before text RESET")) {
+
+        return;
+    }
+
+    std::size_t error_line = 0;
+
+    if (!tests.expect(
+            reset_runtime_ic_text(
+                view,
+                bindings,
+                runtime,
+                text,
+                &reset_stats,
+                &error_line) ==
+                    runtime_ic_reset_result::success &&
+            reset_stats.records == 3 &&
+            error_line == 0,
+            "text RESET resolves current semantic targets")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            get_runtime_value(
+                view,
+                bindings,
+                runtime,
+                "demo::left.value",
+                observed) ==
+                    runtime_query_result::success &&
+            observed.bits == 42,
+            "text RESET restores Runtime value")) {
+
+        return;
+    }
+
+    runtime_ic_scalar_value pending_value;
+    pending_value.type =
+        intrinsic_type::signed_int;
+    pending_value.size =
+        sizeof(std::int32_t);
+
+    const std::int32_t pending_number = 11;
+
+    std::memcpy(
+        pending_value.bytes.data(),
+        &pending_number,
+        sizeof(pending_number));
+
+    const std::array<std::string_view, 2>
+        missing_object{{
+            "demo",
+            "missing",
+        }};
+
+    const std::array<runtime_ic_record_source, 2>
+        invalid_records{{
+            {
+                {
+                    left_object,
+                    value_member,
+                },
+                pending_value,
+            },
+            {
+                {
+                    missing_object,
+                    value_member,
+                },
+                pending_value,
+            },
+        }};
+
+    if (!tests.expect(
+            reset_runtime_ic_records(
+                view,
+                bindings,
+                runtime,
+                invalid_records) ==
+                    runtime_ic_reset_result::not_found,
+            "RESET rejects invalid semantic record before apply")) {
+
+        return;
+    }
+
+    tests.expect(
+        get_runtime_value(
+            view,
+            bindings,
+            runtime,
+            "demo::left.value",
+            observed) ==
+                runtime_query_result::success &&
+        observed.bits == 42,
+        "failed RESET leaves Runtime unchanged");
+
+    tests.expect(
+        reset_runtime_ic_text(
+            view,
+            bindings,
+            runtime,
+            "::demo::left.value = 17\n"
+            "::demo::missing.value = 18\n",
+            nullptr,
+            &error_line) ==
+                runtime_ic_reset_result::not_found &&
+        error_line == 2 &&
+        get_runtime_value(
+            view,
+            bindings,
+            runtime,
+            "demo::left.value",
+            observed) ==
+                runtime_query_result::success &&
+        observed.bits == 42,
+        "failed text RESET is atomic");
 }
 
 
@@ -8196,6 +8533,10 @@ int main() {
             tests);
 
         test_runtime_ic_snapshot(
+            tests,
+            first);
+
+        test_runtime_ic_reset(
             tests,
             first);
 

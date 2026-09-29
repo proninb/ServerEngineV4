@@ -70,6 +70,7 @@ add_executable(ServerEngineV4
     server_engine/project/runtime/runtime_ic.cpp
     server_engine/project/runtime/runtime_ic_codec.cpp
     server_engine/project/runtime/runtime_ic_snapshot.cpp
+    server_engine/project/runtime/runtime_ic_reset.cpp
     server_engine/project/runtime/fixed_direct_materializer.cpp
     server_engine/project/runtime/project_runtime.cpp
     server_engine/project/string/string_table.cpp
@@ -688,6 +689,7 @@ if(BUILD_TESTING)
         server_engine/project/runtime/runtime_ic.cpp
         server_engine/project/runtime/runtime_ic_codec.cpp
         server_engine/project/runtime/runtime_ic_snapshot.cpp
+        server_engine/project/runtime/runtime_ic_reset.cpp
         server_engine/project/runtime/fixed_direct_materializer.cpp
         server_engine/project/abi/abi_layout.cpp
         server_engine/read_only_file_mapping.cpp
