@@ -766,6 +766,12 @@ json_decode_result decode_json_request(
             } else if (command == "GET_VALUE") {
                 request.kind =
                     server_request_kind::get_value;
+            } else if (command == "SNAP_IC") {
+                request.kind =
+                    server_request_kind::snap_ic;
+            } else if (command == "RESET_IC") {
+                request.kind =
+                    server_request_kind::reset_ic;
             } else if (command == "SHUTDOWN") {
                 request.kind =
                     server_request_kind::shutdown;
@@ -780,6 +786,8 @@ json_decode_result decode_json_request(
             case server_request_kind::publish:
             case server_request_kind::build:
             case server_request_kind::rebuild:
+            case server_request_kind::snap_ic:
+            case server_request_kind::reset_ic:
                 if (!only(
                         handler.seen,
                         path_bit) ||

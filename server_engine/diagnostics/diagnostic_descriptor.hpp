@@ -485,6 +485,46 @@ inline constexpr diagnostic_descriptor runtime_query_failed{
     "Runtime query could not read a valid Runtime value",
 };
 
+inline constexpr diagnostic_descriptor runtime_ic_invalid{
+    diagnostic_id{3011},
+    diagnostic_domain::runtime,
+    diagnostic_severity::error,
+    "runtime.ic_invalid",
+    "Runtime IC image or request is invalid",
+};
+
+inline constexpr diagnostic_descriptor runtime_ic_not_found{
+    diagnostic_id{3012},
+    diagnostic_domain::runtime,
+    diagnostic_severity::error,
+    "runtime.ic_not_found",
+    "Runtime IC file or semantic target was not found",
+};
+
+inline constexpr diagnostic_descriptor runtime_ic_type_mismatch{
+    diagnostic_id{3013},
+    diagnostic_domain::runtime,
+    diagnostic_severity::error,
+    "runtime.ic_type_mismatch",
+    "Runtime IC value is incompatible with the current Runtime type",
+};
+
+inline constexpr diagnostic_descriptor runtime_ic_failed{
+    diagnostic_id{3014},
+    diagnostic_domain::runtime,
+    diagnostic_severity::error,
+    "runtime.ic_failed",
+    "Runtime IC operation failed",
+};
+
+inline constexpr diagnostic_descriptor runtime_ic_io_failed{
+    diagnostic_id{3015},
+    diagnostic_domain::persistence,
+    diagnostic_severity::error,
+    "runtime.ic_io_failed",
+    "Runtime IC file I/O failed",
+};
+
 } // namespace diagnostics
 
 }

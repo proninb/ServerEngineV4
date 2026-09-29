@@ -18,11 +18,13 @@ bool server_policy::is_demo_mutation(server_request_kind request) noexcept {
     case server_request_kind::publish:
     case server_request_kind::build:
     case server_request_kind::rebuild:
+    case server_request_kind::reset_ic:
         return true;
     case server_request_kind::load:
     case server_request_kind::unload:
     case server_request_kind::get_state:
     case server_request_kind::get_value:
+    case server_request_kind::snap_ic:
     case server_request_kind::shutdown:
         return false;
     }

@@ -61,6 +61,16 @@ public:
         operation_id operation,
         diagnostic_collection& diagnostics);
 
+    [[nodiscard]] server_status snap_ic(
+        const std::filesystem::path& path,
+        operation_id operation,
+        diagnostic_collection& diagnostics);
+
+    [[nodiscard]] server_status reset_ic(
+        const std::filesystem::path& path,
+        operation_id operation,
+        diagnostic_collection& diagnostics);
+
     void shutdown() noexcept;
 
 private:

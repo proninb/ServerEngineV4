@@ -51,6 +51,62 @@ int main() {
 
         const auto decoded =
             decode_json_request(
+                R"({"request_id":30,"command":"SNAP_IC","arguments":{"path":"snap.ic"}})",
+                request);
+
+        if (!decoded.ok() ||
+            request.kind !=
+                json_request_kind::server) {
+
+            return 30;
+        }
+
+        const auto& server =
+            std::get<server_request>(
+                request.payload);
+
+        if (server.kind !=
+                server_request_kind::snap_ic ||
+            server.path !=
+                "snap.ic") {
+
+            return 31;
+        }
+    }
+
+    {
+        json_request request;
+
+        const auto decoded =
+            decode_json_request(
+                R"({"request_id":32,"command":"RESET_IC","arguments":{"path":"snap.ic"}})",
+                request);
+
+        if (!decoded.ok() ||
+            request.kind !=
+                json_request_kind::server) {
+
+            return 32;
+        }
+
+        const auto& server =
+            std::get<server_request>(
+                request.payload);
+
+        if (server.kind !=
+                server_request_kind::reset_ic ||
+            server.path !=
+                "snap.ic") {
+
+            return 33;
+        }
+    }
+
+    {
+        json_request request;
+
+        const auto decoded =
+            decode_json_request(
                 R"({"request_id":3,"command":"CLIENT","arguments":{"login":"","arg":"ping","parameters":"AQID"}})",
                 request);
 

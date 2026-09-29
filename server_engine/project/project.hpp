@@ -35,6 +35,10 @@ public:
         return compiled_view;
     }
 
+    [[nodiscard]] fixed_shared_memory& shm() noexcept {
+        return shared_memory;
+    }
+
     [[nodiscard]] const fixed_shared_memory& shm() const noexcept {
         return shared_memory;
     }

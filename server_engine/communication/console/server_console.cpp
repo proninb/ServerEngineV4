@@ -9,6 +9,8 @@
  *   REBUILD <project-path>
  *   GET_STATE
  *   GET_VALUE <qualified-object[.member...]>
+ *   SNAP_IC <ic-path>
+ *   RESET_IC <ic-path>
  *   SHUTDOWN
  *   EXIT        (alias of SHUTDOWN)
  *
@@ -131,6 +133,29 @@ void server_console::run() {
             publish({
                 server_request_kind::get_state,
                 {},
+                {},
+            });
+        } else if (
+            verb == "SNAP_IC" ||
+            verb == "RESET_IC") {
+
+            std::string path;
+            std::getline(
+                stream >> std::ws,
+                path);
+
+            if (path.empty()) {
+                std::cout
+                    << verb
+                    << " requires an IC path\n";
+                continue;
+            }
+
+            publish({
+                verb == "SNAP_IC"
+                    ? server_request_kind::snap_ic
+                    : server_request_kind::reset_ic,
+                std::move(path),
                 {},
             });
         } else if (verb == "GET_VALUE") {

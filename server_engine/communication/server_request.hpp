@@ -34,6 +34,12 @@ enum class server_request_kind {
     // Read one scalar value from the committed Runtime view.
     get_value,
 
+    // Persist a semantic binary snapshot of the current Runtime.
+    snap_ic,
+
+    // Restore one semantic binary IC against the current G/Runtime bindings.
+    reset_ic,
+
     // Stop communication, release Project ownership, and exit server.run().
     shutdown,
 };
@@ -43,7 +49,8 @@ struct server_request {
     // Operation selected by the external request.
     server_request_kind kind = server_request_kind::shutdown;
 
-    // Project entry path used by LOAD/PUBLISH/BUILD/REBUILD.
+    // Project entry path used by LOAD/PUBLISH/BUILD/REBUILD and IC path used
+    // by SNAP_IC/RESET_IC.
     std::filesystem::path path;
 
     // Query target used by GET_VALUE.
