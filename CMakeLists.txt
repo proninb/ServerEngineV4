@@ -653,6 +653,51 @@ if(BUILD_TESTING)
 
     add_test(NAME tcp_json_protocol COMMAND ServerEngineV4TcpJsonProtocolTests)
 
+    add_executable(ServerEngineV4IcCatalogTests
+        tests/ic_catalog_tests.cpp
+        server_engine/project/ic/ic_catalog.cpp
+        server_engine/filesystem_path.cpp
+        server_engine/json/json_parser.cpp
+    )
+
+    target_include_directories(ServerEngineV4IcCatalogTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(ServerEngineV4IcCatalogTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4IcCatalogTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(
+        NAME ic_catalog
+        COMMAND ServerEngineV4IcCatalogTests
+    )
+
+    add_executable(ServerEngineV4ProjectRuntimeConfigurationTests
+        tests/project_runtime_configuration_tests.cpp
+        server_engine/project/project_configuration_loader.cpp
+        server_engine/filesystem_path.cpp
+        server_engine/json/json_parser.cpp
+        server_engine/diagnostics/diagnostic_collection.cpp
+        server_engine/diagnostics/diagnostic_source_cache.cpp
+    )
+
+    target_include_directories(ServerEngineV4ProjectRuntimeConfigurationTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(ServerEngineV4ProjectRuntimeConfigurationTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4ProjectRuntimeConfigurationTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(
+        NAME project_runtime_configuration
+        COMMAND ServerEngineV4ProjectRuntimeConfigurationTests
+    )
 
     add_executable(ServerEngineV4EntraJwtTests
         tests/entra_jwt_tests.cpp

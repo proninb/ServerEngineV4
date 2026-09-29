@@ -1279,13 +1279,38 @@ server_status server::reset_ic(
         context.project->ic_catalog_path().parent_path(),
         node->path);
 
-    if (path != catalog_path) {
+    filesystem_path_key path_key;
+    filesystem_path_key catalog_path_key;
+
+    if (make_filesystem_path_key(
+            path,
+            path_key) !=
+            filesystem_path_result::success ||
+        make_filesystem_path_key(
+            catalog_path,
+            catalog_path_key) !=
+            filesystem_path_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::runtime_ic_failed,
+                operation)
+                .detail(
+                    "RESET_IC could not normalize filesystem path identity")
+                .build());
+
+        return server_status::runtime_ic_failed;
+    }
+
+    if (path_key != catalog_path_key) {
         diagnostics.emit(
             diagnostic(
                 diagnostics::runtime_ic_invalid,
                 operation)
-                .detail("RESET_IC path does not match IC.json entry")
+                .detail(
+                    "RESET_IC path does not match IC.json entry")
                 .build());
+
         return server_status::runtime_ic_invalid;
     }
 
