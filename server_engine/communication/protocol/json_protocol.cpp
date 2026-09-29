@@ -22,7 +22,6 @@ enum field_bit : std::uint32_t {
     arg_bit = 1u << 5,
     parameters_bit = 1u << 6,
     options_bit = 1u << 7,
-    group_bit = 1u << 8,
 };
 
 class request_handler final : public json_event_handler {
@@ -51,7 +50,7 @@ public:
     }
 
     void object_end() override {
-        if (depth == 0 || group_array) {
+        if (depth == 0) {
             valid_value = false;
             return;
         }
@@ -60,28 +59,17 @@ public:
     }
 
     void array_begin() override {
-        if (!valid_value ||
-            depth != 2 ||
-            key_value != "group" ||
-            !mark(group_bit)) {
-
-            valid_value = false;
-            ++depth;
-            return;
-        }
-
-        group_array = true;
-        depth = 3;
+        valid_value = false;
+        ++depth;
     }
 
     void array_end() override {
-        if (!valid_value || !group_array || depth != 3) {
+        if (depth == 0) {
             valid_value = false;
             return;
         }
 
-        group_array = false;
-        depth = 2;
+        --depth;
     }
 
     void key(std::string_view value) override {
@@ -90,27 +78,6 @@ public:
 
     void value(json_value_view value) override {
         if (!valid_value) {
-            return;
-        }
-
-        if (group_array) {
-            if (depth != 3) {
-                valid_value = false;
-                return;
-            }
-
-            std::string component;
-            if (!value.get(component) || component.empty()) {
-                valid_value = false;
-                return;
-            }
-
-            try {
-                group_value.push_back(std::move(component));
-            }
-            catch (...) {
-                valid_value = false;
-            }
             return;
         }
 
@@ -160,7 +127,6 @@ public:
     [[nodiscard]] bool valid() const noexcept {
         return valid_value &&
             depth == 0 &&
-            !group_array &&
             (seen & request_id_bit) != 0 &&
             (seen & command_bit) != 0 &&
             request_value != 0;
@@ -173,7 +139,6 @@ public:
     std::string login_value;
     std::string arg_value;
     std::string parameters_value;
-    std::vector<std::string> group_value;
     std::uint64_t options_value = 0;
     std::uint32_t seen = 0;
 
@@ -199,7 +164,6 @@ private:
     std::size_t depth = 0;
     bool valid_value = true;
     bool arguments_seen = false;
-    bool group_array = false;
     std::string key_value;
 };
 
@@ -544,37 +508,35 @@ void append_diagnostics(
     output.push_back(']');
 }
 
-void append_ic_catalog_node(
-    const ic_catalog_node& node,
+void append_ic_catalog_entry(
+    const ic_catalog_entry& entry,
     std::string& output) {
 
+    std::string path_text;
+    (void)filesystem_path_to_utf8(
+        entry.path,
+        path_text);
+
     output += "{\"name\":";
-    append_escaped(node.name, output);
-    output += ",\"type\":";
     append_escaped(
-        node.kind == ic_catalog_node_kind::group ? "group" : "ic",
+        entry.name,
         output);
 
-    if (node.kind == ic_catalog_node_kind::group) {
-        output += ",\"children\":[";
-        for (std::size_t index = 0; index < node.children.size(); ++index) {
-            if (index != 0) {
-                output.push_back(',');
-            }
-            append_ic_catalog_node(node.children[index], output);
-        }
-        output += "]}";
-        return;
-    }
-
-    std::string path;
-    (void)filesystem_path_to_utf8(node.path, path);
     output += ",\"description\":";
-    append_escaped(node.description, output);
+    append_escaped(
+        entry.description,
+        output);
+
     output += ",\"size\":";
-    append_integer(node.size, output);
+    append_integer(
+        entry.size,
+        output);
+
     output += ",\"path\":";
-    append_escaped(path, output);
+    append_escaped(
+        path_text,
+        output);
+
     output.push_back('}');
 }
 
@@ -641,7 +603,7 @@ void append_response(
                 output.push_back(',');
             }
 
-            append_ic_catalog_node(
+            append_ic_catalog_entry(
                 response.result.catalog.items[index],
                 output);
         }
@@ -908,8 +870,7 @@ json_decode_result decode_json_request(
                         handler.seen,
                         name_bit |
                             path_bit |
-                            options_bit |
-                            group_bit) ||
+                            options_bit) ||
                     (handler.seen & name_bit) == 0 ||
                     (handler.seen & path_bit) == 0 ||
                     handler.name_value.empty() ||
@@ -924,12 +885,11 @@ json_decode_result decode_json_request(
                 request.name =
                     std::move(
                         handler.name_value);
+
                 request.path =
                     std::move(
                         handler.path_value);
-                request.group =
-                    std::move(
-                        handler.group_value);
+
                 request.snap_options =
                     static_cast<snap_ic_options>(
                         handler.options_value);
@@ -939,13 +899,9 @@ json_decode_result decode_json_request(
                 if (!only(
                         handler.seen,
                         name_bit |
-                            path_bit |
-                            options_bit |
-                            group_bit) ||
+                            options_bit) ||
                     (handler.seen & name_bit) == 0 ||
-                    (handler.seen & path_bit) == 0 ||
                     handler.name_value.empty() ||
-                    handler.path_value.empty() ||
                     handler.options_value >
                         reset_ic_options_mask) {
 
@@ -958,14 +914,6 @@ json_decode_result decode_json_request(
                     std::move(
                         handler.name_value);
 
-                request.path =
-                    std::move(
-                        handler.path_value);
-
-                request.group =
-                    std::move(
-                        handler.group_value);
-
                 request.reset_options =
                     static_cast<reset_ic_options>(
                         handler.options_value);
@@ -974,8 +922,7 @@ json_decode_result decode_json_request(
             case server_request_kind::delete_ic:
                 if (!only(
                         handler.seen,
-                        name_bit |
-                            group_bit) ||
+                        name_bit) ||
                     (handler.seen & name_bit) == 0 ||
                     handler.name_value.empty()) {
 
@@ -987,9 +934,6 @@ json_decode_result decode_json_request(
                 request.name =
                     std::move(
                         handler.name_value);
-                request.group =
-                    std::move(
-                        handler.group_value);
                 break;
 
             case server_request_kind::get_value:

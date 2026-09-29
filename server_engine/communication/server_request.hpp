@@ -35,17 +35,15 @@ enum class server_request_kind {
 struct server_request {
     server_request_kind kind = server_request_kind::shutdown;
 
-    // Project entry path for lifecycle commands; IC data path for SNAP/RESET.
+    // Project entry path for lifecycle commands; IC data path for SNAP_IC.
     std::filesystem::path path;
 
-    // Runtime query target or IC leaf name.
+    // Runtime query target or unique IC name.
     std::string name;
 
     snap_ic_options snap_options = snap_ic_options::none;
     reset_ic_options reset_options = reset_ic_options::none;
 
-    // Optional ordered IC group path. Empty means root-level IC.
-    std::vector<std::string> group;
-};
+ };
 
 }

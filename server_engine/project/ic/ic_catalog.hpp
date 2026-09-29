@@ -1,9 +1,8 @@
 /*
  * Project IC catalog.
  *
- * IC.json is mutable Project-owned metadata. Logical IC identity is the
- * ordered group path plus leaf name; persisted Runtime values stay in the
- * existing semantic binary IC format.
+ * IC.json is mutable Project-owned Runtime metadata. IC identity is one unique
+ * name; each entry owns one arbitrary persisted snapshot path.
  */
 #pragma once
 
@@ -15,22 +14,15 @@
 
 namespace cw::server {
 
-enum class ic_catalog_node_kind : std::uint8_t {
-    group = 0,
-    ic,
-};
-
-struct ic_catalog_node final {
-    ic_catalog_node_kind kind = ic_catalog_node_kind::group;
+struct ic_catalog_entry final {
     std::string name;
     std::string description;
     std::uint64_t size = 0;
     std::filesystem::path path;
-    std::vector<ic_catalog_node> children;
 };
 
 struct ic_catalog final {
-    std::vector<ic_catalog_node> items;
+    std::vector<ic_catalog_entry> items;
 };
 
 enum class ic_catalog_result : std::uint8_t {
@@ -49,26 +41,23 @@ enum class ic_catalog_result : std::uint8_t {
     const std::filesystem::path& path,
     const ic_catalog& catalog) noexcept;
 
-[[nodiscard]] const ic_catalog_node* find_ic_catalog_node(
+[[nodiscard]] const ic_catalog_entry* find_ic_catalog_entry(
     const ic_catalog& catalog,
-    const std::vector<std::string>& group,
     std::string_view name) noexcept;
 
-[[nodiscard]] ic_catalog_node* find_ic_catalog_node(
+[[nodiscard]] ic_catalog_entry* find_ic_catalog_entry(
     ic_catalog& catalog,
-    const std::vector<std::string>& group,
     std::string_view name) noexcept;
 
-[[nodiscard]] bool upsert_ic_catalog_node(
+[[nodiscard]] bool upsert_ic_catalog_entry(
     ic_catalog& catalog,
-    const std::vector<std::string>& group,
+    const std::filesystem::path& catalog_path,
     std::string_view name,
     const std::filesystem::path& path,
     std::uint64_t size) noexcept;
 
-[[nodiscard]] bool erase_ic_catalog_node(
+[[nodiscard]] bool erase_ic_catalog_entry(
     ic_catalog& catalog,
-    const std::vector<std::string>& group,
     std::string_view name,
     std::filesystem::path& removed_path) noexcept;
 

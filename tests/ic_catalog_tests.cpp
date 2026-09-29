@@ -30,9 +30,9 @@ int main() {
 
     ic_catalog catalog;
 
-    if (!upsert_ic_catalog_node(
+    if (!upsert_ic_catalog_entry(
             catalog,
-            {"Startup", "Commissioning"},
+            catalog_path,
             "Cold",
             std::filesystem::path{
                 "snapshots/cold.ic"},
@@ -41,21 +41,41 @@ int main() {
         return 2;
     }
 
-    const auto* node =
-        find_ic_catalog_node(
+    const auto* entry =
+        find_ic_catalog_entry(
             catalog,
-            {"Startup", "Commissioning"},
             "Cold");
 
-    if (node == nullptr ||
-        node->kind !=
-            ic_catalog_node_kind::ic ||
-        node->size != 128 ||
-        node->path !=
+    if (entry == nullptr ||
+        entry->size != 128 ||
+        entry->path !=
             std::filesystem::path{
                 "snapshots/cold.ic"}) {
 
         return 3;
+    }
+
+    if (upsert_ic_catalog_entry(
+            catalog,
+            catalog_path,
+            "Duplicate",
+            directory /
+                "snapshots" /
+                "cold.ic",
+            64)) {
+
+        return 4;
+    }
+
+    if (!upsert_ic_catalog_entry(
+            catalog,
+            catalog_path,
+            "Warm",
+            std::filesystem::path{
+                "snapshots/warm.ic"},
+            256)) {
+
+        return 5;
     }
 
     if (save_ic_catalog(
@@ -63,7 +83,7 @@ int main() {
             catalog) !=
         ic_catalog_result::success) {
 
-        return 4;
+        return 6;
     }
 
     ic_catalog loaded;
@@ -73,44 +93,41 @@ int main() {
             loaded) !=
         ic_catalog_result::success) {
 
-        return 5;
+        return 7;
     }
 
-    node =
-        find_ic_catalog_node(
+    entry =
+        find_ic_catalog_entry(
             loaded,
-            {"Startup", "Commissioning"},
             "Cold");
 
-    if (node == nullptr ||
-        node->size != 128 ||
-        node->path !=
+    if (entry == nullptr ||
+        entry->size != 128 ||
+        entry->path !=
             std::filesystem::path{
                 "snapshots/cold.ic"}) {
 
-        return 6;
+        return 8;
     }
 
     std::filesystem::path removed_path;
 
-    if (!erase_ic_catalog_node(
+    if (!erase_ic_catalog_entry(
             loaded,
-            {"Startup", "Commissioning"},
             "Cold",
             removed_path)) {
 
-        return 7;
+        return 9;
     }
 
     if (removed_path !=
             std::filesystem::path{
                 "snapshots/cold.ic"} ||
-        find_ic_catalog_node(
+        find_ic_catalog_entry(
             loaded,
-            {"Startup", "Commissioning"},
             "Cold") != nullptr) {
 
-        return 8;
+        return 10;
     }
 
     std::filesystem::remove_all(

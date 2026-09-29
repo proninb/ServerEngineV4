@@ -45,21 +45,10 @@ inline constexpr auto shutdown_ack_timeout =
         : (base / path).lexically_normal();
 }
 
-[[nodiscard]] bool valid_ic_identity(
-    std::string_view name,
-    const std::vector<std::string>& group) noexcept {
+[[nodiscard]] bool valid_ic_name(
+    std::string_view name) noexcept {
 
-    if (name.empty()) {
-        return false;
-    }
-
-    for (const auto& component : group) {
-        if (component.empty()) {
-            return false;
-        }
-    }
-
-    return true;
+    return !name.empty();
 }
 
 [[nodiscard]] server_status load_resident_project_configuration(
@@ -587,7 +576,6 @@ server_response server::execute(
         result.status =
             snap_ic(
                 request.name,
-                request.group,
                 request.path,
                 request.snap_options,
                 result.operation,
@@ -598,8 +586,6 @@ server_response server::execute(
         result.status =
             reset_ic(
                 request.name,
-                request.group,
-                request.path,
                 request.reset_options,
                 result.operation,
                 result.diagnostics);
@@ -609,7 +595,6 @@ server_response server::execute(
         result.status =
             delete_ic(
                 request.name,
-                request.group,
                 result.operation,
                 result.diagnostics);
         break;
@@ -1001,14 +986,13 @@ server_status server::rebuild(
 
 server_status server::snap_ic(
     const std::string& name,
-    const std::vector<std::string>& group,
     const std::filesystem::path& ic_path,
     snap_ic_options options,
     operation_id operation,
     diagnostic_collection& diagnostics) {
 
     if (options != snap_ic_options::none ||
-        !valid_ic_identity(name, group) ||
+        !valid_ic_name(name) ||
         ic_path.empty()) {
 
         diagnostics.emit(
@@ -1016,7 +1000,7 @@ server_status server::snap_ic(
                 diagnostics::runtime_ic_invalid,
                 operation)
                 .detail(
-                    "SNAP_IC requires name, optional group[], path, and valid options")
+                    "SNAP_IC requires name, path, and valid options")
                 .build());
 
         return server_status::runtime_ic_invalid;
@@ -1051,6 +1035,50 @@ server_status server::snap_ic(
         return server_status::runtime_ic_invalid;
     }
 
+    const auto path = resolve(
+        context.project->ic_catalog_path().parent_path(),
+        ic_path);
+
+    std::filesystem::path previous_path;
+    bool previous_path_is_target = false;
+
+    if (const auto* previous =
+            find_ic_catalog_entry(
+                context.project->ic_catalog_data(),
+                name);
+        previous != nullptr) {
+
+        previous_path = resolve(
+            context.project->ic_catalog_path().parent_path(),
+            previous->path);
+
+        filesystem_path_key previous_key;
+        filesystem_path_key target_key;
+
+        if (make_filesystem_path_key(
+                previous_path,
+                previous_key) !=
+                filesystem_path_result::success ||
+            make_filesystem_path_key(
+                path,
+                target_key) !=
+                filesystem_path_result::success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_ic_failed,
+                    operation)
+                    .detail(
+                        "SNAP_IC could not normalize snapshot path identity")
+                    .build());
+
+            return server_status::runtime_ic_failed;
+        }
+
+        previous_path_is_target =
+            previous_key == target_key;
+    }
+
     ic_catalog catalog_candidate;
 
     try {
@@ -1070,9 +1098,9 @@ server_status server::snap_ic(
         return server_status::runtime_ic_failed;
     }
 
-    if (!upsert_ic_catalog_node(
+    if (!upsert_ic_catalog_entry(
             catalog_candidate,
-            group,
+            context.project->ic_catalog_path(),
             name,
             ic_path,
             0)) {
@@ -1082,7 +1110,7 @@ server_status server::snap_ic(
                 diagnostics::runtime_ic_invalid,
                 operation)
                 .detail(
-                    "SNAP_IC group/name conflicts with IC.json tree")
+                    "SNAP_IC name/path conflicts with IC.json catalog")
                 .build());
 
         return server_status::runtime_ic_invalid;
@@ -1127,13 +1155,124 @@ server_status server::snap_ic(
             return server_status::runtime_ic_failed;
         }
 
-        const auto path = resolve(
-            context.project->ic_catalog_path().parent_path(),
-            ic_path);
+        std::filesystem::path backup_path;
+        bool backup_active = false;
+
+        std::error_code file_error;
+
+        const auto target_exists =
+            std::filesystem::exists(
+                path,
+                file_error);
+
+        if (file_error) {
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_ic_io_failed,
+                    operation)
+                    .detail(path.generic_string())
+                    .build());
+
+            return server_status::io_error;
+        }
+
+        if (target_exists) {
+            if (!std::filesystem::is_regular_file(
+                    path,
+                    file_error) ||
+                file_error) {
+
+                diagnostics.emit(
+                    diagnostic(
+                        diagnostics::runtime_ic_io_failed,
+                        operation)
+                        .detail(path.generic_string())
+                        .build());
+
+                return server_status::io_error;
+            }
+
+            backup_path = path;
+            backup_path += ".snap-backup";
+
+            file_error.clear();
+
+            const auto backup_exists =
+                std::filesystem::exists(
+                    backup_path,
+                    file_error);
+
+            if (file_error ||
+                backup_exists) {
+
+                diagnostics.emit(
+                    diagnostic(
+                        diagnostics::runtime_ic_io_failed,
+                        operation)
+                        .detail(
+                            backup_path.generic_string())
+                        .build());
+
+                return server_status::io_error;
+            }
+
+            std::filesystem::rename(
+                path,
+                backup_path,
+                file_error);
+
+            if (file_error) {
+                diagnostics.emit(
+                    diagnostic(
+                        diagnostics::runtime_ic_io_failed,
+                        operation)
+                        .detail(path.generic_string())
+                        .build());
+
+                return server_status::io_error;
+            }
+
+            backup_active = true;
+        }
+
+        const auto rollback_target =
+            [&]() noexcept {
+
+                std::error_code rollback_error;
+
+                std::filesystem::remove(
+                    path,
+                    rollback_error);
+
+                if (rollback_error) {
+                    return false;
+                }
+
+                if (!backup_active) {
+                    return true;
+                }
+
+                std::filesystem::rename(
+                    backup_path,
+                    path,
+                    rollback_error);
+
+                return !rollback_error;
+            };
 
         writable_file_mapping mapping;
         if (mapping.create(path, image.size()) !=
             writable_file_mapping_result::success) {
+
+            if (!rollback_target()) {
+                diagnostics.emit(
+                    diagnostic(
+                        diagnostics::runtime_ic_io_failed,
+                        operation)
+                        .detail(
+                            "SNAP_IC failed to restore the previous snapshot file")
+                        .build());
+            }
 
             diagnostics.emit(
                 diagnostic(
@@ -1141,6 +1280,7 @@ server_status server::snap_ic(
                     operation)
                     .detail(path.generic_string())
                     .build());
+
             return server_status::io_error;
         }
 
@@ -1148,8 +1288,16 @@ server_status server::snap_ic(
 
         if (mapping.flush() != writable_file_mapping_result::success) {
             mapping.reset();
-            std::error_code ignored;
-            std::filesystem::remove(path, ignored);
+
+            if (!rollback_target()) {
+                diagnostics.emit(
+                    diagnostic(
+                        diagnostics::runtime_ic_io_failed,
+                        operation)
+                        .detail(
+                            "SNAP_IC failed to restore the previous snapshot file")
+                        .build());
+            }
 
             diagnostics.emit(
                 diagnostic(
@@ -1157,16 +1305,29 @@ server_status server::snap_ic(
                     operation)
                     .detail(path.generic_string())
                     .build());
+
             return server_status::io_error;
         }
 
-        if (!upsert_ic_catalog_node(
+        mapping.reset();
+
+        if (!upsert_ic_catalog_entry(
                 catalog_candidate,
-                group,
+                context.project->ic_catalog_path(),
                 name,
                 ic_path,
                 static_cast<std::uint64_t>(
                     image.size()))) {
+
+            if (!rollback_target()) {
+                diagnostics.emit(
+                    diagnostic(
+                        diagnostics::runtime_ic_io_failed,
+                        operation)
+                        .detail(
+                            "SNAP_IC failed to restore the previous snapshot file")
+                        .build());
+            }
 
             diagnostics.emit(
                 diagnostic(
@@ -1183,6 +1344,16 @@ server_status server::snap_ic(
                 context.project->ic_catalog_path(),
                 catalog_candidate) != ic_catalog_result::success) {
 
+            if (!rollback_target()) {
+                diagnostics.emit(
+                    diagnostic(
+                        diagnostics::runtime_ic_io_failed,
+                        operation)
+                        .detail(
+                            "SNAP_IC failed to restore the previous snapshot file")
+                        .build());
+            }
+
             diagnostics.emit(
                 diagnostic(
                     diagnostics::runtime_ic_io_failed,
@@ -1190,12 +1361,33 @@ server_status server::snap_ic(
                     .detail(
                         context.project->ic_catalog_path().generic_string())
                     .build());
+
             return server_status::io_error;
         }
 
         context.project->set_ic_catalog(
             std::move(
                 catalog_candidate));
+
+        // Catalog is now authoritative. Cleanup failures must not roll back
+        // the successfully committed logical IC.
+        std::error_code ignored;
+
+        if (backup_active) {
+            std::filesystem::remove(
+                backup_path,
+                ignored);
+        }
+
+        if (!previous_path.empty() &&
+            !previous_path_is_target) {
+
+            ignored.clear();
+
+            std::filesystem::remove(
+                previous_path,
+                ignored);
+        }
 
         return server_status::success;
     }();
@@ -1210,22 +1402,19 @@ server_status server::snap_ic(
 
 server_status server::reset_ic(
     const std::string& name,
-    const std::vector<std::string>& group,
-    const std::filesystem::path& ic_path,
     reset_ic_options options,
     operation_id operation,
     diagnostic_collection& diagnostics) {
 
     if (!valid_reset_ic_options(options) ||
-        !valid_ic_identity(name, group) ||
-        ic_path.empty()) {
+        !valid_ic_name(name)) {
 
         diagnostics.emit(
             diagnostic(
                 diagnostics::runtime_ic_invalid,
                 operation)
                 .detail(
-                    "RESET_IC requires name, optional group[], path, and valid options")
+                    "RESET_IC requires name and valid options")
                 .build());
         return server_status::runtime_ic_invalid;
     }
@@ -1258,10 +1447,10 @@ server_status server::reset_ic(
     }
 
     const auto* node =
-        find_ic_catalog_node(
+        find_ic_catalog_entry(
             context.project->ic_catalog_data(),
-            group,
             name);
+
     if (node == nullptr) {
         diagnostics.emit(
             diagnostic(
@@ -1269,50 +1458,13 @@ server_status server::reset_ic(
                 operation)
                 .detail(name)
                 .build());
+
         return server_status::runtime_ic_not_found;
     }
 
     const auto path = resolve(
         context.project->ic_catalog_path().parent_path(),
-        ic_path);
-    const auto catalog_path = resolve(
-        context.project->ic_catalog_path().parent_path(),
         node->path);
-
-    filesystem_path_key path_key;
-    filesystem_path_key catalog_path_key;
-
-    if (make_filesystem_path_key(
-            path,
-            path_key) !=
-            filesystem_path_result::success ||
-        make_filesystem_path_key(
-            catalog_path,
-            catalog_path_key) !=
-            filesystem_path_result::success) {
-
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::runtime_ic_failed,
-                operation)
-                .detail(
-                    "RESET_IC could not normalize filesystem path identity")
-                .build());
-
-        return server_status::runtime_ic_failed;
-    }
-
-    if (path_key != catalog_path_key) {
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::runtime_ic_invalid,
-                operation)
-                .detail(
-                    "RESET_IC path does not match IC.json entry")
-                .build());
-
-        return server_status::runtime_ic_invalid;
-    }
 
     const auto previous_state = project_state_value;
     project_state_value = project_state::resetting_ic;
@@ -1439,16 +1591,15 @@ server_status server::reset_ic(
 
 server_status server::delete_ic(
     const std::string& name,
-    const std::vector<std::string>& group,
     operation_id operation,
     diagnostic_collection& diagnostics) {
 
-    if (!valid_ic_identity(name, group)) {
+    if (!valid_ic_name(name)) {
         diagnostics.emit(
             diagnostic(
                 diagnostics::runtime_ic_invalid,
                 operation)
-                .detail("DELETE_IC requires name and optional group[]")
+                .detail("DELETE_IC requires name")
                 .build());
         return server_status::runtime_ic_invalid;
     }
@@ -1489,9 +1640,8 @@ server_status server::delete_ic(
     }
 
     std::filesystem::path removed_path;
-    if (!erase_ic_catalog_node(
+    if (!erase_ic_catalog_entry(
             catalog,
-            group,
             name,
             removed_path)) {
 

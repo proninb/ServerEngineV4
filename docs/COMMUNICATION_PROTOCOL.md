@@ -134,16 +134,26 @@ returns failure; it never synthesizes a Server request.
 
 ## Project IC commands
 
-Logical IC identity is `(group[], name)`; `group` is optional and ordered.
+IC identity is one unique `name`.
 
-- `SNAP_IC(name, group[], path, options)`
-- `RESET_IC(name, group[], path, options)`
-- `DELETE_IC(name, group[])`
+- `SNAP_IC(name, path, options)`
+- `RESET_IC(name, options)`
+- `DELETE_IC(name)`
 - `LIST_IC()`
 
-`path` may be relative or absolute. Relative IC paths are resolved against the
-configured `IC.json` directory. SNAP updates `IC.json`; DELETE removes the IC
-node from `IC.json` and deletes its persisted data file.
+`SNAP_IC` accepts the snapshot path. The path may be absolute or relative to
+the directory containing `IC.json`, and is stored in the catalog.
+
+`RESET_IC` accepts only the IC name and options. It resolves the snapshot path
+from the resident IC catalog.
+
+`DELETE_IC` accepts only the IC name and resolves the stored path from the
+resident catalog.
+
+IC names are unique. Different entries cannot resolve to the same physical
+snapshot path.
+
+`group` is not part of the IC model.
 
 SNAP and RESET use transient `SNAPPING_IC` / `RESETTING_IC` states and return
 to the previous LOADED/FREEZE state after the operation.

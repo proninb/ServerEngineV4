@@ -620,3 +620,24 @@ A relative `ic` locator is resolved against the root `project.json` directory.
 LOAD first restores `compiled.bin -> G -> Runtime/SHM`, then reads root
 `project.json` for Project runtime resources such as IC and Tasks before the
 candidate Project is published as LOADED.
+
+
+## IC Catalog
+
+`IC.json` is mutable Project-owned Runtime metadata.
+
+The catalog is flat:
+
+```json
+{
+  "version": 1,
+  "items": [
+    {
+      "name": "Cold",
+      "description": "",
+      "size": 48128,
+      "path": "D:/Snapshots/cold.ic"
+    }
+  ]
+}
+```
