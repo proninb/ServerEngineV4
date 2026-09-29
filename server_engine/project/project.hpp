@@ -8,6 +8,7 @@
 #pragma once
 
 #include "persistence/compiled_project.hpp"
+#include "ic/ic_catalog.hpp"
 #include "runtime/runtime_layout.hpp"
 #include "../fixed_shared_memory.hpp"
 #include "../read_only_file_mapping.hpp"
@@ -62,6 +63,16 @@ public:
         return ic_catalog_path_value;
     }
 
+    void set_ic_catalog(ic_catalog&& value) {
+        ic_catalog_value =
+            std::move(value);
+    }
+
+    [[nodiscard]] const ic_catalog&
+    ic_catalog_data() const noexcept {
+        return ic_catalog_value;
+    }
+
 private:
     std::filesystem::path project_path;
     read_only_file_mapping compiled_mapping;
@@ -70,6 +81,7 @@ private:
     runtime_binding_index runtime_bindings_value;
     std::uint64_t runtime_size_value = 0;
     std::filesystem::path ic_catalog_path_value;
+    ic_catalog ic_catalog_value;
 };
 
 }

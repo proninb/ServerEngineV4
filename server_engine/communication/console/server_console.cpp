@@ -114,67 +114,6 @@ struct parsed_ic_arguments final {
     return true;
 }
 
-[[nodiscard]] bool parse_reset_ic_arguments(
-    std::istringstream& stream,
-    std::filesystem::path& path,
-    reset_ic_options& options) {
-
-    options = reset_ic_options::none;
-
-    std::string first;
-
-    if (!(stream >> first)) {
-        return false;
-    }
-
-    constexpr std::string_view prefix =
-        "/options=";
-
-    if (!std::string_view(first).starts_with(prefix)) {
-        std::string remainder;
-        std::getline(stream, remainder);
-
-        path = first + remainder;
-        return !path.empty();
-    }
-
-    const auto value_text =
-        std::string_view(first).substr(prefix.size());
-
-    std::uint32_t value = 0;
-
-    const auto parsed =
-        std::from_chars(
-            value_text.data(),
-            value_text.data() + value_text.size(),
-            value);
-
-    if (value_text.empty() ||
-        parsed.ec != std::errc{} ||
-        parsed.ptr != value_text.data() + value_text.size() ||
-        value > reset_ic_options_mask) {
-
-        return false;
-    }
-
-    std::string path_text;
-    std::getline(
-        stream >> std::ws,
-        path_text);
-
-    if (path_text.empty()) {
-        return false;
-    }
-
-    options =
-        static_cast<reset_ic_options>(
-            value);
-
-    path =
-        std::move(path_text);
-
-    return true;
-}
 
 }
 
@@ -279,7 +218,7 @@ void server_console::run() {
 
             if (!parse_ic_arguments(stream, true, 0, parsed)) {
                 std::cout
-                    << "SNAP_IC requires [/group=<name> ...] [/options=0] <name> <ic-path>\\n";
+                    << "SNAP_IC requires [/group=<name> ...] [/options=0] <name> <ic-path>\n";
                 continue;
             }
 
@@ -301,7 +240,7 @@ void server_console::run() {
                     parsed)) {
 
                 std::cout
-                    << "RESET_IC requires [/group=<name> ...] [/options=<0..7>] <name> <ic-path>\\n";
+                    << "RESET_IC requires [/group=<name> ...] [/options=<0..7>] <name> <ic-path>\n";
                 continue;
             }
 
@@ -318,7 +257,7 @@ void server_console::run() {
 
             if (!parse_ic_arguments(stream, false, 0, parsed)) {
                 std::cout
-                    << "DELETE_IC requires [/group=<name> ...] <name>\\n";
+                    << "DELETE_IC requires [/group=<name> ...] <name>\n";
                 continue;
             }
 

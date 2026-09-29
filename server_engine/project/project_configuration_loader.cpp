@@ -768,6 +768,193 @@ private:
     schema_error error_value;
 };
 
+
+class project_runtime_configuration_handler final : public json_event_handler {
+public:
+    explicit project_runtime_configuration_handler(
+        project_runtime_configuration& output)
+        : output(output) {
+    }
+
+    void location(
+        std::size_t offset,
+        std::size_t length) override {
+
+        current_offset = offset;
+        current_length = length;
+    }
+
+    void object_begin() override {
+        if (!valid_value) {
+            return;
+        }
+
+        if (depth == 0) {
+            if (root_started) {
+                fail("Project runtime configuration must contain one root object");
+                return;
+            }
+
+            root_started = true;
+            depth = 1;
+            return;
+        }
+
+        if (depth == 1 &&
+            key_value == "ic") {
+
+            fail("ic must be a path string");
+            return;
+        }
+
+        ++depth;
+    }
+
+    void object_end() override {
+        if (!valid_value || depth == 0) {
+            fail("unexpected object end");
+            return;
+        }
+
+        --depth;
+
+        if (depth == 0) {
+            root_completed = true;
+        }
+    }
+
+    void array_begin() override {
+        if (!valid_value) {
+            return;
+        }
+
+        if (depth == 0) {
+            fail("Project runtime configuration root must be an object");
+            return;
+        }
+
+        if (depth == 1 &&
+            key_value == "ic") {
+
+            fail("ic must be a path string");
+            return;
+        }
+
+        ++depth;
+    }
+
+    void array_end() override {
+        if (!valid_value || depth <= 1) {
+            fail("unexpected array end");
+            return;
+        }
+
+        --depth;
+    }
+
+    void key(std::string_view value) override {
+        if (!valid_value || depth == 0) {
+            fail("unexpected key");
+            return;
+        }
+
+        if (depth == 1) {
+            key_value.assign(
+                value.data(),
+                value.size());
+        }
+    }
+
+    void value(json_value_view value) override {
+        if (!valid_value ||
+            depth != 1 ||
+            key_value != "ic") {
+
+            return;
+        }
+
+        if (ic_seen) {
+            fail("root Project configuration contains duplicate ic");
+            return;
+        }
+
+        ic_seen = true;
+
+        std::string path_text;
+
+        if (!value.get(path_text) ||
+            path_text.empty()) {
+
+            fail("ic must be a non-empty path string");
+            return;
+        }
+
+        std::filesystem::path path_value;
+
+        const auto converted =
+            filesystem_path_from_utf8(
+                path_text,
+                path_value);
+
+        if (converted !=
+            filesystem_path_result::success) {
+
+            fail(
+                converted == filesystem_path_result::invalid_utf8
+                    ? "ic path must be valid UTF-8"
+                    : "Cannot convert ic path to native filesystem path");
+            return;
+        }
+
+        if (!path_value.is_absolute() &&
+            (path_value.has_root_name() ||
+             path_value.has_root_directory())) {
+
+            fail("ic path must be relative or fully absolute");
+            return;
+        }
+
+        output.ic =
+            path_value.lexically_normal();
+    }
+
+    [[nodiscard]] bool valid() const noexcept {
+        return valid_value &&
+            root_started &&
+            root_completed &&
+            depth == 0;
+    }
+
+    [[nodiscard]] const schema_error& error() const noexcept {
+        return error_value;
+    }
+
+private:
+    void fail(std::string detail) {
+        if (!valid_value) {
+            return;
+        }
+
+        valid_value = false;
+        error_value = {
+            current_offset,
+            current_length,
+            std::move(detail),
+        };
+    }
+
+    project_runtime_configuration& output;
+    std::size_t depth = 0;
+    std::size_t current_offset = 0;
+    std::size_t current_length = 0;
+    std::string key_value;
+    bool valid_value = true;
+    bool root_started = false;
+    bool root_completed = false;
+    bool ic_seen = false;
+    schema_error error_value;
+};
+
 } // namespace
 
 server_status read_project_configuration(
@@ -879,7 +1066,9 @@ server_status load_project_runtime_configuration(
     output = {};
 
     try {
-        std::ifstream input(path, std::ios::binary);
+        std::ifstream input(
+            path,
+            std::ios::binary);
 
         if (!input) {
             diagnostics.emit(
@@ -898,7 +1087,9 @@ server_status load_project_runtime_configuration(
             std::istreambuf_iterator<char>{input},
             std::istreambuf_iterator<char>{}};
 
-        if (!input.good() && !input.eof()) {
+        if (!input.good() &&
+            !input.eof()) {
+
             diagnostics.emit(
                 diagnostic(
                     diagnostics::project_configuration_read_failed,
@@ -911,20 +1102,68 @@ server_status load_project_runtime_configuration(
             return server_status::io_error;
         }
 
-        std::vector<project_configuration_dependency> dependencies;
-        preprocessor_configuration preprocessor;
+        project_runtime_configuration_handler handler{
+            output};
 
-        return read_project_configuration(
-            bytes,
-            path,
-            operation,
-            diagnostics,
-            dependencies,
-            project_configuration_scope::root,
-            &preprocessor,
-            &output);
+        const auto parsed =
+            parse_json(
+                std::string_view{bytes},
+                handler);
+
+        if (!parsed.ok()) {
+            const auto file_id =
+                diagnostics.add_source(
+                    path,
+                    std::move(bytes));
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_invalid_json,
+                    operation)
+                    .location(
+                        diagnostics.locate(
+                            file_id,
+                            parsed.offset,
+                            parsed.length))
+                    .detail(
+                        json_error_message(
+                            parsed.code))
+                    .build());
+
+            output = {};
+            return server_status::project_configuration_invalid;
+        }
+
+        if (!handler.valid()) {
+            const auto& error =
+                handler.error();
+
+            const auto file_id =
+                diagnostics.add_source(
+                    path,
+                    std::move(bytes));
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_invalid_configuration,
+                    operation)
+                    .location(
+                    diagnostics.locate(
+                        file_id,
+                        error.offset,
+                        error.length))
+                    .detail(error.detail)
+                    .build());
+
+            output = {};
+            return server_status::project_configuration_invalid;
+        }
+
+        return server_status::success;
     }
     catch (...) {
+        output = {};
+
         diagnostics.emit(
             diagnostic(
                 diagnostics::project_configuration_read_failed,
@@ -938,4 +1177,4 @@ server_status load_project_runtime_configuration(
     }
 }
 
-}
+} 

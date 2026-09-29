@@ -69,22 +69,65 @@ inline constexpr auto shutdown_ack_timeout =
 
     project_runtime_configuration configuration;
 
-    const auto status = load_project_runtime_configuration(
-        value.path(),
-        operation,
-        diagnostics,
-        configuration);
+    const auto status =
+        load_project_runtime_configuration(
+            value.path(),
+            operation,
+            diagnostics,
+            configuration);
 
     if (!succeeded(status)) {
         return status;
     }
 
-    if (!configuration.ic.empty()) {
-        value.set_ic_catalog_path(
-            resolve(
-                value.path().parent_path(),
-                configuration.ic));
+    ic_catalog catalog;
+
+    if (configuration.ic.empty()) {
+        value.set_ic_catalog(
+            std::move(catalog));
+        return server_status::success;
     }
+
+    const auto catalog_path =
+        resolve(
+            value.path().parent_path(),
+            configuration.ic);
+
+    value.set_ic_catalog_path(
+        catalog_path);
+
+    const auto loaded =
+        load_ic_catalog(
+            catalog_path,
+            catalog);
+
+    if (loaded == ic_catalog_result::not_found) {
+        value.set_ic_catalog(
+            std::move(catalog));
+        return server_status::success;
+    }
+
+    if (loaded != ic_catalog_result::success) {
+        diagnostics.emit(
+            diagnostic(
+                loaded == ic_catalog_result::invalid
+                    ? diagnostics::runtime_ic_invalid
+                    : diagnostics::runtime_ic_io_failed,
+                operation)
+                .file(catalog_path)
+                .detail(
+                    loaded == ic_catalog_result::invalid
+                        ? "Configured IC.json is invalid"
+                        : "Configured IC.json could not be read")
+                .build());
+
+        return loaded == ic_catalog_result::invalid
+            ? server_status::runtime_ic_invalid
+            : server_status::io_error;
+    }
+
+    value.set_ic_catalog(
+        std::move(catalog));
 
     return server_status::success;
 }
@@ -1008,6 +1051,43 @@ server_status server::snap_ic(
         return server_status::runtime_ic_invalid;
     }
 
+    ic_catalog catalog_candidate;
+
+    try {
+        catalog_candidate =
+            context.project->
+                ic_catalog_data();
+    }
+    catch (...) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::runtime_ic_failed,
+                operation)
+                .detail(
+                    "Cannot allocate SNAP_IC catalog candidate")
+                .build());
+
+        return server_status::runtime_ic_failed;
+    }
+
+    if (!upsert_ic_catalog_node(
+            catalog_candidate,
+            group,
+            name,
+            ic_path,
+            0)) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::runtime_ic_invalid,
+                operation)
+                .detail(
+                    "SNAP_IC group/name conflicts with IC.json tree")
+                .build());
+
+        return server_status::runtime_ic_invalid;
+    }
+
     const auto previous_state = project_state_value;
     project_state_value = project_state::snapping_ic;
     context.communications.publish_server_state(
@@ -1080,48 +1160,28 @@ server_status server::snap_ic(
             return server_status::io_error;
         }
 
-        ic_catalog catalog;
-        const auto loaded = load_ic_catalog(
-            context.project->ic_catalog_path(),
-            catalog);
-
-        if (loaded != ic_catalog_result::success &&
-            loaded != ic_catalog_result::not_found) {
-
-            diagnostics.emit(
-                diagnostic(
-                    loaded == ic_catalog_result::invalid
-                        ? diagnostics::runtime_ic_invalid
-                        : diagnostics::runtime_ic_io_failed,
-                    operation)
-                    .detail(
-                        context.project->ic_catalog_path().generic_string())
-                    .build());
-
-            return loaded == ic_catalog_result::invalid
-                ? server_status::runtime_ic_invalid
-                : server_status::io_error;
-        }
-
         if (!upsert_ic_catalog_node(
-                catalog,
+                catalog_candidate,
                 group,
                 name,
                 ic_path,
-                static_cast<std::uint64_t>(image.size()))) {
+                static_cast<std::uint64_t>(
+                    image.size()))) {
 
             diagnostics.emit(
                 diagnostic(
                     diagnostics::runtime_ic_invalid,
                     operation)
-                    .detail("SNAP_IC group/name conflicts with IC.json tree")
+                    .detail(
+                        "SNAP_IC catalog candidate became invalid")
                     .build());
+
             return server_status::runtime_ic_invalid;
         }
 
         if (save_ic_catalog(
                 context.project->ic_catalog_path(),
-                catalog) != ic_catalog_result::success) {
+                catalog_candidate) != ic_catalog_result::success) {
 
             diagnostics.emit(
                 diagnostic(
@@ -1132,6 +1192,10 @@ server_status server::snap_ic(
                     .build());
             return server_status::io_error;
         }
+
+        context.project->set_ic_catalog(
+            std::move(
+                catalog_candidate));
 
         return server_status::success;
     }();
@@ -1193,32 +1257,11 @@ server_status server::reset_ic(
         return server_status::runtime_ic_invalid;
     }
 
-    ic_catalog catalog;
-    const auto catalog_loaded = load_ic_catalog(
-        context.project->ic_catalog_path(),
-        catalog);
-
-    if (catalog_loaded != ic_catalog_result::success) {
-        diagnostics.emit(
-            diagnostic(
-                catalog_loaded == ic_catalog_result::not_found
-                    ? diagnostics::runtime_ic_not_found
-                    : catalog_loaded == ic_catalog_result::invalid
-                        ? diagnostics::runtime_ic_invalid
-                        : diagnostics::runtime_ic_io_failed,
-                operation)
-                .detail(
-                    context.project->ic_catalog_path().generic_string())
-                .build());
-
-        return catalog_loaded == ic_catalog_result::not_found
-            ? server_status::runtime_ic_not_found
-            : catalog_loaded == ic_catalog_result::invalid
-                ? server_status::runtime_ic_invalid
-                : server_status::io_error;
-    }
-
-    const auto* node = find_ic_catalog_node(catalog, group, name);
+    const auto* node =
+        find_ic_catalog_node(
+            context.project->ic_catalog_data(),
+            group,
+            name);
     if (node == nullptr) {
         diagnostics.emit(
             diagnostic(
@@ -1403,28 +1446,21 @@ server_status server::delete_ic(
     }
 
     ic_catalog catalog;
-    const auto loaded = load_ic_catalog(
-        context.project->ic_catalog_path(),
-        catalog);
 
-    if (loaded != ic_catalog_result::success) {
+    try {
+        catalog =
+            context.project->ic_catalog_data();
+    }
+    catch (...) {
         diagnostics.emit(
             diagnostic(
-                loaded == ic_catalog_result::not_found
-                    ? diagnostics::runtime_ic_not_found
-                    : loaded == ic_catalog_result::invalid
-                        ? diagnostics::runtime_ic_invalid
-                        : diagnostics::runtime_ic_io_failed,
+                diagnostics::runtime_ic_failed,
                 operation)
                 .detail(
-                    context.project->ic_catalog_path().generic_string())
+                    "Cannot allocate DELETE_IC catalog candidate")
                 .build());
 
-        return loaded == ic_catalog_result::not_found
-            ? server_status::runtime_ic_not_found
-            : loaded == ic_catalog_result::invalid
-                ? server_status::runtime_ic_invalid
-                : server_status::io_error;
+        return server_status::runtime_ic_failed;
     }
 
     std::filesystem::path removed_path;
@@ -1456,6 +1492,9 @@ server_status server::delete_ic(
                 .build());
         return server_status::io_error;
     }
+
+    context.project->set_ic_catalog(
+        std::move(catalog));
 
     const auto data_path = resolve(
         context.project->ic_catalog_path().parent_path(),
@@ -1501,29 +1540,20 @@ server_status server::list_ic(
         return server_status::runtime_ic_invalid;
     }
 
-    const auto loaded = load_ic_catalog(
-        context.project->ic_catalog_path(),
-        output);
-
-    if (loaded == ic_catalog_result::not_found) {
-        output = {};
-        return server_status::success;
+    try {
+        output =
+            context.project->ic_catalog_data();
     }
-
-    if (loaded != ic_catalog_result::success) {
+    catch (...) {
         diagnostics.emit(
             diagnostic(
-                loaded == ic_catalog_result::invalid
-                    ? diagnostics::runtime_ic_invalid
-                    : diagnostics::runtime_ic_io_failed,
+                diagnostics::runtime_ic_failed,
                 operation)
                 .detail(
-                    context.project->ic_catalog_path().generic_string())
+                    "Cannot allocate LIST_IC response")
                 .build());
 
-        return loaded == ic_catalog_result::invalid
-            ? server_status::runtime_ic_invalid
-            : server_status::io_error;
+        return server_status::runtime_ic_failed;
     }
 
     return server_status::success;
