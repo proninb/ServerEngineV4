@@ -1675,18 +1675,12 @@ server_status server::delete_ic(
         context.project->ic_catalog_path().parent_path(),
         removed_path);
 
-    std::error_code error;
-    (void)std::filesystem::remove(data_path, error);
-
-    if (error) {
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::runtime_ic_io_failed,
-                operation)
-                .detail(data_path.generic_string())
-                .build());
-        return server_status::io_error;
-    }
+    // The catalog is authoritative after publication. Failure to remove
+    // the unreferenced binary is cleanup only and does not roll back DELETE_IC.
+    std::error_code ignored;
+    (void)std::filesystem::remove(
+        data_path,
+        ignored);
 
     return server_status::success;
 }
