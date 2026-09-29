@@ -10,7 +10,7 @@
  *   GET_STATE
  *   GET_VALUE <qualified-object[.member...]>
  *   SNAP_IC <ic-path>
- *   RESET_IC <ic-path>
+ *   RESET_IC [/options=<0..7>] <ic-path>
  *   SHUTDOWN
  *   EXIT        (alias of SHUTDOWN)
  *
@@ -23,6 +23,7 @@
 #include "../../diagnostics/diagnostic_formatter.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cctype>
 #include <iostream>
 #include <sstream>
@@ -35,6 +36,68 @@ namespace {
         return static_cast<char>(std::toupper(ch));
     });
     return value;
+}
+
+[[nodiscard]] bool parse_reset_ic_arguments(
+    std::istringstream& stream,
+    std::filesystem::path& path,
+    reset_ic_options& options) {
+
+    options = reset_ic_options::none;
+
+    std::string first;
+
+    if (!(stream >> first)) {
+        return false;
+    }
+
+    constexpr std::string_view prefix =
+        "/options=";
+
+    if (!std::string_view(first).starts_with(prefix)) {
+        std::string remainder;
+        std::getline(stream, remainder);
+
+        path = first + remainder;
+        return !path.empty();
+    }
+
+    const auto value_text =
+        std::string_view(first).substr(prefix.size());
+
+    std::uint32_t value = 0;
+
+    const auto parsed =
+        std::from_chars(
+            value_text.data(),
+            value_text.data() + value_text.size(),
+            value);
+
+    if (value_text.empty() ||
+        parsed.ec != std::errc{} ||
+        parsed.ptr != value_text.data() + value_text.size() ||
+        value > reset_ic_options_mask) {
+
+        return false;
+    }
+
+    std::string path_text;
+    std::getline(
+        stream >> std::ws,
+        path_text);
+
+    if (path_text.empty()) {
+        return false;
+    }
+
+    options =
+        static_cast<reset_ic_options>(
+            value);
+
+    path =
+        std::move(path_text);
+
+    return true;
 }
 
 }
@@ -135,10 +198,7 @@ void server_console::run() {
                 {},
                 {},
             });
-        } else if (
-            verb == "SNAP_IC" ||
-            verb == "RESET_IC") {
-
+        } else if (verb == "SNAP_IC") {
             std::string path;
             std::getline(
                 stream >> std::ws,
@@ -146,18 +206,39 @@ void server_console::run() {
 
             if (path.empty()) {
                 std::cout
-                    << verb
-                    << " requires an IC path\n";
+                    << "SNAP_IC requires an IC path\n";
                 continue;
             }
 
             publish({
-                verb == "SNAP_IC"
-                    ? server_request_kind::snap_ic
-                    : server_request_kind::reset_ic,
+                server_request_kind::snap_ic,
                 std::move(path),
                 {},
             });
+        } else if (verb == "RESET_IC") {
+            std::filesystem::path path;
+            reset_ic_options options;
+
+            if (!parse_reset_ic_arguments(
+                    stream,
+                    path,
+                    options)) {
+
+                std::cout
+                    << "RESET_IC requires [/options=<0..7>] <ic-path>\n";
+                continue;
+            }
+
+            server_request request;
+            request.kind =
+                server_request_kind::reset_ic;
+            request.path =
+                std::move(path);
+            request.reset_options =
+                options;
+
+            publish(
+                std::move(request));
         } else if (verb == "GET_VALUE") {
             std::string name;
             std::getline(

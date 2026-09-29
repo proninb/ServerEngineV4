@@ -96,9 +96,100 @@ int main() {
         if (server.kind !=
                 server_request_kind::reset_ic ||
             server.path !=
-                "snap.ic") {
+                "snap.ic" ||
+            server.reset_options !=
+                reset_ic_options::none) {
 
             return 33;
+        }
+    }
+
+    {
+        json_request request;
+
+        const auto decoded =
+            decode_json_request(
+                R"({"request_id":34,"command":"RESET_IC","arguments":{"path":"snap.ic","options":3}})",
+                request);
+
+        if (!decoded.ok() ||
+            request.kind !=
+                json_request_kind::server) {
+
+            return 34;
+        }
+
+        const auto& server =
+            std::get<server_request>(
+                request.payload);
+
+        if (server.kind !=
+                server_request_kind::reset_ic ||
+            server.path !=
+                "snap.ic" ||
+            server.reset_options !=
+                (reset_ic_options::constants |
+                 reset_ic_options::variables)) {
+
+            return 35;
+        }
+    }
+
+    {
+        json_request request;
+
+        const auto decoded =
+            decode_json_request(
+                R"({"request_id":36,"command":"RESET_IC","arguments":{"path":"snap.ic","options":7}})",
+                request);
+
+        if (!decoded.ok()) {
+            return 36;
+        }
+
+        const auto& server =
+            std::get<server_request>(
+                request.payload);
+
+        if (server.reset_options !=
+                (reset_ic_options::constants |
+                 reset_ic_options::variables |
+                 reset_ic_options::defaults)) {
+
+            return 37;
+        }
+    }
+
+    {
+        json_request request;
+
+        if (decode_json_request(
+                R"({"request_id":38,"command":"RESET_IC","arguments":{"path":"snap.ic","options":8}})",
+                request).ok()) {
+
+            return 38;
+        }
+    }
+
+    {
+        json_request request;
+
+        if (decode_json_request(
+                R"({"request_id":39,"command":"SNAP_IC","arguments":{"path":"snap.ic","options":1}})",
+                request).ok()) {
+
+            return 39;
+        }
+    }
+
+    {
+        json_request request;
+
+        if (decode_json_request(
+                R"({"request_id":40,"command":"LOAD","arguments":{"path":"project.json","options":1}})",
+                request).ok()) {
+
+            return 40;
         }
     }
 

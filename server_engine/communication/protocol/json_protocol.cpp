@@ -20,6 +20,7 @@ enum field_bit : std::uint32_t {
     login_bit = 1u << 4,
     arg_bit = 1u << 5,
     parameters_bit = 1u << 6,
+    options_bit = 1u << 7,
 };
 
 class request_handler final : public json_event_handler {
@@ -128,6 +129,12 @@ public:
                 parameters_bit,
                 value,
                 parameters_value);
+        } else if (key_value == "options") {
+            if (!mark(options_bit) ||
+                !value.get(options_value)) {
+
+                valid_value = false;
+            }
         } else {
             valid_value = false;
         }
@@ -148,6 +155,7 @@ public:
     std::string login_value;
     std::string arg_value;
     std::string parameters_value;
+    std::uint64_t options_value = 0;
     std::uint32_t seen = 0;
 
 private:
@@ -787,7 +795,6 @@ json_decode_result decode_json_request(
             case server_request_kind::build:
             case server_request_kind::rebuild:
             case server_request_kind::snap_ic:
-            case server_request_kind::reset_ic:
                 if (!only(
                         handler.seen,
                         path_bit) ||
@@ -802,6 +809,30 @@ json_decode_result decode_json_request(
                 request.path =
                     std::move(
                         handler.path_value);
+                break;
+
+            case server_request_kind::reset_ic:
+                if (!only(
+                        handler.seen,
+                        path_bit |
+                            options_bit) ||
+                    (handler.seen & path_bit) == 0 ||
+                    handler.path_value.empty() ||
+                    handler.options_value >
+                        reset_ic_options_mask) {
+
+                    return {
+                        json_protocol_error::invalid_schema,
+                    };
+                }
+
+                request.path =
+                    std::move(
+                        handler.path_value);
+
+                request.reset_options =
+                    static_cast<reset_ic_options>(
+                        handler.options_value);
                 break;
 
             case server_request_kind::get_value:
