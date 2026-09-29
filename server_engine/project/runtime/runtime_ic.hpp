@@ -59,6 +59,21 @@ struct runtime_ic_record_source final {
     runtime_ic_scalar_value value;
 };
 
+// Command-local native SNAP representation. G-local string IDs are transient
+// keys only; binary codecs translate them to IC-local IDs before persistence.
+struct runtime_ic_native_record_source final {
+    std::uint32_t object_begin = 0;
+    std::uint16_t object_count = 0;
+    std::uint16_t member_count = 0;
+    std::uint32_t member_begin = 0;
+    runtime_ic_scalar_value value;
+};
+
+struct runtime_ic_native_source_view final {
+    std::span<const string_id> components;
+    std::span<const runtime_ic_native_record_source> records;
+};
+
 [[nodiscard]] runtime_ic_result resolve_runtime_ic_scalar(
     const compiled_project_view& project,
     const runtime_binding_index& bindings,

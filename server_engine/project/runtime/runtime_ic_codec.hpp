@@ -78,6 +78,7 @@ private:
 
     std::vector<std::string_view> strings;
     std::vector<string_slot> string_index;
+    std::vector<std::uint32_t> source_string_to_local;
 
     std::uint64_t string_bytes_value = 0;
     std::uint64_t value_bytes_value = 0;
@@ -100,6 +101,19 @@ private:
     friend runtime_ic_codec_result
     encode_runtime_ic_binary(
         std::span<const runtime_ic_record_source>,
+        const runtime_ic_binary_plan&,
+        std::span<std::byte>) noexcept;
+
+    friend runtime_ic_codec_result
+    prepare_runtime_ic_binary_native(
+        const compiled_project_view&,
+        runtime_ic_native_source_view,
+        runtime_ic_binary_plan&) noexcept;
+
+    friend runtime_ic_codec_result
+    encode_runtime_ic_binary_native(
+        const compiled_project_view&,
+        runtime_ic_native_source_view,
         const runtime_ic_binary_plan&,
         std::span<std::byte>) noexcept;
 };

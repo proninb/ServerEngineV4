@@ -81,4 +81,53 @@ snapshot_runtime_ic_project(
     std::span<const std::byte> runtime,
     runtime_ic_snapshot& output) noexcept;
 
+// Command-local binary SNAP workspace. Current-G string_id values exist only
+// until binary encoding; persistent IC identity remains semantic and portable.
+class runtime_ic_native_snapshot final {
+public:
+    [[nodiscard]] runtime_ic_native_source_view source() const noexcept {
+        return {components, values};
+    }
+
+    [[nodiscard]] const runtime_ic_snapshot_stats& stats() const noexcept {
+        return statistics;
+    }
+
+    void reset() noexcept {
+        components.clear();
+        values.clear();
+        statistics = {};
+    }
+
+private:
+    std::vector<string_id> components;
+    std::vector<runtime_ic_native_record_source> values;
+    runtime_ic_snapshot_stats statistics;
+
+    friend runtime_ic_snapshot_result
+    snapshot_runtime_ic_project_native(
+        const compiled_project_view&,
+        const runtime_binding_index&,
+        std::span<const std::byte>,
+        runtime_ic_native_snapshot&) noexcept;
+};
+
+[[nodiscard]] runtime_ic_snapshot_result
+snapshot_runtime_ic_project_native(
+    const compiled_project_view& project,
+    const runtime_binding_index& bindings,
+    std::span<const std::byte> runtime,
+    runtime_ic_native_snapshot& output) noexcept;
+
+
+// Production binary SNAP entry point. It traverses current G/Runtime using the
+// native string_id path and persists only IC-local semantic identity.
+[[nodiscard]] runtime_ic_snapshot_result
+snapshot_runtime_ic_binary(
+    const compiled_project_view& project,
+    const runtime_binding_index& bindings,
+    std::span<const std::byte> runtime,
+    std::vector<std::byte>& output,
+    runtime_ic_snapshot_stats* stats = nullptr) noexcept;
+
 }

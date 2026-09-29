@@ -1225,6 +1225,454 @@ runtime_ic_codec_result encode_runtime_ic_binary(
     return runtime_ic_codec_result::success;
 }
 
+runtime_ic_codec_result prepare_runtime_ic_binary_native(
+    const compiled_project_view& project,
+    runtime_ic_native_source_view source,
+    runtime_ic_binary_plan& output) noexcept {
+
+    output = {};
+
+    if (!project.valid() ||
+        source.records.empty() ||
+        source.records.size() >
+            (std::numeric_limits<std::uint32_t>::max)()) {
+
+        return runtime_ic_codec_result::invalid_input;
+    }
+
+    try {
+        output.source_string_to_local.assign(
+            project.string_count() + 1,
+            0);
+
+        output.strings.reserve(
+            source.components.size());
+    }
+    catch (...) {
+        output = {};
+        return runtime_ic_codec_result::failed;
+    }
+
+    for (const auto id : source.components) {
+        const auto slot = id.value();
+
+        if (slot == 0 ||
+            slot >= output.source_string_to_local.size()) {
+
+            output = {};
+            return runtime_ic_codec_result::invalid_input;
+        }
+
+        if (output.source_string_to_local[slot] != 0) {
+            continue;
+        }
+
+        if (output.strings.size() >=
+            (std::numeric_limits<std::uint32_t>::max)()) {
+
+            output = {};
+            return runtime_ic_codec_result::overflow;
+        }
+
+        const auto text = project.string(id);
+
+        if (text.empty() ||
+            output.string_bytes_value >
+                (std::numeric_limits<std::uint32_t>::max)() -
+                    text.size()) {
+
+            output = {};
+            return runtime_ic_codec_result::invalid_input;
+        }
+
+        try {
+            output.strings.push_back(text);
+        }
+        catch (...) {
+            output = {};
+            return runtime_ic_codec_result::failed;
+        }
+
+        output.source_string_to_local[slot] =
+            static_cast<std::uint32_t>(
+                output.strings.size());
+
+        output.string_bytes_value += text.size();
+    }
+
+    std::uint64_t component_count = 0;
+    std::uint64_t value_bytes = 0;
+
+    for (const auto& record : source.records) {
+        const auto object_end =
+            static_cast<std::uint64_t>(
+                record.object_begin) +
+            record.object_count;
+
+        const auto member_end =
+            static_cast<std::uint64_t>(
+                record.member_begin) +
+            record.member_count;
+
+        std::uint64_t next_components = 0;
+
+        if (record.object_count == 0 ||
+            object_end > source.components.size() ||
+            member_end > source.components.size() ||
+            !valid_scalar(record.value) ||
+            !add_u64(
+                component_count,
+                record.object_count,
+                next_components) ||
+            !add_u64(
+                next_components,
+                record.member_count,
+                component_count) ||
+            component_count >
+                (std::numeric_limits<std::uint32_t>::max)() ||
+            !add_u64(
+                value_bytes,
+                record.value.size,
+                value_bytes) ||
+            value_bytes >
+                (std::numeric_limits<std::uint32_t>::max)()) {
+
+            output = {};
+            return runtime_ic_codec_result::invalid_input;
+        }
+    }
+
+    std::uint64_t string_record_bytes = 0;
+    std::uint64_t component_bytes = 0;
+    std::uint64_t record_bytes = 0;
+
+    if (!multiply_u64(
+            output.strings.size(),
+            runtime_ic_binary_string_record_size,
+            string_record_bytes) ||
+        !multiply_u64(
+            component_count,
+            sizeof(std::uint32_t),
+            component_bytes) ||
+        !multiply_u64(
+            source.records.size(),
+            runtime_ic_binary_record_size,
+            record_bytes)) {
+
+        output = {};
+        return runtime_ic_codec_result::overflow;
+    }
+
+    output.string_records_offset =
+        runtime_ic_binary_header_size;
+
+    output.components_offset =
+        align8(
+            output.string_records_offset +
+            string_record_bytes);
+
+    output.records_offset =
+        align8(
+            output.components_offset +
+            component_bytes);
+
+    output.string_bytes_offset =
+        align8(
+            output.records_offset +
+            record_bytes);
+
+    output.values_offset =
+        align8(
+            output.string_bytes_offset +
+            output.string_bytes_value);
+
+    std::uint64_t total = 0;
+
+    if (!add_u64(
+            output.values_offset,
+            value_bytes,
+            total) ||
+        total >
+            (std::numeric_limits<std::size_t>::max)()) {
+
+        output = {};
+        return runtime_ic_codec_result::overflow;
+    }
+
+    output.value_bytes_value = value_bytes;
+
+    output.component_count_value =
+        static_cast<std::uint32_t>(
+            component_count);
+
+    output.record_count_value =
+        static_cast<std::uint32_t>(
+            source.records.size());
+
+    output.size_value =
+        static_cast<std::size_t>(
+            total);
+
+    return runtime_ic_codec_result::success;
+}
+
+runtime_ic_codec_result encode_runtime_ic_binary_native(
+    const compiled_project_view& project,
+    runtime_ic_native_source_view source,
+    const runtime_ic_binary_plan& plan,
+    std::span<std::byte> output) noexcept {
+
+    if (!project.valid() ||
+        source.records.size() !=
+            plan.record_count_value ||
+        plan.source_string_to_local.size() !=
+            project.string_count() + 1 ||
+        plan.size_value == 0 ||
+        output.size() !=
+            plan.size_value) {
+
+        return runtime_ic_codec_result::invalid_input;
+    }
+
+    std::fill(
+        output.begin(),
+        output.end(),
+        std::byte{0});
+
+    std::memcpy(
+        output.data(),
+        image_magic.data(),
+        image_magic.size());
+
+    write_u32(output.data() + 8, runtime_ic_binary_format_version);
+    write_u32(output.data() + 12, endian_marker);
+    write_u32(output.data() + 16, runtime_ic_binary_header_size);
+    write_u32(output.data() + 20, runtime_ic_binary_string_record_size);
+    write_u32(output.data() + 24, sizeof(std::uint32_t));
+    write_u32(output.data() + 28, runtime_ic_binary_record_size);
+    write_u64(output.data() + 32, output.size());
+    write_u32(output.data() + 40, plan.string_count());
+    write_u32(output.data() + 44, plan.component_count_value);
+    write_u32(output.data() + 48, plan.record_count_value);
+    write_u32(output.data() + 52, 0);
+    write_u64(output.data() + 56, plan.string_bytes_value);
+    write_u64(output.data() + 64, plan.value_bytes_value);
+    write_u64(output.data() + 72, plan.string_records_offset);
+    write_u64(output.data() + 80, plan.components_offset);
+    write_u64(output.data() + 88, plan.records_offset);
+    write_u64(output.data() + 96, plan.string_bytes_offset);
+    write_u64(output.data() + 104, plan.values_offset);
+    write_u64(output.data() + header_payload_crc_offset, 0);
+    write_u64(output.data() + header_reserved_offset, 0);
+
+    std::uint32_t string_cursor = 0;
+
+    for (std::size_t index = 0;
+         index < plan.strings.size();
+         ++index) {
+
+        const auto text = plan.strings[index];
+
+        auto* string_record =
+            output.data() +
+            static_cast<std::size_t>(
+                plan.string_records_offset) +
+            index *
+                runtime_ic_binary_string_record_size;
+
+        write_u32(
+            string_record,
+            string_cursor);
+
+        write_u32(
+            string_record + 4,
+            static_cast<std::uint32_t>(
+                text.size()));
+
+        std::memcpy(
+            output.data() +
+                static_cast<std::size_t>(
+                    plan.string_bytes_offset) +
+                string_cursor,
+            text.data(),
+            text.size());
+
+        string_cursor +=
+            static_cast<std::uint32_t>(
+                text.size());
+    }
+
+    std::uint32_t component_cursor = 0;
+    std::uint32_t value_cursor = 0;
+
+    const auto write_component =
+        [&](string_id id) noexcept -> bool {
+
+        const auto slot = id.value();
+
+        if (slot == 0 ||
+            slot >=
+                plan.source_string_to_local.size()) {
+
+            return false;
+        }
+
+        const auto local =
+            plan.source_string_to_local[slot];
+
+        if (local == 0 ||
+            component_cursor >=
+                plan.component_count_value) {
+
+            return false;
+        }
+
+        write_u32(
+            output.data() +
+                static_cast<std::size_t>(
+                    plan.components_offset) +
+                static_cast<std::size_t>(
+                    component_cursor) *
+                    sizeof(std::uint32_t),
+            local);
+
+        ++component_cursor;
+        return true;
+    };
+
+    for (std::size_t index = 0;
+         index < source.records.size();
+         ++index) {
+
+        const auto& source_record =
+            source.records[index];
+
+        const auto object_end =
+            static_cast<std::uint64_t>(
+                source_record.object_begin) +
+            source_record.object_count;
+
+        const auto member_end =
+            static_cast<std::uint64_t>(
+                source_record.member_begin) +
+            source_record.member_count;
+
+        if (source_record.object_count == 0 ||
+            object_end > source.components.size() ||
+            member_end > source.components.size() ||
+            !valid_scalar(
+                source_record.value)) {
+
+            return runtime_ic_codec_result::invalid_input;
+        }
+
+        const auto object_begin =
+            component_cursor;
+
+        for (std::uint32_t local = 0;
+             local < source_record.object_count;
+             ++local) {
+
+            if (!write_component(
+                    source.components[
+                        source_record.object_begin +
+                        local])) {
+
+                return runtime_ic_codec_result::
+                    invalid_input;
+            }
+        }
+
+        const auto member_begin =
+            component_cursor;
+
+        for (std::uint32_t local = 0;
+             local < source_record.member_count;
+             ++local) {
+
+            if (!write_component(
+                    source.components[
+                        source_record.member_begin +
+                        local])) {
+
+                return runtime_ic_codec_result::
+                    invalid_input;
+            }
+        }
+
+        auto* record =
+            output.data() +
+            static_cast<std::size_t>(
+                plan.records_offset) +
+            index *
+                runtime_ic_binary_record_size;
+
+        write_u32(
+            record,
+            object_begin);
+
+        write_u16(
+            record + 4,
+            source_record.object_count);
+
+        write_u16(
+            record + 6,
+            source_record.member_count);
+
+        write_u32(
+            record + 8,
+            member_begin);
+
+        write_u32(
+            record + 12,
+            value_cursor);
+
+        write_u16(
+            record + 16,
+            source_record.value.size);
+
+        record[18] =
+            static_cast<std::byte>(
+                source_record.value.type);
+
+        record[19] = std::byte{0};
+
+        write_u32(
+            record + 20,
+            0);
+
+        std::memcpy(
+            output.data() +
+                static_cast<std::size_t>(
+                    plan.values_offset) +
+                value_cursor,
+            source_record.value.bytes.data(),
+            source_record.value.size);
+
+        value_cursor +=
+            source_record.value.size;
+    }
+
+    if (component_cursor !=
+            plan.component_count_value ||
+        value_cursor !=
+            plan.value_bytes_value ||
+        string_cursor !=
+            plan.string_bytes_value) {
+
+        return runtime_ic_codec_result::invalid_input;
+    }
+
+    write_u64(
+        output.data() +
+            header_payload_crc_offset,
+        persistence_crc64(
+            output.subspan(
+                runtime_ic_binary_header_size)));
+
+    return runtime_ic_codec_result::success;
+}
+
 runtime_ic_codec_result runtime_ic_binary_view::bind(
     std::span<const std::byte> image) noexcept {
 
