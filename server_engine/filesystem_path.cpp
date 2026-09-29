@@ -15,6 +15,7 @@
 #include <Windows.h>
 #else
 #include <cstdint>
+#include <cstdio>
 #endif
 
 namespace cw::server {
@@ -84,6 +85,55 @@ namespace {
 
 #endif
 
+}
+
+filesystem_replace_result replace_file(
+    const std::filesystem::path& source,
+    const std::filesystem::path& target) noexcept {
+
+    if (source.empty() ||
+        target.empty()) {
+
+        return filesystem_replace_result::failed;
+    }
+
+#if defined(_WIN32)
+    if (ReplaceFileW(
+            target.c_str(),
+            source.c_str(),
+            nullptr,
+            0,
+            nullptr,
+            nullptr) != 0) {
+
+        return filesystem_replace_result::success;
+    }
+
+    const auto error =
+        GetLastError();
+
+    if (error != ERROR_FILE_NOT_FOUND &&
+        error != ERROR_PATH_NOT_FOUND) {
+
+        return filesystem_replace_result::failed;
+    }
+
+    if (MoveFileExW(
+            source.c_str(),
+            target.c_str(),
+            MOVEFILE_WRITE_THROUGH) == 0) {
+
+        return filesystem_replace_result::failed;
+    }
+
+    return filesystem_replace_result::success;
+#else
+    return ::rename(
+            source.c_str(),
+            target.c_str()) == 0
+        ? filesystem_replace_result::success
+        : filesystem_replace_result::failed;
+#endif
 }
 
 filesystem_path_result filesystem_path_from_utf8(

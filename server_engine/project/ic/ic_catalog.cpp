@@ -607,8 +607,21 @@ ic_catalog_result save_ic_catalog(
 
         bytes += "]}\n";
 
+        auto temporary_path = path;
+        temporary_path += ".new";
+
+        std::error_code error;
+
+        std::filesystem::remove(
+            temporary_path,
+            error);
+
+        if (error) {
+            return ic_catalog_result::io_error;
+        }
+
         std::ofstream output(
-            path,
+            temporary_path,
             std::ios::binary |
                 std::ios::trunc);
 
@@ -623,9 +636,42 @@ ic_catalog_result save_ic_catalog(
 
         output.flush();
 
-        return output
-            ? ic_catalog_result::success
-            : ic_catalog_result::io_error;
+        if (!output) {
+            output.close();
+
+            error.clear();
+            std::filesystem::remove(
+                temporary_path,
+                error);
+
+            return ic_catalog_result::io_error;
+        }
+
+        output.close();
+
+        if (!output) {
+            error.clear();
+            std::filesystem::remove(
+                temporary_path,
+                error);
+
+            return ic_catalog_result::io_error;
+        }
+
+        if (replace_file(
+                temporary_path,
+                path) !=
+            filesystem_replace_result::success) {
+
+            error.clear();
+            std::filesystem::remove(
+                temporary_path,
+                error);
+
+            return ic_catalog_result::io_error;
+        }
+
+        return ic_catalog_result::success;
     }
     catch (...) {
         return ic_catalog_result::failed;

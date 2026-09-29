@@ -21,6 +21,11 @@ enum class filesystem_path_result : std::uint8_t {
     failed,
 };
 
+enum class filesystem_replace_result : std::uint8_t {
+    success,
+    failed,
+};
+
 using filesystem_native_path_view =
     std::basic_string_view<
         std::filesystem::path::value_type>;
@@ -67,5 +72,11 @@ struct filesystem_path_key_hash final {
 [[nodiscard]] filesystem_path_result make_filesystem_path_key(
     const std::filesystem::path& path,
     filesystem_path_key& output) noexcept;
+
+// Replaces target with source without exposing a partially written target.
+// Source and target are expected to reside on the same filesystem.
+[[nodiscard]] filesystem_replace_result replace_file(
+    const std::filesystem::path& source,
+    const std::filesystem::path& target) noexcept;
 
 }

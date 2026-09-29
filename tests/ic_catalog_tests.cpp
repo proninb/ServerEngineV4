@@ -110,24 +110,75 @@ int main() {
         return 8;
     }
 
+    if (!upsert_ic_catalog_entry(
+            loaded,
+            catalog_path,
+            "Cold",
+            std::filesystem::path{
+                "snapshots/cold.ic"},
+            129)) {
+
+        return 9;
+    }
+
+    if (save_ic_catalog(
+            catalog_path,
+            loaded) !=
+        ic_catalog_result::success) {
+
+        return 10;
+    }
+
+    auto temporary_catalog_path =
+        catalog_path;
+
+    temporary_catalog_path += ".new";
+
+    if (std::filesystem::exists(
+            temporary_catalog_path)) {
+
+        return 11;
+    }
+
+    ic_catalog replaced;
+
+    if (load_ic_catalog(
+            catalog_path,
+            replaced) !=
+        ic_catalog_result::success) {
+
+        return 12;
+    }
+
+    entry =
+        find_ic_catalog_entry(
+            replaced,
+            "Cold");
+
+    if (entry == nullptr ||
+        entry->size != 129) {
+
+        return 13;
+    }
+
     std::filesystem::path removed_path;
 
     if (!erase_ic_catalog_entry(
-            loaded,
+            replaced,
             "Cold",
             removed_path)) {
 
-        return 9;
+        return 14;
     }
 
     if (removed_path !=
             std::filesystem::path{
                 "snapshots/cold.ic"} ||
         find_ic_catalog_entry(
-            loaded,
+            replaced,
             "Cold") != nullptr) {
 
-        return 10;
+        return 15;
     }
 
     std::filesystem::remove_all(
