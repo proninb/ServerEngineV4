@@ -13,15 +13,17 @@
 #include "communication/control/communication_control.hpp"
 #include "diagnostics/diagnostic_collection.hpp"
 #include "operation.hpp"
+#include "project/ic/ic_catalog.hpp"
 #include "server_context.hpp"
 #include "server_status.hpp"
 
 #include <cstdint>
 #include <filesystem>
+#include <string>
+#include <vector>
 
 namespace cw::server {
 
-// Coordinates Server startup, command execution, Project ownership, and shutdown.
 class server final {
 public:
     [[nodiscard]] server_status start(
@@ -33,25 +35,21 @@ public:
     [[nodiscard]] server_response execute(
         const server_request& request);
 
-    // Fast persisted-state restore. No Project/source construction checks.
     [[nodiscard]] server_status load(
         const std::filesystem::path& project_path,
         operation_id operation,
         diagnostic_collection& diagnostics);
 
-    // Full source construction. Persists compiled.bin only.
     [[nodiscard]] server_status publish(
         const std::filesystem::path& project_path,
         operation_id operation,
         diagnostic_collection& diagnostics);
 
-    // Incremental construction from persisted BUILD state.
     [[nodiscard]] server_status build(
         const std::filesystem::path& project_path,
         operation_id operation,
         diagnostic_collection& diagnostics);
 
-    // Full construction mode. Ignores incremental construction state.
     [[nodiscard]] server_status rebuild(
         const std::filesystem::path& project_path,
         operation_id operation,
@@ -62,14 +60,29 @@ public:
         diagnostic_collection& diagnostics);
 
     [[nodiscard]] server_status snap_ic(
+        const std::string& name,
+        const std::vector<std::string>& group,
         const std::filesystem::path& path,
         snap_ic_options options,
         operation_id operation,
         diagnostic_collection& diagnostics);
 
     [[nodiscard]] server_status reset_ic(
+        const std::string& name,
+        const std::vector<std::string>& group,
         const std::filesystem::path& path,
         reset_ic_options options,
+        operation_id operation,
+        diagnostic_collection& diagnostics);
+
+    [[nodiscard]] server_status delete_ic(
+        const std::string& name,
+        const std::vector<std::string>& group,
+        operation_id operation,
+        diagnostic_collection& diagnostics);
+
+    [[nodiscard]] server_status list_ic(
+        ic_catalog& output,
         operation_id operation,
         diagnostic_collection& diagnostics);
 
@@ -84,7 +97,6 @@ public:
     void shutdown() noexcept;
 
 private:
-    // Applies Server Policy to a request entering from Communication.
     [[nodiscard]] server_response execute_message(
         const server_request_message& message);
 
@@ -93,12 +105,10 @@ private:
     void execute_client(client_control_message& message);
 
     [[nodiscard]] project_state current_project_state() const noexcept;
-
     [[nodiscard]] operation_id next_operation() noexcept;
 
     server_context context;
-    project_state project_state_value =
-        project_state::unloaded;
+    project_state project_state_value = project_state::unloaded;
     std::uint64_t next_operation_value = 1;
     bool running = false;
 };

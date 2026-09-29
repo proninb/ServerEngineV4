@@ -1,7 +1,8 @@
 /*
  * Transport-neutral observable Server state.
  *
- * Runtime execution states extend this same project_state domain later.
+ * Runtime execution and transient IC operations share this one project_state
+ * domain; no second lifecycle/runtime state machine exists.
  */
 #pragma once
 
@@ -15,6 +16,8 @@ enum class project_state : std::uint8_t {
     loaded = 1,
     run = 2,
     freeze = 3,
+    resetting_ic = 4,
+    snapping_ic = 5,
 };
 
 [[nodiscard]] constexpr bool project_state_can_run(
@@ -31,6 +34,13 @@ enum class project_state : std::uint8_t {
 }
 
 [[nodiscard]] constexpr bool project_state_can_unload(
+    project_state state) noexcept {
+
+    return state == project_state::loaded ||
+        state == project_state::freeze;
+}
+
+[[nodiscard]] constexpr bool project_state_can_ic(
     project_state state) noexcept {
 
     return state == project_state::loaded ||

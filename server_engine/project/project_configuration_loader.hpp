@@ -1,10 +1,8 @@
 /*
  * Streaming project.json schema/composition-reference boundary.
  *
- * One file is validated without materializing a project_configuration tree.
- * Every non-group item is emitted in declaration order with its immutable
- * file_kind and locator semantics. Composition owns cross-file cardinality and
- * recursive Project traversal.
+ * Construction dependencies remain separate from Project runtime resource
+ * references. Root "ic" is never emitted as file_kind/DAG/G input.
  */
 #pragma once
 
@@ -34,6 +32,10 @@ struct project_configuration_dependency final {
     std::filesystem::path path;
 };
 
+struct project_runtime_configuration final {
+    std::filesystem::path ic;
+};
+
 [[nodiscard]] server_status read_project_configuration(
     std::string& bytes,
     const std::filesystem::path& path,
@@ -41,6 +43,13 @@ struct project_configuration_dependency final {
     diagnostic_collection& diagnostics,
     std::vector<project_configuration_dependency>& dependencies,
     project_configuration_scope scope,
-    preprocessor_configuration* preprocessor);
+    preprocessor_configuration* preprocessor,
+    project_runtime_configuration* runtime = nullptr);
+
+[[nodiscard]] server_status load_project_runtime_configuration(
+    const std::filesystem::path& path,
+    operation_id operation,
+    diagnostic_collection& diagnostics,
+    project_runtime_configuration& output);
 
 }

@@ -130,3 +130,20 @@ so a later response write cannot overwrite the completion observation.
 
 Stopping request acceptance wakes both queue wait APIs. An empty stopped queue
 returns failure; it never synthesizes a Server request.
+
+
+## Project IC commands
+
+Logical IC identity is `(group[], name)`; `group` is optional and ordered.
+
+- `SNAP_IC(name, group[], path, options)`
+- `RESET_IC(name, group[], path, options)`
+- `DELETE_IC(name, group[])`
+- `LIST_IC()`
+
+`path` may be relative or absolute. Relative IC paths are resolved against the
+configured `IC.json` directory. SNAP updates `IC.json`; DELETE removes the IC
+node from `IC.json` and deletes its persisted data file.
+
+SNAP and RESET use transient `SNAPPING_IC` / `RESETTING_IC` states and return
+to the previous LOADED/FREEZE state after the operation.

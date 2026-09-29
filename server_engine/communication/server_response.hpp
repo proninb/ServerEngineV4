@@ -5,6 +5,7 @@
 
 #include "../diagnostics/diagnostic_collection.hpp"
 #include "../operation.hpp"
+#include "../project/ic/ic_catalog.hpp"
 #include "../project/runtime/runtime_query.hpp"
 #include "../server_state.hpp"
 #include "../server_status.hpp"
@@ -15,14 +16,11 @@ enum class server_response_payload_kind : std::uint8_t {
     none = 0,
     state,
     runtime_value,
+    ic_catalog,
 };
 
-// Common response envelope for one request execution.
 struct server_response {
-    // Process-local operation identity.
     operation_id operation;
-
-    // Control-flow result.
     server_status status = server_status::success;
 
     server_response_payload_kind payload =
@@ -30,8 +28,8 @@ struct server_response {
 
     server_state_snapshot state;
     runtime_value value;
+    ic_catalog catalog;
 
-    // Diagnostics produced by this request only.
     diagnostic_collection diagnostics;
 };
 

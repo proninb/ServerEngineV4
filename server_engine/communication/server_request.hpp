@@ -11,65 +11,41 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace cw::server {
 
-// Server request kinds currently accepted by the control layer.
 enum class server_request_kind {
-    // Restore one persisted Project while the Server is UNLOADED.
     load,
-
-    // Compile one Project from source and persist only the final compiled artifact.
     publish,
-
-    // Incrementally construct one Project from persisted BUILD state while UNLOADED.
     build,
-
-    // Destroy the currently active Project and return to UNLOADED.
     unload,
-
-    // Full source construction plus fresh BUILD acceleration while UNLOADED.
     rebuild,
-
-    // Read the current observable Server/Project state.
     get_state,
-
-    // Read one scalar value from the committed Runtime view.
     get_value,
-
-    // Persist a semantic binary snapshot of the current Runtime.
     snap_ic,
-
-    // Restore one semantic binary IC against the current G/Runtime bindings.
     reset_ic,
-
-    // Enter Runtime execution from LOADED/FREEZE.
+    delete_ic,
+    list_ic,
     run,
-
-    // Pause Runtime execution while preserving execution state.
     freeze,
-
-    // Stop communication, release Project ownership, and exit server.run().
     shutdown,
 };
 
-// Fully parsed transport-neutral request published by a communication endpoint.
 struct server_request {
-    // Operation selected by the external request.
     server_request_kind kind = server_request_kind::shutdown;
 
-    // Project entry path used by LOAD/PUBLISH/BUILD/REBUILD and IC path used
-    // by SNAP_IC/RESET_IC.
+    // Project entry path for lifecycle commands; IC data path for SNAP/RESET.
     std::filesystem::path path;
 
-    // Query target used by GET_VALUE.
+    // Runtime query target or IC leaf name.
     std::string name;
 
-    snap_ic_options snap_options =
-        snap_ic_options::none;
+    snap_ic_options snap_options = snap_ic_options::none;
+    reset_ic_options reset_options = reset_ic_options::none;
 
-    reset_ic_options reset_options =
-        reset_ic_options::none;
+    // Optional ordered IC group path. Empty means root-level IC.
+    std::vector<std::string> group;
 };
 
 }

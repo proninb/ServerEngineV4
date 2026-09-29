@@ -13,6 +13,8 @@
 #include "license/server_lease_loader.hpp"
 #include "project/project_build.hpp"
 #include "project/project_load.hpp"
+#include "project/project_configuration_loader.hpp"
+#include "project/ic/ic_catalog.hpp"
 #include "project/project_publish.hpp"
 #include "project/project_rebuild.hpp"
 #include "project/runtime/runtime_ic_codec.hpp"
@@ -43,6 +45,69 @@ inline constexpr auto shutdown_ack_timeout =
         : (base / path).lexically_normal();
 }
 
+[[nodiscard]] bool valid_ic_identity(
+    std::string_view name,
+    const std::vector<std::string>& group) noexcept {
+
+    if (name.empty()) {
+        return false;
+    }
+
+    for (const auto& component : group) {
+        if (component.empty()) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+[[nodiscard]] server_status load_resident_project_configuration(
+    project& value,
+    operation_id operation,
+    diagnostic_collection& diagnostics) {
+
+    project_runtime_configuration configuration;
+
+    const auto status = load_project_runtime_configuration(
+        value.path(),
+        operation,
+        diagnostics,
+        configuration);
+
+    if (!succeeded(status)) {
+        return status;
+    }
+
+    if (!configuration.ic.empty()) {
+        value.set_ic_catalog_path(
+            resolve(
+                value.path().parent_path(),
+                configuration.ic));
+    }
+
+    return server_status::success;
+}
+
+[[nodiscard]] server_status require_ic_catalog(
+    const project& value,
+    operation_id operation,
+    diagnostic_collection& diagnostics) {
+
+    if (!value.ic_catalog_path().empty()) {
+        return server_status::success;
+    }
+
+    diagnostics.emit(
+        diagnostic(
+            diagnostics::runtime_ic_invalid,
+            operation)
+            .detail(
+                "Root project.json does not configure an IC catalog path")
+            .build());
+
+    return server_status::runtime_ic_invalid;
+}
 
 }
 
@@ -478,6 +543,8 @@ server_response server::execute(
     case server_request_kind::snap_ic:
         result.status =
             snap_ic(
+                request.name,
+                request.group,
                 request.path,
                 request.snap_options,
                 result.operation,
@@ -487,10 +554,34 @@ server_response server::execute(
     case server_request_kind::reset_ic:
         result.status =
             reset_ic(
+                request.name,
+                request.group,
                 request.path,
                 request.reset_options,
                 result.operation,
                 result.diagnostics);
+        break;
+
+    case server_request_kind::delete_ic:
+        result.status =
+            delete_ic(
+                request.name,
+                request.group,
+                result.operation,
+                result.diagnostics);
+        break;
+
+    case server_request_kind::list_ic:
+        result.status =
+            list_ic(
+                result.catalog,
+                result.operation,
+                result.diagnostics);
+
+        if (succeeded(result.status)) {
+            result.payload =
+                server_response_payload_kind::ic_catalog;
+        }
         break;
 
     case server_request_kind::run:
@@ -659,6 +750,20 @@ server_status server::load(
         return status;
     }
 
+    const auto configured =
+        load_resident_project_configuration(
+            *candidate,
+            operation,
+            diagnostics);
+
+    if (!succeeded(configured)) {
+        candidate.reset();
+        context.project.reset();
+        project_state_value =
+            project_state::unloaded;
+        return configured;
+    }
+
     context.project =
         std::move(candidate);
 
@@ -704,6 +809,20 @@ server_status server::publish(
         project_state_value =
             project_state::unloaded;
         return status;
+    }
+
+    const auto configured =
+        load_resident_project_configuration(
+            *candidate,
+            operation,
+            diagnostics);
+
+    if (!succeeded(configured)) {
+        candidate.reset();
+        context.project.reset();
+        project_state_value =
+            project_state::unloaded;
+        return configured;
     }
 
     context.project =
@@ -753,6 +872,20 @@ server_status server::build(
         return status;
     }
 
+    const auto configured =
+        load_resident_project_configuration(
+            *candidate,
+            operation,
+            diagnostics);
+
+    if (!succeeded(configured)) {
+        candidate.reset();
+        context.project.reset();
+        project_state_value =
+            project_state::unloaded;
+        return configured;
+    }
+
     context.project =
         std::move(candidate);
 
@@ -800,6 +933,20 @@ server_status server::rebuild(
         return status;
     }
 
+    const auto configured =
+        load_resident_project_configuration(
+            *candidate,
+            operation,
+            diagnostics);
+
+    if (!succeeded(configured)) {
+        candidate.reset();
+        context.project.reset();
+        project_state_value =
+            project_state::unloaded;
+        return configured;
+    }
+
     context.project =
         std::move(candidate);
 
@@ -810,18 +957,25 @@ server_status server::rebuild(
 }
 
 server_status server::snap_ic(
+    const std::string& name,
+    const std::vector<std::string>& group,
     const std::filesystem::path& ic_path,
     snap_ic_options options,
     operation_id operation,
     diagnostic_collection& diagnostics) {
 
-    if (options != snap_ic_options::none) {
+    if (options != snap_ic_options::none ||
+        !valid_ic_identity(name, group) ||
+        ic_path.empty()) {
+
         diagnostics.emit(
             diagnostic(
                 diagnostics::runtime_ic_invalid,
                 operation)
-                .detail("SNAP_IC options are invalid")
+                .detail(
+                    "SNAP_IC requires name, optional group[], path, and valid options")
                 .build());
+
         return server_status::runtime_ic_invalid;
     }
 
@@ -832,120 +986,182 @@ server_status server::snap_ic(
                 operation)
                 .detail("SNAP_IC requires an active Project")
                 .build());
+
         return server_status::project_not_loaded;
     }
 
-    if (ic_path.empty()) {
+    if (!project_state_can_ic(project_state_value)) {
         diagnostics.emit(
             diagnostic(
-                diagnostics::runtime_ic_invalid,
+                diagnostics::runtime_state_invalid,
                 operation)
-                .detail("SNAP_IC requires a file path")
+                .detail("SNAP_IC requires LOADED or FREEZE")
                 .build());
+
+        return server_status::runtime_state_invalid;
+    }
+
+    if (!succeeded(require_ic_catalog(
+            *context.project,
+            operation,
+            diagnostics))) {
         return server_status::runtime_ic_invalid;
     }
 
-    const auto runtime =
-        static_cast<const project&>(
-            *context.project).shm().bytes();
+    const auto previous_state = project_state_value;
+    project_state_value = project_state::snapping_ic;
+    context.communications.publish_server_state(
+        previous_state,
+        project_state_value);
 
-    const auto logical_size =
-        context.project->runtime_size();
+    const auto status = [&]() -> server_status {
+        const auto runtime =
+            static_cast<const project&>(*context.project).shm().bytes();
+        const auto logical_size = context.project->runtime_size();
 
-    if (logical_size == 0 ||
-        logical_size >
-            static_cast<std::uint64_t>(
-                runtime.size())) {
+        if (logical_size == 0 ||
+            logical_size > static_cast<std::uint64_t>(runtime.size())) {
 
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::runtime_ic_failed,
-                operation)
-                .detail("Runtime SHM size is invalid")
-                .build());
-        return server_status::runtime_ic_failed;
-    }
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_ic_failed,
+                    operation)
+                    .detail("Runtime SHM size is invalid")
+                    .build());
+            return server_status::runtime_ic_failed;
+        }
 
-    std::vector<std::byte> image;
+        std::vector<std::byte> image;
+        if (snapshot_runtime_ic_binary(
+                context.project->compiled(),
+                context.project->runtime_bindings(),
+                runtime.first(static_cast<std::size_t>(logical_size)),
+                image) != runtime_ic_snapshot_result::success) {
 
-    if (snapshot_runtime_ic_binary(
-            context.project->compiled(),
-            context.project->runtime_bindings(),
-            runtime.first(
-                static_cast<std::size_t>(
-                    logical_size)),
-            image) !=
-        runtime_ic_snapshot_result::success) {
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_ic_failed,
+                    operation)
+                    .detail("SNAP_IC could not capture Runtime")
+                    .build());
+            return server_status::runtime_ic_failed;
+        }
 
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::runtime_ic_failed,
-                operation)
-                .detail("SNAP_IC could not capture Runtime")
-                .build());
-        return server_status::runtime_ic_failed;
-    }
-
-    const auto path =
-        resolve(
-            context.configuration_directory,
+        const auto path = resolve(
+            context.project->ic_catalog_path().parent_path(),
             ic_path);
 
-    writable_file_mapping mapping;
+        writable_file_mapping mapping;
+        if (mapping.create(path, image.size()) !=
+            writable_file_mapping_result::success) {
 
-    if (mapping.create(
-            path,
-            image.size()) !=
-        writable_file_mapping_result::success) {
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_ic_io_failed,
+                    operation)
+                    .detail(path.generic_string())
+                    .build());
+            return server_status::io_error;
+        }
 
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::runtime_ic_io_failed,
-                operation)
-                .detail(path.generic_string())
-                .build());
-        return server_status::io_error;
-    }
+        std::memcpy(mapping.bytes().data(), image.data(), image.size());
 
-    std::memcpy(
-        mapping.bytes().data(),
-        image.data(),
-        image.size());
+        if (mapping.flush() != writable_file_mapping_result::success) {
+            mapping.reset();
+            std::error_code ignored;
+            std::filesystem::remove(path, ignored);
 
-    if (mapping.flush() !=
-        writable_file_mapping_result::success) {
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_ic_io_failed,
+                    operation)
+                    .detail(path.generic_string())
+                    .build());
+            return server_status::io_error;
+        }
 
-        mapping.reset();
+        ic_catalog catalog;
+        const auto loaded = load_ic_catalog(
+            context.project->ic_catalog_path(),
+            catalog);
 
-        std::error_code ignored;
-        std::filesystem::remove(
-            path,
-            ignored);
+        if (loaded != ic_catalog_result::success &&
+            loaded != ic_catalog_result::not_found) {
 
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::runtime_ic_io_failed,
-                operation)
-                .detail(path.generic_string())
-                .build());
-        return server_status::io_error;
-    }
+            diagnostics.emit(
+                diagnostic(
+                    loaded == ic_catalog_result::invalid
+                        ? diagnostics::runtime_ic_invalid
+                        : diagnostics::runtime_ic_io_failed,
+                    operation)
+                    .detail(
+                        context.project->ic_catalog_path().generic_string())
+                    .build());
 
-    return server_status::success;
+            return loaded == ic_catalog_result::invalid
+                ? server_status::runtime_ic_invalid
+                : server_status::io_error;
+        }
+
+        if (!upsert_ic_catalog_node(
+                catalog,
+                group,
+                name,
+                ic_path,
+                static_cast<std::uint64_t>(image.size()))) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_ic_invalid,
+                    operation)
+                    .detail("SNAP_IC group/name conflicts with IC.json tree")
+                    .build());
+            return server_status::runtime_ic_invalid;
+        }
+
+        if (save_ic_catalog(
+                context.project->ic_catalog_path(),
+                catalog) != ic_catalog_result::success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_ic_io_failed,
+                    operation)
+                    .detail(
+                        context.project->ic_catalog_path().generic_string())
+                    .build());
+            return server_status::io_error;
+        }
+
+        return server_status::success;
+    }();
+
+    project_state_value = previous_state;
+    context.communications.publish_server_state(
+        project_state::snapping_ic,
+        previous_state);
+
+    return status;
 }
 
 server_status server::reset_ic(
+    const std::string& name,
+    const std::vector<std::string>& group,
     const std::filesystem::path& ic_path,
     reset_ic_options options,
     operation_id operation,
     diagnostic_collection& diagnostics) {
 
-    if (!valid_reset_ic_options(options)) {
+    if (!valid_reset_ic_options(options) ||
+        !valid_ic_identity(name, group) ||
+        ic_path.empty()) {
+
         diagnostics.emit(
             diagnostic(
                 diagnostics::runtime_ic_invalid,
                 operation)
-                .detail("RESET_IC options are invalid")
+                .detail(
+                    "RESET_IC requires name, optional group[], path, and valid options")
                 .build());
         return server_status::runtime_ic_invalid;
     }
@@ -960,146 +1176,357 @@ server_status server::reset_ic(
         return server_status::project_not_loaded;
     }
 
-    if (ic_path.empty()) {
+    if (!project_state_can_ic(project_state_value)) {
         diagnostics.emit(
             diagnostic(
-                diagnostics::runtime_ic_invalid,
+                diagnostics::runtime_state_invalid,
                 operation)
-                .detail("RESET_IC requires a file path")
+                .detail("RESET_IC requires LOADED or FREEZE")
                 .build());
+        return server_status::runtime_state_invalid;
+    }
+
+    if (!succeeded(require_ic_catalog(
+            *context.project,
+            operation,
+            diagnostics))) {
         return server_status::runtime_ic_invalid;
     }
 
-    const auto path =
-        resolve(
-            context.configuration_directory,
-            ic_path);
+    ic_catalog catalog;
+    const auto catalog_loaded = load_ic_catalog(
+        context.project->ic_catalog_path(),
+        catalog);
 
-    read_only_file_mapping mapping;
-
-    const auto opened =
-        mapping.open(path);
-
-    if (opened !=
-        read_only_file_mapping_result::success) {
-
-        const bool missing =
-            opened ==
-            read_only_file_mapping_result::not_found;
-
+    if (catalog_loaded != ic_catalog_result::success) {
         diagnostics.emit(
             diagnostic(
-                missing
+                catalog_loaded == ic_catalog_result::not_found
                     ? diagnostics::runtime_ic_not_found
-                    : diagnostics::runtime_ic_io_failed,
+                    : catalog_loaded == ic_catalog_result::invalid
+                        ? diagnostics::runtime_ic_invalid
+                        : diagnostics::runtime_ic_io_failed,
                 operation)
-                .detail(path.generic_string())
+                .detail(
+                    context.project->ic_catalog_path().generic_string())
                 .build());
 
-        return missing
+        return catalog_loaded == ic_catalog_result::not_found
             ? server_status::runtime_ic_not_found
-            : server_status::io_error;
+            : catalog_loaded == ic_catalog_result::invalid
+                ? server_status::runtime_ic_invalid
+                : server_status::io_error;
     }
 
-    runtime_ic_binary_view image;
-
-    if (image.bind(
-            mapping.bytes()) !=
-        runtime_ic_codec_result::success) {
-
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::runtime_ic_invalid,
-                operation)
-                .detail(path.generic_string())
-                .build());
-        return server_status::runtime_ic_invalid;
-    }
-
-    auto runtime =
-        context.project->shm().bytes();
-
-    const auto logical_size =
-        context.project->runtime_size();
-
-    if (logical_size == 0 ||
-        logical_size >
-            static_cast<std::uint64_t>(
-                runtime.size())) {
-
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::runtime_ic_failed,
-                operation)
-                .detail("Runtime SHM size is invalid")
-                .build());
-        return server_status::runtime_ic_failed;
-    }
-
-    const auto reset =
-        reset_runtime_ic_binary(
-            context.project->compiled(),
-            context.project->runtime_bindings(),
-            runtime.first(
-                static_cast<std::size_t>(
-                    logical_size)),
-            image,
-            nullptr,
-            options);
-
-    switch (reset) {
-    case runtime_ic_reset_result::success:
-        return server_status::success;
-
-    case runtime_ic_reset_result::invalid_input:
-    case runtime_ic_reset_result::invalid_image:
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::runtime_ic_invalid,
-                operation)
-                .detail(path.generic_string())
-                .build());
-        return server_status::runtime_ic_invalid;
-
-    case runtime_ic_reset_result::not_found:
+    const auto* node = find_ic_catalog_node(catalog, group, name);
+    if (node == nullptr) {
         diagnostics.emit(
             diagnostic(
                 diagnostics::runtime_ic_not_found,
                 operation)
-                .detail(path.generic_string())
+                .detail(name)
                 .build());
         return server_status::runtime_ic_not_found;
-
-    case runtime_ic_reset_result::unsupported_type:
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::runtime_ic_failed,
-                operation)
-                .detail("RESET_IC encountered an unsupported Runtime type")
-                .build());
-        return server_status::unsupported;
-
-    case runtime_ic_reset_result::type_mismatch:
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::runtime_ic_type_mismatch,
-                operation)
-                .detail(path.generic_string())
-                .build());
-        return server_status::runtime_ic_type_mismatch;
-
-    case runtime_ic_reset_result::invalid_runtime:
-    case runtime_ic_reset_result::failed:
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::runtime_ic_failed,
-                operation)
-                .detail(path.generic_string())
-                .build());
-        return server_status::runtime_ic_failed;
     }
 
-    return server_status::runtime_ic_failed;
+    const auto path = resolve(
+        context.project->ic_catalog_path().parent_path(),
+        ic_path);
+    const auto catalog_path = resolve(
+        context.project->ic_catalog_path().parent_path(),
+        node->path);
+
+    if (path != catalog_path) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::runtime_ic_invalid,
+                operation)
+                .detail("RESET_IC path does not match IC.json entry")
+                .build());
+        return server_status::runtime_ic_invalid;
+    }
+
+    const auto previous_state = project_state_value;
+    project_state_value = project_state::resetting_ic;
+    context.communications.publish_server_state(
+        previous_state,
+        project_state_value);
+
+    const auto status = [&]() -> server_status {
+        read_only_file_mapping mapping;
+        const auto opened = mapping.open(path);
+
+        if (opened != read_only_file_mapping_result::success) {
+            const bool missing =
+                opened == read_only_file_mapping_result::not_found;
+
+            diagnostics.emit(
+                diagnostic(
+                    missing
+                        ? diagnostics::runtime_ic_not_found
+                        : diagnostics::runtime_ic_io_failed,
+                    operation)
+                    .detail(path.generic_string())
+                    .build());
+
+            return missing
+                ? server_status::runtime_ic_not_found
+                : server_status::io_error;
+        }
+
+        runtime_ic_binary_view image;
+        if (image.bind(mapping.bytes()) !=
+            runtime_ic_codec_result::success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_ic_invalid,
+                    operation)
+                    .detail(path.generic_string())
+                    .build());
+            return server_status::runtime_ic_invalid;
+        }
+
+        auto runtime = context.project->shm().bytes();
+        const auto logical_size = context.project->runtime_size();
+
+        if (logical_size == 0 ||
+            logical_size > static_cast<std::uint64_t>(runtime.size())) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_ic_failed,
+                    operation)
+                    .detail("Runtime SHM size is invalid")
+                    .build());
+            return server_status::runtime_ic_failed;
+        }
+
+        const auto reset = reset_runtime_ic_binary(
+            context.project->compiled(),
+            context.project->runtime_bindings(),
+            runtime.first(static_cast<std::size_t>(logical_size)),
+            image,
+            nullptr,
+            options);
+
+        switch (reset) {
+        case runtime_ic_reset_result::success:
+            return server_status::success;
+        case runtime_ic_reset_result::invalid_input:
+        case runtime_ic_reset_result::invalid_image:
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_ic_invalid,
+                    operation)
+                    .detail(path.generic_string())
+                    .build());
+            return server_status::runtime_ic_invalid;
+        case runtime_ic_reset_result::not_found:
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_ic_not_found,
+                    operation)
+                    .detail(path.generic_string())
+                    .build());
+            return server_status::runtime_ic_not_found;
+        case runtime_ic_reset_result::unsupported_type:
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_ic_failed,
+                    operation)
+                    .detail(
+                        "RESET_IC encountered an unsupported Runtime type")
+                    .build());
+            return server_status::unsupported;
+        case runtime_ic_reset_result::type_mismatch:
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_ic_type_mismatch,
+                    operation)
+                    .detail(path.generic_string())
+                    .build());
+            return server_status::runtime_ic_type_mismatch;
+        case runtime_ic_reset_result::invalid_runtime:
+        case runtime_ic_reset_result::failed:
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_ic_failed,
+                    operation)
+                    .detail(path.generic_string())
+                    .build());
+            return server_status::runtime_ic_failed;
+        }
+
+        return server_status::runtime_ic_failed;
+    }();
+
+    project_state_value = previous_state;
+    context.communications.publish_server_state(
+        project_state::resetting_ic,
+        previous_state);
+
+    return status;
+}
+
+server_status server::delete_ic(
+    const std::string& name,
+    const std::vector<std::string>& group,
+    operation_id operation,
+    diagnostic_collection& diagnostics) {
+
+    if (!valid_ic_identity(name, group)) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::runtime_ic_invalid,
+                operation)
+                .detail("DELETE_IC requires name and optional group[]")
+                .build());
+        return server_status::runtime_ic_invalid;
+    }
+
+    if (!context.project) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_not_loaded,
+                operation)
+                .detail("DELETE_IC requires an active Project")
+                .build());
+        return server_status::project_not_loaded;
+    }
+
+    if (!succeeded(require_ic_catalog(
+            *context.project,
+            operation,
+            diagnostics))) {
+        return server_status::runtime_ic_invalid;
+    }
+
+    ic_catalog catalog;
+    const auto loaded = load_ic_catalog(
+        context.project->ic_catalog_path(),
+        catalog);
+
+    if (loaded != ic_catalog_result::success) {
+        diagnostics.emit(
+            diagnostic(
+                loaded == ic_catalog_result::not_found
+                    ? diagnostics::runtime_ic_not_found
+                    : loaded == ic_catalog_result::invalid
+                        ? diagnostics::runtime_ic_invalid
+                        : diagnostics::runtime_ic_io_failed,
+                operation)
+                .detail(
+                    context.project->ic_catalog_path().generic_string())
+                .build());
+
+        return loaded == ic_catalog_result::not_found
+            ? server_status::runtime_ic_not_found
+            : loaded == ic_catalog_result::invalid
+                ? server_status::runtime_ic_invalid
+                : server_status::io_error;
+    }
+
+    std::filesystem::path removed_path;
+    if (!erase_ic_catalog_node(
+            catalog,
+            group,
+            name,
+            removed_path)) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::runtime_ic_not_found,
+                operation)
+                .detail(name)
+                .build());
+        return server_status::runtime_ic_not_found;
+    }
+
+    if (save_ic_catalog(
+            context.project->ic_catalog_path(),
+            catalog) != ic_catalog_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::runtime_ic_io_failed,
+                operation)
+                .detail(
+                    context.project->ic_catalog_path().generic_string())
+                .build());
+        return server_status::io_error;
+    }
+
+    const auto data_path = resolve(
+        context.project->ic_catalog_path().parent_path(),
+        removed_path);
+
+    std::error_code error;
+    (void)std::filesystem::remove(data_path, error);
+
+    if (error) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::runtime_ic_io_failed,
+                operation)
+                .detail(data_path.generic_string())
+                .build());
+        return server_status::io_error;
+    }
+
+    return server_status::success;
+}
+
+server_status server::list_ic(
+    ic_catalog& output,
+    operation_id operation,
+    diagnostic_collection& diagnostics) {
+
+    output = {};
+
+    if (!context.project) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_not_loaded,
+                operation)
+                .detail("LIST_IC requires an active Project")
+                .build());
+        return server_status::project_not_loaded;
+    }
+
+    if (!succeeded(require_ic_catalog(
+            *context.project,
+            operation,
+            diagnostics))) {
+        return server_status::runtime_ic_invalid;
+    }
+
+    const auto loaded = load_ic_catalog(
+        context.project->ic_catalog_path(),
+        output);
+
+    if (loaded == ic_catalog_result::not_found) {
+        output = {};
+        return server_status::success;
+    }
+
+    if (loaded != ic_catalog_result::success) {
+        diagnostics.emit(
+            diagnostic(
+                loaded == ic_catalog_result::invalid
+                    ? diagnostics::runtime_ic_invalid
+                    : diagnostics::runtime_ic_io_failed,
+                operation)
+                .detail(
+                    context.project->ic_catalog_path().generic_string())
+                .build());
+
+        return loaded == ic_catalog_result::invalid
+            ? server_status::runtime_ic_invalid
+            : server_status::io_error;
+    }
+
+    return server_status::success;
 }
 
 server_status server::run_project(

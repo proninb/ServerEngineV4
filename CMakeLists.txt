@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.25)
+﻿cmake_minimum_required(VERSION 3.25)
 
 project(ServerEngineV4
     VERSION 4.0.0
@@ -64,6 +64,7 @@ add_executable(ServerEngineV4
     server_engine/communication/console/server_console.cpp
 
     server_engine/project/project.cpp
+    server_engine/project/ic/ic_catalog.cpp
     server_engine/project/abi/abi_layout.cpp
     server_engine/project/runtime/runtime_layout.cpp
     server_engine/project/runtime/runtime_query.cpp
@@ -634,6 +635,7 @@ if(BUILD_TESTING)
     add_executable(ServerEngineV4TcpJsonProtocolTests
         tests/tcp_json_protocol_tests.cpp
         server_engine/communication/protocol/json_protocol.cpp
+        server_engine/filesystem_path.cpp
         server_engine/json/json_parser.cpp
         server_engine/diagnostics/diagnostic_collection.cpp
         server_engine/diagnostics/diagnostic_source_cache.cpp
@@ -881,3 +883,4 @@ if(BUILD_TESTING)
         COMMAND ServerEngineV4FrontendTests
     )
 endif()
+

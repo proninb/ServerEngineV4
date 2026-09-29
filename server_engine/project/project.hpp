@@ -1,8 +1,9 @@
 /*
  * Resident Project state.
  *
- * Resident state owns the immutable compiled.bin mapping plus final Project
- * SHM. Runtime layout construction state never enters this class.
+ * Resident state owns immutable compiled.bin, final Runtime/SHM state, and
+ * resolved references to Project runtime resources loaded after Runtime
+ * publication. Construction-only state never enters this class.
  */
 #pragma once
 
@@ -13,10 +14,10 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <utility>
 
 namespace cw::server {
 
-// Resident state published only after a Project lifecycle mode succeeds.
 class project final {
 public:
     project(
@@ -52,6 +53,15 @@ public:
         return runtime_bindings_value;
     }
 
+    void set_ic_catalog_path(std::filesystem::path path) {
+        ic_catalog_path_value = std::move(path);
+    }
+
+    [[nodiscard]] const std::filesystem::path&
+    ic_catalog_path() const noexcept {
+        return ic_catalog_path_value;
+    }
+
 private:
     std::filesystem::path project_path;
     read_only_file_mapping compiled_mapping;
@@ -59,6 +69,7 @@ private:
     fixed_shared_memory shared_memory;
     runtime_binding_index runtime_bindings_value;
     std::uint64_t runtime_size_value = 0;
+    std::filesystem::path ic_catalog_path_value;
 };
 
 }

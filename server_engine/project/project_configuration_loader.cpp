@@ -14,6 +14,8 @@
 
 #include <array>
 #include <cstdint>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -68,10 +70,12 @@ public:
     project_configuration_handler(
         std::vector<project_configuration_dependency>& dependencies,
         project_configuration_scope scope,
-        preprocessor_configuration* preprocessor)
+        preprocessor_configuration* preprocessor,
+        project_runtime_configuration* runtime)
         : dependencies(dependencies),
           scope(scope),
-          preprocessor(preprocessor) {
+          preprocessor(preprocessor),
+          runtime(runtime) {
 
         stack.reserve(16);
     }
@@ -157,15 +161,16 @@ public:
 
         switch (ended.context) {
         case schema_context::root: {
-            const auto required =
+            const bool complete =
                 scope == project_configuration_scope::root
-                    ? std::uint8_t{4}
-                    : std::uint8_t{3};
+                    ? ended.index == 4 ||
+                        ended.index == 5
+                    : ended.index == 3;
 
-            if (ended.index != required) {
+            if (!complete) {
                 fail(
                     scope == project_configuration_scope::root
-                        ? "root Project configuration requires fields in order: version, name, project, preprocessor"
+                        ? "root Project configuration requires fields in order: version, name, project, preprocessor[, ic]"
                         : "nested Project configuration requires fields in order: version, name, project");
                 return;
             }
@@ -380,11 +385,12 @@ private:
         const frame& current,
         std::string_view key) {
 
-        static constexpr std::array<std::string_view, 4> root_keys{
+        static constexpr std::array<std::string_view, 5> root_keys{
             "version",
             "name",
             "project",
             "preprocessor",
+            "ic",
         };
 
         if (scope == project_configuration_scope::nested &&
@@ -398,7 +404,7 @@ private:
 
         const auto key_count =
             scope == project_configuration_scope::root
-                ? std::size_t{4}
+                ? std::size_t{5}
                 : std::size_t{3};
 
         if (current.index >= key_count) {
@@ -412,7 +418,7 @@ private:
         if (key != root_keys[current.index]) {
             fail(
                 scope == project_configuration_scope::root
-                    ? "root Project configuration fields must be ordered: version, name, project, preprocessor"
+                    ? "root Project configuration fields must be ordered: version, name, project, preprocessor[, ic]"
                     : "nested Project configuration fields must be ordered: version, name, project");
         }
     }
@@ -483,6 +489,49 @@ private:
 
                 fail("name must be a non-empty string");
                 return;
+            }
+
+            ++current.index;
+            return;
+        }
+
+        if (current.index == 4) {
+            std::string path_text;
+
+            if (!value.get(path_text) ||
+                path_text.empty()) {
+
+                fail("ic must be a non-empty path string");
+                return;
+            }
+
+            std::filesystem::path path_value;
+
+            const auto converted =
+                filesystem_path_from_utf8(
+                    path_text,
+                    path_value);
+
+            if (converted !=
+                filesystem_path_result::success) {
+
+                fail(
+                    converted == filesystem_path_result::invalid_utf8
+                        ? "ic path must be valid UTF-8"
+                        : "Cannot convert ic path to native filesystem path");
+                return;
+            }
+
+            if (!path_value.is_absolute() &&
+                (path_value.has_root_name() ||
+                 path_value.has_root_directory())) {
+
+                fail("ic path must be relative or fully absolute");
+                return;
+            }
+
+            if (runtime != nullptr) {
+                runtime->ic = path_value.lexically_normal();
             }
 
             ++current.index;
@@ -709,6 +758,7 @@ private:
     std::vector<project_configuration_dependency>& dependencies;
     project_configuration_scope scope = project_configuration_scope::nested;
     preprocessor_configuration* preprocessor = nullptr;
+    project_runtime_configuration* runtime = nullptr;
     std::vector<frame> stack;
 
     std::size_t current_offset = 0;
@@ -727,9 +777,14 @@ server_status read_project_configuration(
     diagnostic_collection& diagnostics,
     std::vector<project_configuration_dependency>& dependencies,
     project_configuration_scope scope,
-    preprocessor_configuration* preprocessor) {
+    preprocessor_configuration* preprocessor,
+    project_runtime_configuration* runtime) {
 
     dependencies.clear();
+
+    if (runtime != nullptr) {
+        runtime->ic.clear();
+    }
 
     if (scope == project_configuration_scope::root) {
         if (preprocessor == nullptr) {
@@ -737,14 +792,18 @@ server_status read_project_configuration(
         }
 
         preprocessor->predefines.clear();
-    } else if (preprocessor != nullptr) {
+    } else if (
+        preprocessor != nullptr ||
+        runtime != nullptr) {
+
         return server_status::project_configuration_invalid;
     }
 
     project_configuration_handler handler{
         dependencies,
         scope,
-        preprocessor};
+        preprocessor,
+        runtime};
 
     const auto parsed =
         parse_json(
@@ -809,6 +868,74 @@ server_status read_project_configuration(
     }
 
     return server_status::success;
+}
+
+server_status load_project_runtime_configuration(
+    const std::filesystem::path& path,
+    operation_id operation,
+    diagnostic_collection& diagnostics,
+    project_runtime_configuration& output) {
+
+    output = {};
+
+    try {
+        std::ifstream input(path, std::ios::binary);
+
+        if (!input) {
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_configuration_read_failed,
+                    operation)
+                    .file(path)
+                    .detail(
+                        "Cannot read root project.json after Runtime/SHM publication")
+                    .build());
+
+            return server_status::io_error;
+        }
+
+        std::string bytes{
+            std::istreambuf_iterator<char>{input},
+            std::istreambuf_iterator<char>{}};
+
+        if (!input.good() && !input.eof()) {
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_configuration_read_failed,
+                    operation)
+                    .file(path)
+                    .detail(
+                        "Cannot complete root project.json read")
+                    .build());
+
+            return server_status::io_error;
+        }
+
+        std::vector<project_configuration_dependency> dependencies;
+        preprocessor_configuration preprocessor;
+
+        return read_project_configuration(
+            bytes,
+            path,
+            operation,
+            diagnostics,
+            dependencies,
+            project_configuration_scope::root,
+            &preprocessor,
+            &output);
+    }
+    catch (...) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_configuration_read_failed,
+                operation)
+                .file(path)
+                .detail(
+                    "Cannot allocate Project runtime configuration read state")
+                .build());
+
+        return server_status::io_error;
+    }
 }
 
 }

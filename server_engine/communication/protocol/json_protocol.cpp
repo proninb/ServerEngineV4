@@ -1,6 +1,7 @@
 #include "json_protocol.hpp"
 
 #include "../../json/json_parser.hpp"
+#include "../../filesystem_path.hpp"
 
 #include <array>
 #include <charconv>
@@ -21,13 +22,12 @@ enum field_bit : std::uint32_t {
     arg_bit = 1u << 5,
     parameters_bit = 1u << 6,
     options_bit = 1u << 7,
+    group_bit = 1u << 8,
 };
 
 class request_handler final : public json_event_handler {
 public:
-    void location(
-        std::size_t,
-        std::size_t) override {
+    void location(std::size_t, std::size_t) override {
     }
 
     void object_begin() override {
@@ -37,9 +37,7 @@ public:
         }
 
         if (depth == 1) {
-            if (key_value != "arguments" ||
-                arguments_seen) {
-
+            if (key_value != "arguments" || arguments_seen) {
                 valid_value = false;
             }
 
@@ -53,7 +51,7 @@ public:
     }
 
     void object_end() override {
-        if (depth == 0) {
+        if (depth == 0 || group_array) {
             valid_value = false;
             return;
         }
@@ -62,53 +60,77 @@ public:
     }
 
     void array_begin() override {
-        valid_value = false;
-        ++depth;
+        if (!valid_value ||
+            depth != 2 ||
+            key_value != "group" ||
+            !mark(group_bit)) {
+
+            valid_value = false;
+            ++depth;
+            return;
+        }
+
+        group_array = true;
+        depth = 3;
     }
 
     void array_end() override {
-        if (depth != 0) {
-            --depth;
+        if (!valid_value || !group_array || depth != 3) {
+            valid_value = false;
+            return;
         }
 
-        valid_value = false;
+        group_array = false;
+        depth = 2;
     }
 
-    void key(
-        std::string_view value) override {
-
-        key_value.assign(
-            value.data(),
-            value.size());
+    void key(std::string_view value) override {
+        key_value.assign(value.data(), value.size());
     }
 
-    void value(
-        json_value_view value) override {
+    void value(json_value_view value) override {
+        if (!valid_value) {
+            return;
+        }
 
-        if (!valid_value ||
-            (depth != 1 && depth != 2)) {
+        if (group_array) {
+            if (depth != 3) {
+                valid_value = false;
+                return;
+            }
+
+            std::string component;
+            if (!value.get(component) || component.empty()) {
+                valid_value = false;
+                return;
+            }
+
+            try {
+                group_value.push_back(std::move(component));
+            }
+            catch (...) {
+                valid_value = false;
+            }
+            return;
+        }
+
+        if (depth != 1 && depth != 2) {
             valid_value = false;
             return;
         }
 
         if (depth == 1) {
             if (key_value == "request_id") {
-                if (!mark(request_id_bit) ||
-                    !value.get(request_value)) {
-
+                if (!mark(request_id_bit) || !value.get(request_value)) {
                     valid_value = false;
                 }
-
                 return;
             }
 
             if (key_value == "command") {
-                if (!mark(command_bit) ||
-                    !value.get(command_value)) {
-
+                if (!mark(command_bit) || !value.get(command_value)) {
                     valid_value = false;
                 }
-
                 return;
             }
 
@@ -125,14 +147,9 @@ public:
         } else if (key_value == "arg") {
             assign_string(arg_bit, value, arg_value);
         } else if (key_value == "parameters") {
-            assign_string(
-                parameters_bit,
-                value,
-                parameters_value);
+            assign_string(parameters_bit, value, parameters_value);
         } else if (key_value == "options") {
-            if (!mark(options_bit) ||
-                !value.get(options_value)) {
-
+            if (!mark(options_bit) || !value.get(options_value)) {
                 valid_value = false;
             }
         } else {
@@ -143,6 +160,7 @@ public:
     [[nodiscard]] bool valid() const noexcept {
         return valid_value &&
             depth == 0 &&
+            !group_array &&
             (seen & request_id_bit) != 0 &&
             (seen & command_bit) != 0 &&
             request_value != 0;
@@ -155,17 +173,15 @@ public:
     std::string login_value;
     std::string arg_value;
     std::string parameters_value;
+    std::vector<std::string> group_value;
     std::uint64_t options_value = 0;
     std::uint32_t seen = 0;
 
 private:
-    [[nodiscard]] bool mark(
-        std::uint32_t bit) noexcept {
-
+    [[nodiscard]] bool mark(std::uint32_t bit) noexcept {
         if ((seen & bit) != 0) {
             return false;
         }
-
         seen |= bit;
         return true;
     }
@@ -175,9 +191,7 @@ private:
         json_value_view value,
         std::string& output) {
 
-        if (!mark(bit) ||
-            !value.get(output)) {
-
+        if (!mark(bit) || !value.get(output)) {
             valid_value = false;
         }
     }
@@ -185,6 +199,7 @@ private:
     std::size_t depth = 0;
     bool valid_value = true;
     bool arguments_seen = false;
+    bool group_array = false;
     std::string key_value;
 };
 
@@ -457,6 +472,10 @@ void append_integer(
         return "RUN";
     case project_state::freeze:
         return "FREEZE";
+    case project_state::resetting_ic:
+        return "RESETTING_IC";
+    case project_state::snapping_ic:
+        return "SNAPPING_IC";
     }
 
     return "UNLOADED";
@@ -525,6 +544,40 @@ void append_diagnostics(
     output.push_back(']');
 }
 
+void append_ic_catalog_node(
+    const ic_catalog_node& node,
+    std::string& output) {
+
+    output += "{\"name\":";
+    append_escaped(node.name, output);
+    output += ",\"type\":";
+    append_escaped(
+        node.kind == ic_catalog_node_kind::group ? "group" : "ic",
+        output);
+
+    if (node.kind == ic_catalog_node_kind::group) {
+        output += ",\"children\":[";
+        for (std::size_t index = 0; index < node.children.size(); ++index) {
+            if (index != 0) {
+                output.push_back(',');
+            }
+            append_ic_catalog_node(node.children[index], output);
+        }
+        output += "]}";
+        return;
+    }
+
+    std::string path;
+    (void)filesystem_path_to_utf8(node.path, path);
+    output += ",\"description\":";
+    append_escaped(node.description, output);
+    output += ",\"size\":";
+    append_integer(node.size, output);
+    output += ",\"path\":";
+    append_escaped(path, output);
+    output.push_back('}');
+}
+
 void append_response(
     std::uint64_t sequence,
     const protocol_response& response,
@@ -575,6 +628,25 @@ void append_response(
             output);
 
         output.push_back('}');
+        break;
+
+    case server_response_payload_kind::ic_catalog:
+        output += ",\"payload\":{\"items\":[";
+
+        for (std::size_t index = 0;
+             index < response.result.catalog.items.size();
+             ++index) {
+
+            if (index != 0) {
+                output.push_back(',');
+            }
+
+            append_ic_catalog_node(
+                response.result.catalog.items[index],
+                output);
+        }
+
+        output += "]}";
         break;
     }
 
@@ -789,6 +861,12 @@ json_decode_result decode_json_request(
             } else if (command == "RESET_IC") {
                 request.kind =
                     server_request_kind::reset_ic;
+            } else if (command == "DELETE_IC") {
+                request.kind =
+                    server_request_kind::delete_ic;
+            } else if (command == "LIST_IC") {
+                request.kind =
+                    server_request_kind::list_ic;
             } else if (command == "RUN") {
                 request.kind =
                     server_request_kind::run;
@@ -809,7 +887,6 @@ json_decode_result decode_json_request(
             case server_request_kind::publish:
             case server_request_kind::build:
             case server_request_kind::rebuild:
-            case server_request_kind::snap_ic:
                 if (!only(
                         handler.seen,
                         path_bit) ||
@@ -826,12 +903,48 @@ json_decode_result decode_json_request(
                         handler.path_value);
                 break;
 
+            case server_request_kind::snap_ic:
+                if (!only(
+                        handler.seen,
+                        name_bit |
+                            path_bit |
+                            options_bit |
+                            group_bit) ||
+                    (handler.seen & name_bit) == 0 ||
+                    (handler.seen & path_bit) == 0 ||
+                    handler.name_value.empty() ||
+                    handler.path_value.empty() ||
+                    handler.options_value != 0) {
+
+                    return {
+                        json_protocol_error::invalid_schema,
+                    };
+                }
+
+                request.name =
+                    std::move(
+                        handler.name_value);
+                request.path =
+                    std::move(
+                        handler.path_value);
+                request.group =
+                    std::move(
+                        handler.group_value);
+                request.snap_options =
+                    static_cast<snap_ic_options>(
+                        handler.options_value);
+                break;
+
             case server_request_kind::reset_ic:
                 if (!only(
                         handler.seen,
-                        path_bit |
-                            options_bit) ||
+                        name_bit |
+                            path_bit |
+                            options_bit |
+                            group_bit) ||
+                    (handler.seen & name_bit) == 0 ||
                     (handler.seen & path_bit) == 0 ||
+                    handler.name_value.empty() ||
                     handler.path_value.empty() ||
                     handler.options_value >
                         reset_ic_options_mask) {
@@ -841,13 +954,42 @@ json_decode_result decode_json_request(
                     };
                 }
 
+                request.name =
+                    std::move(
+                        handler.name_value);
+
                 request.path =
                     std::move(
                         handler.path_value);
 
+                request.group =
+                    std::move(
+                        handler.group_value);
+
                 request.reset_options =
                     static_cast<reset_ic_options>(
                         handler.options_value);
+                break;
+
+            case server_request_kind::delete_ic:
+                if (!only(
+                        handler.seen,
+                        name_bit |
+                            group_bit) ||
+                    (handler.seen & name_bit) == 0 ||
+                    handler.name_value.empty()) {
+
+                    return {
+                        json_protocol_error::invalid_schema,
+                    };
+                }
+
+                request.name =
+                    std::move(
+                        handler.name_value);
+                request.group =
+                    std::move(
+                        handler.group_value);
                 break;
 
             case server_request_kind::get_value:
@@ -869,6 +1011,7 @@ json_decode_result decode_json_request(
 
             case server_request_kind::unload:
             case server_request_kind::get_state:
+            case server_request_kind::list_ic:
             case server_request_kind::run:
             case server_request_kind::freeze:
             case server_request_kind::shutdown:

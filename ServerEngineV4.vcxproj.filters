@@ -85,6 +85,9 @@
     <Filter Include="server_engine\project\runtime">
       <UniqueIdentifier>{A7777777-7777-7777-7777-777777777777}</UniqueIdentifier>
     </Filter>
+    <Filter Include="server_engine\project\ic">
+      <UniqueIdentifier>{D95EAB93-55AE-4B31-B49E-67F921ED49D0}</UniqueIdentifier>
+    </Filter>
     <Filter Include="tests">
       <UniqueIdentifier>{0F5D5C54-5BD2-4A49-BEEE-5422EE125E37}</UniqueIdentifier>
     </Filter>
@@ -197,6 +200,9 @@
 
     <ClCompile Include="server_engine\project\project.cpp">
       <Filter>server_engine\project</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\ic\ic_catalog.cpp">
+      <Filter>server_engine\project\ic</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\project\abi\abi_layout.cpp">
       <Filter>server_engine\project\abi</Filter>
@@ -508,6 +514,9 @@
 
     <ClInclude Include="server_engine\project\project.hpp">
       <Filter>server_engine\project</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\ic\ic_catalog.hpp">
+      <Filter>server_engine\project\ic</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\abi\abi_layout.hpp">
       <Filter>server_engine\project\abi</Filter>

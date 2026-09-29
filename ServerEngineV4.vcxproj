@@ -108,6 +108,7 @@
     <ClCompile Include="server_engine\communication\console\console_input_windows.cpp" />
     <ClCompile Include="server_engine\communication\console\server_console.cpp" />
     <ClCompile Include="server_engine\project\project.cpp" />
+    <ClCompile Include="server_engine\project\ic\ic_catalog.cpp" />
     <ClCompile Include="server_engine\project\abi\abi_layout.cpp" />
     <ClCompile Include="server_engine\project\runtime\runtime_layout.cpp" />
     <ClCompile Include="server_engine\project\runtime\runtime_query.cpp" />
@@ -212,6 +213,7 @@
     <ClInclude Include="server_engine\communication\console\console_input.hpp" />
     <ClInclude Include="server_engine\communication\console\server_console.hpp" />
     <ClInclude Include="server_engine\project\project.hpp" />
+    <ClInclude Include="server_engine\project\ic\ic_catalog.hpp" />
     <ClInclude Include="server_engine\project\abi\abi_layout.hpp" />
     <ClInclude Include="server_engine\project\runtime\runtime_layout.hpp" />
     <ClInclude Include="server_engine\project\runtime\runtime_query.hpp" />

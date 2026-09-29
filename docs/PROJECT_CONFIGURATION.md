@@ -603,3 +603,20 @@ recursive Project cycle
 absolute path resolution failure
 filesystem-equivalence key construction failure
 ```
+
+
+## Runtime Project resources
+
+The root Project configuration may append:
+
+```json
+"ic": "IC.json"
+```
+
+A relative `ic` locator is resolved against the root `project.json` directory.
+`IC.json` is mutable Project runtime metadata; it is not a construction
+`file_kind`, Source Manager node, DAG input, or G contribution.
+
+LOAD first restores `compiled.bin -> G -> Runtime/SHM`, then reads root
+`project.json` for Project runtime resources such as IC and Tasks before the
+candidate Project is published as LOADED.

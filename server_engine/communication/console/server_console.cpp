@@ -9,8 +9,10 @@
  *   REBUILD <project-path>
  *   GET_STATE
  *   GET_VALUE <qualified-object[.member...]>
- *   SNAP_IC <ic-path>
- *   RESET_IC [/options=<0..7>] <ic-path>
+ *   SNAP_IC [/group=<name> ...] [/options=0] <name> <ic-path>
+ *   RESET_IC [/group=<name> ...] [/options=<0..7>] <name> <ic-path>
+ *   DELETE_IC [/group=<name> ...] <name>
+ *   LIST_IC
  *   RUN
  *   FREEZE
  *   SHUTDOWN
@@ -38,6 +40,78 @@ namespace {
         return static_cast<char>(std::toupper(ch));
     });
     return value;
+}
+
+struct parsed_ic_arguments final {
+    std::string name;
+    std::filesystem::path path;
+    std::vector<std::string> group;
+    std::uint32_t options = 0;
+};
+
+[[nodiscard]] bool parse_ic_arguments(
+    std::istringstream& stream,
+    bool path_required,
+    std::uint32_t max_options,
+    parsed_ic_arguments& output) {
+
+    output = {};
+    std::string token;
+
+    while (stream >> token) {
+        constexpr std::string_view group_prefix = "/group=";
+        constexpr std::string_view options_prefix = "/options=";
+        const auto view = std::string_view(token);
+
+        if (view.starts_with(group_prefix)) {
+            const auto component = view.substr(group_prefix.size());
+            if (component.empty()) {
+                return false;
+            }
+            output.group.emplace_back(component);
+            continue;
+        }
+
+        if (view.starts_with(options_prefix)) {
+            const auto value_text = view.substr(options_prefix.size());
+            std::uint32_t value = 0;
+            const auto parsed = std::from_chars(
+                value_text.data(),
+                value_text.data() + value_text.size(),
+                value);
+
+            if (value_text.empty() ||
+                parsed.ec != std::errc{} ||
+                parsed.ptr != value_text.data() + value_text.size() ||
+                value > max_options) {
+                return false;
+            }
+
+            output.options = value;
+            continue;
+        }
+
+        output.name = std::move(token);
+        break;
+    }
+
+    if (output.name.empty()) {
+        return false;
+    }
+
+    if (!path_required) {
+        std::string extra;
+        return !(stream >> extra);
+    }
+
+    std::string path;
+    std::getline(stream >> std::ws, path);
+    if (path.empty()) {
+        return false;
+    }
+
+    output.path = std::move(path);
+    return true;
 }
 
 [[nodiscard]] bool parse_reset_ic_arguments(
@@ -201,46 +275,60 @@ void server_console::run() {
                 {},
             });
         } else if (verb == "SNAP_IC") {
-            std::string path;
-            std::getline(
-                stream >> std::ws,
-                path);
+            parsed_ic_arguments parsed;
 
-            if (path.empty()) {
+            if (!parse_ic_arguments(stream, true, 0, parsed)) {
                 std::cout
-                    << "SNAP_IC requires an IC path\n";
-                continue;
-            }
-
-            publish({
-                server_request_kind::snap_ic,
-                std::move(path),
-                {},
-            });
-        } else if (verb == "RESET_IC") {
-            std::filesystem::path path;
-            reset_ic_options options;
-
-            if (!parse_reset_ic_arguments(
-                    stream,
-                    path,
-                    options)) {
-
-                std::cout
-                    << "RESET_IC requires [/options=<0..7>] <ic-path>\n";
+                    << "SNAP_IC requires [/group=<name> ...] [/options=0] <name> <ic-path>\\n";
                 continue;
             }
 
             server_request request;
-            request.kind =
-                server_request_kind::reset_ic;
-            request.path =
-                std::move(path);
-            request.reset_options =
-                options;
+            request.kind = server_request_kind::snap_ic;
+            request.name = std::move(parsed.name);
+            request.path = std::move(parsed.path);
+            request.group = std::move(parsed.group);
+            request.snap_options =
+                static_cast<snap_ic_options>(parsed.options);
+            publish(std::move(request));
+        } else if (verb == "RESET_IC") {
+            parsed_ic_arguments parsed;
 
-            publish(
-                std::move(request));
+            if (!parse_ic_arguments(
+                    stream,
+                    true,
+                    reset_ic_options_mask,
+                    parsed)) {
+
+                std::cout
+                    << "RESET_IC requires [/group=<name> ...] [/options=<0..7>] <name> <ic-path>\\n";
+                continue;
+            }
+
+            server_request request;
+            request.kind = server_request_kind::reset_ic;
+            request.name = std::move(parsed.name);
+            request.path = std::move(parsed.path);
+            request.group = std::move(parsed.group);
+            request.reset_options =
+                static_cast<reset_ic_options>(parsed.options);
+            publish(std::move(request));
+        } else if (verb == "DELETE_IC") {
+            parsed_ic_arguments parsed;
+
+            if (!parse_ic_arguments(stream, false, 0, parsed)) {
+                std::cout
+                    << "DELETE_IC requires [/group=<name> ...] <name>\\n";
+                continue;
+            }
+
+            server_request request;
+            request.kind = server_request_kind::delete_ic;
+            request.name = std::move(parsed.name);
+            request.group = std::move(parsed.group);
+            publish(std::move(request));
+        } else if (verb == "LIST_IC") {
+            publish({server_request_kind::list_ic, {}});
         } else if (verb == "RUN") {
             publish({
                 server_request_kind::run,
@@ -333,10 +421,17 @@ void server_console::present(
     case server_response_payload_kind::state:
         std::cout
             << "STATE "
-            << (result.state.project ==
-                    project_state::loaded
-                ? "LOADED"
-                : "UNLOADED")
+            << (result.state.project == project_state::unloaded
+                ? "UNLOADED"
+                : result.state.project == project_state::loaded
+                    ? "LOADED"
+                    : result.state.project == project_state::run
+                        ? "RUN"
+                        : result.state.project == project_state::freeze
+                            ? "FREEZE"
+                            : result.state.project == project_state::resetting_ic
+                                ? "RESETTING_IC"
+                                : "SNAPPING_IC")
             << '\n';
         break;
 
@@ -351,6 +446,12 @@ void server_console::present(
             << " bits="
             << result.value.bits
             << '\n';
+        break;
+
+    case server_response_payload_kind::ic_catalog:
+        for (const auto& node : result.catalog.items) {
+            std::cout << node.name << '\n';
+        }
         break;
     }
 }
