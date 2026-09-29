@@ -82,7 +82,7 @@
     <Filter Include="server_engine\project\persistence">
       <UniqueIdentifier>{F6666666-6666-6666-6666-666666666666}</UniqueIdentifier>
     </Filter>
-    <Filter Include="server_engine\project\nuntime">
+    <Filter Include="server_engine\project\runtime">
       <UniqueIdentifier>{A7777777-7777-7777-7777-777777777777}</UniqueIdentifier>
     </Filter>
     <Filter Include="tests">
@@ -106,7 +106,7 @@
     <ClCompile Include="server_engine\filesystem_path.cpp">
       <Filter>server_engine</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\nead_only_file_mapping.cpp">
+    <ClCompile Include="server_engine\read_only_file_mapping.cpp">
       <Filter>server_engine</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\writable_file_mapping.cpp">
@@ -160,10 +160,10 @@
     <ClCompile Include="server_engine\authentication\entra_jwt.cpp">
       <Filter>server_engine\authentication</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\authentication\crypto\nsa_sha256_verifier_windows.cpp">
+    <ClCompile Include="server_engine\authentication\crypto\rsa_sha256_verifier_windows.cpp">
       <Filter>server_engine\authentication\crypto</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\communication\nequest_queue.cpp">
+    <ClCompile Include="server_engine\communication\request_queue.cpp">
       <Filter>server_engine\communication</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\communication\communication.cpp">
@@ -201,23 +201,29 @@
     <ClCompile Include="server_engine\project\abi\abi_layout.cpp">
       <Filter>server_engine\project\abi</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\project\nuntime\nuntime_layout.cpp">
-      <Filter>server_engine\project\nuntime</Filter>
+    <ClCompile Include="server_engine\project\runtime\runtime_layout.cpp">
+      <Filter>server_engine\project\runtime</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\project\nuntime\nuntime_query.cpp">
-      <Filter>server_engine\project\nuntime</Filter>
+    <ClCompile Include="server_engine\project\runtime\runtime_query.cpp">
+      <Filter>server_engine\project\runtime</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\project\nuntime\nuntime_ic.cpp">
-      <Filter>server_engine\project\nuntime</Filter>
+    <ClCompile Include="server_engine\project\runtime\runtime_ic.cpp">
+      <Filter>server_engine\project\runtime</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\project\nuntime\nuntime_ic_codec.cpp">
-      <Filter>server_engine\project\nuntime</Filter>
+    <ClCompile Include="server_engine\project\runtime\runtime_ic_codec.cpp">
+      <Filter>server_engine\project\runtime</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\project\nuntime\fixed_direct_materializer.cpp">
-      <Filter>server_engine\project\nuntime</Filter>
+    <ClCompile Include="server_engine\project\runtime\runtime_ic_snapshot.cpp">
+      <Filter>server_engine\project\runtime</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\project\nuntime\project_runtime.cpp">
-      <Filter>server_engine\project\nuntime</Filter>
+    <ClCompile Include="server_engine\project\runtime\runtime_ic_reset.cpp">
+      <Filter>server_engine\project\runtime</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\runtime\fixed_direct_materializer.cpp">
+      <Filter>server_engine\project\runtime</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\runtime\project_runtime.cpp">
+      <Filter>server_engine\project\runtime</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\project\string\string_table.cpp">
       <Filter>server_engine\project\string</Filter>
@@ -336,7 +342,7 @@
     <ClInclude Include="server_engine\filesystem_path.hpp">
       <Filter>server_engine</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\nead_only_file_mapping.hpp">
+    <ClInclude Include="server_engine\read_only_file_mapping.hpp">
       <Filter>server_engine</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\writable_file_mapping.hpp">
@@ -441,13 +447,13 @@
     <ClInclude Include="server_engine\authentication\entra_jwt.hpp">
       <Filter>server_engine\authentication</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\authentication\crypto\nsa_sha256_verifier.hpp">
+    <ClInclude Include="server_engine\authentication\crypto\rsa_sha256_verifier.hpp">
       <Filter>server_engine\authentication\crypto</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\communication\request_id.hpp">
       <Filter>server_engine\communication</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\communication\nequest_identity.hpp">
+    <ClInclude Include="server_engine\communication\request_identity.hpp">
       <Filter>server_engine\communication</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\communication\protocol\protocol_contract.hpp">
@@ -462,7 +468,7 @@
     <ClInclude Include="server_engine\communication\control\communication_control.hpp">
       <Filter>server_engine\communication\control</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\communication\nequest_queue.hpp">
+    <ClInclude Include="server_engine\communication\request_queue.hpp">
       <Filter>server_engine\communication</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\communication\communication.hpp">
@@ -506,23 +512,29 @@
     <ClInclude Include="server_engine\project\abi\abi_layout.hpp">
       <Filter>server_engine\project\abi</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\project\nuntime\nuntime_layout.hpp">
-      <Filter>server_engine\project\nuntime</Filter>
+    <ClInclude Include="server_engine\project\runtime\runtime_layout.hpp">
+      <Filter>server_engine\project\runtime</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\project\nuntime\nuntime_query.hpp">
-      <Filter>server_engine\project\nuntime</Filter>
+    <ClInclude Include="server_engine\project\runtime\runtime_query.hpp">
+      <Filter>server_engine\project\runtime</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\project\nuntime\nuntime_ic.hpp">
-      <Filter>server_engine\project\nuntime</Filter>
+    <ClInclude Include="server_engine\project\runtime\runtime_ic.hpp">
+      <Filter>server_engine\project\runtime</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\project\nuntime\nuntime_ic_codec.hpp">
-      <Filter>server_engine\project\nuntime</Filter>
+    <ClInclude Include="server_engine\project\runtime\runtime_ic_codec.hpp">
+      <Filter>server_engine\project\runtime</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\project\nuntime\fixed_direct_materializer.hpp">
-      <Filter>server_engine\project\nuntime</Filter>
+    <ClInclude Include="server_engine\project\runtime\runtime_ic_snapshot.hpp">
+      <Filter>server_engine\project\runtime</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\project\nuntime\project_runtime.hpp">
-      <Filter>server_engine\project\nuntime</Filter>
+    <ClInclude Include="server_engine\project\runtime\runtime_ic_reset.hpp">
+      <Filter>server_engine\project\runtime</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\runtime\fixed_direct_materializer.hpp">
+      <Filter>server_engine\project\runtime</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\runtime\project_runtime.hpp">
+      <Filter>server_engine\project\runtime</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\project_lifecycle_context.hpp">
       <Filter>server_engine\project</Filter>
