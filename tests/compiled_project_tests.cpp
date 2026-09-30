@@ -8935,6 +8935,8 @@ void test_build_lineage_overlays(
             baseline.type_count() &&
         G.member_count() ==
             baseline.member_count() &&
+        G.base_count() ==
+            baseline.base_count() &&
         G.object_count() ==
             baseline.object_count() &&
         G.live_object_count() ==
@@ -9028,6 +9030,87 @@ void test_build_lineage_overlays(
                 construction_kind::signed_integer,
                 99),
         "graph_delta type replacement preserves type_handle");
+
+    string_id build_base_name;
+    identity_ref build_base_identity;
+    type_handle build_base;
+
+    if (!tests.expect(
+            succeeded(
+                strings.intern(
+                    "BuildBase",
+                    build_base_name)) &&
+            succeeded(
+                identities.resolve(
+                    identities.root(),
+                    build_base_name,
+                    identity_kind::type,
+                    build_base_identity)) &&
+            succeeded(
+                G.declare_record(
+                    build_base_identity,
+                    graph_record_kind::struct_type,
+                    build_base)) &&
+            succeeded(
+                G.define_record(
+                    build_base,
+                    graph_record_kind::struct_type,
+                    std::span<const member_record>{},
+                    std::span<const construction_value>{},
+                    std::span<const base_record>{},
+                    true)),
+            "BUILD graph_delta creates polymorphic appended base type")) {
+
+        return;
+    }
+
+    const std::array<base_record, 1>
+        replacement_bases{{
+            {
+                build_base,
+                graph_member_access::public_access,
+                0,
+                0,
+            },
+        }};
+
+    if (!tests.expect(
+            succeeded(
+                G.clear_definition(
+                    fixture.type)) &&
+            succeeded(
+                G.define_record(
+                    fixture.type,
+                    graph_record_kind::struct_type,
+                    replacement_members,
+                    replacement_construction,
+                    replacement_bases,
+                    false)),
+            "BUILD graph_delta replaces type with base topology")) {
+
+        return;
+    }
+
+    type_entry inherited_type;
+    base_record inherited_base;
+
+    tests.expect(
+        G.type(
+            fixture.type,
+            inherited_type) &&
+        inherited_type.bases.count == 1 &&
+        inherited_type.polymorphic() &&
+        G.polymorphic(
+            fixture.type) &&
+        G.base(
+            fixture.type,
+            0,
+            inherited_base) &&
+        inherited_base.type ==
+            build_base &&
+        inherited_base.access ==
+            graph_member_access::public_access,
+        "BUILD graph_delta preserves sparse base and inherited polymorphism");
 
     const auto old_live_objects =
         G.live_object_count();

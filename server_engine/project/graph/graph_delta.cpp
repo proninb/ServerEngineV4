@@ -69,6 +69,17 @@ namespace {
     return left_union == right_union;
 }
 
+[[nodiscard]] bool valid_member_access(
+    graph_member_access access) noexcept {
+
+    return access ==
+            graph_member_access::public_access ||
+        access ==
+            graph_member_access::protected_access ||
+        access ==
+            graph_member_access::private_access;
+}
+
 [[nodiscard]] bool valid_derived_kind(
     derived_type_kind kind) noexcept {
 
@@ -304,6 +315,7 @@ server_status graph_delta::bind_baseline(
         !link_patches.empty() ||
         !types.empty() ||
         !type_identities.empty() ||
+        !base_records.empty() ||
         !member_records.empty() ||
         !member_construction.empty() ||
         !objects.empty() ||
@@ -320,6 +332,9 @@ server_status graph_delta::bind_baseline(
 
     baseline_type_count =
         value.type_count();
+
+    baseline_base_count =
+        value.base_count();
 
     baseline_member_count =
         value.member_count();
@@ -1568,11 +1583,83 @@ server_status graph_delta::retire(
     return server_status::success;
 }
 
+bool graph_delta::base(
+    type_handle type_value,
+    std::uint32_t local_base,
+    base_record& output) const noexcept {
+
+    output = {};
+
+    type_entry entry;
+
+    if (!type(
+            type_value,
+            entry) ||
+        !entry.defined() ||
+        local_base >=
+            entry.bases.count) {
+
+        return false;
+    }
+
+    const auto logical =
+        static_cast<std::size_t>(
+            entry.bases.begin) +
+        local_base;
+
+    if (type_value.value() <=
+            baseline_type_count &&
+        find_type_patch(
+            type_value.value()) ==
+            nullptr) {
+
+        return baseline != nullptr &&
+            baseline->base_at(
+                logical,
+                output);
+    }
+
+    if (logical <
+        baseline_base_count) {
+
+        return false;
+    }
+
+    const auto index =
+        logical -
+        baseline_base_count;
+
+    if (index >=
+        base_records.size()) {
+
+        return false;
+    }
+
+    output =
+        base_records[index];
+
+    return true;
+}
+
+bool graph_delta::polymorphic(
+    type_handle type_value) const noexcept {
+
+    type_entry entry;
+
+    return type(
+               type_value,
+               entry) &&
+        entry.defined() &&
+        entry.polymorphic();
+}
+
 server_status graph_delta::define_record(
     type_handle type_value,
     graph_record_kind kind,
     std::span<const member_record> definition,
-    std::span<const construction_value> construction_values) noexcept {
+    std::span<const construction_value> construction_values,
+    std::span<const base_record> bases_value,
+    bool declares_virtual) noexcept {
 
     type_entry entry;
 
@@ -1587,10 +1674,64 @@ server_status graph_delta::define_record(
             kind) ||
         (!construction_values.empty() &&
          construction_values.size() !=
-            definition.size())) {
+            definition.size()) ||
+        (kind ==
+             graph_record_kind::union_type &&
+         (!bases_value.empty() ||
+          declares_virtual))) {
 
         return server_status::
             project_configuration_invalid;
+    }
+
+    bool polymorphic_value =
+        declares_virtual;
+
+    for (std::size_t index = 0;
+         index < bases_value.size();
+         ++index) {
+
+        const auto& base_value =
+            bases_value[index];
+
+        type_entry base_type;
+
+        if (!base_value.type ||
+            base_value.type ==
+                type_value ||
+            !type(
+                base_value.type,
+                base_type) ||
+            !base_type.defined() ||
+            base_type.kind !=
+                graph_type_kind::record ||
+            base_type.record_kind ==
+                graph_record_kind::union_type ||
+            !valid_member_access(
+                base_value.access) ||
+            (base_value.flags &
+                ~graph_base_flag_mask) != 0 ||
+            base_value.reserved != 0) {
+
+            return server_status::
+                project_configuration_invalid;
+        }
+
+        for (std::size_t previous = 0;
+             previous < index;
+             ++previous) {
+
+            if (bases_value[previous].type ==
+                base_value.type) {
+
+                return server_status::
+                    project_configuration_invalid;
+            }
+        }
+
+        polymorphic_value =
+            polymorphic_value ||
+            base_type.polymorphic();
     }
 
     for (std::size_t index = 0;
@@ -1599,7 +1740,9 @@ server_status graph_delta::define_record(
 
         if (!definition[index].name ||
             !contains(
-                definition[index].type)) {
+                definition[index].type) ||
+            !valid_member_access(
+                definition[index].access)) {
 
             return server_status::
                 project_configuration_invalid;
@@ -1661,14 +1804,39 @@ server_status graph_delta::define_record(
 
     if (entry.defined()) {
         if (entry.record_kind !=
-            kind ||
-            entry.bases.count != 0 ||
-            entry.polymorphic() ||
+                kind ||
+            entry.polymorphic() !=
+                polymorphic_value ||
+            entry.bases.count !=
+                bases_value.size() ||
             entry.members.count !=
                 definition.size()) {
 
             return server_status::
                 project_configuration_invalid;
+        }
+
+        for (std::size_t index = 0;
+             index < bases_value.size();
+             ++index) {
+
+            base_record existing;
+
+            if (!base(
+                    type_value,
+                    static_cast<std::uint32_t>(
+                        index),
+                    existing) ||
+                existing.type !=
+                    bases_value[index].type ||
+                existing.access !=
+                    bases_value[index].access ||
+                existing.flags !=
+                    bases_value[index].flags) {
+
+                return server_status::
+                    project_configuration_invalid;
+            }
         }
 
         for (std::size_t index = 0;
@@ -1722,21 +1890,38 @@ server_status graph_delta::define_record(
             (std::numeric_limits<
                 std::uint32_t>::max)());
 
-    const auto logical_begin =
+    const auto logical_member_begin =
         member_count();
 
-    if (logical_begin > maximum ||
+    const auto logical_base_begin =
+        base_count();
+
+    if (logical_member_begin > maximum ||
         definition.size() > maximum ||
         definition.size() >
-            maximum - logical_begin) {
+            maximum -
+                logical_member_begin ||
+        logical_base_begin > maximum ||
+        bases_value.size() > maximum ||
+        bases_value.size() >
+            maximum -
+                logical_base_begin) {
 
         return server_status::io_error;
     }
 
-    const auto old_count =
+    const auto old_member_count =
         member_records.size();
 
+    const auto old_base_count =
+        base_records.size();
+
     try {
+        base_records.insert(
+            base_records.end(),
+            bases_value.begin(),
+            bases_value.end());
+
         member_records.insert(
             member_records.end(),
             definition.begin(),
@@ -1754,32 +1939,46 @@ server_status graph_delta::define_record(
         }
     }
     catch (...) {
+        base_records.resize(
+            old_base_count);
+
         member_records.resize(
-            old_count);
+            old_member_count);
 
         member_construction.resize(
-            old_count);
+            old_member_count);
 
         return server_status::io_error;
     }
 
+    entry.bases = {
+        static_cast<std::uint32_t>(
+            logical_base_begin),
+        static_cast<std::uint32_t>(
+            bases_value.size()),
+    };
+
     entry.members = {
         static_cast<std::uint32_t>(
-            logical_begin),
+            logical_member_begin),
         static_cast<std::uint32_t>(
             definition.size()),
     };
 
-    entry.bases = {};
-    entry.flags &=
-        static_cast<std::uint16_t>(
-            ~graph_type_polymorphic);
-
     entry.record_kind =
         kind;
 
+    entry.flags &=
+        static_cast<std::uint16_t>(
+            ~graph_type_flag_mask);
+
     entry.flags |=
         graph_type_defined;
+
+    if (polymorphic_value) {
+        entry.flags |=
+            graph_type_polymorphic;
+    }
 
     if (type_value.value() <=
         baseline_type_count) {
@@ -1794,11 +1993,14 @@ server_status graph_delta::define_record(
         if (!succeeded(prepared) ||
             patch == nullptr) {
 
+            base_records.resize(
+                old_base_count);
+
             member_records.resize(
-                old_count);
+                old_member_count);
 
             member_construction.resize(
-                old_count);
+                old_member_count);
 
             return succeeded(prepared)
                 ? server_status::
@@ -1821,11 +2023,14 @@ server_status graph_delta::define_record(
     if (index >=
         types.size()) {
 
+        base_records.resize(
+            old_base_count);
+
         member_records.resize(
-            old_count);
+            old_member_count);
 
         member_construction.resize(
-            old_count);
+            old_member_count);
 
         return server_status::
             project_artifact_invalid;

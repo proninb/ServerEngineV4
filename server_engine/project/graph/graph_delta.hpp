@@ -44,7 +44,9 @@ public:
         type_handle type,
         graph_record_kind kind,
         std::span<const member_record> definition,
-        std::span<const construction_value> construction = {}) noexcept;
+        std::span<const construction_value> construction = {},
+        std::span<const base_record> bases = {},
+        bool declares_virtual = false) noexcept;
 
     [[nodiscard]] server_status clear_definition(
         type_handle type) noexcept;
@@ -138,6 +140,14 @@ public:
     [[nodiscard]] identity_ref identity(
         object_handle object) const noexcept;
 
+    [[nodiscard]] bool base(
+        type_handle type,
+        std::uint32_t local_base,
+        base_record& output) const noexcept;
+
+    [[nodiscard]] bool polymorphic(
+        type_handle type) const noexcept;
+
     [[nodiscard]] std::span<const member_record> members(
         type_handle type) const noexcept;
 
@@ -210,6 +220,11 @@ public:
             member_records.size();
     }
 
+    [[nodiscard]] std::size_t base_count() const noexcept {
+        return baseline_base_count +
+            base_records.size();
+    }
+
     [[nodiscard]] std::size_t object_count() const noexcept {
         return baseline_object_count +
             objects.size();
@@ -243,6 +258,11 @@ public:
     [[nodiscard]] std::span<const identity_ref>
     type_identity_entries() const noexcept {
         return type_identities;
+    }
+
+    [[nodiscard]] std::span<const base_record>
+    base_entries() const noexcept {
+        return base_records;
     }
 
     [[nodiscard]] std::span<const member_record>
@@ -453,6 +473,7 @@ private:
     const compiled_project_view* baseline = nullptr;
 
     std::size_t baseline_type_count = 0;
+    std::size_t baseline_base_count = 0;
     std::size_t baseline_member_count = 0;
     std::size_t baseline_object_count = 0;
     std::size_t baseline_object_construction_count = 0;
@@ -481,6 +502,7 @@ private:
     std::vector<identity_ref> type_identities;
     std::vector<std::uint8_t> type_live;
 
+    std::vector<base_record> base_records;
     std::vector<member_record> member_records;
     std::vector<construction_value> member_construction;
 
