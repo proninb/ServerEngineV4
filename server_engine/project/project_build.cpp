@@ -13,6 +13,7 @@
 #include "../diagnostics/diagnostic_descriptor.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -375,6 +376,106 @@ void append_file_id_difference(
         return server_status::io_error;
     }
 }
+
+struct build_initialization_invalidation_metrics final {
+    std::size_t visited_roots = 0;
+    std::uint64_t producer_targets = 0;
+    std::size_t tombstones = 0;
+};
+
+[[nodiscard]] server_status invalidate_persisted_initializations(
+    const source_save_view& persisted,
+    graph_delta& changes,
+    const std::vector<file_id>& roots,
+    build_initialization_invalidation_metrics* metrics = nullptr) noexcept {
+
+    if (metrics != nullptr) {
+        *metrics = {};
+    }
+
+    if (!persisted.valid() ||
+        !changes.baseline_bound()) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    build_initialization_invalidation_metrics
+        local;
+
+    local.visited_roots =
+        roots.size();
+
+    const auto before =
+        changes.initialization_count();
+
+    for (const auto root : roots) {
+        std::size_t count = 0;
+
+        if (!persisted.initialization_targets(
+                root,
+                count)) {
+
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        if (count >
+            (std::numeric_limits<
+                std::uint64_t>::max)() -
+                local.producer_targets) {
+
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        local.producer_targets +=
+            static_cast<std::uint64_t>(
+                count);
+
+        for (std::size_t index = 0;
+             index < count;
+             ++index) {
+
+            object_endpoint target;
+
+            if (!persisted.initialization_target(
+                    root,
+                    index,
+                    target)) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            const auto invalidated =
+                changes.invalidate_initialization(
+                    target);
+
+            if (!succeeded(invalidated)) {
+                return invalidated;
+            }
+        }
+    }
+
+    const auto after =
+        changes.initialization_count();
+
+    if (after > before) {
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    local.tombstones =
+        before - after;
+
+    if (metrics != nullptr) {
+        *metrics = local;
+    }
+
+    return server_status::success;
+}
+
 
 [[nodiscard]] server_status load_root_preprocessor_configuration(
     const std::filesystem::path& project_path,
@@ -976,6 +1077,48 @@ server_status build_project(
     semantic_invalidated_roots =
         semantic_dependency_roots;
 
+    build_initialization_invalidation_metrics
+        initialization_invalidation_metrics;
+
+    const auto initialization_invalidated =
+        invalidate_persisted_initializations(
+            context.source,
+            context.graph_changes,
+            semantic_invalidated_roots,
+            &initialization_invalidation_metrics);
+
+    if (!succeeded(
+            initialization_invalidated)) {
+
+        if (initialization_invalidated ==
+            server_status::io_error) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::
+                        project_build_incomplete,
+                    operation)
+                    .file(layout.compiled)
+                    .detail(
+                        "BUILD could not allocate sparse object-initialization tombstones")
+                    .build());
+
+            return initialization_invalidated;
+        }
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::
+                    project_source_save_invalid,
+                operation)
+                .file(layout.source_save)
+                .detail(
+                    "Persisted source.bin initialization provenance disagrees with compiled.bin canonical initialization baseline")
+                .build());
+
+        return initialization_invalidated;
+    }
+
     try {
         for (const auto root :
              semantic_dependency_roots) {
@@ -1228,6 +1371,18 @@ server_status build_project(
             std::to_string(
                 semantic_dependency_metrics.
                     visited_slots) +
+            ", initialization_invalidated_roots=" +
+            std::to_string(
+                initialization_invalidation_metrics.
+                    visited_roots) +
+            ", initialization_producer_targets=" +
+            std::to_string(
+                initialization_invalidation_metrics.
+                    producer_targets) +
+            ", initialization_tombstones=" +
+            std::to_string(
+                initialization_invalidation_metrics.
+                    tombstones) +
             ", database_mapped=" +
             std::to_string(
                 database_bound ? 1 : 0) +
