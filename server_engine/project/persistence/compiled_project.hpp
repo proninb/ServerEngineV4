@@ -336,6 +336,12 @@ public:
         std::size_t index,
         endpoint_path_step& output) const noexcept;
 
+    // Persisted O(1) canonical lookup used by sparse BUILD. The index already
+    // belongs to compiled.bin; this exposes it without reconstructing paths.
+    [[nodiscard]] endpoint_path_handle find_endpoint_path(
+        type_ref root_type,
+        std::span<const endpoint_path_step> steps) const noexcept;
+
     [[nodiscard]] link_handle link_at(
         std::size_t index) const noexcept;
 

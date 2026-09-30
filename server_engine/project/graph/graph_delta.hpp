@@ -84,6 +84,20 @@ public:
         std::uint64_t payload,
         type_ref& output) noexcept;
 
+    [[nodiscard]] server_status intern_endpoint_path(
+        type_ref root_type,
+        std::span<const endpoint_path_step> steps,
+        endpoint_path_handle& output,
+        type_ref* value_type = nullptr) noexcept;
+
+    [[nodiscard]] bool endpoint_path(
+        endpoint_path_handle path,
+        endpoint_path_record& output) const noexcept;
+
+    [[nodiscard]] bool endpoint_path_step_at(
+        std::size_t index,
+        endpoint_path_step& output) const noexcept;
+
     [[nodiscard]] bool slot_exists(
         type_handle type) const noexcept;
 
@@ -248,6 +262,16 @@ public:
             derived_types.size();
     }
 
+    [[nodiscard]] std::size_t endpoint_path_count() const noexcept {
+        return baseline_endpoint_path_count +
+            endpoint_paths.size();
+    }
+
+    [[nodiscard]] std::size_t endpoint_path_step_count() const noexcept {
+        return baseline_endpoint_path_step_count +
+            endpoint_path_steps.size();
+    }
+
     // Dense construction spans. In BUILD baseline mode these expose only the
     // append arena; final sparse persistence uses logical access instead.
     [[nodiscard]] std::span<const type_entry>
@@ -300,6 +324,16 @@ public:
         return derived_types;
     }
 
+    [[nodiscard]] std::span<const endpoint_path_record>
+    endpoint_path_entries() const noexcept {
+        return endpoint_paths;
+    }
+
+    [[nodiscard]] std::span<const endpoint_path_step>
+    endpoint_path_step_entries() const noexcept {
+        return endpoint_path_steps;
+    }
+
 private:
     enum class location_kind : std::uint8_t {
         none = 0,
@@ -310,6 +344,11 @@ private:
     struct derived_index_slot final {
         std::uint32_t fingerprint = 0;
         type_ref type{};
+    };
+
+    struct endpoint_path_index_slot final {
+        std::uint32_t fingerprint = 0;
+        endpoint_path_handle path{};
     };
 
     struct sparse_index_slot final {
@@ -363,6 +402,7 @@ private:
     };
 
     static_assert(sizeof(derived_index_slot) == 8);
+    static_assert(sizeof(endpoint_path_index_slot) == 8);
 
     [[nodiscard]] static std::uint32_t encode_location(
         location_kind kind,
@@ -445,6 +485,30 @@ private:
         std::uint64_t hash,
         std::uint32_t fingerprint) const noexcept;
 
+    [[nodiscard]] static std::uint64_t hash_endpoint_path(
+        type_ref root_type,
+        std::span<const endpoint_path_step> steps) noexcept;
+
+    [[nodiscard]] bool resolve_endpoint_path(
+        type_ref root_type,
+        std::span<const endpoint_path_step> steps,
+        type_ref& output) const noexcept;
+
+    [[nodiscard]] endpoint_path_handle find_local_endpoint_path(
+        type_ref root_type,
+        std::span<const endpoint_path_step> steps,
+        std::uint64_t hash,
+        std::uint32_t fingerprint) const noexcept;
+
+    [[nodiscard]] server_status ensure_endpoint_path_index_capacity(
+        std::size_t additional) noexcept;
+
+    void insert_endpoint_path_index(
+        std::vector<endpoint_path_index_slot>& target,
+        endpoint_path_handle path,
+        std::uint64_t hash,
+        std::uint32_t fingerprint) const noexcept;
+
     [[nodiscard]] static std::uint64_t link_target_key(
         object_endpoint target) noexcept;
 
@@ -479,6 +543,8 @@ private:
     std::size_t baseline_object_construction_count = 0;
     std::size_t baseline_link_count = 0;
     std::size_t baseline_derived_count = 0;
+    std::size_t baseline_endpoint_path_count = 0;
+    std::size_t baseline_endpoint_path_step_count = 0;
 
     std::size_t live_type_count_value = 0;
     std::size_t live_object_count_value = 0;
@@ -518,6 +584,10 @@ private:
 
     std::vector<derived_type_record> derived_types;
     std::vector<derived_index_slot> derived_index;
+
+    std::vector<endpoint_path_record> endpoint_paths;
+    std::vector<endpoint_path_step> endpoint_path_steps;
+    std::vector<endpoint_path_index_slot> endpoint_path_index;
 };
 
 }

@@ -322,7 +322,10 @@ server_status graph_delta::bind_baseline(
         !object_identities.empty() ||
         !object_construction.empty() ||
         !links.empty() ||
-        !derived_types.empty()) {
+        !derived_types.empty() ||
+        !endpoint_paths.empty() ||
+        !endpoint_path_steps.empty() ||
+        !endpoint_path_index.empty()) {
 
         return server_status::
             project_configuration_invalid;
@@ -350,6 +353,12 @@ server_status graph_delta::bind_baseline(
 
     baseline_derived_count =
         value.derived_type_count();
+
+    baseline_endpoint_path_count =
+        value.endpoint_path_count();
+
+    baseline_endpoint_path_step_count =
+        value.endpoint_path_step_count();
 
     live_type_count_value =
         baseline_type_count;
@@ -3147,6 +3156,618 @@ bool graph_delta::derived(
 
     return true;
 }
+
+std::uint64_t graph_delta::hash_endpoint_path(
+    type_ref root_type,
+    std::span<const endpoint_path_step> steps) noexcept {
+
+    std::uint64_t hash =
+        1469598103934665603ull;
+
+    const auto mix =
+        [&hash](std::uint64_t value) noexcept {
+
+            for (std::size_t index = 0;
+                 index < 8;
+                 ++index) {
+
+                hash ^=
+                    static_cast<std::uint8_t>(
+                        value & 0xffu);
+
+                hash *=
+                    1099511628211ull;
+
+                value >>= 8;
+            }
+        };
+
+    mix(root_type.value());
+
+    for (const auto& step :
+         steps) {
+
+        mix(static_cast<std::uint8_t>(
+            step.kind));
+
+        mix(step.value);
+    }
+
+    return hash == 0
+        ? 1
+        : hash;
+}
+
+bool graph_delta::resolve_endpoint_path(
+    type_ref root_type,
+    std::span<const endpoint_path_step> steps,
+    type_ref& output) const noexcept {
+
+    output = {};
+
+    if (!contains(
+            root_type) ||
+        steps.empty()) {
+
+        return false;
+    }
+
+    auto current_type =
+        root_type;
+
+    for (const auto& step :
+         steps) {
+
+        for (const auto reserved :
+             step.reserved) {
+
+            if (reserved != 0) {
+                return false;
+            }
+        }
+
+        derived_type_record derived_value;
+
+        while (derived(
+                   current_type,
+                   derived_value) &&
+               (derived_value.kind ==
+                    derived_type_kind::
+                        const_qualified ||
+                derived_value.kind ==
+                    derived_type_kind::
+                        volatile_qualified)) {
+
+            current_type =
+                derived_value.child;
+        }
+
+        switch (step.kind) {
+        case endpoint_path_step_kind::member: {
+            if (step.value >
+                (std::numeric_limits<
+                    std::uint32_t>::max)()) {
+
+                return false;
+            }
+
+            type_handle record;
+
+            if (!named(
+                    current_type,
+                    record)) {
+
+                return false;
+            }
+
+            member_record value;
+
+            const member_index member_value{
+                static_cast<std::uint32_t>(
+                    step.value)};
+
+            if (!member(
+                    record,
+                    member_value,
+                    value)) {
+
+                return false;
+            }
+
+            current_type =
+                value.type;
+
+            break;
+        }
+
+        case endpoint_path_step_kind::array_index:
+            if (!derived(
+                    current_type,
+                    derived_value) ||
+                derived_value.kind !=
+                    derived_type_kind::
+                        bounded_array ||
+                step.value >=
+                    derived_value.payload) {
+
+                return false;
+            }
+
+            current_type =
+                derived_value.child;
+
+            break;
+
+        default:
+            return false;
+        }
+    }
+
+    output =
+        current_type;
+
+    return contains(output);
+}
+
+endpoint_path_handle
+graph_delta::find_local_endpoint_path(
+    type_ref root_type,
+    std::span<const endpoint_path_step> steps,
+    std::uint64_t hash,
+    std::uint32_t fingerprint_value) const noexcept {
+
+    if (endpoint_path_index.empty()) {
+        return {};
+    }
+
+    const auto mask =
+        endpoint_path_index.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            hash) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe <
+            endpoint_path_index.size();
+         ++probe) {
+
+        const auto& slot =
+            endpoint_path_index[
+                position];
+
+        if (!slot.path) {
+            return {};
+        }
+
+        if (slot.fingerprint ==
+                fingerprint_value &&
+            slot.path.value() >
+                baseline_endpoint_path_count) {
+
+            const auto local =
+                static_cast<std::size_t>(
+                    slot.path.value() -
+                    baseline_endpoint_path_count -
+                    1);
+
+            if (local <
+                endpoint_paths.size()) {
+
+                const auto& record =
+                    endpoint_paths[local];
+
+                if (record.root_type ==
+                        root_type &&
+                    record.steps.count ==
+                        steps.size() &&
+                    record.steps.begin >=
+                        baseline_endpoint_path_step_count) {
+
+                    const auto local_begin =
+                        static_cast<std::size_t>(
+                            record.steps.begin -
+                            baseline_endpoint_path_step_count);
+
+                    if (local_begin <=
+                            endpoint_path_steps.size() &&
+                        record.steps.count <=
+                            endpoint_path_steps.size() -
+                                local_begin) {
+
+                        bool equal = true;
+
+                        for (std::size_t index = 0;
+                             index < steps.size();
+                             ++index) {
+
+                            if (endpoint_path_steps[
+                                    local_begin +
+                                    index] !=
+                                steps[index]) {
+
+                                equal = false;
+                                break;
+                            }
+                        }
+
+                        if (equal) {
+                            return slot.path;
+                        }
+                    }
+                }
+            }
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return {};
+}
+
+server_status
+graph_delta::ensure_endpoint_path_index_capacity(
+    std::size_t additional) noexcept {
+
+    if (additional >
+        (std::numeric_limits<
+            std::size_t>::max)() -
+            endpoint_paths.size()) {
+
+        return server_status::io_error;
+    }
+
+    const auto required =
+        endpoint_paths.size() +
+        additional;
+
+    if (!endpoint_path_index.empty() &&
+        required <=
+            endpoint_path_index.size() / 2) {
+
+        return server_status::success;
+    }
+
+    const auto capacity =
+        next_index_capacity(
+            required);
+
+    if (capacity == 0) {
+        return server_status::io_error;
+    }
+
+    try {
+        std::vector<endpoint_path_index_slot>
+            candidate(capacity);
+
+        for (std::size_t index = 0;
+             index <
+                endpoint_paths.size();
+             ++index) {
+
+            const auto& record =
+                endpoint_paths[index];
+
+            if (record.steps.begin <
+                baseline_endpoint_path_step_count) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            const auto local_begin =
+                static_cast<std::size_t>(
+                    record.steps.begin -
+                    baseline_endpoint_path_step_count);
+
+            if (local_begin >
+                    endpoint_path_steps.size() ||
+                record.steps.count >
+                    endpoint_path_steps.size() -
+                        local_begin) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            const auto steps =
+                std::span<const endpoint_path_step>{
+                    endpoint_path_steps.data() +
+                        local_begin,
+                    record.steps.count};
+
+            const auto hash =
+                hash_endpoint_path(
+                    record.root_type,
+                    steps);
+
+            const endpoint_path_handle path{
+                static_cast<std::uint32_t>(
+                    baseline_endpoint_path_count +
+                    index +
+                    1)};
+
+            insert_endpoint_path_index(
+                candidate,
+                path,
+                hash,
+                fingerprint(hash));
+        }
+
+        endpoint_path_index =
+            std::move(candidate);
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
+void graph_delta::insert_endpoint_path_index(
+    std::vector<endpoint_path_index_slot>& target,
+    endpoint_path_handle path,
+    std::uint64_t hash,
+    std::uint32_t fingerprint_value) const noexcept {
+
+    const auto mask =
+        target.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            hash) &
+        mask;
+
+    while (target[position].path) {
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    target[position] = {
+        fingerprint_value,
+        path,
+    };
+}
+
+bool graph_delta::endpoint_path(
+    endpoint_path_handle path,
+    endpoint_path_record& output) const noexcept {
+
+    output = {};
+
+    if (!path ||
+        path.value() >
+            endpoint_path_count()) {
+
+        return false;
+    }
+
+    if (path.value() <=
+        baseline_endpoint_path_count) {
+
+        return baseline != nullptr &&
+            baseline->endpoint_path(
+                path,
+                output);
+    }
+
+    const auto index =
+        static_cast<std::size_t>(
+            path.value() -
+            baseline_endpoint_path_count -
+            1);
+
+    if (index >=
+        endpoint_paths.size()) {
+
+        return false;
+    }
+
+    output =
+        endpoint_paths[index];
+
+    return true;
+}
+
+bool graph_delta::endpoint_path_step_at(
+    std::size_t index,
+    endpoint_path_step& output) const noexcept {
+
+    output = {};
+
+    if (index <
+        baseline_endpoint_path_step_count) {
+
+        return baseline != nullptr &&
+            baseline->endpoint_path_step_at(
+                index,
+                output);
+    }
+
+    const auto local =
+        index -
+        baseline_endpoint_path_step_count;
+
+    if (local >=
+        endpoint_path_steps.size()) {
+
+        return false;
+    }
+
+    output =
+        endpoint_path_steps[local];
+
+    return true;
+}
+
+server_status graph_delta::intern_endpoint_path(
+    type_ref root_type,
+    std::span<const endpoint_path_step> steps,
+    endpoint_path_handle& output,
+    type_ref* value_type) noexcept {
+
+    output = {};
+
+    if (value_type != nullptr) {
+        *value_type = {};
+    }
+
+    type_ref resolved;
+
+    if (!resolve_endpoint_path(
+            root_type,
+            steps,
+            resolved)) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    if (baseline != nullptr) {
+        const auto existing =
+            baseline->find_endpoint_path(
+                root_type,
+                steps);
+
+        if (existing) {
+            endpoint_path_record record;
+
+            if (!baseline->endpoint_path(
+                    existing,
+                    record) ||
+                record.value_type !=
+                    resolved) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            output =
+                existing;
+
+            if (value_type != nullptr) {
+                *value_type =
+                    resolved;
+            }
+
+            return server_status::success;
+        }
+    }
+
+    const auto hash =
+        hash_endpoint_path(
+            root_type,
+            steps);
+
+    const auto fingerprint_value =
+        fingerprint(
+            hash);
+
+    if (const auto existing =
+            find_local_endpoint_path(
+                root_type,
+                steps,
+                hash,
+                fingerprint_value);
+        existing) {
+
+        output =
+            existing;
+
+        if (value_type != nullptr) {
+            *value_type =
+                resolved;
+        }
+
+        return server_status::success;
+    }
+
+    if (endpoint_path_count() >=
+            endpoint_path_handle::
+                maximum_slot ||
+        steps.size() >
+            (std::numeric_limits<
+                std::uint32_t>::max)() ||
+        endpoint_path_step_count() >
+            (std::numeric_limits<
+                std::uint32_t>::max)() -
+                steps.size()) {
+
+        return server_status::io_error;
+    }
+
+    const auto prepared =
+        ensure_endpoint_path_index_capacity(
+            1);
+
+    if (!succeeded(prepared)) {
+        return prepared;
+    }
+
+    const auto old_path_count =
+        endpoint_paths.size();
+
+    const auto old_step_count =
+        endpoint_path_steps.size();
+
+    try {
+        endpoint_path_steps.insert(
+            endpoint_path_steps.end(),
+            steps.begin(),
+            steps.end());
+
+        endpoint_paths.push_back({
+            {
+                static_cast<std::uint32_t>(
+                    baseline_endpoint_path_step_count +
+                    old_step_count),
+                static_cast<std::uint32_t>(
+                    steps.size()),
+            },
+            root_type,
+            resolved,
+        });
+
+        output =
+            endpoint_path_handle{
+                static_cast<std::uint32_t>(
+                    baseline_endpoint_path_count +
+                    endpoint_paths.size())};
+
+        insert_endpoint_path_index(
+            endpoint_path_index,
+            output,
+            hash,
+            fingerprint_value);
+
+        if (value_type != nullptr) {
+            *value_type =
+                resolved;
+        }
+
+        return server_status::success;
+    }
+    catch (...) {
+        endpoint_paths.resize(
+            old_path_count);
+
+        endpoint_path_steps.resize(
+            old_step_count);
+
+        output = {};
+
+        if (value_type != nullptr) {
+            *value_type = {};
+        }
+
+        return server_status::io_error;
+    }
+}
+
 
 std::uint64_t graph_delta::link_target_key(
     object_endpoint target) noexcept {

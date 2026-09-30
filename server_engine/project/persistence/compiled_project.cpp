@@ -2661,6 +2661,141 @@ bool compiled_project_view::endpoint_path_step_at(
     return true;
 }
 
+endpoint_path_handle
+compiled_project_view::find_endpoint_path(
+    type_ref root_type,
+    std::span<const endpoint_path_step> steps) const noexcept {
+
+    if (!type_ref_from_raw(
+            root_type.value()) ||
+        steps.empty() ||
+        steps.size() >
+            (std::numeric_limits<
+                std::uint32_t>::max)()) {
+
+        return {};
+    }
+
+    const auto& index =
+        section(
+            compiled_project_section::
+                endpoint_path_index);
+
+    if (index.count == 0 ||
+        (index.count &
+            (index.count - 1)) != 0) {
+
+        return {};
+    }
+
+    const auto hash =
+        endpoint_path_hash(
+            root_type,
+            [&steps](
+                std::size_t position,
+                endpoint_path_step& output) noexcept {
+
+                if (position >=
+                    steps.size()) {
+
+                    return false;
+                }
+
+                output =
+                    steps[position];
+
+                return true;
+            },
+            0,
+            static_cast<std::uint32_t>(
+                steps.size()));
+
+    if (hash == 0) {
+        return {};
+    }
+
+    const auto fingerprint =
+        identity_fingerprint(
+            hash);
+
+    const auto mask =
+        index.count - 1;
+
+    auto position =
+        hash &
+        mask;
+
+    for (std::uint64_t probe = 0;
+         probe < index.count;
+         ++probe) {
+
+        const auto* slot =
+            index.data +
+            static_cast<std::size_t>(
+                position) *
+                index_record_size;
+
+        const auto raw =
+            read_u32(
+                slot + 4);
+
+        if (raw == 0) {
+            return {};
+        }
+
+        if (read_u32(slot) ==
+                fingerprint &&
+            raw <=
+                endpoint_path_count()) {
+
+            const endpoint_path_handle candidate{
+                raw};
+
+            endpoint_path_record record;
+
+            if (endpoint_path(
+                    candidate,
+                    record) &&
+                record.root_type ==
+                    root_type &&
+                record.steps.count ==
+                    steps.size()) {
+
+                bool equal = true;
+
+                for (std::size_t local = 0;
+                     local < steps.size();
+                     ++local) {
+
+                    endpoint_path_step existing;
+
+                    if (!endpoint_path_step_at(
+                            static_cast<std::size_t>(
+                                record.steps.begin) +
+                                local,
+                            existing) ||
+                        existing !=
+                            steps[local]) {
+
+                        equal = false;
+                        break;
+                    }
+                }
+
+                if (equal) {
+                    return candidate;
+                }
+            }
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return {};
+}
+
 
 link_handle compiled_project_view::link_at(
     std::size_t index) const noexcept {

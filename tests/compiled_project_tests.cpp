@@ -723,6 +723,123 @@ void test_endpoint_path_persistence(
         second.value ==
             2,
         "compiled.bin preserves canonical endpoint path");
+
+    tests.expect(
+        view.find_endpoint_path(
+            named,
+            steps) ==
+            path,
+        "compiled mmap endpoint-path index resolves canonical path");
+
+    graph_delta delta;
+
+    if (!tests.expect(
+            succeeded(
+                delta.bind_baseline(
+                    view)),
+            "bind endpoint-path BUILD baseline")) {
+
+        return;
+    }
+
+    endpoint_path_handle baseline_path;
+    type_ref baseline_path_type;
+
+    if (!tests.expect(
+            succeeded(
+                delta.intern_endpoint_path(
+                    named,
+                    steps,
+                    baseline_path,
+                    &baseline_path_type)) &&
+            baseline_path ==
+                path &&
+            baseline_path_type ==
+                integer &&
+            delta.endpoint_path_count() ==
+                view.endpoint_path_count() &&
+            delta.endpoint_path_step_count() ==
+                view.endpoint_path_step_count(),
+            "BUILD endpoint-path interning reuses mmap baseline path")) {
+
+        return;
+    }
+
+    const std::array<endpoint_path_step, 2>
+        appended_steps{{
+            {
+                values.value(),
+                endpoint_path_step_kind::member,
+                {},
+            },
+            {
+                1,
+                endpoint_path_step_kind::array_index,
+                {},
+            },
+        }};
+
+    endpoint_path_handle appended_path;
+    endpoint_path_handle repeated_appended_path;
+    type_ref appended_type;
+
+    if (!tests.expect(
+            succeeded(
+                delta.intern_endpoint_path(
+                    named,
+                    appended_steps,
+                    appended_path,
+                    &appended_type)) &&
+            appended_path.value() ==
+                view.endpoint_path_count() + 1 &&
+            appended_type ==
+                integer &&
+            succeeded(
+                delta.intern_endpoint_path(
+                    named,
+                    appended_steps,
+                    repeated_appended_path,
+                    nullptr)) &&
+            repeated_appended_path ==
+                appended_path &&
+            delta.endpoint_path_count() ==
+                view.endpoint_path_count() + 1 &&
+            delta.endpoint_path_step_count() ==
+                view.endpoint_path_step_count() +
+                    appended_steps.size(),
+            "BUILD endpoint paths append canonically after mmap baseline")) {
+
+        return;
+    }
+
+    endpoint_path_record appended_record;
+    endpoint_path_step appended_first;
+    endpoint_path_step appended_second;
+
+    tests.expect(
+        delta.endpoint_path(
+            appended_path,
+            appended_record) &&
+        appended_record.root_type ==
+            named &&
+        appended_record.value_type ==
+            integer &&
+        appended_record.steps.begin ==
+            view.endpoint_path_step_count() &&
+        appended_record.steps.count ==
+            2 &&
+        delta.endpoint_path_step_at(
+            appended_record.steps.begin,
+            appended_first) &&
+        appended_first ==
+            appended_steps[0] &&
+        delta.endpoint_path_step_at(
+            static_cast<std::size_t>(
+                appended_record.steps.begin) + 1,
+            appended_second) &&
+        appended_second ==
+            appended_steps[1],
+        "BUILD exposes logical baseline plus appended endpoint paths");
 }
 
 void test_graph_derived_type_invariants(
