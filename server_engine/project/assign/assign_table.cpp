@@ -48,34 +48,34 @@ server_status assign_table::add(
             bytes.size() +
             source_value.size() +
             target_value.size());
-
-        bytes.insert(
-            bytes.end(),
-            source_value.begin(),
-            source_value.end());
-
-        bytes.insert(
-            bytes.end(),
-            target_value.begin(),
-            target_value.end());
-
-        entries.push_back({
-            source_offset,
-            static_cast<std::uint32_t>(
-                source_value.size()),
-            target_offset,
-            static_cast<std::uint32_t>(
-                target_value.size()),
-        });
-
-        files.push_back(
-            file);
-
-        return server_status::success;
     }
     catch (...) {
         return server_status::io_error;
     }
+
+    bytes.insert(
+        bytes.end(),
+        source_value.begin(),
+        source_value.end());
+
+    bytes.insert(
+        bytes.end(),
+        target_value.begin(),
+        target_value.end());
+
+    entries.push_back({
+        source_offset,
+        static_cast<std::uint32_t>(
+            source_value.size()),
+        target_offset,
+        static_cast<std::uint32_t>(
+            target_value.size()),
+    });
+
+    files.push_back(
+        file);
+
+    return server_status::success;
 }
 
 void assign_table::clear() noexcept {
