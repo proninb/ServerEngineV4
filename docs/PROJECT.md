@@ -69,6 +69,22 @@ G + Server ABI + SHM policy
 The mode changes physical materialization only. It does not create another G or
 a second semantic construction stage.
 
+### Runtime System prefix
+
+The final physical Runtime image contains one Server-owned `System` prefix before all Project-derived Runtime storage:
+
+```text
+Runtime/SHM
+    System
+    unconnected<T>
+    Project objects
+```
+
+For FIXED_DIRECT, `System` starts at offset zero. It is not inserted into G or `compiled.bin`, so Project semantic identity, Graph handles, and Source Map remain unchanged. Project object offsets are physical Runtime-layout offsets after this prefix.
+
+The current resident Runtime publication rejects a root Project object named `System` because that spelling is owned by the built-in Runtime object.
+
+
 Runtime/SHM remains Phase 2; the current Phase-1 implementation publishes the
 resident mmap-native compiled representation at that convergence boundary.
 

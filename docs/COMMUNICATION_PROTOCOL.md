@@ -104,8 +104,8 @@ per client. Outbound enqueue wakes that event loop.
 
 Wire requests use `request_id`, uppercase `command`, and optional `arguments`.
 Supported V1 commands are LOGIN, LOAD, PUBLISH, BUILD, UNLOAD, REBUILD,
-GET_STATE, GET_VALUE, SNAP_IC, RESET_IC, DELETE_IC, LIST_IC, RUN, FREEZE,
-SHUTDOWN, and CLIENT. CLIENT `parameters` is Base64.
+GET_STATE, GET_OBJECT, GET_TYPE, GET_LINK, GET_VALUE, SNAP_IC, RESET_IC,
+DELETE_IC, LIST_IC, RUN, FREEZE, SHUTDOWN, and CLIENT. CLIENT `parameters` is Base64.
 
 Every outbound JSON object contains `sequence`. Responses additionally contain
 `request_id` and boolean `status`; payload and diagnostics are emitted only when
@@ -132,6 +132,28 @@ so a later response write cannot overwrite the completion observation.
 Stopping request acceptance wakes both queue wait APIs. An empty stopped queue
 returns failure; it never synthesizes a Server request.
 
+
+## Runtime System object
+
+`System` is a Server-owned built-in Runtime object backed directly by the FIXED_DIRECT SHM image.
+
+```text
+GET_OBJECT("System")
+    -> name = "System"
+       type = "System"
+
+GET_TYPE(["System"])
+    -> System type specification
+
+GET_VALUE("System.<member>")
+    -> direct Runtime/SHM value
+```
+
+Current members are `state`, `flags`, `current_cycle`, `completed_cycle`, `target_cycle`, `server_datetime_ns`, `model_datetime_ns`, `value_generation`, `snapshot_generation`, and `current_ic_generation`.
+
+`GET_OBJECT("*")` includes `System`. Its `file` field is empty because the built-in object has no physical Project source provenance.
+
+`System` is not a Graph object, so GET_LINK does not synthesize Graph links or Assign relations for it.
 
 ## Project IC commands
 

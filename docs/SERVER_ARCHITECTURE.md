@@ -123,6 +123,43 @@ RELOCATABLE_TRANSFER
 
 SHM size is derived from final G + ABI and is not configured independently.
 
+## Runtime System object
+
+Every resident FIXED_DIRECT Runtime image starts with one Server-owned `System` object at SHM offset zero.
+
+```text
+FIXED_DIRECT SHM
+    offset 0 -> System
+                unconnected<T>
+                Project objects
+```
+
+`System` is Runtime infrastructure. It is not a Project semantic object and is not inserted into G or `compiled.bin`. It therefore has no Project `object_handle`, semantic `identity_ref`, Source Map contribution, or physical source file.
+
+The current native fields are:
+
+```text
+state
+flags
+current_cycle
+completed_cycle
+target_cycle
+server_datetime_ns
+model_datetime_ns
+value_generation
+snapshot_generation
+current_ic_generation
+```
+
+Server/Runtime owns writes. FIXED_DIRECT Tasks read the same native bytes directly from SHM.
+
+Runtime Query exposes the built-in object through `GET_OBJECT`, `GET_TYPE`, and `GET_VALUE`. `GET_OBJECT("*")` includes `System`; its file provenance is empty because it is not source-defined.
+
+The current publication boundary rejects a root Project object named `System` to avoid collision with the built-in Runtime object.
+
+`System` is not included in IC snapshot data. SNAP/RESET operate on Project semantic values rather than Server-owned Runtime control state.
+
+
 Each mode-specific operation borrows the same process-wide
 `server_settings_configuration`. The explicit root Project path is an operation
 input; it is not resident Project state and is not stored in `server_context`.

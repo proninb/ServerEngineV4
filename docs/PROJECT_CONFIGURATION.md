@@ -622,6 +622,11 @@ LOAD first restores `compiled.bin -> G -> Runtime/SHM`, then reads root
 `project.json` for Project runtime resources such as IC and Tasks before the
 candidate Project is published as LOADED.
 
+The final Runtime image additionally contains the Server-owned `System` object. `System` is not a Project configuration input and does not participate in G, `compiled.bin`, Source Manager, File Context, or BUILD dependency state.
+
+The current Runtime publication boundary rejects a root Project object named `System` to avoid collision with the built-in Runtime object.
+
+
 
 ## IC Catalog
 
