@@ -346,6 +346,10 @@ public:
 
     [[nodiscard]] server_status end_root() noexcept;
 
+    [[nodiscard]] bool complete() const noexcept {
+        return !active_root;
+    }
+
     [[nodiscard]] std::span<const source_map_delta_root>
     root_entries() const noexcept {
         return root_records;

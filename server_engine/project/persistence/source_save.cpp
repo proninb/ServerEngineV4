@@ -5010,6 +5010,595 @@ server_status collect_source_save_semantic_roots(
 }
 
 
+void source_map_overlay_view::reset() noexcept {
+
+    persisted = nullptr;
+    compiled = nullptr;
+    replay = nullptr;
+
+    invalidated.clear();
+    replay_index.clear();
+
+    replayed_root_count_value = 0;
+    replaced_root_count_value = 0;
+}
+
+server_status source_map_overlay_view::bind(
+    const source_save_view& persisted_value,
+    const compiled_project_view& compiled_value,
+    const source_map_delta& replay_value,
+    std::span<const file_id> invalidated_roots) noexcept {
+
+    reset();
+
+    if (!persisted_value.valid() ||
+        !compiled_value.valid() ||
+        !replay_value.complete() ||
+        persisted_value.file_count() !=
+            compiled_value.source_file_count()) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    file_id previous;
+
+    for (const auto root :
+         invalidated_roots) {
+
+        if (!root ||
+            root.value() >
+                persisted_value.file_count() ||
+            (previous &&
+             root.value() <=
+                previous.value())) {
+
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        previous =
+            root;
+    }
+
+    const auto replay_roots =
+        replay_value.root_entries();
+
+    const auto replay_contributions =
+        replay_value.contribution_entries();
+
+    const auto replay_dependencies =
+        replay_value.dependency_entries();
+
+    const auto replay_initializations =
+        replay_value.initialization_target_entries();
+
+    if (replay_roots.size() >
+        static_cast<std::size_t>(
+            (std::numeric_limits<
+                std::uint32_t>::max)())) {
+
+        return server_status::io_error;
+    }
+
+    const auto range_valid =
+        [](source_map_range range,
+           std::size_t total) noexcept {
+
+            return static_cast<std::size_t>(
+                       range.begin) <= total &&
+                static_cast<std::size_t>(
+                    range.count) <=
+                    total -
+                    static_cast<std::size_t>(
+                        range.begin);
+        };
+
+    try {
+        invalidated.assign(
+            invalidated_roots.begin(),
+            invalidated_roots.end());
+
+        if (!replay_roots.empty()) {
+            const auto capacity =
+                next_capacity(
+                    replay_roots.size());
+
+            if (capacity == 0) {
+                reset();
+                return server_status::io_error;
+            }
+
+            replay_index.assign(
+                capacity,
+                {});
+
+            const auto mask =
+                replay_index.size() - 1;
+
+            for (std::size_t index = 0;
+                 index < replay_roots.size();
+                 ++index) {
+
+                const auto& record =
+                    replay_roots[index];
+
+                if (!record.root ||
+                    !range_valid(
+                        record.contributions,
+                        replay_contributions.size()) ||
+                    !range_valid(
+                        record.dependencies,
+                        replay_dependencies.size()) ||
+                    !range_valid(
+                        record.initializations,
+                        replay_initializations.size())) {
+
+                    reset();
+
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                auto position =
+                    static_cast<std::size_t>(
+                        mix64(
+                            record.root.value())) &
+                    mask;
+
+                bool inserted = false;
+
+                for (std::size_t probe = 0;
+                     probe <
+                        replay_index.size();
+                     ++probe) {
+
+                    auto& slot =
+                        replay_index[
+                            position];
+
+                    if (!slot.root) {
+                        slot.root =
+                            record.root;
+
+                        slot.record =
+                            static_cast<std::uint32_t>(
+                                index + 1);
+
+                        inserted = true;
+                        break;
+                    }
+
+                    if (slot.root ==
+                        record.root) {
+
+                        reset();
+
+                        return server_status::
+                            project_artifact_invalid;
+                    }
+
+                    position =
+                        (position + 1) &
+                        mask;
+                }
+
+                if (!inserted) {
+                    reset();
+
+                    return server_status::
+                        project_artifact_invalid;
+                }
+            }
+        }
+
+        persisted =
+            &persisted_value;
+
+        compiled =
+            &compiled_value;
+
+        replay =
+            &replay_value;
+
+        replayed_root_count_value =
+            replay_roots.size();
+
+        for (const auto root :
+             invalidated) {
+
+            if (replay_root(root) !=
+                nullptr) {
+
+                ++replaced_root_count_value;
+            }
+        }
+
+        return server_status::success;
+    }
+    catch (...) {
+        reset();
+        return server_status::io_error;
+    }
+}
+
+const source_map_delta_root*
+source_map_overlay_view::replay_root(
+    file_id root) const noexcept {
+
+    if (!replay ||
+        !root ||
+        replay_index.empty()) {
+
+        return nullptr;
+    }
+
+    const auto mask =
+        replay_index.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            mix64(root.value())) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe <
+            replay_index.size();
+         ++probe) {
+
+        const auto& slot =
+            replay_index[
+                position];
+
+        if (!slot.root) {
+            return nullptr;
+        }
+
+        if (slot.root == root) {
+            const auto entries =
+                replay->root_entries();
+
+            const auto index =
+                static_cast<std::size_t>(
+                    slot.record - 1);
+
+            return slot.record != 0 &&
+                index < entries.size()
+                ? &entries[index]
+                : nullptr;
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return nullptr;
+}
+
+bool source_map_overlay_view::invalidated_root(
+    file_id root) const noexcept {
+
+    return std::binary_search(
+        invalidated.begin(),
+        invalidated.end(),
+        root,
+        [](file_id left,
+           file_id right) noexcept {
+            return left.value() <
+                right.value();
+        });
+}
+
+bool source_map_overlay_view::contributions(
+    file_id root,
+    std::size_t& count) const noexcept {
+
+    count = 0;
+
+    if (!valid() ||
+        !root) {
+
+        return false;
+    }
+
+    if (const auto* replacement =
+            replay_root(root);
+        replacement != nullptr) {
+
+        count =
+            replacement->
+                contributions.count;
+
+        return true;
+    }
+
+    if (invalidated_root(root) ||
+        root.value() >
+            persisted->file_count()) {
+
+        return true;
+    }
+
+    source_map_range range;
+
+    if (!compiled->source_root(
+            root,
+            range)) {
+
+        return false;
+    }
+
+    count =
+        range.count;
+
+    return true;
+}
+
+bool source_map_overlay_view::contribution(
+    file_id root,
+    std::size_t index,
+    source_contribution_record& output) const noexcept {
+
+    output = {};
+
+    if (!valid() ||
+        !root) {
+
+        return false;
+    }
+
+    if (const auto* replacement =
+            replay_root(root);
+        replacement != nullptr) {
+
+        if (index >=
+            replacement->
+                contributions.count) {
+
+            return false;
+        }
+
+        const auto entries =
+            replay->contribution_entries();
+
+        const auto position =
+            static_cast<std::size_t>(
+                replacement->
+                    contributions.begin) +
+            index;
+
+        if (position >=
+            entries.size()) {
+
+            return false;
+        }
+
+        output =
+            entries[position];
+
+        return true;
+    }
+
+    if (invalidated_root(root) ||
+        root.value() >
+            persisted->file_count()) {
+
+        return false;
+    }
+
+    source_map_range range;
+
+    if (!compiled->source_root(
+            root,
+            range) ||
+        index >=
+            range.count) {
+
+        return false;
+    }
+
+    return compiled->source_contribution(
+        range.begin +
+            static_cast<std::uint32_t>(
+                index),
+        output);
+}
+
+bool source_map_overlay_view::dependencies(
+    file_id root,
+    std::size_t& count) const noexcept {
+
+    count = 0;
+
+    if (!valid() ||
+        !root) {
+
+        return false;
+    }
+
+    if (const auto* replacement =
+            replay_root(root);
+        replacement != nullptr) {
+
+        count =
+            replacement->
+                dependencies.count;
+
+        return true;
+    }
+
+    if (invalidated_root(root) ||
+        root.value() >
+            persisted->file_count()) {
+
+        return true;
+    }
+
+    return persisted->
+        semantic_dependencies(
+            root,
+            count);
+}
+
+bool source_map_overlay_view::dependency(
+    file_id root,
+    std::size_t index,
+    source_dependency_ref& output) const noexcept {
+
+    output = {};
+
+    if (!valid() ||
+        !root) {
+
+        return false;
+    }
+
+    if (const auto* replacement =
+            replay_root(root);
+        replacement != nullptr) {
+
+        if (index >=
+            replacement->
+                dependencies.count) {
+
+            return false;
+        }
+
+        const auto entries =
+            replay->dependency_entries();
+
+        const auto position =
+            static_cast<std::size_t>(
+                replacement->
+                    dependencies.begin) +
+            index;
+
+        if (position >=
+            entries.size()) {
+
+            return false;
+        }
+
+        output =
+            entries[position];
+
+        return static_cast<bool>(
+            output);
+    }
+
+    if (invalidated_root(root) ||
+        root.value() >
+            persisted->file_count()) {
+
+        return false;
+    }
+
+    return persisted->
+        semantic_dependency(
+            root,
+            index,
+            output);
+}
+
+bool source_map_overlay_view::initialization_targets(
+    file_id root,
+    std::size_t& count) const noexcept {
+
+    count = 0;
+
+    if (!valid() ||
+        !root) {
+
+        return false;
+    }
+
+    if (const auto* replacement =
+            replay_root(root);
+        replacement != nullptr) {
+
+        count =
+            replacement->
+                initializations.count;
+
+        return true;
+    }
+
+    if (invalidated_root(root) ||
+        root.value() >
+            persisted->file_count()) {
+
+        return true;
+    }
+
+    return persisted->
+        initialization_targets(
+            root,
+            count);
+}
+
+bool source_map_overlay_view::initialization_target(
+    file_id root,
+    std::size_t index,
+    object_endpoint& output) const noexcept {
+
+    output = {};
+
+    if (!valid() ||
+        !root) {
+
+        return false;
+    }
+
+    if (const auto* replacement =
+            replay_root(root);
+        replacement != nullptr) {
+
+        if (index >=
+            replacement->
+                initializations.count) {
+
+            return false;
+        }
+
+        const auto entries =
+            replay->
+                initialization_target_entries();
+
+        const auto position =
+            static_cast<std::size_t>(
+                replacement->
+                    initializations.begin) +
+            index;
+
+        if (position >=
+            entries.size()) {
+
+            return false;
+        }
+
+        output =
+            entries[position];
+
+        return output.object &&
+            output.member;
+    }
+
+    if (invalidated_root(root) ||
+        root.value() >
+            persisted->file_count()) {
+
+        return false;
+    }
+
+    return persisted->
+        initialization_target(
+            root,
+            index,
+            output);
+}
+
+
 server_status collect_source_save_semantic_dependency_closure(
     const source_save_view& persisted,
     const compiled_project_view& compiled,

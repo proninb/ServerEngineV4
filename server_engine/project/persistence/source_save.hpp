@@ -395,6 +395,97 @@ prepare_source_save_layout(const file_context &files,
 
 class compiled_project_view;
 
+// Read-only BUILD candidate over OLD persisted provenance plus sparse replay.
+// Replayed roots replace OLD root state completely; invalidated roots without a
+// replay become empty. Unaffected roots remain mmap-backed and are never copied.
+class source_map_overlay_view final {
+public:
+    [[nodiscard]] server_status bind(
+        const source_save_view& persisted,
+        const compiled_project_view& compiled,
+        const source_map_delta& replay,
+        std::span<const file_id> invalidated_roots) noexcept;
+
+    void reset() noexcept;
+
+    [[nodiscard]] bool valid() const noexcept {
+        return persisted != nullptr &&
+            compiled != nullptr &&
+            replay != nullptr;
+    }
+
+    [[nodiscard]] std::size_t invalidated_root_count() const noexcept {
+        return invalidated.size();
+    }
+
+    [[nodiscard]] std::size_t replayed_root_count() const noexcept {
+        return replayed_root_count_value;
+    }
+
+    [[nodiscard]] std::size_t replaced_root_count() const noexcept {
+        return replaced_root_count_value;
+    }
+
+    [[nodiscard]] std::size_t removed_root_count() const noexcept {
+        return invalidated.size() -
+            replaced_root_count_value;
+    }
+
+    [[nodiscard]] std::size_t added_root_count() const noexcept {
+        return replayed_root_count_value -
+            replaced_root_count_value;
+    }
+
+    [[nodiscard]] bool contributions(
+        file_id root,
+        std::size_t& count) const noexcept;
+
+    [[nodiscard]] bool contribution(
+        file_id root,
+        std::size_t index,
+        source_contribution_record& output) const noexcept;
+
+    [[nodiscard]] bool dependencies(
+        file_id root,
+        std::size_t& count) const noexcept;
+
+    [[nodiscard]] bool dependency(
+        file_id root,
+        std::size_t index,
+        source_dependency_ref& output) const noexcept;
+
+    [[nodiscard]] bool initialization_targets(
+        file_id root,
+        std::size_t& count) const noexcept;
+
+    [[nodiscard]] bool initialization_target(
+        file_id root,
+        std::size_t index,
+        object_endpoint& output) const noexcept;
+
+private:
+    struct replay_index_slot final {
+        file_id root{};
+        std::uint32_t record = 0;
+    };
+
+    [[nodiscard]] const source_map_delta_root* replay_root(
+        file_id root) const noexcept;
+
+    [[nodiscard]] bool invalidated_root(
+        file_id root) const noexcept;
+
+    const source_save_view* persisted = nullptr;
+    const compiled_project_view* compiled = nullptr;
+    const source_map_delta* replay = nullptr;
+
+    std::vector<file_id> invalidated;
+    std::vector<replay_index_slot> replay_index;
+
+    std::size_t replayed_root_count_value = 0;
+    std::size_t replaced_root_count_value = 0;
+};
+
 // Expands OLD invalidated semantic roots through persisted semantic dependency
 // observations. The traversal is sparse in root count and semantic edges; it
 // never allocates a file_count-sized visited marker.

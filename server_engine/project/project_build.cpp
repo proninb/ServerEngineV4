@@ -1590,6 +1590,40 @@ server_status build_project(
         }
     }
 
+    const auto source_candidate_bound =
+        context.source_candidate.bind(
+            context.source,
+            context.compiled,
+            context.source_changes,
+            semantic_invalidated_roots);
+
+    if (!succeeded(
+            source_candidate_bound)) {
+
+        diagnostics.emit(
+            diagnostic(
+                source_candidate_bound ==
+                        server_status::io_error
+                    ? diagnostics::
+                        project_build_incomplete
+                    : diagnostics::
+                        project_source_save_invalid,
+                operation)
+                .file(
+                    source_candidate_bound ==
+                            server_status::io_error
+                        ? project_path
+                        : layout.source_save)
+                .detail(
+                    source_candidate_bound ==
+                            server_status::io_error
+                        ? "BUILD could not allocate sparse merged Source Map overlay"
+                        : "OLD Source Map/SourceSave and sparse replay could not form one BUILD candidate")
+                .build());
+
+        return source_candidate_bound;
+    }
+
     std::string detail;
 
     try {
@@ -1740,13 +1774,33 @@ server_status build_project(
                 context.source_changes.
                     initialization_target_entries().
                         size()) +
+            ", source_candidate_invalidated_roots=" +
+            std::to_string(
+                context.source_candidate.
+                    invalidated_root_count()) +
+            ", source_candidate_replayed_roots=" +
+            std::to_string(
+                context.source_candidate.
+                    replayed_root_count()) +
+            ", source_candidate_replaced_roots=" +
+            std::to_string(
+                context.source_candidate.
+                    replaced_root_count()) +
+            ", source_candidate_removed_roots=" +
+            std::to_string(
+                context.source_candidate.
+                    removed_root_count()) +
+            ", source_candidate_added_roots=" +
+            std::to_string(
+                context.source_candidate.
+                    added_root_count()) +
             ", baseline_strings=" +
             std::to_string(
                 context.compiled.string_count()) +
             ", baseline_identities=" +
             std::to_string(
                 context.compiled.identity_count()) +
-            "; selected semantic-root Parser/Semantic replay completed; sparse provenance merge and final G/artifact publication are not implemented yet";
+            "; sparse semantic replay and OLD+replay Source Map overlay completed; final G/artifact publication is not implemented yet";
     }
     catch (...) {
         return server_status::io_error;

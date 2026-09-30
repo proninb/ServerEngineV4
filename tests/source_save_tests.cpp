@@ -539,6 +539,218 @@ void test_direct_source_save(
                  "presence matches compiled root ownership");
 
     {
+        source_map_delta replay;
+
+        tests.expect(
+            succeeded(
+                replay.reset()) &&
+            succeeded(
+                replay.begin_root(
+                    first)) &&
+            succeeded(
+                replay.add(
+                    first,
+                    source_data_ref::
+                        type_declaration(
+                            identity))) &&
+            succeeded(
+                replay.end_root()),
+            "prepare sparse replay provenance replacement");
+
+        const std::array<file_id, 1>
+            invalidated{first};
+
+        source_map_overlay_view overlay;
+
+        std::size_t first_contributions = 0;
+        std::size_t first_dependencies = 0;
+        std::size_t first_initializations = 0;
+        std::size_t second_contributions = 0;
+        std::size_t second_dependencies = 0;
+        std::size_t second_initializations = 0;
+
+        source_contribution_record
+            first_contribution;
+
+        source_contribution_record
+            second_contribution;
+
+        source_dependency_ref
+            second_dependency_value;
+
+        object_endpoint
+            second_initialization_value;
+
+        tests.expect(
+            succeeded(
+                overlay.bind(
+                    writable_view,
+                    compiled,
+                    replay,
+                    invalidated)) &&
+            overlay.invalidated_root_count() == 1 &&
+            overlay.replayed_root_count() == 1 &&
+            overlay.replaced_root_count() == 1 &&
+            overlay.removed_root_count() == 0 &&
+            overlay.added_root_count() == 0 &&
+            overlay.contributions(
+                first,
+                first_contributions) &&
+            first_contributions == 1 &&
+            overlay.contribution(
+                first,
+                0,
+                first_contribution) &&
+            first_contribution.file == first &&
+            first_contribution.data ==
+                source_data_ref::
+                    type_declaration(
+                        identity) &&
+            overlay.dependencies(
+                first,
+                first_dependencies) &&
+            first_dependencies == 0 &&
+            overlay.initialization_targets(
+                first,
+                first_initializations) &&
+            first_initializations == 0,
+            "replayed root fully replaces OLD provenance instead of unioning with it");
+
+        tests.expect(
+            overlay.contributions(
+                second,
+                second_contributions) &&
+            second_contributions == 2 &&
+            overlay.contribution(
+                second,
+                0,
+                second_contribution) &&
+            second_contribution.file == second &&
+            overlay.dependencies(
+                second,
+                second_dependencies) &&
+            second_dependencies == 1 &&
+            overlay.dependency(
+                second,
+                0,
+                second_dependency_value) &&
+            second_dependency_value ==
+                type_dependency &&
+            overlay.initialization_targets(
+                second,
+                second_initializations) &&
+            second_initializations == 1 &&
+            overlay.initialization_target(
+                second,
+                0,
+                second_initialization_value) &&
+            second_initialization_value ==
+                source,
+            "unaffected root remains mmap-backed through merged source overlay");
+    }
+
+    {
+        source_map_delta empty_replay;
+
+        tests.expect(
+            succeeded(
+                empty_replay.reset()),
+            "prepare empty sparse replay provenance");
+
+        const std::array<file_id, 1>
+            invalidated{first};
+
+        source_map_overlay_view overlay;
+
+        std::size_t first_contributions = 99;
+        std::size_t first_dependencies = 99;
+        std::size_t first_initializations = 99;
+        std::size_t second_contributions = 0;
+
+        tests.expect(
+            succeeded(
+                overlay.bind(
+                    writable_view,
+                    compiled,
+                    empty_replay,
+                    invalidated)) &&
+            overlay.replayed_root_count() == 0 &&
+            overlay.replaced_root_count() == 0 &&
+            overlay.removed_root_count() == 1 &&
+            overlay.contributions(
+                first,
+                first_contributions) &&
+            first_contributions == 0 &&
+            overlay.dependencies(
+                first,
+                first_dependencies) &&
+            first_dependencies == 0 &&
+            overlay.initialization_targets(
+                first,
+                first_initializations) &&
+            first_initializations == 0 &&
+            overlay.contributions(
+                second,
+                second_contributions) &&
+            second_contributions == 2,
+            "invalidated root without replay disappears while unrelated OLD provenance survives");
+    }
+
+    {
+        source_map_delta added_replay;
+
+        const file_id added_root{
+            static_cast<std::uint32_t>(
+                writable_view.file_count() + 1)};
+
+        tests.expect(
+            succeeded(
+                added_replay.reset()) &&
+            succeeded(
+                added_replay.begin_root(
+                    added_root)) &&
+            succeeded(
+                added_replay.add(
+                    added_root,
+                    source_data_ref::
+                        type_declaration(
+                            identity))) &&
+            succeeded(
+                added_replay.end_root()),
+            "prepare newly added semantic root provenance");
+
+        source_map_overlay_view overlay;
+
+        std::size_t added_contributions = 0;
+        source_contribution_record
+            added_contribution;
+
+        tests.expect(
+            succeeded(
+                overlay.bind(
+                    writable_view,
+                    compiled,
+                    added_replay,
+                    {})) &&
+            overlay.invalidated_root_count() == 0 &&
+            overlay.replayed_root_count() == 1 &&
+            overlay.replaced_root_count() == 0 &&
+            overlay.removed_root_count() == 0 &&
+            overlay.added_root_count() == 1 &&
+            overlay.contributions(
+                added_root,
+                added_contributions) &&
+            added_contributions == 1 &&
+            overlay.contribution(
+                added_root,
+                0,
+                added_contribution) &&
+            added_contribution.file ==
+                added_root,
+            "new semantic root exists only in sparse replay overlay");
+    }
+
+    {
         source_save_semantic_invalidation_plan
             plan;
 
