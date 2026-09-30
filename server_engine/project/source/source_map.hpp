@@ -340,6 +340,13 @@ public:
     [[nodiscard]] server_status add_dependency(
         object_handle object) noexcept;
 
+    // BUILD-only producer provenance. G keeps only canonical final
+    // initialization state; this preserves the exact targets produced by each
+    // semantic root so sparse BUILD can invalidate OLD producers without
+    // scanning all object initializations.
+    [[nodiscard]] server_status add_initialization(
+        object_endpoint target) noexcept;
+
     [[nodiscard]] server_status end_root() noexcept;
 
     [[nodiscard]] server_status finalize(
@@ -359,6 +366,9 @@ public:
         source_map_file_view& output) const noexcept;
 
     [[nodiscard]] std::span<const source_dependency_ref> root_dependencies(
+        file_id root) const noexcept;
+
+    [[nodiscard]] std::span<const object_endpoint> root_initializations(
         file_id root) const noexcept;
 
     [[nodiscard]] std::span<const file_id> dependents(
@@ -402,6 +412,16 @@ public:
     [[nodiscard]] std::span<const file_id>
     dependent_root_entries() const noexcept {
         return dependent_roots;
+    }
+
+    [[nodiscard]] std::span<const source_map_range>
+    root_initialization_entries() const noexcept {
+        return root_initialization_ranges;
+    }
+
+    [[nodiscard]] std::span<const object_endpoint>
+    initialization_target_entries() const noexcept {
+        return initialization_targets;
     }
 
     [[nodiscard]] std::span<const source_type_presence>
@@ -450,6 +470,9 @@ private:
     std::vector<source_dependency_index_slot> dependency_index;
     std::vector<file_id> dependent_roots;
 
+    std::vector<source_map_range> root_initialization_ranges;
+    std::vector<object_endpoint> initialization_targets;
+
     std::vector<source_type_presence> type_presence;
     std::vector<std::uint32_t> object_presence;
     std::vector<std::uint32_t> link_presence;
@@ -458,11 +481,13 @@ private:
     std::vector<contribution_slot> root_seen;
     std::uint32_t root_seen_generation = 0;
     std::unordered_set<std::uint32_t> root_dependency_seen;
+    std::unordered_set<std::uint64_t> root_initialization_seen;
     std::vector<bool> completed_roots;
 
     file_id active_root{};
     std::uint32_t active_root_begin = 0;
     std::uint32_t active_dependency_begin = 0;
+    std::uint32_t active_initialization_begin = 0;
     bool capture_build_acceleration = true;
     bool finalized_value = false;
 };

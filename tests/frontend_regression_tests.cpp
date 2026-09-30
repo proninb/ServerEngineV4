@@ -1473,6 +1473,27 @@ void test_source_value_initialization_last_wins(
         warnings[0].source.length == 5,
         "duplicate object init emits warning at replacing target");
 
+    const auto first_initializations =
+        sources.root_initializations(
+            first_id);
+
+    const auto second_initializations =
+        sources.root_initializations(
+            second_id);
+
+    tests.expect(
+        first_initializations.size() == 1 &&
+        second_initializations.size() == 1 &&
+        first_initializations[0] ==
+            object_endpoint{
+                object,
+                endpoint_ref{member}} &&
+        second_initializations[0] ==
+            object_endpoint{
+                object,
+                endpoint_ref{member}},
+        "BUILD provenance keeps every root that produces the canonical init target");
+
     const auto second_contributions =
         sources.root(
             second_id);

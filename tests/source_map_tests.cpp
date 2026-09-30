@@ -142,6 +142,8 @@ void test_root_ownership_and_file_projection(test_state &tests) {
         !tests.expect(succeeded(map.add(file_id{3}, definition)),
                       "root 1 definition dominates declaration") ||
         !tests.expect(succeeded(map.add(file_id{2}, object)), "root 1 object") ||
+        !tests.expect(succeeded(map.add_initialization(source)), "root 1 initialization target") ||
+        !tests.expect(succeeded(map.add_initialization(source)), "root 1 duplicate initialization target") ||
         !tests.expect(succeeded(map.add_dependency(type)), "root 1 type dependency") ||
         !tests.expect(succeeded(map.add_dependency(type)), "root 1 duplicate type dependency") ||
         !tests.expect(succeeded(map.end_root()), "end root 1") ||
@@ -160,6 +162,21 @@ void test_root_ownership_and_file_projection(test_state &tests) {
     const auto root1 = map.root(file_id{1});
 
     const auto root2 = map.root(file_id{2});
+
+    const auto root1_initializations =
+        map.root_initializations(
+            file_id{1});
+
+    const auto root2_initializations =
+        map.root_initializations(
+            file_id{2});
+
+    tests.expect(
+        root1_initializations.size() == 1 &&
+        root1_initializations[0] == source &&
+        root2_initializations.empty() &&
+        map.initialization_target_entries().size() == 1,
+        "BUILD initialization provenance is exact and root-deduped");
 
     tests.expect(root1.size() == 2 && root1[0].file == file_id{3} && root1[0].data == definition &&
                      root1[1].file == file_id{2} && root1[1].data == object,

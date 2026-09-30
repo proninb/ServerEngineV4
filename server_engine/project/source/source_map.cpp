@@ -60,6 +60,12 @@ server_status source_map::reset(
         dependency_index.clear();
         dependent_roots.clear();
 
+        root_initialization_ranges.assign(
+            file_count,
+            {});
+
+        initialization_targets.clear();
+
         type_presence.clear();
         object_presence.clear();
         link_presence.clear();
@@ -67,10 +73,12 @@ server_status source_map::reset(
         root_seen.clear();
         root_seen_generation = 0;
         root_dependency_seen.clear();
+        root_initialization_seen.clear();
 
         active_root = {};
         active_root_begin = 0;
         active_dependency_begin = 0;
+        active_initialization_begin = 0;
         finalized_value = false;
 
         return server_status::success;
@@ -103,6 +111,9 @@ server_status source_map::begin_root(
             root_dependency_ranges.resize(
                 root.value());
 
+            root_initialization_ranges.resize(
+                root.value());
+
             completed_roots.resize(
                 root.value());
         }
@@ -116,6 +127,7 @@ server_status source_map::begin_root(
 
         begin_contribution_generation();
         root_dependency_seen.clear();
+        root_initialization_seen.clear();
 
         active_root = root;
 
@@ -126,6 +138,10 @@ server_status source_map::begin_root(
         active_dependency_begin =
             static_cast<std::uint32_t>(
                 dependencies.size());
+
+        active_initialization_begin =
+            static_cast<std::uint32_t>(
+                initialization_targets.size());
 
         return server_status::success;
     }
@@ -368,6 +384,61 @@ server_status source_map::add_dependency(
     }
 }
 
+server_status source_map::add_initialization(
+    object_endpoint target) noexcept {
+
+    if (!active_root ||
+        finalized_value) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    if (!capture_build_acceleration) {
+        return server_status::success;
+    }
+
+    if (!target.object ||
+        !target.member) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    const auto key =
+        (static_cast<std::uint64_t>(
+             target.object.value()) << 32) |
+        target.member.value();
+
+    try {
+        const auto inserted =
+            root_initialization_seen.insert(
+                key);
+
+        if (!inserted.second) {
+            return server_status::success;
+        }
+
+        if (initialization_targets.size() >=
+            max_index) {
+
+            root_initialization_seen.erase(
+                key);
+
+            return server_status::io_error;
+        }
+
+        initialization_targets.push_back(
+            target);
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
+
 server_status source_map::end_root() noexcept {
 
     if (!active_root ||
@@ -393,12 +464,21 @@ server_status source_map::end_root() noexcept {
                 active_dependency_begin),
         };
 
+    root_initialization_ranges[
+        active_root.value() - 1] = {
+            active_initialization_begin,
+            static_cast<std::uint32_t>(
+                initialization_targets.size() -
+                active_initialization_begin),
+        };
+
     completed_roots[
         active_root.value() - 1] =
             true;
 
     active_root = {};
     root_dependency_seen.clear();
+    root_initialization_seen.clear();
 
     return server_status::success;
 }
@@ -427,6 +507,9 @@ server_status source_map::finalize(
             file_count);
 
         root_dependency_ranges.resize(
+            file_count);
+
+        root_initialization_ranges.resize(
             file_count);
 
         file_ranges.resize(
@@ -1001,6 +1084,9 @@ server_status source_map::finalize(
         root_dependency_seen.clear();
         root_dependency_seen.rehash(0);
 
+        root_initialization_seen.clear();
+        root_initialization_seen.rehash(0);
+
         completed_roots.clear();
 
         finalized_value = true;
@@ -1091,6 +1177,31 @@ source_map::root_dependencies(
             range.begin,
             range.count);
 }
+
+std::span<const object_endpoint>
+source_map::root_initializations(
+    file_id root) const noexcept {
+
+    if (!finalized_value ||
+        !root ||
+        root.value() >
+            root_initialization_ranges.size()) {
+
+        return {};
+    }
+
+    const auto range =
+        root_initialization_ranges[
+            root.value() - 1];
+
+    return std::span<
+        const object_endpoint>{
+            initialization_targets}
+        .subspan(
+            range.begin,
+            range.count);
+}
+
 
 std::span<const file_id>
 source_map::dependents(

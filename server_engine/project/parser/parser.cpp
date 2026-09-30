@@ -3993,6 +3993,14 @@ private:
                 target.location);
         }
 
+        status =
+            sources.add_initialization(
+                target.endpoint);
+
+        if (!succeeded(status)) {
+            return status;
+        }
+
         const auto object_identity =
             G.identity(
                 target.endpoint.object);
