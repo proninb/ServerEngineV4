@@ -441,5 +441,151 @@ int main() {
         }
     }
 
+    {
+        json_request request;
+
+        const auto decoded =
+            decode_json_request(
+                R"({"request_id":50,"command":"GET_OBJECT","arguments":{"name":"demo::left"}})",
+                request);
+
+        if (!decoded.ok() ||
+            request.kind !=
+                json_request_kind::server) {
+
+            return 50;
+        }
+
+        const auto& server =
+            std::get<server_request>(
+                request.payload);
+
+        if (server.kind !=
+                server_request_kind::get_object ||
+            server.name !=
+                "demo::left" ||
+            !server.type.empty()) {
+
+            return 51;
+        }
+    }
+
+    {
+        json_request request;
+
+        const auto decoded =
+            decode_json_request(
+                R"({"request_id":52,"command":"GET_OBJECT","arguments":{"name":"demo::*","type":"demo::T"}})",
+                request);
+
+        if (!decoded.ok()) {
+            return 52;
+        }
+
+        const auto& server =
+            std::get<server_request>(
+                request.payload);
+
+        if (server.kind !=
+                server_request_kind::get_object ||
+            server.name !=
+                "demo::*" ||
+            server.type !=
+                "demo::T") {
+
+            return 53;
+        }
+    }
+
+    {
+        json_request request;
+
+        if (decode_json_request(
+                R"({"request_id":54,"command":"GET_OBJECT","arguments":{"type":"demo::T"}})",
+                request).ok()) {
+
+            return 54;
+        }
+    }
+
+    {
+        json_request request;
+
+        if (decode_json_request(
+                R"({"request_id":55,"command":"GET_OBJECT","arguments":{"name":"*","type":""}})",
+                request).ok()) {
+
+            return 55;
+        }
+    }
+
+    {
+        outbound_write message;
+        message.connection_sequence = 20;
+
+        server_response response;
+        response.status =
+            server_status::success;
+        response.payload =
+            server_response_payload_kind::
+                runtime_object;
+
+        response.object.name =
+            "demo::left";
+        response.object.type =
+            "demo::T";
+
+        message.message.payload =
+            protocol_response{
+                request_id{56},
+                response,
+            };
+
+        std::string json;
+
+        if (!encode_json_outbound(
+                message,
+                json) ||
+            json.find(
+                R"("name":"demo::left")") ==
+                std::string::npos ||
+            json.find(
+                R"("type":"demo::T")") ==
+                std::string::npos) {
+
+            return 56;
+        }
+
+        response.object = {};
+        response.object.pattern = true;
+        response.object.objects.push_back(
+            {
+                "demo::left",
+                "source/left.cpp",
+            });
+
+        message.message.payload =
+            protocol_response{
+                request_id{57},
+                response,
+            };
+
+        if (!encode_json_outbound(
+                message,
+                json) ||
+            json.find(
+                R"("objects":[)") ==
+                std::string::npos ||
+            json.find(
+                R"("name":"demo::left")") ==
+                std::string::npos ||
+            json.find(
+                R"("file":"source/left.cpp")") ==
+                std::string::npos) {
+
+            return 57;
+        }
+    }
+
     return 0;
 }

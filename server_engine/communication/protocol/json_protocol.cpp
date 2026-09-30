@@ -22,6 +22,7 @@ enum field_bit : std::uint32_t {
     arg_bit = 1u << 5,
     parameters_bit = 1u << 6,
     options_bit = 1u << 7,
+    type_bit = 1u << 8,
 };
 
 class request_handler final : public json_event_handler {
@@ -107,6 +108,8 @@ public:
 
         if (key_value == "name") {
             assign_string(name_bit, value, name_value);
+        } else if (key_value == "type") {
+            assign_string(type_bit, value, type_value);
         } else if (key_value == "path") {
             assign_string(path_bit, value, path_value);
         } else if (key_value == "login") {
@@ -135,6 +138,7 @@ public:
     std::uint64_t request_value = 0;
     std::string command_value;
     std::string name_value;
+    std::string type_value;
     std::string path_value;
     std::string login_value;
     std::string arg_value;
@@ -567,6 +571,52 @@ void append_response(
         output.push_back('}');
         break;
 
+    case server_response_payload_kind::runtime_object:
+        if (!response.result.object.pattern) {
+            output += ",\"payload\":{\"name\":";
+            append_escaped(
+                response.result.object.name,
+                output);
+
+            output += ",\"type\":";
+            append_escaped(
+                response.result.object.type,
+                output);
+
+            output.push_back('}');
+            break;
+        }
+
+        output += ",\"payload\":{\"objects\":[";
+
+        for (std::size_t index = 0;
+             index <
+                response.result.object.objects.size();
+             ++index) {
+
+            if (index != 0) {
+                output.push_back(',');
+            }
+
+            const auto& object =
+                response.result.object.objects[index];
+
+            output += "{\"name\":";
+            append_escaped(
+                object.name,
+                output);
+
+            output += ",\"file\":";
+            append_escaped(
+                object.file,
+                output);
+
+            output.push_back('}');
+        }
+
+        output += "]}";
+        break;
+
     case server_response_payload_kind::runtime_value:
         output += ",\"payload\":{\"type\":";
         append_integer(
@@ -809,6 +859,9 @@ json_decode_result decode_json_request(
             } else if (command == "GET_STATE") {
                 request.kind =
                     server_request_kind::get_state;
+            } else if (command == "GET_OBJECT") {
+                request.kind =
+                    server_request_kind::get_object;
             } else if (command == "GET_VALUE") {
                 request.kind =
                     server_request_kind::get_value;
@@ -922,6 +975,30 @@ json_decode_result decode_json_request(
                 request.path =
                     std::move(
                         handler.path_value);
+                break;
+
+            case server_request_kind::get_object:
+                if (!only(
+                        handler.seen,
+                        name_bit |
+                            type_bit) ||
+                    (handler.seen & name_bit) == 0 ||
+                    handler.name_value.empty() ||
+                    ((handler.seen & type_bit) != 0 &&
+                     handler.type_value.empty())) {
+
+                    return {
+                        json_protocol_error::invalid_schema,
+                    };
+                }
+
+                request.name =
+                    std::move(
+                        handler.name_value);
+
+                request.type =
+                    std::move(
+                        handler.type_value);
                 break;
 
             case server_request_kind::get_value:

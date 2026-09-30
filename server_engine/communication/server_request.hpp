@@ -22,6 +22,7 @@ enum class server_request_kind {
     unload,
     rebuild,
     get_state,
+    get_object,
     get_value,
     snap_ic,
     reset_ic,
@@ -40,6 +41,9 @@ struct server_request {
 
     // Runtime query target.
     std::string name;
+
+    // Optional Runtime query type filter.
+    std::string type;
 
     snap_ic_options snap_options = snap_ic_options::none;
     reset_ic_options reset_options = reset_ic_options::none;

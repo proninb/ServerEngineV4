@@ -619,6 +619,85 @@ server_response server::execute(
                 result.diagnostics);
         break;
 
+    case server_request_kind::get_object: {
+        if (!context.project) {
+            result.diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_not_loaded,
+                    result.operation)
+                    .detail(
+                        "GET_OBJECT requires an active Project")
+                    .build());
+
+            result.status =
+                server_status::project_not_loaded;
+            break;
+        }
+
+        const auto queried =
+            get_runtime_object(
+                context.project->compiled(),
+                request.name,
+                request.type,
+                result.object);
+
+        switch (queried) {
+        case runtime_query_result::success:
+            result.payload =
+                server_response_payload_kind::
+                    runtime_object;
+            result.status =
+                server_status::success;
+            break;
+
+        case runtime_query_result::invalid_input:
+            result.diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_query_invalid,
+                    result.operation)
+                    .detail(request.name)
+                    .build());
+            result.status =
+                server_status::runtime_query_invalid;
+            break;
+
+        case runtime_query_result::not_found:
+            result.diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_query_not_found,
+                    result.operation)
+                    .detail(request.name)
+                    .build());
+            result.status =
+                server_status::runtime_query_not_found;
+            break;
+
+        case runtime_query_result::unsupported_type:
+            result.diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_query_unsupported,
+                    result.operation)
+                    .detail(request.name)
+                    .build());
+            result.status =
+                server_status::unsupported;
+            break;
+
+        case runtime_query_result::invalid_runtime:
+            result.diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_query_failed,
+                    result.operation)
+                    .detail(request.name)
+                    .build());
+            result.status =
+                server_status::project_runtime_failed;
+            break;
+        }
+
+        break;
+    }
+
     case server_request_kind::get_value: {
         if (!context.project) {
             result.diagnostics.emit(

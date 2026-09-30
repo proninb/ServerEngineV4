@@ -2772,6 +2772,174 @@ void test_runtime_query(
 }
 
 
+void test_runtime_object_query(
+    test_state& tests,
+    const compiled_test_image& image) {
+
+    compiled_project_view view;
+
+    if (!tests.expect(
+            view.bind(
+                image.bytes) ==
+                compiled_project_image_result::success,
+            "bind GET_OBJECT query image")) {
+
+        return;
+    }
+
+    runtime_object_query result;
+
+    if (!tests.expect(
+            get_runtime_object(
+                view,
+                "demo::left",
+                {},
+                result) ==
+                    runtime_query_result::success &&
+            !result.pattern &&
+            result.name ==
+                "demo::left" &&
+            result.type ==
+                "demo::Widget" &&
+            result.objects.empty(),
+            "GET_OBJECT exact returns canonical name and type")) {
+
+        return;
+    }
+
+    tests.expect(
+        get_runtime_object(
+            view,
+            "::demo::left",
+            "::demo::Widget",
+            result) ==
+                runtime_query_result::success &&
+        !result.pattern &&
+        result.name ==
+            "demo::left" &&
+        result.type ==
+            "demo::Widget",
+        "GET_OBJECT exact normalizes leading global scope and type filter");
+
+    tests.expect(
+        get_runtime_object(
+            view,
+            "demo::left",
+            "int",
+            result) ==
+                runtime_query_result::not_found,
+        "GET_OBJECT exact rejects nonmatching type filter");
+
+    if (!tests.expect(
+            get_runtime_object(
+                view,
+                "demo::*",
+                {},
+                result) ==
+                    runtime_query_result::success &&
+            result.pattern &&
+            result.name.empty() &&
+            result.type.empty() &&
+            result.objects.size() == 3,
+            "GET_OBJECT wildcard returns matching object list")) {
+
+        return;
+    }
+
+    tests.expect(
+        result.objects[0].name ==
+                "demo::left" &&
+        result.objects[1].name ==
+                "demo::right" &&
+        result.objects[2].name ==
+                "demo::scalar",
+        "GET_OBJECT wildcard preserves G object order");
+
+    bool provenance_valid = true;
+
+    for (const auto& object :
+         result.objects) {
+
+        provenance_valid =
+            provenance_valid &&
+            std::string_view{
+                object.file}.ends_with(
+                    "objects.source");
+    }
+
+    tests.expect(
+        provenance_valid,
+        "GET_OBJECT wildcard returns physical source provenance");
+
+    if (!tests.expect(
+            get_runtime_object(
+                view,
+                "demo::ri??t",
+                {},
+                result) ==
+                    runtime_query_result::success &&
+            result.pattern &&
+            result.objects.size() == 1 &&
+            result.objects[0].name ==
+                "demo::right",
+            "GET_OBJECT question-mark wildcard matches one character")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            get_runtime_object(
+                view,
+                "*",
+                "demo::Widget",
+                result) ==
+                    runtime_query_result::success &&
+            result.pattern &&
+            result.objects.size() == 2 &&
+            result.objects[0].name ==
+                "demo::left" &&
+            result.objects[1].name ==
+                "demo::right",
+            "GET_OBJECT wildcard applies named-type filter")) {
+
+        return;
+    }
+
+    tests.expect(
+        get_runtime_object(
+            view,
+            "*",
+            "int",
+            result) ==
+                runtime_query_result::success &&
+        result.pattern &&
+        result.objects.size() == 1 &&
+        result.objects[0].name ==
+            "demo::scalar",
+        "GET_OBJECT wildcard applies intrinsic-type filter");
+
+    tests.expect(
+        get_runtime_object(
+            view,
+            "::demo::*",
+            {},
+            result) ==
+                runtime_query_result::success &&
+        result.pattern &&
+        result.objects.size() == 3,
+        "GET_OBJECT wildcard accepts leading global scope");
+
+    tests.expect(
+        get_runtime_object(
+            view,
+            {},
+            {},
+            result) ==
+                runtime_query_result::invalid_input,
+        "GET_OBJECT rejects empty name");
+}
+
+
 void test_runtime_ic_cross_generation(
     test_state& tests,
     const compiled_fixture& first_fixture,
@@ -8582,6 +8750,10 @@ int main() {
             first);
 
         test_runtime_query(
+            tests,
+            first);
+
+        test_runtime_object_query(
             tests,
             first);
 

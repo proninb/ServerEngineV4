@@ -8,6 +8,7 @@
  *   UNLOAD
  *   REBUILD <project-path>
  *   GET_STATE
+ *   GET_OBJECT <name-pattern> [type]
  *   GET_VALUE <qualified-object[.member...]>
  *   SNAP_IC [/options=0] <ic-path>
  *   RESET_IC [/options=<0..7>] <ic-path>
@@ -277,6 +278,32 @@ void server_console::run() {
                 {},
                 {},
             });
+        } else if (verb == "GET_OBJECT") {
+            std::string name;
+
+            if (!(stream >> name) ||
+                name.empty()) {
+
+                std::cout
+                    << "GET_OBJECT requires <name-pattern> [type]\n";
+                continue;
+            }
+
+            std::string type;
+            std::getline(
+                stream >> std::ws,
+                type);
+
+            server_request request;
+            request.kind =
+                server_request_kind::get_object;
+            request.name =
+                std::move(name);
+            request.type =
+                std::move(type);
+
+            publish(
+                std::move(request));
         } else if (verb == "GET_VALUE") {
             std::string name;
             std::getline(
@@ -369,6 +396,29 @@ void server_console::present(
                                 ? "RESETTING_IC"
                                 : "SNAPPING_IC")
             << '\n';
+        break;
+
+    case server_response_payload_kind::runtime_object:
+        if (!result.object.pattern) {
+            std::cout
+                << "OBJECT "
+                << result.object.name
+                << " type="
+                << result.object.type
+                << '\n';
+            break;
+        }
+
+        for (const auto& object :
+             result.object.objects) {
+
+            std::cout
+                << "OBJECT "
+                << object.name
+                << " file="
+                << object.file
+                << '\n';
+        }
         break;
 
     case server_response_payload_kind::runtime_value:

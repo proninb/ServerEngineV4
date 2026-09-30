@@ -10,8 +10,10 @@
 
 #include <cstdint>
 #include <span>
+#include <string>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 namespace cw::server {
 
@@ -34,6 +36,24 @@ struct runtime_value final {
 static_assert(sizeof(runtime_value) == 16);
 static_assert(std::is_trivially_copyable_v<runtime_value>);
 static_assert(std::is_standard_layout_v<runtime_value>);
+
+struct runtime_object_match final {
+    std::string name;
+    std::string file;
+};
+
+struct runtime_object_query final {
+    bool pattern = false;
+    std::string name;
+    std::string type;
+    std::vector<runtime_object_match> objects;
+};
+
+[[nodiscard]] runtime_query_result get_runtime_object(
+    const compiled_project_view& project,
+    std::string_view name,
+    std::string_view type,
+    runtime_object_query& output) noexcept;
 
 [[nodiscard]] runtime_query_result get_runtime_value(
     const compiled_project_view& project,

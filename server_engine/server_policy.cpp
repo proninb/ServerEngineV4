@@ -29,6 +29,7 @@ bool server_policy::is_demo_mutation(
     case server_request_kind::load:
     case server_request_kind::unload:
     case server_request_kind::get_state:
+    case server_request_kind::get_object:
     case server_request_kind::get_value:
     case server_request_kind::snap_ic:
     case server_request_kind::list_ic:
