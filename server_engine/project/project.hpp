@@ -49,6 +49,20 @@ public:
         return runtime_size_value;
     }
 
+    [[nodiscard]] runtime_system& system() noexcept {
+        return *reinterpret_cast<runtime_system*>(
+            shared_memory.data() +
+                static_cast<std::size_t>(
+                    runtime_system_offset));
+    }
+
+    [[nodiscard]] const runtime_system& system() const noexcept {
+        return *reinterpret_cast<const runtime_system*>(
+            shared_memory.data() +
+                static_cast<std::size_t>(
+                    runtime_system_offset));
+    }
+
     [[nodiscard]] const runtime_binding_index&
     runtime_bindings() const noexcept {
         return runtime_bindings_value;

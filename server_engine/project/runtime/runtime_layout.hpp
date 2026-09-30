@@ -8,6 +8,8 @@
  */
 #pragma once
 
+#include "runtime_system.hpp"
+
 #include "../abi/abi_layout.hpp"
 #include "../persistence/compiled_project.hpp"
 
@@ -30,6 +32,8 @@ enum class runtime_layout_result : std::uint8_t {
 // record are compact 32-bit values; the maximum value is reserved internally.
 using runtime_offset = std::uint64_t;
 using record_offset = std::uint32_t;
+
+inline constexpr runtime_offset runtime_system_offset = 0;
 
 static_assert(sizeof(runtime_offset) == 8);
 static_assert(sizeof(record_offset) == 4);

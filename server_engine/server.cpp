@@ -399,6 +399,38 @@ project_state server::current_project_state() const noexcept {
     return project_state_value;
 }
 
+void server::update_system_datetime() noexcept {
+
+    if (!context.project) {
+        return;
+    }
+
+    const auto now =
+        std::chrono::system_clock::now().
+            time_since_epoch();
+
+    context.project->system().
+        server_datetime_ns =
+            std::chrono::duration_cast<
+                std::chrono::nanoseconds>(
+                    now).count();
+}
+
+void server::set_project_state(
+    project_state state) noexcept {
+
+    project_state_value =
+        state;
+
+    if (context.project) {
+        context.project->system().state =
+            static_cast<std::uint32_t>(
+                state);
+
+        update_system_datetime();
+    }
+}
+
 void server::execute_login(
     login_control_message& message) {
 
@@ -517,6 +549,8 @@ server_response server::execute(
     server_response result;
     result.operation =
         next_operation();
+
+    update_system_datetime();
 
     switch (request.kind) {
     case server_request_kind::load:
@@ -1002,8 +1036,7 @@ server_status server::load(
 
     if (!succeeded(status)) {
         context.project.reset();
-        project_state_value =
-            project_state::unloaded;
+        set_project_state(project_state::unloaded);
         return status;
     }
 
@@ -1016,16 +1049,14 @@ server_status server::load(
     if (!succeeded(configured)) {
         candidate.reset();
         context.project.reset();
-        project_state_value =
-            project_state::unloaded;
+        set_project_state(project_state::unloaded);
         return configured;
     }
 
     context.project =
         std::move(candidate);
 
-    project_state_value =
-        project_state::loaded;
+    set_project_state(project_state::loaded);
 
     return server_status::success;
 }
@@ -1063,8 +1094,7 @@ server_status server::publish(
 
     if (!succeeded(status)) {
         context.project.reset();
-        project_state_value =
-            project_state::unloaded;
+        set_project_state(project_state::unloaded);
         return status;
     }
 
@@ -1077,16 +1107,14 @@ server_status server::publish(
     if (!succeeded(configured)) {
         candidate.reset();
         context.project.reset();
-        project_state_value =
-            project_state::unloaded;
+        set_project_state(project_state::unloaded);
         return configured;
     }
 
     context.project =
         std::move(candidate);
 
-    project_state_value =
-        project_state::loaded;
+    set_project_state(project_state::loaded);
 
     return server_status::success;
 }
@@ -1124,8 +1152,7 @@ server_status server::build(
 
     if (!succeeded(status)) {
         context.project.reset();
-        project_state_value =
-            project_state::unloaded;
+        set_project_state(project_state::unloaded);
         return status;
     }
 
@@ -1138,16 +1165,14 @@ server_status server::build(
     if (!succeeded(configured)) {
         candidate.reset();
         context.project.reset();
-        project_state_value =
-            project_state::unloaded;
+        set_project_state(project_state::unloaded);
         return configured;
     }
 
     context.project =
         std::move(candidate);
 
-    project_state_value =
-        project_state::loaded;
+    set_project_state(project_state::loaded);
 
     return server_status::success;
 }
@@ -1185,8 +1210,7 @@ server_status server::rebuild(
 
     if (!succeeded(status)) {
         context.project.reset();
-        project_state_value =
-            project_state::unloaded;
+        set_project_state(project_state::unloaded);
         return status;
     }
 
@@ -1199,16 +1223,14 @@ server_status server::rebuild(
     if (!succeeded(configured)) {
         candidate.reset();
         context.project.reset();
-        project_state_value =
-            project_state::unloaded;
+        set_project_state(project_state::unloaded);
         return configured;
     }
 
     context.project =
         std::move(candidate);
 
-    project_state_value =
-        project_state::loaded;
+    set_project_state(project_state::loaded);
 
     return server_status::success;
 }
@@ -1303,7 +1325,7 @@ server_status server::snap_ic(
     }
 
     const auto previous_state = project_state_value;
-    project_state_value = project_state::snapping_ic;
+    set_project_state(project_state::snapping_ic);
     context.communications.publish_server_state(
         previous_state,
         project_state_value);
@@ -1660,6 +1682,9 @@ server_status server::snap_ic(
             std::move(
                 catalog_candidate));
 
+        ++context.project->system().
+            snapshot_generation;
+
         // Catalog is now authoritative. Backup cleanup is no longer part
         // of the logical SNAP transaction.
         cleanup_backup();
@@ -1667,7 +1692,7 @@ server_status server::snap_ic(
         return server_status::success;
     }();
 
-    project_state_value = previous_state;
+    set_project_state(previous_state);
     context.communications.publish_server_state(
         project_state::snapping_ic,
         previous_state);
@@ -1743,7 +1768,7 @@ server_status server::reset_ic(
         node->path);
 
     const auto previous_state = project_state_value;
-    project_state_value = project_state::resetting_ic;
+    set_project_state(project_state::resetting_ic);
     context.communications.publish_server_state(
         previous_state,
         project_state_value);
@@ -1798,16 +1823,26 @@ server_status server::reset_ic(
             return server_status::runtime_ic_failed;
         }
 
+        runtime_ic_reset_stats reset_stats;
+
         const auto reset = reset_runtime_ic_binary(
             context.project->compiled(),
             context.project->runtime_bindings(),
             runtime.first(static_cast<std::size_t>(logical_size)),
             image,
-            nullptr,
+            &reset_stats,
             options);
 
         switch (reset) {
         case runtime_ic_reset_result::success:
+            if (reset_stats.records != 0) {
+                ++context.project->system().
+                    value_generation;
+            }
+
+            ++context.project->system().
+                current_ic_generation;
+
             return server_status::success;
         case runtime_ic_reset_result::invalid_input:
         case runtime_ic_reset_result::invalid_image:
@@ -1857,7 +1892,7 @@ server_status server::reset_ic(
         return server_status::runtime_ic_failed;
     }();
 
-    project_state_value = previous_state;
+    set_project_state(previous_state);
     context.communications.publish_server_state(
         project_state::resetting_ic,
         previous_state);
@@ -2033,8 +2068,7 @@ server_status server::run_project(
         return server_status::runtime_state_invalid;
     }
 
-    project_state_value =
-        project_state::run;
+    set_project_state(project_state::run);
 
     return server_status::success;
 }
@@ -2067,8 +2101,7 @@ server_status server::freeze_project(
         return server_status::runtime_state_invalid;
     }
 
-    project_state_value =
-        project_state::freeze;
+    set_project_state(project_state::freeze);
 
     return server_status::success;
 }
@@ -2102,8 +2135,7 @@ server_status server::unload(
     }
 
     context.project.reset();
-    project_state_value =
-        project_state::unloaded;
+    set_project_state(project_state::unloaded);
 
     return server_status::success;
 }
@@ -2113,8 +2145,7 @@ void server::shutdown() noexcept {
     context.requests.stop_accepting_and_discard();
     context.communications.stop();
     context.project.reset();
-    project_state_value =
-        project_state::unloaded;
+    set_project_state(project_state::unloaded);
     context.authentication.stop();
     context.lease.clear();
     context.identity.stop();

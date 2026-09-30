@@ -99,6 +99,8 @@ private:
     void execute_client(client_control_message& message);
 
     [[nodiscard]] project_state current_project_state() const noexcept;
+    void set_project_state(project_state state) noexcept;
+    void update_system_datetime() noexcept;
     [[nodiscard]] operation_id next_operation() noexcept;
 
     server_context context;

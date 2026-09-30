@@ -2,6 +2,7 @@
 #include "project/persistence/crc64_ecma.hpp"
 #include "project/runtime/fixed_direct_materializer.hpp"
 #include "project/runtime/runtime_layout.hpp"
+#include "project/runtime/runtime_system.hpp"
 #include "project/runtime/runtime_query.hpp"
 #include "project/runtime/runtime_ic.hpp"
 #include "project/runtime/runtime_ic_codec.hpp"
@@ -2753,6 +2754,28 @@ void test_runtime_query(
         return;
     }
 
+    auto& system =
+        *reinterpret_cast<runtime_system*>(
+            runtime.data());
+
+    if (!tests.expect(
+            system.state == 0 &&
+            system.current_cycle == 0 &&
+            system.snapshot_generation == 0,
+            "FIXED_DIRECT materializes zero-initialized System at SHM offset zero")) {
+
+        return;
+    }
+
+    system.state = 2;
+    system.current_cycle = 123;
+    system.completed_cycle = 122;
+    system.target_cycle = 200;
+    system.server_datetime_ns = 456;
+    system.value_generation = 7;
+    system.snapshot_generation = 8;
+    system.current_ic_generation = 9;
+
     const auto expect_value =
         [&](std::string_view name,
             std::uint64_t expected,
@@ -2797,6 +2820,42 @@ void test_runtime_query(
             view,
             bindings,
             runtime,
+            "System.current_cycle",
+            value) ==
+                runtime_query_result::success &&
+        value.type ==
+            intrinsic_type::unsigned_long_long &&
+        value.size ==
+            sizeof(std::uint64_t) &&
+        value.bits == 123,
+        "GET_VALUE reads built-in System directly from SHM");
+
+    tests.expect(
+        get_runtime_value(
+            view,
+            bindings,
+            runtime,
+            "::System.snapshot_generation",
+            value) ==
+                runtime_query_result::success &&
+        value.bits == 8,
+        "GET_VALUE accepts global System name");
+
+    tests.expect(
+        get_runtime_value(
+            view,
+            bindings,
+            runtime,
+            "System.missing",
+            value) ==
+                runtime_query_result::not_found,
+        "GET_VALUE reports missing System member");
+
+    tests.expect(
+        get_runtime_value(
+            view,
+            bindings,
+            runtime,
             "demo::missing.value",
             value) ==
             runtime_query_result::not_found,
@@ -2830,6 +2889,40 @@ void test_runtime_object_query(
     }
 
     runtime_object_query result;
+
+    if (!tests.expect(
+            get_runtime_object(
+                view,
+                "System",
+                {},
+                result) ==
+                    runtime_query_result::success &&
+            !result.pattern &&
+            result.name ==
+                "System" &&
+            result.type ==
+                "System",
+            "GET_OBJECT exact exposes built-in System")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            get_runtime_object(
+                view,
+                "*",
+                {},
+                result) ==
+                    runtime_query_result::success &&
+            result.pattern &&
+            result.objects.size() == 4 &&
+            result.objects[0].name ==
+                "System" &&
+            result.objects[0].file.empty(),
+            "GET_OBJECT wildcard exposes System first without fake source provenance")) {
+
+        return;
+    }
 
     if (!tests.expect(
             get_runtime_object(
@@ -3006,6 +3099,35 @@ void test_runtime_type_query(
 
     runtime_type_query result;
 
+    const std::vector<std::string>
+        system_object{
+            "::System",
+        };
+
+    if (!tests.expect(
+            get_runtime_type(
+                view,
+                system_object,
+                result) ==
+                    runtime_query_result::success &&
+            result.types.size() == 1 &&
+            result.types[0].object ==
+                "System" &&
+            result.types[0].type.name ==
+                "System" &&
+            result.types[0].type.bases.empty() &&
+            result.types[0].type.members.size() == 10 &&
+            result.types[0].type.members[0].name ==
+                "state" &&
+            result.types[0].type.members[2].name ==
+                "current_cycle" &&
+            result.types[0].type.members[9].name ==
+                "current_ic_generation",
+            "GET_TYPE exposes built-in System ABI")) {
+
+        return;
+    }
+
     if (!tests.expect(
             get_runtime_type(
                 view,
@@ -3092,8 +3214,8 @@ void test_runtime_type_query(
             view,
             wildcard,
             result) ==
-                runtime_query_result::invalid_input,
-        "GET_TYPE does not accept wildcard object names");
+                runtime_query_result::not_found,
+        "GET_TYPE treats wildcard text as an ordinary exact object name");
 
     const std::vector<std::string> empty;
 
@@ -5373,14 +5495,14 @@ void test_runtime_layout(
         native.object_offset(
             fixture.left,
             left_offset) &&
-        left_offset == 8 &&
+        left_offset == 80 &&
         native.object_offset(
             fixture.right,
             right_offset) &&
-        right_offset == 24 &&
-        native.size() == 48 &&
+        right_offset == 96 &&
+        native.size() == 120 &&
         native.alignment() == 8,
-        "pack-8 canonical sentinel plus dense object layout");
+        "pack-8 System prefix, canonical sentinel, and dense object layout");
 
     abi.pack = 4;
 
@@ -5424,14 +5546,14 @@ void test_runtime_layout(
         packed.object_offset(
             fixture.left,
             left_offset) &&
-        left_offset == 4 &&
+        left_offset == 76 &&
         packed.object_offset(
             fixture.right,
             right_offset) &&
-        right_offset == 16 &&
-        packed.size() == 32 &&
-        packed.alignment() == 4,
-        "pack-4 canonical sentinel plus dense object layout");
+        right_offset == 88 &&
+        packed.size() == 104 &&
+        packed.alignment() == 8,
+        "pack-4 System prefix, canonical sentinel, and dense object layout");
 
     std::uint64_t unconnected = 0;
 
@@ -5439,8 +5561,9 @@ void test_runtime_layout(
         native.unconnected_offset(
             fixture.integer_type,
             unconnected) &&
-        unconnected == 0,
-        "Runtime layout places canonical unconnected<int> before Project objects");
+        unconnected ==
+            sizeof(runtime_system),
+        "Runtime layout places System first and canonical unconnected<int> after it");
 }
 
 void test_fixed_direct_materializer(
@@ -8206,11 +8329,14 @@ void test_runtime_layout_tail_alignment(
         layout.object_offset(
             tail,
             tail_offset) &&
-        wide_offset == 0 &&
-        tail_offset == 8 &&
+        wide_offset ==
+            sizeof(runtime_system) &&
+        tail_offset ==
+            sizeof(runtime_system) + 8 &&
         layout.alignment() == 8 &&
-        layout.size() == 16,
-        "Runtime total size is aligned to maximum object alignment");
+        layout.size() ==
+            sizeof(runtime_system) + 16,
+        "Runtime total size is aligned after the System prefix");
 }
 
 void test_hot_cold_boundary(

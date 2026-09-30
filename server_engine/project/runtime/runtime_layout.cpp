@@ -233,8 +233,11 @@ public:
             }
         }
 
-        std::uint64_t cursor = 0;
-        std::uint32_t maximum_alignment = 1;
+        std::uint64_t cursor =
+            sizeof(runtime_system);
+
+        std::uint32_t maximum_alignment =
+            alignof(runtime_system);
 
         for (const auto type :
              output.unconnected_types) {
@@ -2101,11 +2104,6 @@ runtime_layout_result prepare_runtime_layout(
 
     output.target_value =
         abi.target;
-
-    if (project.object_count() == 0) {
-        output.prepared_value = true;
-        return runtime_layout_result::success;
-    }
 
     try {
         output.type_slots.resize(

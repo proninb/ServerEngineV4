@@ -17,6 +17,36 @@
 namespace cw::server {
 namespace {
 
+[[nodiscard]] bool has_reserved_system_object(
+    const compiled_project_view& project) noexcept {
+
+    const auto name =
+        project.find_string(
+            runtime_system_object_name);
+
+    if (!name) {
+        return false;
+    }
+
+    const auto root =
+        project.identity_root();
+
+    if (!root) {
+        return true;
+    }
+
+    const auto identity =
+        project.find_identity(
+            root,
+            name,
+            identity_kind::object);
+
+    return identity &&
+        static_cast<bool>(
+            project.find_object(
+                identity));
+}
+
 [[nodiscard]] constexpr std::string_view
 layout_failure_detail(
     runtime_layout_result result) noexcept {
@@ -190,6 +220,21 @@ server_status create_resident_project(
                 .build());
 
         return server_status::unsupported;
+    }
+
+    if (has_reserved_system_object(
+            compiled)) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_runtime_failed,
+                operation)
+                .file(project_path)
+                .detail(
+                    "Root Runtime object name 'System' is reserved by Server Runtime")
+                .build());
+
+        return server_status::project_runtime_failed;
     }
 
     runtime_layout layout;

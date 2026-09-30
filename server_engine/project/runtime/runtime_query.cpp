@@ -1,5 +1,6 @@
 #include "runtime_query.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -621,6 +622,167 @@ struct resolved_member final {
     return filter == actual;
 }
 
+struct runtime_system_member_descriptor final {
+    std::string_view name;
+    std::string_view type_name;
+    intrinsic_type type = intrinsic_type::none;
+    std::uint8_t size = 0;
+    std::size_t offset = 0;
+};
+
+inline constexpr std::array<
+    runtime_system_member_descriptor,
+    10>
+runtime_system_members{{
+    {
+        "state",
+        "std::uint32_t",
+        intrinsic_type::unsigned_int,
+        sizeof(std::uint32_t),
+        offsetof(runtime_system, state),
+    },
+    {
+        "flags",
+        "std::uint32_t",
+        intrinsic_type::unsigned_int,
+        sizeof(std::uint32_t),
+        offsetof(runtime_system, flags),
+    },
+    {
+        "current_cycle",
+        "std::uint64_t",
+        intrinsic_type::unsigned_long_long,
+        sizeof(std::uint64_t),
+        offsetof(runtime_system, current_cycle),
+    },
+    {
+        "completed_cycle",
+        "std::uint64_t",
+        intrinsic_type::unsigned_long_long,
+        sizeof(std::uint64_t),
+        offsetof(runtime_system, completed_cycle),
+    },
+    {
+        "target_cycle",
+        "std::uint64_t",
+        intrinsic_type::unsigned_long_long,
+        sizeof(std::uint64_t),
+        offsetof(runtime_system, target_cycle),
+    },
+    {
+        "server_datetime_ns",
+        "std::int64_t",
+        intrinsic_type::signed_long_long,
+        sizeof(std::int64_t),
+        offsetof(runtime_system, server_datetime_ns),
+    },
+    {
+        "model_datetime_ns",
+        "std::int64_t",
+        intrinsic_type::signed_long_long,
+        sizeof(std::int64_t),
+        offsetof(runtime_system, model_datetime_ns),
+    },
+    {
+        "value_generation",
+        "std::uint64_t",
+        intrinsic_type::unsigned_long_long,
+        sizeof(std::uint64_t),
+        offsetof(runtime_system, value_generation),
+    },
+    {
+        "snapshot_generation",
+        "std::uint64_t",
+        intrinsic_type::unsigned_long_long,
+        sizeof(std::uint64_t),
+        offsetof(runtime_system, snapshot_generation),
+    },
+    {
+        "current_ic_generation",
+        "std::uint64_t",
+        intrinsic_type::unsigned_long_long,
+        sizeof(std::uint64_t),
+        offsetof(runtime_system, current_ic_generation),
+    },
+}};
+
+[[nodiscard]] bool runtime_system_name(
+    std::string_view value) noexcept {
+
+    if (value.starts_with("::")) {
+        value.remove_prefix(2);
+    }
+
+    return value ==
+        runtime_system_object_name;
+}
+
+[[nodiscard]] bool build_runtime_system_type(
+    runtime_object_type& output) {
+
+    output = {};
+    output.object =
+        runtime_system_object_name;
+
+    output.type.name =
+        runtime_system_object_name;
+
+    output.type.members.reserve(
+        runtime_system_members.size());
+
+    for (const auto& member :
+         runtime_system_members) {
+
+        output.type.members.push_back({
+            std::string(member.name),
+            std::string(member.type_name),
+        });
+    }
+
+    return true;
+}
+
+[[nodiscard]] runtime_query_result
+read_runtime_system_value(
+    std::span<const std::byte> runtime,
+    std::string_view member_name,
+    runtime_value& output) noexcept {
+
+    output = {};
+
+    if (runtime.size() <
+        sizeof(runtime_system)) {
+
+        return runtime_query_result::
+            invalid_runtime;
+    }
+
+    for (const auto& member :
+         runtime_system_members) {
+
+        if (member.name !=
+            member_name) {
+
+            continue;
+        }
+
+        output.type =
+            member.type;
+
+        output.size =
+            member.size;
+
+        return read_native_bits(
+            runtime,
+            static_cast<runtime_offset>(
+                member.offset),
+            member.size,
+            output.bits);
+    }
+
+    return runtime_query_result::not_found;
+}
+
 [[nodiscard]] bool build_type_spec(
     const compiled_project_view& project,
     type_ref type,
@@ -1089,6 +1251,26 @@ runtime_query_result get_runtime_object(
     try {
         std::vector<identity_ref> identity_scratch;
 
+        if (!wildcard_query(name) &&
+            runtime_system_name(name)) {
+
+            if (!type_filter_matches(
+                    type,
+                    runtime_system_object_name)) {
+
+                return runtime_query_result::
+                    not_found;
+            }
+
+            output.name =
+                runtime_system_object_name;
+
+            output.type =
+                runtime_system_object_name;
+
+            return runtime_query_result::success;
+        }
+
         if (!wildcard_query(name)) {
             object_handle object;
 
@@ -1143,6 +1325,21 @@ runtime_query_result get_runtime_object(
         }
 
         output.pattern = true;
+
+        if (glob_match(
+                name,
+                runtime_system_object_name) &&
+            type_filter_matches(
+                type,
+                runtime_system_object_name)) {
+
+            runtime_object_match system;
+            system.name =
+                runtime_system_object_name;
+
+            output.objects.push_back(
+                std::move(system));
+        }
 
         std::vector<file_id> object_files(
             project.object_count());
@@ -1341,13 +1538,29 @@ runtime_query_result get_runtime_type(
         for (const auto& requested :
              objects) {
 
-            if (requested.empty() ||
-                wildcard_query(
-                    requested)) {
-
+            if (requested.empty()) {
                 output = {};
                 return runtime_query_result::
                     invalid_input;
+            }
+
+            if (runtime_system_name(
+                    requested)) {
+
+                runtime_object_type result;
+
+                if (!build_runtime_system_type(
+                        result)) {
+
+                    output = {};
+                    return runtime_query_result::
+                        invalid_runtime;
+                }
+
+                output.types.push_back(
+                    std::move(result));
+
+                continue;
             }
 
             object_handle object;
@@ -1687,6 +1900,49 @@ runtime_query_result get_runtime_value(
         name.empty()) {
 
         return runtime_query_result::invalid_input;
+    }
+
+    auto runtime_name =
+        name;
+
+    if (runtime_name.starts_with("::")) {
+        runtime_name.remove_prefix(2);
+    }
+
+    const auto system_dot =
+        runtime_name.find('.');
+
+    const auto system_object =
+        runtime_name.substr(
+            0,
+            system_dot);
+
+    if (system_object ==
+        runtime_system_object_name) {
+
+        if (system_dot ==
+            std::string_view::npos) {
+
+            return runtime_query_result::
+                unsupported_type;
+        }
+
+        const auto member =
+            runtime_name.substr(
+                system_dot + 1);
+
+        if (member.empty() ||
+            member.find('.') !=
+                std::string_view::npos) {
+
+            return runtime_query_result::
+                not_found;
+        }
+
+        return read_runtime_system_value(
+            runtime,
+            member,
+            output);
     }
 
     const auto dot =
