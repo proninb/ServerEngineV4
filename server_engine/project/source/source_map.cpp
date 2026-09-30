@@ -29,6 +29,450 @@ constexpr auto max_index =
 
 }
 
+server_status source_map_delta::reset() noexcept {
+
+    try {
+        root_records.clear();
+        contributions.clear();
+        dependencies.clear();
+        initialization_targets.clear();
+
+        root_seen.clear();
+        root_seen_generation = 0;
+        root_dependency_seen.clear();
+        root_initialization_seen.clear();
+        completed_roots.clear();
+
+        active_root = {};
+        active_contribution_begin = 0;
+        active_dependency_begin = 0;
+        active_initialization_begin = 0;
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
+std::uint64_t source_map_delta::contribution_hash(
+    std::uint64_t owner_key) noexcept {
+
+    auto hash = owner_key;
+    hash ^= hash >> 33;
+    hash *= 0xff51afd7ed558ccdULL;
+    hash ^= hash >> 33;
+    hash *= 0xc4ceb9fe1a85ec53ULL;
+    hash ^= hash >> 33;
+    return hash;
+}
+
+std::size_t source_map_delta::contribution_position(
+    std::uint64_t owner_key,
+    std::uint64_t hash) const noexcept {
+
+    const auto mask =
+        root_seen.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            hash) &
+        mask;
+
+    while (
+        root_seen[position].generation ==
+            root_seen_generation &&
+        root_seen[position].key !=
+            owner_key) {
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return position;
+}
+
+void source_map_delta::grow_contribution_index() {
+
+    const auto count =
+        contributions.size() -
+        active_contribution_begin;
+
+    if (!root_seen.empty() &&
+        count <
+            root_seen.size() / 2) {
+
+        return;
+    }
+
+    if (root_seen.size() >
+        root_seen.max_size() / 2) {
+
+        throw std::length_error(
+            "BUILD Source Map contribution index capacity exceeded");
+    }
+
+    std::vector<contribution_slot>
+        previous(
+            root_seen.empty()
+            ? 16
+            : root_seen.size() * 2);
+
+    root_seen.swap(
+        previous);
+
+    for (const auto& slot :
+         previous) {
+
+        if (slot.generation ==
+            root_seen_generation) {
+
+            root_seen[
+                contribution_position(
+                    slot.key,
+                    contribution_hash(
+                        slot.key))] =
+                slot;
+        }
+    }
+}
+
+void source_map_delta::begin_contribution_generation() noexcept {
+
+    if (++root_seen_generation == 0) {
+        for (auto& slot :
+             root_seen) {
+
+            slot = {};
+        }
+
+        root_seen_generation = 1;
+    }
+}
+
+server_status source_map_delta::begin_root(
+    file_id root) noexcept {
+
+    if (!root ||
+        active_root ||
+        contributions.size() > max_index ||
+        dependencies.size() > max_index ||
+        initialization_targets.size() >
+            max_index) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    try {
+        if (completed_roots.contains(
+                root.value())) {
+
+            return server_status::
+                project_configuration_invalid;
+        }
+
+        begin_contribution_generation();
+        root_dependency_seen.clear();
+        root_initialization_seen.clear();
+
+        active_root =
+            root;
+
+        active_contribution_begin =
+            static_cast<std::uint32_t>(
+                contributions.size());
+
+        active_dependency_begin =
+            static_cast<std::uint32_t>(
+                dependencies.size());
+
+        active_initialization_begin =
+            static_cast<std::uint32_t>(
+                initialization_targets.size());
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
+server_status source_map_delta::add(
+    file_id file,
+    source_data_ref data) noexcept {
+
+    if (!active_root ||
+        !file ||
+        !data) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    try {
+        const auto owner_key =
+            key(
+                file,
+                is_type(data)
+                    ? data.slot()
+                    : data.raw());
+
+        const auto owner_hash =
+            contribution_hash(
+                owner_key);
+
+        std::size_t owner_position = 0;
+
+        if (!root_seen.empty()) {
+            owner_position =
+                contribution_position(
+                    owner_key,
+                    owner_hash);
+
+            const auto& owner =
+                root_seen[
+                    owner_position];
+
+            if (owner.generation ==
+                root_seen_generation) {
+
+                auto& existing =
+                    contributions[
+                        owner.position].data;
+
+                if (is_type(data) &&
+                    existing.kind() ==
+                        source_data_kind::
+                            type_declaration &&
+                    data.kind() ==
+                        source_data_kind::
+                            type_definition) {
+
+                    existing =
+                        data;
+                }
+
+                return server_status::success;
+            }
+        }
+
+        if (contributions.size() >=
+            max_index) {
+
+            return server_status::io_error;
+        }
+
+        const auto position =
+            static_cast<std::uint32_t>(
+                contributions.size());
+
+        const auto previous_capacity =
+            root_seen.size();
+
+        grow_contribution_index();
+
+        if (root_seen.size() !=
+            previous_capacity) {
+
+            owner_position =
+                contribution_position(
+                    owner_key,
+                    owner_hash);
+        }
+
+        contributions.push_back({
+            file,
+            data,
+        });
+
+        root_seen[owner_position] = {
+            owner_key,
+            position,
+            root_seen_generation,
+        };
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
+server_status source_map_delta::add_dependency(
+    type_handle type) noexcept {
+
+    return add_dependency(
+        source_dependency_ref::type(
+            type));
+}
+
+server_status source_map_delta::add_dependency(
+    object_handle object) noexcept {
+
+    return add_dependency(
+        source_dependency_ref::object(
+            object));
+}
+
+server_status source_map_delta::add_dependency(
+    source_dependency_ref dependency) noexcept {
+
+    if (!active_root ||
+        !dependency) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    try {
+        const auto inserted =
+            root_dependency_seen.insert(
+                dependency.raw());
+
+        if (!inserted.second) {
+            return server_status::success;
+        }
+
+        if (dependencies.size() >=
+            max_index) {
+
+            root_dependency_seen.erase(
+                dependency.raw());
+
+            return server_status::io_error;
+        }
+
+        dependencies.push_back(
+            dependency);
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
+server_status source_map_delta::add_initialization(
+    object_endpoint target) noexcept {
+
+    if (!active_root ||
+        !target.object ||
+        !target.member) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    const auto target_key =
+        (static_cast<std::uint64_t>(
+             target.object.value()) << 32) |
+        target.member.value();
+
+    try {
+        const auto inserted =
+            root_initialization_seen.insert(
+                target_key);
+
+        if (!inserted.second) {
+            return server_status::success;
+        }
+
+        if (initialization_targets.size() >=
+            max_index) {
+
+            root_initialization_seen.erase(
+                target_key);
+
+            return server_status::io_error;
+        }
+
+        initialization_targets.push_back(
+            target);
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
+server_status source_map_delta::end_root() noexcept {
+
+    if (!active_root) {
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    const auto contribution_count =
+        contributions.size() -
+        active_contribution_begin;
+
+    const auto dependency_count =
+        dependencies.size() -
+        active_dependency_begin;
+
+    const auto initialization_count =
+        initialization_targets.size() -
+        active_initialization_begin;
+
+    if (contribution_count > max_index ||
+        dependency_count > max_index ||
+        initialization_count > max_index) {
+
+        return server_status::io_error;
+    }
+
+    try {
+        const auto inserted =
+            completed_roots.insert(
+                active_root.value());
+
+        if (!inserted.second) {
+            return server_status::
+                project_configuration_invalid;
+        }
+
+        try {
+            root_records.push_back({
+                active_root,
+                {
+                    active_contribution_begin,
+                    static_cast<std::uint32_t>(
+                        contribution_count),
+                },
+                {
+                    active_dependency_begin,
+                    static_cast<std::uint32_t>(
+                        dependency_count),
+                },
+                {
+                    active_initialization_begin,
+                    static_cast<std::uint32_t>(
+                        initialization_count),
+                },
+            });
+        }
+        catch (...) {
+            completed_roots.erase(
+                active_root.value());
+
+            return server_status::io_error;
+        }
+
+        active_root = {};
+        root_dependency_seen.clear();
+        root_initialization_seen.clear();
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
+
 server_status source_map::reset(
     std::size_t file_count) noexcept {
 

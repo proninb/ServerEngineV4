@@ -314,6 +314,96 @@ struct source_type_presence final {
 
 static_assert(sizeof(source_type_presence) == 8);
 
+struct source_map_delta_root final {
+    file_id root{};
+    source_map_range contributions;
+    source_map_range dependencies;
+    source_map_range initializations;
+};
+
+// Sparse BUILD provenance replacement for only replayed semantic roots.
+// It preserves Parser emission order and root-local dedup semantics without
+// allocating file_count/type_count/object_count/link_count-sized state.
+class source_map_delta final {
+public:
+    [[nodiscard]] server_status reset() noexcept;
+
+    [[nodiscard]] server_status begin_root(
+        file_id root) noexcept;
+
+    [[nodiscard]] server_status add(
+        file_id file,
+        source_data_ref data) noexcept;
+
+    [[nodiscard]] server_status add_dependency(
+        type_handle type) noexcept;
+
+    [[nodiscard]] server_status add_dependency(
+        object_handle object) noexcept;
+
+    [[nodiscard]] server_status add_initialization(
+        object_endpoint target) noexcept;
+
+    [[nodiscard]] server_status end_root() noexcept;
+
+    [[nodiscard]] std::span<const source_map_delta_root>
+    root_entries() const noexcept {
+        return root_records;
+    }
+
+    [[nodiscard]] std::span<const source_contribution_record>
+    contribution_entries() const noexcept {
+        return contributions;
+    }
+
+    [[nodiscard]] std::span<const source_dependency_ref>
+    dependency_entries() const noexcept {
+        return dependencies;
+    }
+
+    [[nodiscard]] std::span<const object_endpoint>
+    initialization_target_entries() const noexcept {
+        return initialization_targets;
+    }
+
+private:
+    [[nodiscard]] server_status add_dependency(
+        source_dependency_ref dependency) noexcept;
+
+    struct contribution_slot final {
+        std::uint64_t key = 0;
+        std::uint32_t position = 0;
+        std::uint32_t generation = 0;
+    };
+
+    [[nodiscard]] static std::uint64_t contribution_hash(
+        std::uint64_t key) noexcept;
+
+    [[nodiscard]] std::size_t contribution_position(
+        std::uint64_t key,
+        std::uint64_t hash) const noexcept;
+
+    void grow_contribution_index();
+    void begin_contribution_generation() noexcept;
+
+    std::vector<source_map_delta_root> root_records;
+    std::vector<source_contribution_record> contributions;
+    std::vector<source_dependency_ref> dependencies;
+    std::vector<object_endpoint> initialization_targets;
+
+    std::vector<contribution_slot> root_seen;
+    std::uint32_t root_seen_generation = 0;
+    std::unordered_set<std::uint32_t> root_dependency_seen;
+    std::unordered_set<std::uint64_t> root_initialization_seen;
+    std::unordered_set<std::uint32_t> completed_roots;
+
+    file_id active_root{};
+    std::uint32_t active_contribution_begin = 0;
+    std::uint32_t active_dependency_begin = 0;
+    std::uint32_t active_initialization_begin = 0;
+};
+
+
 // Owns root-contiguous provenance plus root-local semantic dependency observations.
 // finalize() derives physical provenance, semantic presence, and one sparse reverse
 // dependency hash index sized by unique dependency targets; root adjacency is O(edges).

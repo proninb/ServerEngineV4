@@ -4240,4 +4240,103 @@ server_status parse_semantic_project(
     return sources.finalize(files.size(), identities, G);
 }
 
+server_status parse_semantic_roots(
+    file_context& files,
+    lexical_generation& lexical,
+    std::span<const file_id> roots,
+    const preprocessor_configuration& configuration,
+    string_table& strings,
+    identity_space& identities,
+    graph_delta& G,
+    source_map_delta& sources,
+    parser_failure* failure,
+    std::vector<parser_warning>* warnings) noexcept {
+
+    if (failure != nullptr) {
+        *failure = {};
+    }
+
+    if (warnings != nullptr) {
+        warnings->clear();
+    }
+
+    file_id previous;
+
+    for (const auto root : roots) {
+        if (!root ||
+            !files.contains(root) ||
+            (previous &&
+             root.value() <=
+                previous.value())) {
+
+            return server_status::
+                project_configuration_invalid;
+        }
+
+        const auto kind =
+            files.kind(root);
+
+        if (kind != file_kind::header &&
+            kind != file_kind::source) {
+
+            return server_status::
+                project_configuration_invalid;
+        }
+
+        previous =
+            root;
+    }
+
+    const auto source_reset =
+        sources.reset();
+
+    if (!succeeded(source_reset)) {
+        return source_reset;
+    }
+
+    semantic_parser<
+        graph_delta,
+        source_map_delta>
+        parser{
+            files,
+            lexical,
+            configuration,
+            strings,
+            identities,
+            G,
+            sources,
+            failure,
+            warnings};
+
+    for (const auto domain :
+         {semantic_domain::header,
+          semantic_domain::source}) {
+
+        const auto expected_kind =
+            domain ==
+                semantic_domain::header
+            ? file_kind::header
+            : file_kind::source;
+
+        for (const auto root : roots) {
+            if (files.kind(root) !=
+                expected_kind) {
+
+                continue;
+            }
+
+            const auto parsed =
+                parser.parse(
+                    root,
+                    domain);
+
+            if (!succeeded(parsed)) {
+                return parsed;
+            }
+        }
+    }
+
+    return server_status::success;
+}
+
 }

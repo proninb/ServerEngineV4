@@ -706,6 +706,143 @@ void test_header_source_semantic_split(
         "Source semantic root records dependency on global Header type");
 }
 
+void test_sparse_semantic_replay_order(
+    test_state& tests) {
+
+    const temporary_source source{
+        "sparse_replay_source_first",
+        "A instance;\n"
+        "instance.field = 7;\n"};
+
+    const temporary_source header{
+        "sparse_replay_header_second",
+        "struct A { int field; };\n"};
+
+    file_context files;
+    lexical_generation lexical;
+
+    file_id source_id;
+    file_id header_id;
+
+    if (!tests.expect(
+            succeeded(
+                files.resolve(
+                    source.path(),
+                    file_kind::source,
+                    source_id)) &&
+            succeeded(
+                files.resolve(
+                    header.path(),
+                    file_kind::header,
+                    header_id)) &&
+            source_id.value() <
+                header_id.value(),
+            "prepare sparse replay roots with Source file_id before Header")) {
+
+        return;
+    }
+
+    const std::array<file_id, 2>
+        roots{
+            source_id,
+            header_id,
+        };
+
+    if (!prepare_all_roots(
+            tests,
+            files,
+            lexical,
+            roots)) {
+
+        return;
+    }
+
+    preprocessor_configuration configuration;
+    string_table strings;
+    identity_space identities{
+        strings};
+    graph_delta G;
+    source_map_delta sources;
+    parser_failure failure;
+    std::vector<parser_warning> warnings;
+
+    if (!tests.expect(
+            succeeded(
+                parse_semantic_roots(
+                    files,
+                    lexical,
+                    roots,
+                    configuration,
+                    strings,
+                    identities,
+                    G,
+                    sources,
+                    &failure,
+                    &warnings)),
+            "sparse replay executes Header domain before Source domain")) {
+
+        return;
+    }
+
+    const auto type =
+        G.find_type(
+            identities.find(
+                identities.root(),
+                strings.find("A"),
+                identity_kind::type));
+
+    const auto object =
+        G.find_object(
+            identities.find(
+                identities.root(),
+                strings.find("instance"),
+                identity_kind::object));
+
+    const auto member =
+        G.find_member(
+            type,
+            strings.find("field"));
+
+    object_initialization_record
+        initialization;
+
+    const auto replay_roots =
+        sources.root_entries();
+
+    tests.expect(
+        type &&
+        object &&
+        member &&
+        G.initialization(
+            {
+                object,
+                endpoint_ref{member},
+            },
+            initialization) &&
+        initialization.value.kind ==
+            construction_kind::
+                unsigned_integer &&
+        initialization.value.bits() == 7,
+        "sparse replay produces Graph delta with Source initialization");
+
+    tests.expect(
+        replay_roots.size() == 2 &&
+        replay_roots[0].root ==
+            header_id &&
+        replay_roots[1].root ==
+            source_id &&
+        replay_roots[0].
+            initializations.count == 0 &&
+        replay_roots[1].
+            initializations.count == 1 &&
+        sources.
+            initialization_target_entries().
+                size() == 1 &&
+        warnings.empty(),
+        "BUILD provenance retains canonical Header then Source replay order");
+}
+
+
 void test_source_preprocessor_rejected(
     test_state& tests) {
 
@@ -2901,6 +3038,9 @@ int main() {
         test_state tests;
 
         test_header_source_semantic_split(
+            tests);
+
+        test_sparse_semantic_replay_order(
             tests);
 
         test_source_preprocessor_rejected(

@@ -11,6 +11,7 @@
 #include "../frontend/lexical_generation.hpp"
 #include "../frontend/directive_decoder.hpp"
 #include "../graph/graph.hpp"
+#include "../graph/graph_delta.hpp"
 #include "../preprocessor_configuration.hpp"
 #include "../semantic/identity.hpp"
 #include "../source/source_map.hpp"
@@ -19,6 +20,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -66,6 +68,21 @@ struct parser_warning final {
     identity_space& identities,
     graph& G,
     source_map& sources,
+    parser_failure* failure = nullptr,
+    std::vector<parser_warning>* warnings = nullptr) noexcept;
+
+// Replays only selected BUILD semantic roots. Input roots must be unique and
+// ascending by file_id; execution is canonical Header pass first, then Source
+// pass, matching full REBUILD regardless of dependency-discovery order.
+[[nodiscard]] server_status parse_semantic_roots(
+    file_context& files,
+    lexical_generation& lexical,
+    std::span<const file_id> roots,
+    const preprocessor_configuration& configuration,
+    string_table& strings,
+    identity_space& identities,
+    graph_delta& G,
+    source_map_delta& sources,
     parser_failure* failure = nullptr,
     std::vector<parser_warning>* warnings = nullptr) noexcept;
 

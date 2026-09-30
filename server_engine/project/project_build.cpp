@@ -7,6 +7,7 @@
 #include "project_configuration_loader.hpp"
 #include "construction/execution_lanes.hpp"
 #include "frontend/source_discovery.hpp"
+#include "parser/parser.hpp"
 #include "project_configuration_manifest_store.hpp"
 #include "persistence/project_artifact.hpp"
 #include "../diagnostics/diagnostic_builder.hpp"
@@ -36,6 +37,106 @@ namespace {
 
     return server_status::unsupported;
 }
+
+[[nodiscard]] server_status emit_build_source_diagnostic(
+    file_context& files,
+    file_id file,
+    source_range range,
+    const diagnostic_descriptor& descriptor,
+    std::string_view detail,
+    operation_id operation,
+    diagnostic_collection& diagnostics) {
+
+    if (!file ||
+        !files.contains(file) ||
+        !files.content_available(file)) {
+
+        return server_status::success;
+    }
+
+    try {
+        const auto path_view =
+            files.path(file);
+
+        const std::filesystem::path path{
+            path_view.begin(),
+            path_view.end()};
+
+        const auto source =
+            files.content(file);
+
+        const auto diagnostic_file =
+            diagnostics.add_source(
+                path,
+                std::string{
+                    source.data(),
+                    source.size()});
+
+        const auto location =
+            diagnostics.locate(
+                diagnostic_file,
+                range.offset,
+                range.length);
+
+        diagnostics.emit(
+            diagnostic(
+                descriptor,
+                operation)
+                .location(location)
+                .detail(detail)
+                .build());
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
+[[nodiscard]] server_status emit_build_parser_warnings(
+    file_context& files,
+    const std::vector<parser_warning>& warnings,
+    operation_id operation,
+    diagnostic_collection& diagnostics) {
+
+    for (const auto& warning :
+         warnings) {
+
+        const diagnostic_descriptor* descriptor =
+            nullptr;
+
+        switch (warning.kind) {
+        case parser_warning_kind::
+                duplicate_initialization:
+            descriptor =
+                &diagnostics::
+                    project_duplicate_initialization;
+            break;
+        }
+
+        if (descriptor == nullptr) {
+            return server_status::
+                project_configuration_invalid;
+        }
+
+        const auto emitted =
+            emit_build_source_diagnostic(
+                files,
+                warning.file,
+                warning.source,
+                *descriptor,
+                warning.detail,
+                operation,
+                diagnostics);
+
+        if (!succeeded(emitted)) {
+            return emitted;
+        }
+    }
+
+    return server_status::success;
+}
+
 
 [[nodiscard]] server_status report_manifest_open(
     read_only_file_mapping_result result,
@@ -1415,6 +1516,80 @@ server_status build_project(
         }
     }
 
+    parser_failure semantic_failure;
+    std::vector<parser_warning>
+        semantic_warnings;
+
+    if (!semantic_replay_roots.empty()) {
+        const auto parsed =
+            parse_semantic_roots(
+                context.files,
+                context.lexical,
+                semantic_replay_roots,
+                context.preprocessor,
+                context.strings,
+                context.identities,
+                context.graph_changes,
+                context.source_changes,
+                &semantic_failure,
+                &semantic_warnings);
+
+        const auto warnings_emitted =
+            emit_build_parser_warnings(
+                context.files,
+                semantic_warnings,
+                operation,
+                diagnostics);
+
+        if (!succeeded(
+                warnings_emitted)) {
+
+            return warnings_emitted;
+        }
+
+        if (!succeeded(parsed)) {
+            if (semantic_failure.file) {
+                const auto emitted =
+                    emit_build_source_diagnostic(
+                        context.files,
+                        semantic_failure.file,
+                        semantic_failure.source,
+                        semantic_failure.kind ==
+                                parser_failure_kind::
+                                    lexical
+                            ? diagnostics::
+                                project_lexical_error
+                            : semantic_failure.kind ==
+                                    parser_failure_kind::
+                                        preprocessing
+                                ? diagnostics::
+                                    project_preprocessing_error
+                                : diagnostics::
+                                    project_semantic_error,
+                        semantic_failure.detail.empty()
+                            ? std::string_view{
+                                "Sparse BUILD Parser/Semantic replay failed"}
+                            : semantic_failure.detail,
+                        operation,
+                        diagnostics);
+
+                if (!succeeded(emitted)) {
+                    return emitted;
+                }
+            }
+
+            return parsed;
+        }
+    }
+    else {
+        const auto reset =
+            context.source_changes.reset();
+
+        if (!succeeded(reset)) {
+            return reset;
+        }
+    }
+
     std::string detail;
 
     try {
@@ -1548,13 +1723,30 @@ server_status build_project(
             ", lexical_retokenized=" + std::to_string(lexical_metrics.retokenized_files) +
             ", lexical_missing=" + std::to_string(lexical_metrics.missing_files) +
             ", lexical_lanes=" + std::to_string(lexical_metrics.active_lanes) +
+            ", semantic_replayed_roots=" +
+            std::to_string(
+                context.source_changes.
+                    root_entries().size()) +
+            ", semantic_replay_contributions=" +
+            std::to_string(
+                context.source_changes.
+                    contribution_entries().size()) +
+            ", semantic_replay_dependencies=" +
+            std::to_string(
+                context.source_changes.
+                    dependency_entries().size()) +
+            ", semantic_replay_initializations=" +
+            std::to_string(
+                context.source_changes.
+                    initialization_target_entries().
+                        size()) +
             ", baseline_strings=" +
             std::to_string(
                 context.compiled.string_count()) +
             ", baseline_identities=" +
             std::to_string(
                 context.compiled.identity_count()) +
-            "; selected semantic-root Parser/Semantic replay and final G construction are not implemented yet";
+            "; selected semantic-root Parser/Semantic replay completed; sparse provenance merge and final G/artifact publication are not implemented yet";
     }
     catch (...) {
         return server_status::io_error;

@@ -896,6 +896,7 @@ if(BUILD_TESTING)
         server_engine/project/string/string_table.cpp
         server_engine/project/semantic/identity.cpp
         server_engine/project/graph/graph.cpp
+        server_engine/project/graph/graph_delta.cpp
         server_engine/project/source/source_map.cpp
         server_engine/project/assign/assign_table.cpp
         server_engine/project/persistence/compiled_project.cpp

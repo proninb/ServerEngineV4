@@ -61,6 +61,7 @@ public:
     string_table strings;
     identity_space identities;
     graph_delta graph_changes;
+    source_map_delta source_changes;
 
     preprocessor_configuration preprocessor;
 };
