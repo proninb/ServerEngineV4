@@ -1,7 +1,9 @@
 #include "project_build.hpp"
 
 #include "project_lifecycle_context.hpp"
+#include "project_rebuild.hpp"
 #include "project_path.hpp"
+#include "runtime/project_runtime.hpp"
 #include "project_configuration_loader.hpp"
 #include "construction/execution_lanes.hpp"
 #include "frontend/source_discovery.hpp"
@@ -482,6 +484,31 @@ server_status build_project(
         return server_status::io_error;
     }
 
+    const auto source_opened =
+        context.source_mapping.open(
+            layout.source_save);
+
+    if (source_opened ==
+        read_only_file_mapping_result::not_found) {
+
+        return rebuild_project(
+            project_path,
+            settings,
+            operation,
+            diagnostics,
+            output);
+    }
+
+    if (source_opened !=
+        read_only_file_mapping_result::success) {
+
+        return report_source_open(
+            source_opened,
+            layout.source_save,
+            operation,
+            diagnostics);
+    }
+
     const auto manifest_opened =
         context.manifest_mapping.open(
             layout.manifest);
@@ -541,20 +568,6 @@ server_status build_project(
         verification !=
             project_configuration_manifest_verification::
                 unchanged;
-
-    const auto source_opened =
-        context.source_mapping.open(
-            layout.source_save);
-
-    if (source_opened !=
-        read_only_file_mapping_result::success) {
-
-        return report_source_open(
-            source_opened,
-            layout.source_save,
-            operation,
-            diagnostics);
-    }
 
     if (context.source.bind(
             context.source_mapping.bytes()) !=
@@ -895,6 +908,23 @@ server_status build_project(
                 .build());
 
         return server_status::project_artifact_invalid;
+    }
+
+    if (semantic_changed.empty() &&
+        !configuration_identity_changed) {
+
+        // Exact no-change BUILD: REBUILD already produced this G and the
+        // current inputs are byte-identical. No Graph reconstruction, Parser,
+        // database.bin mapping, or graph_delta publication is necessary.
+        return create_resident_project(
+            project_path,
+            settings,
+            operation,
+            diagnostics,
+            std::move(
+                context.compiled_mapping),
+            context.compiled,
+            output);
     }
 
     const auto graph_bound =

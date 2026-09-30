@@ -1,9 +1,10 @@
 /*
  * Project BUILD pipeline.
  *
- * BUILD incrementally constructs from persisted BUILD state
- * selected by the explicit root Project path. Resident Project state is never
- * a BUILD input.
+ * REBUILD creates the persisted BUILD lineage. BUILD consumes that lineage;
+ * absence of source.bin routes to REBUILD. An exact no-change BUILD publishes
+ * the persisted compiled.bin directly, while changed input continues through
+ * sparse BUILD reconstruction. Resident Project state is never a BUILD input.
  */
 #pragma once
 
