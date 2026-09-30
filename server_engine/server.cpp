@@ -9,6 +9,7 @@
 #include "configuration/server_configuration_loader.hpp"
 #include "diagnostics/diagnostic_builder.hpp"
 #include "diagnostics/diagnostic_descriptor.hpp"
+#include "filesystem_path.hpp"
 #include "license/server_license_loader.hpp"
 #include "license/server_lease_loader.hpp"
 #include "project/project_build.hpp"
@@ -1340,8 +1341,38 @@ server_status server::snap_ic(
             return server_status::runtime_ic_failed;
         }
 
-        std::filesystem::path backup_path;
-        bool backup_active = false;
+        auto temporary_path =
+            path;
+
+        temporary_path += ".new";
+
+        auto backup_path =
+            path;
+
+        backup_path += ".snap-backup";
+
+        // Temporary/rollback files must never alias another configured IC.
+        // IC identity remains the resolved snapshot path; these are only
+        // persistence artifacts of this SNAP operation.
+        if (find_ic_catalog_entry(
+                context.project->ic_catalog_data(),
+                context.project->ic_catalog_path(),
+                temporary_path) != nullptr ||
+            find_ic_catalog_entry(
+                context.project->ic_catalog_data(),
+                context.project->ic_catalog_path(),
+                backup_path) != nullptr) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_ic_invalid,
+                    operation)
+                    .detail(
+                        "SNAP_IC temporary path conflicts with another IC")
+                    .build());
+
+            return server_status::runtime_ic_invalid;
+        }
 
         std::error_code file_error;
 
@@ -1355,7 +1386,8 @@ server_status server::snap_ic(
                 diagnostic(
                     diagnostics::runtime_ic_io_failed,
                     operation)
-                    .detail(path.generic_string())
+                    .detail(
+                        path.generic_string())
                     .build());
 
             return server_status::io_error;
@@ -1371,25 +1403,61 @@ server_status server::snap_ic(
                     diagnostic(
                         diagnostics::runtime_ic_io_failed,
                         operation)
-                        .detail(path.generic_string())
+                        .detail(
+                            path.generic_string())
                         .build());
 
                 return server_status::io_error;
             }
+        }
 
-            backup_path = path;
-            backup_path += ".snap-backup";
+        file_error.clear();
 
-            file_error.clear();
+        std::filesystem::remove(
+            temporary_path,
+            file_error);
 
-            const auto backup_exists =
-                std::filesystem::exists(
-                    backup_path,
-                    file_error);
+        if (file_error) {
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_ic_io_failed,
+                    operation)
+                    .detail(
+                        temporary_path.generic_string())
+                    .build());
 
-            if (file_error ||
-                backup_exists) {
+            return server_status::io_error;
+        }
 
+        const auto backup_exists =
+            std::filesystem::exists(
+                backup_path,
+                file_error);
+
+        if (file_error ||
+            backup_exists) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_ic_io_failed,
+                    operation)
+                    .detail(
+                        backup_path.generic_string())
+                    .build());
+
+            return server_status::io_error;
+        }
+
+        bool backup_active = false;
+
+        if (target_exists) {
+            std::filesystem::copy_file(
+                path,
+                backup_path,
+                std::filesystem::copy_options::none,
+                file_error);
+
+            if (file_error) {
                 diagnostics.emit(
                     diagnostic(
                         diagnostics::runtime_ic_io_failed,
@@ -1401,100 +1469,136 @@ server_status server::snap_ic(
                 return server_status::io_error;
             }
 
-            std::filesystem::rename(
-                path,
-                backup_path,
-                file_error);
-
-            if (file_error) {
-                diagnostics.emit(
-                    diagnostic(
-                        diagnostics::runtime_ic_io_failed,
-                        operation)
-                        .detail(path.generic_string())
-                        .build());
-
-                return server_status::io_error;
-            }
-
             backup_active = true;
         }
+
+        const auto cleanup_temporary =
+            [&]() noexcept {
+
+                std::error_code ignored;
+
+                std::filesystem::remove(
+                    temporary_path,
+                    ignored);
+            };
+
+        const auto cleanup_backup =
+            [&]() noexcept {
+
+                if (!backup_active) {
+                    return;
+                }
+
+                std::error_code ignored;
+
+                std::filesystem::remove(
+                    backup_path,
+                    ignored);
+            };
+
+        bool target_replaced = false;
 
         const auto rollback_target =
             [&]() noexcept {
 
-                std::error_code rollback_error;
+                cleanup_temporary();
 
-                std::filesystem::remove(
-                    path,
-                    rollback_error);
-
-                if (rollback_error) {
-                    return false;
-                }
-
-                if (!backup_active) {
+                if (!target_replaced) {
+                    cleanup_backup();
                     return true;
                 }
 
-                std::filesystem::rename(
-                    backup_path,
-                    path,
-                    rollback_error);
+                if (!backup_active) {
+                    std::error_code rollback_error;
 
-                return !rollback_error;
+                    std::filesystem::remove(
+                        path,
+                        rollback_error);
+
+                    return !rollback_error;
+                }
+
+                if (replace_file(
+                        backup_path,
+                        path) !=
+                    filesystem_replace_result::success) {
+
+                    return false;
+                }
+
+                backup_active = false;
+                return true;
             };
 
         writable_file_mapping mapping;
-        if (mapping.create(path, image.size()) !=
+
+        if (mapping.create(
+                temporary_path,
+                image.size()) !=
             writable_file_mapping_result::success) {
 
-            if (!rollback_target()) {
-                diagnostics.emit(
-                    diagnostic(
-                        diagnostics::runtime_ic_io_failed,
-                        operation)
-                        .detail(
-                            "SNAP_IC failed to restore the previous snapshot file")
-                        .build());
-            }
+            cleanup_temporary();
+            cleanup_backup();
 
             diagnostics.emit(
                 diagnostic(
                     diagnostics::runtime_ic_io_failed,
                     operation)
-                    .detail(path.generic_string())
+                    .detail(
+                        temporary_path.generic_string())
                     .build());
 
             return server_status::io_error;
         }
 
-        std::memcpy(mapping.bytes().data(), image.data(), image.size());
+        std::memcpy(
+            mapping.bytes().data(),
+            image.data(),
+            image.size());
 
-        if (mapping.flush() != writable_file_mapping_result::success) {
+        if (mapping.flush() !=
+            writable_file_mapping_result::success) {
+
             mapping.reset();
 
-            if (!rollback_target()) {
-                diagnostics.emit(
-                    diagnostic(
-                        diagnostics::runtime_ic_io_failed,
-                        operation)
-                        .detail(
-                            "SNAP_IC failed to restore the previous snapshot file")
-                        .build());
-            }
+            cleanup_temporary();
+            cleanup_backup();
 
             diagnostics.emit(
                 diagnostic(
                     diagnostics::runtime_ic_io_failed,
                     operation)
-                    .detail(path.generic_string())
+                    .detail(
+                        temporary_path.generic_string())
                     .build());
 
             return server_status::io_error;
         }
 
         mapping.reset();
+
+        // Visibility boundary: the complete flushed .new image replaces the
+        // old snapshot atomically. Readers never observe a partial target.
+        if (replace_file(
+                temporary_path,
+                path) !=
+            filesystem_replace_result::success) {
+
+            cleanup_temporary();
+            cleanup_backup();
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::runtime_ic_io_failed,
+                    operation)
+                    .detail(
+                        path.generic_string())
+                    .build());
+
+            return server_status::io_error;
+        }
+
+        target_replaced = true;
 
         if (!upsert_ic_catalog_entry(
                 catalog_candidate,
@@ -1526,7 +1630,8 @@ server_status server::snap_ic(
 
         if (save_ic_catalog(
                 context.project->ic_catalog_path(),
-                catalog_candidate) != ic_catalog_result::success) {
+                catalog_candidate) !=
+            ic_catalog_result::success) {
 
             if (!rollback_target()) {
                 diagnostics.emit(
@@ -1543,7 +1648,9 @@ server_status server::snap_ic(
                     diagnostics::runtime_ic_io_failed,
                     operation)
                     .detail(
-                        context.project->ic_catalog_path().generic_string())
+                        context.project->
+                            ic_catalog_path().
+                            generic_string())
                     .build());
 
             return server_status::io_error;
@@ -1553,15 +1660,9 @@ server_status server::snap_ic(
             std::move(
                 catalog_candidate));
 
-        // Catalog is now authoritative. Cleanup failures must not roll back
-        // the successfully committed logical IC.
-        std::error_code ignored;
-
-        if (backup_active) {
-            std::filesystem::remove(
-                backup_path,
-                ignored);
-        }
+        // Catalog is now authoritative. Backup cleanup is no longer part
+        // of the logical SNAP transaction.
+        cleanup_backup();
 
         return server_status::success;
     }();
