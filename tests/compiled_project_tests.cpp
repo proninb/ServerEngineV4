@@ -765,6 +765,36 @@ void test_endpoint_path_persistence(
         return;
     }
 
+    const object_endpoint path_initialization_target{
+        a,
+        endpoint_ref::from_path(
+            baseline_path),
+    };
+
+    bool path_initialization_replaced = true;
+    object_initialization_record path_initialization;
+
+    tests.expect(
+        succeeded(
+            delta.add_initialization(
+                path_initialization_target,
+                construction_value::constant(
+                    construction_kind::
+                        signed_integer,
+                    17),
+                path_initialization_replaced)) &&
+        !path_initialization_replaced &&
+        delta.initialization_count() == 1 &&
+        delta.initialization(
+            path_initialization_target,
+            path_initialization) &&
+        path_initialization.value ==
+            construction_value::constant(
+                construction_kind::
+                    signed_integer,
+                17),
+        "BUILD graph_delta initializes scalar endpoint paths with Graph semantics");
+
     const std::array<endpoint_path_step, 2>
         appended_steps{{
             {
@@ -3094,6 +3124,199 @@ void test_object_initialization_persistence_runtime(
                 runtime_query_result::success &&
         peer.bits == 91,
         "reference link observes final initialized value");
+}
+
+
+void test_graph_delta_initialization_overlay(
+    test_state& tests) {
+
+    compiled_fixture fixture;
+
+    if (!build_fixture(
+            tests,
+            fixture)) {
+
+        return;
+    }
+
+    const object_endpoint baseline_target{
+        fixture.left,
+        endpoint_ref{
+            fixture.value_member},
+    };
+
+    bool replaced = false;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.add_initialization(
+                    baseline_target,
+                    construction_value::constant(
+                        construction_kind::
+                            signed_integer,
+                        11),
+                    replaced)) &&
+            !replaced,
+            "prepare graph_delta initialization baseline")) {
+
+        return;
+    }
+
+    compiled_test_image image;
+
+    if (!tests.expect(
+            build_test_compiled_image(
+                fixture,
+                image) ==
+                compiled_project_image_result::
+                    success,
+            "persist graph_delta initialization baseline")) {
+
+        return;
+    }
+
+    compiled_project_view baseline;
+    graph_delta delta;
+
+    if (!tests.expect(
+            baseline.bind(
+                image.bytes) ==
+                    compiled_project_image_result::
+                        success &&
+            baseline.initialization_count() == 1 &&
+            succeeded(
+                delta.bind_baseline(
+                    baseline)) &&
+            delta.initialization_count() == 1,
+            "bind mmap initialization baseline without reconstruction")) {
+
+        return;
+    }
+
+    object_initialization_record value;
+
+    tests.expect(
+        delta.initialization(
+            baseline_target,
+            value) &&
+        value.value ==
+            construction_value::constant(
+                construction_kind::
+                    signed_integer,
+                11),
+        "graph_delta reads unchanged initialization from compiled mmap");
+
+    replaced = false;
+
+    tests.expect(
+        succeeded(
+            delta.add_initialization(
+                baseline_target,
+                construction_value::constant(
+                    construction_kind::
+                        signed_integer,
+                    22),
+                replaced)) &&
+        replaced &&
+        delta.initialization_count() == 1 &&
+        delta.initialization(
+            baseline_target,
+            value) &&
+        value.value ==
+            construction_value::constant(
+                construction_kind::
+                    signed_integer,
+                22),
+        "graph_delta sparsely replaces one baseline initialization");
+
+    tests.expect(
+        succeeded(
+            delta.invalidate_initialization(
+                baseline_target)) &&
+        !delta.initialization(
+            baseline_target,
+            value) &&
+        delta.initialization_count() == 0 &&
+        succeeded(
+            delta.invalidate_initialization(
+                baseline_target)) &&
+        delta.initialization_count() == 0,
+        "graph_delta initialization invalidation is idempotent for shared producers");
+
+    replaced = true;
+
+    tests.expect(
+        succeeded(
+            delta.add_initialization(
+                baseline_target,
+                construction_value::constant(
+                    construction_kind::
+                        signed_integer,
+                    33),
+                replaced)) &&
+        !replaced &&
+        delta.initialization_count() == 1 &&
+        delta.initialization(
+            baseline_target,
+            value) &&
+        value.value ==
+            construction_value::constant(
+                construction_kind::
+                    signed_integer,
+                33),
+        "replay after tombstone restores target without false duplicate warning");
+
+    const object_endpoint appended_target{
+        fixture.right,
+        endpoint_ref{
+            fixture.value_member},
+    };
+
+    replaced = true;
+
+    tests.expect(
+        succeeded(
+            delta.add_initialization(
+                appended_target,
+                construction_value::constant(
+                    construction_kind::
+                        signed_integer,
+                    44),
+                replaced)) &&
+        !replaced &&
+        delta.initialization_count() == 2 &&
+        delta.initialization(
+            appended_target,
+            value) &&
+        value.value ==
+            construction_value::constant(
+                construction_kind::
+                    signed_integer,
+                44),
+        "graph_delta appends new canonical initialization without baseline scan");
+
+    replaced = false;
+
+    tests.expect(
+        succeeded(
+            delta.add_initialization(
+                appended_target,
+                construction_value::constant(
+                    construction_kind::
+                        signed_integer,
+                    55),
+                replaced)) &&
+        replaced &&
+        delta.initialization_count() == 2 &&
+        delta.initialization(
+            appended_target,
+            value) &&
+        value.value ==
+            construction_value::constant(
+                construction_kind::
+                    signed_integer,
+                55),
+        "graph_delta preserves canonical last-wins initialization semantics");
 }
 
 
@@ -9618,6 +9841,9 @@ int main() {
         test_source_map_provenance(tests, fixture);
 
         test_object_initialization_persistence_runtime(
+            tests);
+
+        test_graph_delta_initialization_overlay(
             tests);
 
         compiled_test_image first;

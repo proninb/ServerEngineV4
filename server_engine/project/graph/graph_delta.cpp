@@ -322,6 +322,8 @@ server_status graph_delta::bind_baseline(
         !object_identities.empty() ||
         !object_construction.empty() ||
         !links.empty() ||
+        !initialization_patches.empty() ||
+        !initialization_target_index.empty() ||
         !derived_types.empty() ||
         !endpoint_paths.empty() ||
         !endpoint_path_steps.empty() ||
@@ -368,6 +370,9 @@ server_status graph_delta::bind_baseline(
 
     live_link_count_value =
         baseline_link_count;
+
+    live_initialization_count_value =
+        value.initialization_count();
 
     return server_status::success;
 }
@@ -3931,6 +3936,261 @@ link_handle graph_delta::lineage_link_target(
         : link_handle{};
 }
 
+const graph_delta::initialization_patch*
+graph_delta::find_initialization_patch(
+    object_endpoint target) const noexcept {
+
+    const auto key =
+        link_target_key(
+            target);
+
+    if (key == 0 ||
+        initialization_target_index.empty()) {
+
+        return nullptr;
+    }
+
+    const auto mask =
+        initialization_target_index.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            mix64(key)) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe <
+            initialization_target_index.size();
+         ++probe) {
+
+        const auto& slot =
+            initialization_target_index[
+                position];
+
+        if (slot.key == 0) {
+            return nullptr;
+        }
+
+        if (slot.key == key) {
+            return slot.patch != 0 &&
+                slot.patch <=
+                    initialization_patches.size()
+                ? &initialization_patches[
+                    slot.patch - 1]
+                : nullptr;
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return nullptr;
+}
+
+graph_delta::initialization_patch*
+graph_delta::find_initialization_patch(
+    object_endpoint target) noexcept {
+
+    const auto key =
+        link_target_key(
+            target);
+
+    if (key == 0 ||
+        initialization_target_index.empty()) {
+
+        return nullptr;
+    }
+
+    const auto mask =
+        initialization_target_index.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            mix64(key)) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe <
+            initialization_target_index.size();
+         ++probe) {
+
+        const auto& slot =
+            initialization_target_index[
+                position];
+
+        if (slot.key == 0) {
+            return nullptr;
+        }
+
+        if (slot.key == key) {
+            return slot.patch != 0 &&
+                slot.patch <=
+                    initialization_patches.size()
+                ? &initialization_patches[
+                    slot.patch - 1]
+                : nullptr;
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return nullptr;
+}
+
+server_status
+graph_delta::ensure_initialization_target_index_capacity(
+    std::size_t additional) noexcept {
+
+    if (additional >
+        (std::numeric_limits<
+            std::size_t>::max)() -
+            initialization_patches.size()) {
+
+        return server_status::io_error;
+    }
+
+    const auto required =
+        initialization_patches.size() +
+        additional;
+
+    if (!initialization_target_index.empty() &&
+        required <=
+            initialization_target_index.size() / 2) {
+
+        return server_status::success;
+    }
+
+    const auto capacity =
+        next_index_capacity(
+            required);
+
+    if (capacity == 0) {
+        return server_status::io_error;
+    }
+
+    try {
+        std::vector<initialization_target_index_slot>
+            candidate(
+                capacity);
+
+        for (const auto& value :
+             initialization_target_index) {
+
+            if (value.key == 0) {
+                continue;
+            }
+
+            if (value.patch == 0 ||
+                value.patch >
+                    initialization_patches.size()) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            insert_initialization_target_index(
+                candidate,
+                value.key,
+                value.patch);
+        }
+
+        initialization_target_index =
+            std::move(candidate);
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
+void graph_delta::insert_initialization_target_index(
+    std::vector<initialization_target_index_slot>& target,
+    std::uint64_t key,
+    std::uint32_t patch) const noexcept {
+
+    const auto mask =
+        target.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            mix64(key)) &
+        mask;
+
+    while (target[position].key != 0) {
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    target[position] = {
+        key,
+        patch,
+        0,
+    };
+}
+
+bool graph_delta::scalar_initialization_target(
+    type_ref type_value) const noexcept {
+
+    derived_type_record derived_value;
+
+    for (;;) {
+        if (!derived(
+                type_value,
+                derived_value)) {
+
+            break;
+        }
+
+        if (derived_value.kind ==
+            derived_type_kind::
+                const_qualified) {
+
+            return false;
+        }
+
+        if (derived_value.kind ==
+            derived_type_kind::
+                volatile_qualified) {
+
+            type_value =
+                derived_value.child;
+
+            continue;
+        }
+
+        break;
+    }
+
+    if (type_value.kind() ==
+        type_ref_kind::intrinsic) {
+
+        const auto intrinsic_value =
+            static_cast<intrinsic_type>(
+                type_value.payload());
+
+        return intrinsic_value >
+                intrinsic_type::none &&
+            intrinsic_value <=
+                intrinsic_type::nullptr_type &&
+            intrinsic_value !=
+                intrinsic_type::void_type;
+    }
+
+    return type_value.kind() ==
+            type_ref_kind::derived &&
+        derived(
+            type_value,
+            derived_value) &&
+        derived_value.kind ==
+            derived_type_kind::pointer;
+}
+
+
 bool graph_delta::reference_binding_compatible(
     type_ref target,
     type_ref source) const noexcept {
@@ -3981,10 +4241,54 @@ bool graph_delta::endpoint_type(
         return false;
     }
 
+    if (endpoint.member.is_path()) {
+        endpoint_path_record path;
+
+        if (!endpoint_path(
+                endpoint.member.path(),
+                path) ||
+            path.root_type !=
+                object_value.type) {
+
+            return false;
+        }
+
+        output =
+            path.value_type;
+
+        return contains(output);
+    }
+
+    const auto member_value =
+        endpoint.member.direct_member();
+
+    if (!member_value) {
+        return false;
+    }
+
+    auto object_type =
+        object_value.type;
+
+    derived_type_record derived_value;
+
+    while (derived(
+               object_type,
+               derived_value) &&
+           (derived_value.kind ==
+                derived_type_kind::
+                    const_qualified ||
+            derived_value.kind ==
+                derived_type_kind::
+                    volatile_qualified)) {
+
+        object_type =
+            derived_value.child;
+    }
+
     type_handle type_value;
 
     if (!named(
-            object_value.type,
+            object_type,
             type_value)) {
 
         return false;
@@ -3994,15 +4298,257 @@ bool graph_delta::endpoint_type(
 
     if (!member(
             type_value,
-            endpoint.member,
+            member_value,
             value)) {
 
         return false;
     }
 
-    output = value.type;
-    return static_cast<bool>(output);
+    output =
+        value.type;
+
+    return static_cast<bool>(
+        output);
 }
+
+bool graph_delta::initialization(
+    object_endpoint target,
+    object_initialization_record& output) const noexcept {
+
+    output = {};
+
+    if (!target.object ||
+        !target.member) {
+
+        return false;
+    }
+
+    if (const auto* patch =
+            find_initialization_patch(
+                target);
+        patch != nullptr) {
+
+        if (!patch->live ||
+            patch->value.target !=
+                target) {
+
+            return false;
+        }
+
+        output =
+            patch->value;
+
+        return true;
+    }
+
+    return baseline != nullptr &&
+        baseline->initialization(
+            target,
+            output);
+}
+
+server_status graph_delta::add_initialization(
+    object_endpoint target,
+    construction_value value,
+    bool& replaced) noexcept {
+
+    replaced = false;
+
+    type_ref target_type;
+
+    if (!endpoint_type(
+            target,
+            target_type) ||
+        !scalar_initialization_target(
+            target_type) ||
+        !valid_construction(
+            value) ||
+        value.kind ==
+            construction_kind::
+                member_binding ||
+        value.kind ==
+            construction_kind::
+                object_binding ||
+        value.kind ==
+            construction_kind::
+                unsupported ||
+        !construction_compatible(
+            *this,
+            target_type,
+            value)) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    if (auto* patch =
+            find_initialization_patch(
+                target);
+        patch != nullptr) {
+
+        replaced =
+            patch->live;
+
+        if (!patch->live) {
+            ++live_initialization_count_value;
+        }
+
+        patch->value = {
+            target,
+            value,
+        };
+
+        patch->live = true;
+
+        return server_status::success;
+    }
+
+    object_initialization_record
+        baseline_value;
+
+    const auto baseline_present =
+        baseline != nullptr &&
+        baseline->initialization(
+            target,
+            baseline_value);
+
+    const auto prepared =
+        ensure_initialization_target_index_capacity(
+            1);
+
+    if (!succeeded(prepared)) {
+        return prepared;
+    }
+
+    const auto key =
+        link_target_key(
+            target);
+
+    if (key == 0 ||
+        initialization_patches.size() >=
+            (std::numeric_limits<
+                std::uint32_t>::max)()) {
+
+        return key == 0
+            ? server_status::
+                project_configuration_invalid
+            : server_status::io_error;
+    }
+
+    try {
+        initialization_patches.push_back({
+            {
+                target,
+                value,
+            },
+            true,
+        });
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+
+    insert_initialization_target_index(
+        initialization_target_index,
+        key,
+        static_cast<std::uint32_t>(
+            initialization_patches.size()));
+
+    replaced =
+        baseline_present;
+
+    if (!baseline_present) {
+        ++live_initialization_count_value;
+    }
+
+    return server_status::success;
+}
+
+server_status graph_delta::invalidate_initialization(
+    object_endpoint target) noexcept {
+
+    if (!target.object ||
+        !target.member) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    if (auto* patch =
+            find_initialization_patch(
+                target);
+        patch != nullptr) {
+
+        if (!patch->live) {
+            return server_status::success;
+        }
+
+        if (live_initialization_count_value == 0) {
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        patch->live = false;
+        --live_initialization_count_value;
+
+        return server_status::success;
+    }
+
+    object_initialization_record
+        baseline_value;
+
+    if (baseline == nullptr ||
+        !baseline->initialization(
+            target,
+            baseline_value)) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    const auto prepared =
+        ensure_initialization_target_index_capacity(
+            1);
+
+    if (!succeeded(prepared)) {
+        return prepared;
+    }
+
+    const auto key =
+        link_target_key(
+            target);
+
+    if (key == 0 ||
+        live_initialization_count_value == 0 ||
+        initialization_patches.size() >=
+            (std::numeric_limits<
+                std::uint32_t>::max)()) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    try {
+        initialization_patches.push_back({
+            baseline_value,
+            false,
+        });
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+
+    insert_initialization_target_index(
+        initialization_target_index,
+        key,
+        static_cast<std::uint32_t>(
+            initialization_patches.size()));
+
+    --live_initialization_count_value;
+
+    return server_status::success;
+}
+
 
 server_status graph_delta::add_link(
     object_endpoint source,
