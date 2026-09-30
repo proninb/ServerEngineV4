@@ -322,8 +322,9 @@ void test_direct_source_save(
             G.add_object(
                 object_identity,
                 G.named(type),
-                object)),
-        "presence object fixture");
+                object,
+                graph_object_internal_static)),
+        "presence header-static object fixture");
 
     const object_endpoint source{
         object,
@@ -344,6 +345,21 @@ void test_direct_source_save(
                 target,
                 link)),
         "presence link fixture");
+
+    bool initialization_replaced = false;
+
+    tests.expect(
+        succeeded(
+            G.add_initialization(
+                source,
+                construction_value::constant(
+                    construction_kind::
+                        signed_integer,
+                    7),
+                initialization_replaced)) &&
+        !initialization_replaced,
+        "presence initialization fixture");
+
     for (auto owner : {first, second}) {
         tests.expect(
             succeeded(sources.begin_root(owner)) &&
@@ -352,6 +368,17 @@ void test_direct_source_save(
                         second,
                         source_data_ref::type_definition(
                             identity))) &&
+                succeeded(
+                    sources.add(
+                        owner,
+                        source_data_ref::object(
+                            object_identity))) &&
+                succeeded(
+                    sources.add_initialization(
+                        source)) &&
+                succeeded(
+                    sources.add_initialization(
+                        source)) &&
                 succeeded(
                     sources.add_dependency(
                         type)) &&
@@ -455,12 +482,43 @@ void test_direct_source_save(
         first_dependent == first &&
         second_dependent == second,
         "semantic dependency sidecars persist mmap-native root and reverse views");
+
+    object_endpoint first_initialization;
+    object_endpoint second_initialization;
+    std::size_t first_initialization_count = 0;
+    std::size_t second_initialization_count = 0;
+
+    tests.expect(
+        writable_view.initialization_targets(
+            first,
+            first_initialization_count) &&
+        writable_view.initialization_targets(
+            second,
+            second_initialization_count) &&
+        first_initialization_count == 1 &&
+        second_initialization_count == 1 &&
+        writable_view.initialization_target_count(
+            first) == 1 &&
+        writable_view.initialization_target_count(
+            second) == 1 &&
+        writable_view.initialization_target(
+            first,
+            0,
+            first_initialization) &&
+        writable_view.initialization_target(
+            second,
+            0,
+            second_initialization) &&
+        first_initialization == source &&
+        second_initialization == source,
+        "source.bin persists exact initialization producers per semantic root");
+
     tests.expect(
         writable_view.object_presence_count() == 1 &&
         writable_view.link_presence_count() == 1 &&
-        writable_view.object_presence(0) == 0 &&
+        writable_view.object_presence(0) == 2 &&
         writable_view.link_presence(0) == 0,
-        "unowned object and link slots persist zero presence");
+        "object initialization producers participate in object presence");
     assign_table assigns;
     compiled_project_layout compiled_layout;
     tests.expect(prepare_compiled_project_layout(
@@ -500,7 +558,7 @@ void test_direct_source_save(
         semantic_closure[0] == first &&
         semantic_closure[1] == second &&
         semantic_metrics.visited_roots == 2 &&
-        semantic_metrics.semantic_entities == 2 &&
+        semantic_metrics.semantic_entities == 4 &&
         semantic_metrics.dependency_edges == 4 &&
         semantic_metrics.visited_slots >=
             semantic_metrics.visited_roots,
@@ -511,9 +569,15 @@ void test_direct_source_save(
         sources.dependency_entries().size() * 4 +
         sources.dependency_index_entries().size() * 12 +
         sources.dependent_root_entries().size() * 4;
+
+    const auto initialization_sidecar_bytes =
+        sources.root_initialization_entries().size() * 8 +
+        sources.initialization_target_entries().size() * 8;
+
     altered[
         altered.size() -
         32 -
+        initialization_sidecar_bytes -
         semantic_sidecar_bytes -
         16] = std::byte{1};
     source_save_view stale;
@@ -521,6 +585,77 @@ void test_direct_source_save(
                      verify_source_save_presence(stale, compiled) ==
                          source_save_result::invalid_image,
                  "cross-artifact validation rejects stale presence");
+
+    const auto initialization_range_bytes =
+        sources.root_initialization_entries().size() * 8;
+
+    const auto initialization_target_bytes =
+        sources.initialization_target_entries().size() * 8;
+
+    const auto initialization_ranges_offset =
+        writable.bytes().size() -
+        32 -
+        initialization_target_bytes -
+        initialization_range_bytes;
+
+    const auto initialization_targets_offset =
+        initialization_ranges_offset +
+        initialization_range_bytes;
+
+    {
+        auto corrupted =
+            std::vector<std::byte>(
+                writable.bytes().begin(),
+                writable.bytes().end());
+
+        // first root count: 1 -> impossible 3, while total target count is 2.
+        corrupted[
+            initialization_ranges_offset + 4] =
+                std::byte{3};
+
+        source_save_view corrupted_view;
+        std::size_t corrupted_count = 0;
+
+        tests.expect(
+            corrupted_view.bind(
+                corrupted) ==
+                    source_save_result::success &&
+            !corrupted_view.initialization_targets(
+                first,
+                corrupted_count) &&
+            validate_source_save_image(
+                corrupted) ==
+                    source_save_result::invalid_image,
+            "source.bin rejects corrupted initialization root range");
+    }
+
+    {
+        auto corrupted =
+            std::vector<std::byte>(
+                writable.bytes().begin(),
+                writable.bytes().end());
+
+        // Persisted object_handle becomes zero.
+        corrupted[
+            initialization_targets_offset] =
+                std::byte{0};
+
+        source_save_view corrupted_view;
+        object_endpoint corrupted_target;
+
+        tests.expect(
+            corrupted_view.bind(
+                corrupted) ==
+                    source_save_result::success &&
+            !corrupted_view.initialization_target(
+                first,
+                0,
+                corrupted_target) &&
+            validate_source_save_image(
+                corrupted) ==
+                    source_save_result::invalid_image,
+            "source.bin rejects corrupted initialization endpoint");
+    }
 
     source_save_file_view first_state;
     source_save_file_view second_state;
@@ -601,6 +736,17 @@ void test_direct_source_save(
             persisted.bytes()) ==
             source_save_result::success,
         "validate persisted source.bin mmap");
+
+    object_endpoint persisted_initialization;
+
+    tests.expect(
+        persisted_view.initialization_target(
+            first,
+            0,
+            persisted_initialization) &&
+        persisted_initialization ==
+            source,
+        "read-only source.bin exposes exact initialization producer target");
 
     file_context build_files;
 

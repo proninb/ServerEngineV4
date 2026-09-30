@@ -41,10 +41,10 @@ constexpr std::array<std::byte, 8> magic{
     std::byte{'C'},
     std::byte{'0'},
     std::byte{'0'},
-    std::byte{'5'},
+    std::byte{'6'},
 };
 
-constexpr std::uint32_t format_version = 5;
+constexpr std::uint32_t format_version = 6;
 
 constexpr std::uint32_t current_member_flag =
     source_save_current_member_flag;
@@ -1332,10 +1332,13 @@ void source_save_view::reset() noexcept {
     semantic_dependencies_offset = 0;
     semantic_reverse_index_offset = 0;
     semantic_dependent_roots_offset = 0;
+    initialization_root_ranges_offset = 0;
+    initialization_targets_offset = 0;
 
     type_count = object_count = link_count = 0;
     semantic_dependency_count_value = 0;
     semantic_reverse_index_count_value = 0;
+    initialization_target_count_value = 0;
 
     bytes = {};
     records_offset = 0;
@@ -1417,19 +1420,17 @@ source_save_result source_save_view::bind(
             invalid_image;
     }
 
-    std::uint32_t semantic_reserved0 = 0;
-    std::uint32_t semantic_reserved1 = 0;
+    std::uint32_t reserved = 0;
 
     if (!read_u32(
             image,
             offset,
-            semantic_reserved0) ||
+            initialization_target_count_value) ||
         !read_u32(
             image,
             offset,
-            semantic_reserved1) ||
-        semantic_reserved0 != 0 ||
-        semantic_reserved1 != 0 ||
+            reserved) ||
+        reserved != 0 ||
         (semantic_reverse_index_count_value != 0 &&
          !valid_power_of_two_or_zero(
              semantic_reverse_index_count_value)) ||
@@ -1523,6 +1524,8 @@ source_save_result source_save_view::bind(
     std::size_t semantic_dependencies_size = 0;
     std::size_t semantic_reverse_index_size = 0;
     std::size_t semantic_dependent_roots_size = 0;
+    std::size_t initialization_root_ranges_size = 0;
+    std::size_t initialization_targets_size = 0;
 
     if (!add_size(
             presence_words,
@@ -1552,7 +1555,15 @@ source_save_result source_save_view::bind(
         !multiply_size(
             semantic_dependency_count_value,
             4,
-            semantic_dependent_roots_size)) {
+            semantic_dependent_roots_size) ||
+        !multiply_size(
+            file_count_value,
+            8,
+            initialization_root_ranges_size) ||
+        !multiply_size(
+            initialization_target_count_value,
+            8,
+            initialization_targets_size)) {
 
         reset();
         return source_save_result::
@@ -1574,6 +1585,8 @@ source_save_result source_save_view::bind(
         !add_size(expected, semantic_dependencies_size) ||
         !add_size(expected, semantic_reverse_index_size) ||
         !add_size(expected, semantic_dependent_roots_size) ||
+        !add_size(expected, initialization_root_ranges_size) ||
+        !add_size(expected, initialization_targets_size) ||
         !add_size(expected, checksum_size) ||
         expected != image.size()) {
 
@@ -1628,6 +1641,14 @@ source_save_result source_save_view::bind(
     semantic_dependent_roots_offset =
         semantic_reverse_index_offset +
         semantic_reverse_index_size;
+
+    initialization_root_ranges_offset =
+        semantic_dependent_roots_offset +
+        semantic_dependent_roots_size;
+
+    initialization_targets_offset =
+        initialization_root_ranges_offset +
+        initialization_root_ranges_size;
 
     bytes = image;
 
@@ -2043,12 +2064,15 @@ source_save_result prepare_source_save_layout(const file_context &files,
     if (!sources.finalized() ||
         sources.file_entries().size() != files.size() ||
         sources.root_dependency_entries().size() != files.size() ||
+        sources.root_initialization_entries().size() != files.size() ||
         sources.type_presence_entries().size() > UINT32_MAX ||
         sources.object_presence_entries().size() > UINT32_MAX ||
         sources.link_presence_entries().size() > UINT32_MAX ||
         sources.dependency_entries().size() > UINT32_MAX ||
         sources.dependency_index_entries().size() > UINT32_MAX ||
         sources.dependent_root_entries().size() >
+            UINT32_MAX ||
+        sources.initialization_target_entries().size() >
             UINT32_MAX ||
         sources.dependent_root_entries().size() !=
             sources.dependency_entries().size() ||
@@ -2106,10 +2130,44 @@ source_save_result prepare_source_save_layout(const file_context &files,
         static_cast<std::uint32_t>(
             sources.dependency_index_entries().size());
 
+    output.initialization_target_count =
+        static_cast<std::uint32_t>(
+            sources.initialization_target_entries().size());
+
+    std::uint64_t initialization_range_total = 0;
+
+    for (const auto range :
+         sources.root_initialization_entries()) {
+
+        if (range.begin >
+                output.initialization_target_count ||
+            range.count >
+                output.initialization_target_count -
+                    range.begin) {
+
+            output.reset();
+            return source_save_result::
+                invalid_state;
+        }
+
+        initialization_range_total +=
+            range.count;
+    }
+
+    if (initialization_range_total !=
+        output.initialization_target_count) {
+
+        output.reset();
+        return source_save_result::
+            invalid_state;
+    }
+
     std::size_t semantic_root_ranges_size = 0;
     std::size_t semantic_dependencies_size = 0;
     std::size_t semantic_reverse_index_size = 0;
     std::size_t semantic_dependent_roots_size = 0;
+    std::size_t initialization_root_ranges_size = 0;
+    std::size_t initialization_targets_size = 0;
 
     if (!multiply_size(
             file_count,
@@ -2126,7 +2184,15 @@ source_save_result prepare_source_save_layout(const file_context &files,
         !multiply_size(
             output.semantic_dependency_count,
             4,
-            semantic_dependent_roots_size)) {
+            semantic_dependent_roots_size) ||
+        !multiply_size(
+            file_count,
+            8,
+            initialization_root_ranges_size) ||
+        !multiply_size(
+            output.initialization_target_count,
+            8,
+            initialization_targets_size)) {
 
         output.reset();
         return source_save_result::failed;
@@ -2176,6 +2242,28 @@ source_save_result prepare_source_save_layout(const file_context &files,
         return source_save_result::failed;
     }
 
+    output.initialization_root_ranges_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            initialization_root_ranges_size)) {
+
+        output.reset();
+        return source_save_result::failed;
+    }
+
+    output.initialization_targets_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            initialization_targets_size)) {
+
+        output.reset();
+        return source_save_result::failed;
+    }
+
     output.checksum_offset =
         cursor;
 
@@ -2217,6 +2305,7 @@ source_save_result encode_source_save_image(const file_context &files,
     if (!sources.finalized() ||
         sources.file_entries().size() != files.size() ||
         sources.root_dependency_entries().size() != files.size() ||
+        sources.root_initialization_entries().size() != files.size() ||
         sources.type_presence_entries().size() != layout.type_count ||
         sources.object_presence_entries().size() != layout.object_count ||
         sources.link_presence_entries().size() != layout.link_count ||
@@ -2225,7 +2314,9 @@ source_save_result encode_source_save_image(const file_context &files,
         sources.dependency_index_entries().size() !=
             layout.semantic_reverse_index_count ||
         sources.dependent_root_entries().size() !=
-            layout.semantic_dependency_count) {
+            layout.semantic_dependency_count ||
+        sources.initialization_target_entries().size() !=
+            layout.initialization_target_count) {
 
         return source_save_result::invalid_state;
     }
@@ -2283,7 +2374,7 @@ source_save_result encode_source_save_image(const file_context &files,
         !write_u32(output, header_cursor, layout.link_count) ||
         !write_u32(output, header_cursor, layout.semantic_dependency_count) ||
         !write_u32(output, header_cursor, layout.semantic_reverse_index_count) ||
-        !write_u32(output, header_cursor, 0) ||
+        !write_u32(output, header_cursor, layout.initialization_target_count) ||
         !write_u32(output, header_cursor, 0) ||
         header_cursor != header_size) {
 
@@ -2788,6 +2879,71 @@ source_save_result encode_source_save_image(const file_context &files,
     }
 
     if (semantic_cursor !=
+        layout.initialization_root_ranges_offset) {
+
+        return source_save_result::
+            invalid_state;
+    }
+
+    std::size_t initialization_cursor =
+        layout.initialization_root_ranges_offset;
+
+    std::uint64_t initialization_range_total = 0;
+
+    for (const auto range :
+         sources.root_initialization_entries()) {
+
+        if (range.begin >
+                layout.initialization_target_count ||
+            range.count >
+                layout.initialization_target_count -
+                    range.begin ||
+            !write_u32(
+                output,
+                initialization_cursor,
+                range.begin) ||
+            !write_u32(
+                output,
+                initialization_cursor,
+                range.count)) {
+
+            return source_save_result::
+                invalid_state;
+        }
+
+        initialization_range_total +=
+            range.count;
+    }
+
+    if (initialization_range_total !=
+            layout.initialization_target_count ||
+        initialization_cursor !=
+            layout.initialization_targets_offset) {
+
+        return source_save_result::
+            invalid_state;
+    }
+
+    for (const auto target :
+         sources.initialization_target_entries()) {
+
+        if (!target.object ||
+            !target.member ||
+            !write_u32(
+                output,
+                initialization_cursor,
+                target.object.value()) ||
+            !write_u32(
+                output,
+                initialization_cursor,
+                target.member.value())) {
+
+            return source_save_result::
+                invalid_state;
+        }
+    }
+
+    if (initialization_cursor !=
         layout.checksum_offset) {
 
         return source_save_result::
@@ -2864,6 +3020,85 @@ source_save_result validate_source_save_image(
     }
 
     try {
+        std::vector<std::uint8_t>
+            initialization_seen(
+                view.initialization_target_count_value);
+
+        std::size_t initialization_covered = 0;
+
+        for (std::uint32_t raw_root = 1;
+             raw_root <=
+                view.file_count();
+             ++raw_root) {
+
+            std::size_t range_offset =
+                view.initialization_root_ranges_offset +
+                static_cast<std::size_t>(
+                    raw_root - 1) * 8;
+
+            source_map_range range;
+
+            if (!read_u32(
+                    image,
+                    range_offset,
+                    range.begin) ||
+                !read_u32(
+                    image,
+                    range_offset,
+                    range.count) ||
+                range.begin >
+                    view.initialization_target_count_value ||
+                range.count >
+                    view.initialization_target_count_value -
+                        range.begin) {
+
+                return source_save_result::
+                    invalid_image;
+            }
+
+            const file_id root{raw_root};
+
+            for (std::uint32_t index = 0;
+                 index < range.count;
+                 ++index) {
+
+                const auto position =
+                    static_cast<std::size_t>(
+                        range.begin) +
+                    index;
+
+                if (initialization_seen[
+                        position] != 0) {
+
+                    return source_save_result::
+                        invalid_image;
+                }
+
+                object_endpoint target;
+
+                if (!view.initialization_target(
+                        root,
+                        index,
+                        target)) {
+
+                    return source_save_result::
+                        invalid_image;
+                }
+
+                initialization_seen[
+                    position] = 1;
+
+                ++initialization_covered;
+            }
+        }
+
+        if (initialization_covered !=
+            view.initialization_target_count_value) {
+
+            return source_save_result::
+                invalid_image;
+        }
+
         struct semantic_slot final {
             source_dependency_ref dependency{};
             source_map_range roots{};
@@ -5127,32 +5362,6 @@ server_status collect_source_save_semantic_dependency_closure(
     }
 }
 
-source_type_presence source_save_view::type_presence(std::size_t index) const noexcept {
-    source_type_presence result;
-    if (!valid() || index >= type_count)
-        return result;
-    auto cursor = presence_offset + index * 8;
-    (void)read_u32(bytes, cursor, result.declarations);
-    (void)read_u32(bytes, cursor, result.definitions);
-    return result;
-}
-std::uint32_t source_save_view::object_presence(std::size_t index) const noexcept {
-    std::uint32_t result = 0;
-    if (!valid() || index >= object_count)
-        return result;
-    auto cursor = presence_offset + std::size_t{type_count} * 8 + index * 4;
-    (void)read_u32(bytes, cursor, result);
-    return result;
-}
-std::uint32_t source_save_view::link_presence(std::size_t index) const noexcept {
-    std::uint32_t result = 0;
-    if (!valid() || index >= link_count)
-        return result;
-    auto cursor =
-        presence_offset + std::size_t{type_count} * 8 + std::size_t{object_count} * 4 + index * 4;
-    (void)read_u32(bytes, cursor, result);
-    return result;
-}
 source_save_result verify_source_save_presence(const source_save_view &source,
                                                const compiled_project_view &compiled) noexcept {
     if (!source.valid() || !compiled.valid() ||

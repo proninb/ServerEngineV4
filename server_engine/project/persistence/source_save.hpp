@@ -68,10 +68,13 @@ private:
         semantic_dependencies_offset = 0;
         semantic_reverse_index_offset = 0;
         semantic_dependent_roots_offset = 0;
+        initialization_root_ranges_offset = 0;
+        initialization_targets_offset = 0;
         checksum_offset = 0;
         type_count = object_count = link_count = 0;
         semantic_dependency_count = 0;
         semantic_reverse_index_count = 0;
+        initialization_target_count = 0;
 
         file_count = 0;
         path_bytes = 0;
@@ -101,11 +104,14 @@ private:
     std::size_t semantic_dependencies_offset = 0;
     std::size_t semantic_reverse_index_offset = 0;
     std::size_t semantic_dependent_roots_offset = 0;
+    std::size_t initialization_root_ranges_offset = 0;
+    std::size_t initialization_targets_offset = 0;
     std::size_t checksum_offset = 0;
 
     std::uint32_t type_count = 0, object_count = 0, link_count = 0;
     std::uint32_t semantic_dependency_count = 0;
     std::uint32_t semantic_reverse_index_count = 0;
+    std::uint32_t initialization_target_count = 0;
 
     std::uint32_t file_count = 0;
     std::uint32_t path_bytes = 0;
@@ -218,6 +224,18 @@ public:
         std::size_t index,
         source_dependency_ref& output) const noexcept;
 
+    [[nodiscard]] bool initialization_targets(
+        file_id root,
+        std::size_t& count) const noexcept;
+
+    [[nodiscard]] std::size_t initialization_target_count(
+        file_id root) const noexcept;
+
+    [[nodiscard]] bool initialization_target(
+        file_id root,
+        std::size_t index,
+        object_endpoint& output) const noexcept;
+
     [[nodiscard]] bool semantic_dependents(
         source_dependency_ref dependency,
         std::size_t& count) const noexcept;
@@ -248,6 +266,8 @@ private:
     std::size_t semantic_dependencies_offset = 0;
     std::size_t semantic_reverse_index_offset = 0;
     std::size_t semantic_dependent_roots_offset = 0;
+    std::size_t initialization_root_ranges_offset = 0;
+    std::size_t initialization_targets_offset = 0;
 
     std::uint32_t file_count_value = 0;
     std::uint32_t path_bytes_value = 0;
@@ -258,6 +278,7 @@ private:
     std::uint32_t directory_index_count_value = 0;
     std::uint32_t semantic_dependency_count_value = 0;
     std::uint32_t semantic_reverse_index_count_value = 0;
+    std::uint32_t initialization_target_count_value = 0;
 
     file_change_checkpoint checkpoint;
 };

@@ -4,6 +4,7 @@
 #include "../../filesystem_path.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -142,6 +143,33 @@ namespace {
 
 }
 
+source_type_presence source_save_view::type_presence(std::size_t index) const noexcept {
+    source_type_presence result;
+    if (!valid() || index >= type_count)
+        return result;
+    auto cursor = presence_offset + index * 8;
+    (void)read_u32(bytes, cursor, result.declarations);
+    (void)read_u32(bytes, cursor, result.definitions);
+    return result;
+}
+std::uint32_t source_save_view::object_presence(std::size_t index) const noexcept {
+    std::uint32_t result = 0;
+    if (!valid() || index >= object_count)
+        return result;
+    auto cursor = presence_offset + std::size_t{type_count} * 8 + index * 4;
+    (void)read_u32(bytes, cursor, result);
+    return result;
+}
+std::uint32_t source_save_view::link_presence(std::size_t index) const noexcept {
+    std::uint32_t result = 0;
+    if (!valid() || index >= link_count)
+        return result;
+    auto cursor =
+        presence_offset + std::size_t{type_count} * 8 + std::size_t{object_count} * 4 + index * 4;
+    (void)read_u32(bytes, cursor, result);
+    return result;
+}
+
 bool source_save_view::semantic_dependencies(
     file_id root,
     std::size_t& count) const noexcept {
@@ -230,6 +258,120 @@ bool source_save_view::semantic_dependency(
     return static_cast<bool>(
         output);
 }
+
+bool source_save_view::initialization_targets(
+    file_id root,
+    std::size_t& count) const noexcept {
+
+    count = 0;
+
+    if (!contains(root)) {
+        return false;
+    }
+
+    source_map_range range;
+
+    if (!semantic_range(
+            bytes,
+            initialization_root_ranges_offset,
+            root.value() - 1,
+            initialization_target_count_value,
+            range)) {
+
+        return false;
+    }
+
+    count =
+        range.count;
+
+    return true;
+}
+
+std::size_t source_save_view::initialization_target_count(
+    file_id root) const noexcept {
+
+    std::size_t count = 0;
+
+    return initialization_targets(
+        root,
+        count)
+        ? count
+        : 0;
+}
+
+bool source_save_view::initialization_target(
+    file_id root,
+    std::size_t index,
+    object_endpoint& output) const noexcept {
+
+    output = {};
+
+    if (!contains(root)) {
+        return false;
+    }
+
+    source_map_range range;
+
+    if (!semantic_range(
+            bytes,
+            initialization_root_ranges_offset,
+            root.value() - 1,
+            initialization_target_count_value,
+            range) ||
+        index >=
+            range.count) {
+
+        return false;
+    }
+
+    auto offset =
+        initialization_targets_offset +
+        (static_cast<std::size_t>(
+             range.begin) +
+         index) *
+            8;
+
+    std::uint32_t raw_object = 0;
+    std::uint32_t raw_member = 0;
+
+    if (!read_u32(
+            bytes,
+            offset,
+            raw_object) ||
+        !read_u32(
+            bytes,
+            offset,
+            raw_member) ||
+        raw_object == 0 ||
+        raw_object >
+            object_handle::maximum_slot ||
+        raw_object >
+            object_count) {
+
+        return false;
+    }
+
+    const auto member =
+        endpoint_ref::from_raw(
+            raw_member);
+
+    if (!member ||
+        object_presence(
+            raw_object - 1) == 0) {
+
+        return false;
+    }
+
+    output.object =
+        std::bit_cast<object_handle>(
+            raw_object);
+
+    output.member =
+        member;
+
+    return true;
+}
+
 
 bool source_save_view::semantic_dependents(
     source_dependency_ref dependency,
