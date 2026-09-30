@@ -69,6 +69,28 @@ struct runtime_type_query final {
     std::vector<runtime_object_type> types;
 };
 
+struct runtime_link_match final {
+    std::string source;
+    std::string target;
+    std::string file;
+};
+
+struct runtime_assign_match final {
+    std::string source;
+    std::string target;
+    std::string file;
+};
+
+struct runtime_object_links final {
+    std::string object;
+    std::vector<runtime_link_match> links;
+    std::vector<runtime_assign_match> assigns;
+};
+
+struct runtime_link_query final {
+    std::vector<runtime_object_links> objects;
+};
+
 [[nodiscard]] runtime_query_result get_runtime_object(
     const compiled_project_view& project,
     std::string_view name,
@@ -79,6 +101,11 @@ struct runtime_type_query final {
     const compiled_project_view& project,
     std::span<const std::string> objects,
     runtime_type_query& output) noexcept;
+
+[[nodiscard]] runtime_query_result get_runtime_link(
+    const compiled_project_view& project,
+    std::span<const std::string> objects,
+    runtime_link_query& output) noexcept;
 
 [[nodiscard]] runtime_query_result get_runtime_value(
     const compiled_project_view& project,

@@ -747,6 +747,240 @@ struct resolved_member final {
     return true;
 }
 
+[[nodiscard]] bool append_endpoint_member(
+    const compiled_project_view& project,
+    type_ref& type,
+    std::uint32_t local,
+    std::string& output) {
+
+    derived_type_record derived;
+
+    while (project.derived(
+               type,
+               derived) &&
+           (derived.kind ==
+                derived_type_kind::const_qualified ||
+            derived.kind ==
+                derived_type_kind::volatile_qualified)) {
+
+        type = derived.child;
+    }
+
+    if (type.kind() !=
+            type_ref_kind::named ||
+        type.payload() == 0) {
+
+        return false;
+    }
+
+    const auto owner =
+        project.type_at(
+            static_cast<std::size_t>(
+                type.payload() - 1));
+
+    member_record member;
+
+    if (!owner ||
+        !project.member(
+            owner,
+            local,
+            member)) {
+
+        return false;
+    }
+
+    const auto name =
+        project.string(
+            member.name);
+
+    if (name.empty()) {
+        return false;
+    }
+
+    output.push_back('.');
+    output.append(
+        name.data(),
+        name.size());
+
+    type = member.type;
+    return true;
+}
+
+[[nodiscard]] bool format_endpoint_name(
+    const compiled_project_view& project,
+    object_endpoint endpoint,
+    std::string& output,
+    std::vector<identity_ref>& identity_scratch) {
+
+    output.clear();
+
+    object_entry object;
+
+    if (!endpoint.object ||
+        !endpoint.member ||
+        !project.object(
+            endpoint.object,
+            object) ||
+        !qualified_identity_name(
+            project,
+            project.identity(
+                endpoint.object),
+            output,
+            identity_scratch)) {
+
+        return false;
+    }
+
+    auto type =
+        object.type;
+
+    if (endpoint.member.is_member()) {
+        return append_endpoint_member(
+            project,
+            type,
+            endpoint.member.direct_member().value(),
+            output);
+    }
+
+    endpoint_path_record path;
+
+    if (!project.endpoint_path(
+            endpoint.member.path(),
+            path) ||
+        path.root_type !=
+            object.type) {
+
+        return false;
+    }
+
+    for (std::uint32_t local = 0;
+         local < path.steps.count;
+         ++local) {
+
+        endpoint_path_step step;
+
+        if (!project.endpoint_path_step_at(
+                static_cast<std::size_t>(
+                    path.steps.begin) +
+                    local,
+                step)) {
+
+            return false;
+        }
+
+        if (step.kind ==
+            endpoint_path_step_kind::member) {
+
+            if (step.value >
+                (std::numeric_limits<std::uint32_t>::max)() ||
+                !append_endpoint_member(
+                    project,
+                    type,
+                    static_cast<std::uint32_t>(
+                        step.value),
+                    output)) {
+
+                return false;
+            }
+
+            continue;
+        }
+
+        derived_type_record derived;
+
+        while (project.derived(
+                   type,
+                   derived) &&
+               (derived.kind ==
+                    derived_type_kind::const_qualified ||
+                derived.kind ==
+                    derived_type_kind::volatile_qualified)) {
+
+            type = derived.child;
+        }
+
+        if (step.kind !=
+                endpoint_path_step_kind::array_index ||
+            !project.derived(
+                type,
+                derived) ||
+            derived.kind !=
+                derived_type_kind::bounded_array ||
+            step.value >=
+                derived.payload) {
+
+            return false;
+        }
+
+        output.push_back('[');
+        output +=
+            std::to_string(
+                step.value);
+        output.push_back(']');
+
+        type = derived.child;
+    }
+
+    return true;
+}
+
+[[nodiscard]] std::string_view assign_object_name(
+    std::string_view endpoint) noexcept {
+
+    if (endpoint.starts_with("::")) {
+        endpoint.remove_prefix(2);
+    }
+
+    const auto dot =
+        endpoint.find('.');
+
+    return endpoint.substr(
+        0,
+        dot);
+}
+
+[[nodiscard]] bool assign_matches_object(
+    std::string_view endpoint,
+    std::string_view object) noexcept {
+
+    return !endpoint.empty() &&
+        assign_object_name(
+            endpoint) ==
+        object;
+}
+
+[[nodiscard]] bool query_file_path(
+    const compiled_project_view& project,
+    file_id file,
+    file_kind expected,
+    std::string& output) {
+
+    output.clear();
+
+    std::string_view path;
+    file_kind kind{};
+    source_map_range range;
+
+    if (!file ||
+        !project.source_file(
+            file,
+            path,
+            kind,
+            range) ||
+        kind != expected ||
+        path.empty()) {
+
+        return false;
+    }
+
+    output.assign(
+        path.data(),
+        path.size());
+
+    return true;
+}
+
+
 [[nodiscard]] runtime_query_result resolve_object(
     const compiled_project_view& project,
     std::string_view qualified,
@@ -1172,6 +1406,273 @@ runtime_query_result get_runtime_type(
             invalid_runtime;
     }
 }
+
+runtime_query_result get_runtime_link(
+    const compiled_project_view& project,
+    std::span<const std::string> objects,
+    runtime_link_query& output) noexcept {
+
+    output = {};
+
+    if (!project.valid() ||
+        objects.empty()) {
+
+        return runtime_query_result::invalid_input;
+    }
+
+    try {
+        std::vector<object_handle> handles;
+        handles.reserve(
+            objects.size());
+
+        output.objects.reserve(
+            objects.size());
+
+        std::vector<identity_ref>
+            identity_scratch;
+
+        for (const auto& requested :
+             objects) {
+
+            if (requested.empty()) {
+                output = {};
+                return runtime_query_result::
+                    invalid_input;
+            }
+
+            object_handle object;
+
+            const auto resolved =
+                resolve_object(
+                    project,
+                    requested,
+                    object);
+
+            if (resolved !=
+                runtime_query_result::success) {
+
+                output = {};
+                return resolved;
+            }
+
+            runtime_object_links result;
+
+            if (!qualified_identity_name(
+                    project,
+                    project.identity(object),
+                    result.object,
+                    identity_scratch)) {
+
+                output = {};
+                return runtime_query_result::
+                    invalid_runtime;
+            }
+
+            handles.push_back(
+                object);
+
+            output.objects.push_back(
+                std::move(result));
+        }
+
+        std::vector<file_id> link_files(
+            project.link_count());
+
+        const auto contribution_count =
+            project.source_contribution_count();
+
+        if (contribution_count >
+            (std::numeric_limits<std::uint32_t>::max)()) {
+
+            output = {};
+            return runtime_query_result::
+                invalid_runtime;
+        }
+
+        for (std::size_t index = 0;
+             index < contribution_count;
+             ++index) {
+
+            source_contribution_record contribution;
+
+            if (!project.source_contribution(
+                    static_cast<std::uint32_t>(
+                        index),
+                    contribution)) {
+
+                output = {};
+                return runtime_query_result::
+                    invalid_runtime;
+            }
+
+            if (contribution.data.kind() !=
+                source_data_kind::link) {
+
+                continue;
+            }
+
+            const auto slot =
+                contribution.data.slot();
+
+            if (slot == 0 ||
+                slot >
+                    link_files.size()) {
+
+                output = {};
+                return runtime_query_result::
+                    invalid_runtime;
+            }
+
+            auto& file =
+                link_files[
+                    slot - 1];
+
+            if (!file) {
+                file =
+                    contribution.file;
+                continue;
+            }
+
+            if (file !=
+                contribution.file) {
+
+                output = {};
+                return runtime_query_result::
+                    invalid_runtime;
+            }
+        }
+
+        for (std::size_t group = 0;
+             group < handles.size();
+             ++group) {
+
+            const auto selected =
+                handles[group];
+
+            auto& result =
+                output.objects[group];
+
+            for (std::size_t index = 0;
+                 index < project.link_count();
+                 ++index) {
+
+                const auto handle =
+                    project.link_at(index);
+
+                link_record link;
+
+                if (!handle ||
+                    !project.link(
+                        handle,
+                        link)) {
+
+                    output = {};
+                    return runtime_query_result::
+                        invalid_runtime;
+                }
+
+                if (link.source.object != selected &&
+                    link.target.object != selected) {
+
+                    continue;
+                }
+
+                runtime_link_match match;
+
+                if (!format_endpoint_name(
+                        project,
+                        link.source,
+                        match.source,
+                        identity_scratch) ||
+                    !format_endpoint_name(
+                        project,
+                        link.target,
+                        match.target,
+                        identity_scratch) ||
+                    index >=
+                        link_files.size() ||
+                    !query_file_path(
+                        project,
+                        link_files[index],
+                        file_kind::source,
+                        match.file)) {
+
+                    output = {};
+                    return runtime_query_result::
+                        invalid_runtime;
+                }
+
+                result.links.push_back(
+                    std::move(match));
+            }
+
+            for (std::size_t index = 0;
+                 index < project.assign_count();
+                 ++index) {
+
+                std::string_view source;
+                std::string_view target;
+
+                if (!project.assign(
+                        index,
+                        source,
+                        target)) {
+
+                    output = {};
+                    return runtime_query_result::
+                        invalid_runtime;
+                }
+
+                if (!assign_matches_object(
+                        source,
+                        result.object) &&
+                    !assign_matches_object(
+                        target,
+                        result.object)) {
+
+                    continue;
+                }
+
+                file_id file;
+
+                runtime_assign_match match;
+
+                if (!project.assign_file(
+                        index,
+                        file) ||
+                    !query_file_path(
+                        project,
+                        file,
+                        file_kind::assign,
+                        match.file)) {
+
+                    output = {};
+                    return runtime_query_result::
+                        invalid_runtime;
+                }
+
+                match.source.assign(
+                    source.data(),
+                    source.size());
+
+                match.target.assign(
+                    target.data(),
+                    target.size());
+
+                result.assigns.push_back(
+                    std::move(match));
+            }
+        }
+
+        return runtime_query_result::success;
+    }
+    catch (...) {
+        output = {};
+        return runtime_query_result::
+            invalid_runtime;
+    }
+}
+
 
 runtime_query_result get_runtime_value(
     const compiled_project_view& project,

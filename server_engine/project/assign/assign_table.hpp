@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include "../file/file_context.hpp"
 #include "../../server_status.hpp"
 
 #include <cstddef>
@@ -35,8 +36,18 @@ public:
     assign_table& operator=(const assign_table&) = delete;
 
     [[nodiscard]] server_status add(
+        file_id file,
         std::string_view source,
         std::string_view target) noexcept;
+
+    [[nodiscard]] server_status add(
+        std::string_view source,
+        std::string_view target) noexcept {
+        return add(
+            {},
+            source,
+            target);
+    }
 
     void clear() noexcept;
 
@@ -49,6 +60,18 @@ public:
 
     [[nodiscard]] std::string_view target(
         const assign_record& record) const noexcept;
+
+    [[nodiscard]] file_id file(
+        std::size_t index) const noexcept {
+        return index < files.size()
+            ? files[index]
+            : file_id{};
+    }
+
+    [[nodiscard]] std::span<const file_id>
+    file_entries() const noexcept {
+        return files;
+    }
 
     [[nodiscard]] std::size_t size() const noexcept {
         return entries.size();
@@ -68,6 +91,7 @@ private:
         std::uint32_t length) const noexcept;
 
     std::vector<assign_record> entries;
+    std::vector<file_id> files;
     std::vector<char> bytes;
 };
 

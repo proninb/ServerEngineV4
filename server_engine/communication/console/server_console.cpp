@@ -10,6 +10,7 @@
  *   GET_STATE
  *   GET_OBJECT <name-pattern> [type]
  *   GET_TYPE <object> [object...]
+ *   GET_LINK <object> [object...]
  *   GET_VALUE <qualified-object[.member...]>
  *   SNAP_IC [/options=0] <ic-path>
  *   RESET_IC [/options=<0..7>] <ic-path>
@@ -325,6 +326,26 @@ void server_console::run() {
 
             publish(
                 std::move(request));
+        } else if (verb == "GET_LINK") {
+            server_request request;
+            request.kind =
+                server_request_kind::get_link;
+
+            std::string object;
+
+            while (stream >> object) {
+                request.objects.push_back(
+                    std::move(object));
+            }
+
+            if (request.objects.empty()) {
+                std::cout
+                    << "GET_LINK requires <object> [object...]\n";
+                continue;
+            }
+
+            publish(
+                std::move(request));
         } else if (verb == "GET_VALUE") {
             std::string name;
             std::getline(
@@ -470,6 +491,43 @@ void server_console::present(
                     << member.name
                     << " type="
                     << member.type
+                    << '\n';
+            }
+        }
+        break;
+
+    case server_response_payload_kind::runtime_link:
+        for (const auto& item :
+             result.link.objects) {
+
+            std::cout
+                << "LINKS object="
+                << item.object
+                << '\n';
+
+            for (const auto& link :
+                 item.links) {
+
+                std::cout
+                    << "  LINK "
+                    << link.source
+                    << " -> "
+                    << link.target
+                    << " file="
+                    << link.file
+                    << '\n';
+            }
+
+            for (const auto& assign :
+                 item.assigns) {
+
+                std::cout
+                    << "  ASSIGN "
+                    << assign.source
+                    << " -> "
+                    << assign.target
+                    << " file="
+                    << assign.file
                     << '\n';
             }
         }

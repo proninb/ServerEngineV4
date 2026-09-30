@@ -632,6 +632,9 @@ void write_u64(
     case compiled_project_section::assign_records:
         return assign_record_size;
 
+    case compiled_project_section::assign_files:
+        return 4;
+
     case compiled_project_section::assign_bytes:
     case compiled_project_section::source_paths:
         return 1;
@@ -1147,6 +1150,12 @@ compiled_project_view::bind(
                 compiled_project_section::
                     assign_bytes)];
 
+    const auto& assign_files =
+        candidate[
+            section_index(
+                compiled_project_section::
+                    assign_files)];
+
     const auto expected_string_index_count =
         index_capacity(
             string_count);
@@ -1239,6 +1248,8 @@ compiled_project_view::bind(
         graph_identity.count !=
             identity_count + 1 ||
         assign_records.count !=
+            assign_count ||
+        assign_files.count !=
             assign_count) {
 
         return compiled_project_image_result::
@@ -2915,6 +2926,41 @@ bool compiled_project_view::assign(
     return true;
 }
 
+bool compiled_project_view::assign_file(
+    std::size_t index,
+    file_id& output) const noexcept {
+
+    output = {};
+
+    const auto& values =
+        section(
+            compiled_project_section::
+                assign_files);
+
+    if (!valid() ||
+        index >= assign_count_value ||
+        index >= values.count) {
+
+        return false;
+    }
+
+    const file_id value{
+        read_u32(
+            values.data +
+                index * 4)};
+
+    if (!value ||
+        value.value() >
+            source_file_count()) {
+
+        return false;
+    }
+
+    output = value;
+    return true;
+}
+
+
 compiled_project_image_result
 compiled_project_view::verify_contents() const noexcept {
 
@@ -4432,6 +4478,7 @@ compiled_project_view::verify_contents() const noexcept {
 
         std::string_view source;
         std::string_view target;
+        file_id file;
 
         if (source_offset !=
                 expected_assign_offset ||
@@ -4443,7 +4490,25 @@ compiled_project_view::verify_contents() const noexcept {
             !assign(
                 index,
                 source,
-                target)) {
+                target) ||
+            !assign_file(
+                index,
+                file)) {
+
+            return compiled_project_image_result::
+                invalid_image;
+        }
+
+        std::string_view path;
+        file_kind kind;
+        source_map_range range;
+
+        if (!source_file(
+                file,
+                path,
+                kind,
+                range) ||
+            kind != file_kind::assign) {
 
             return compiled_project_image_result::
                 invalid_image;
@@ -4494,7 +4559,9 @@ prepare_compiled_project_layout(const string_table &strings,
         G.member_entries().size() !=
             G.member_construction_entries().size() ||
         G.object_entries().size() !=
-            G.object_identity_entries().size()) {
+            G.object_identity_entries().size() ||
+        assigns.records().size() !=
+            assigns.file_entries().size()) {
 
         return compiled_project_image_result::
             invalid_state;
@@ -4710,6 +4777,11 @@ prepare_compiled_project_layout(const string_table &strings,
             compiled_project_section::assign_bytes,
             1,
             assign_bytes_count,
+        },
+        {
+            compiled_project_section::assign_files,
+            4,
+            assign_count,
         },
         {compiled_project_section::source_contributions, 8, sources.contribution_entries().size()},
         {compiled_project_section::source_roots, 8, sources.root_entries().size()},
@@ -5035,6 +5107,10 @@ encode_compiled_project_image(const string_table &strings,
             assigns.size() ||
         assign_bytes_count !=
             assigns.byte_size() ||
+        count(
+            compiled_project_section::
+                assign_files) !=
+            assigns.file_entries().size() ||
         member_index_count !=
             index_capacity(
                 member_count)) {
@@ -6183,6 +6259,11 @@ encode_compiled_project_image(const string_table &strings,
                 compiled_project_section::
                     assign_bytes);
 
+        auto* files_out =
+            section_data(
+                compiled_project_section::
+                    assign_files);
+
         std::uint32_t byte_offset = 0;
         std::size_t index = 0;
 
@@ -6194,6 +6275,18 @@ encode_compiled_project_image(const string_table &strings,
 
             const auto target =
                 assigns.target(value);
+
+            const auto file =
+                assigns.file(index);
+
+            if (!file ||
+                file.value() > files.size() ||
+                files.kind(file) !=
+                    file_kind::assign) {
+
+                return compiled_project_image_result::
+                    invalid_state;
+            }
 
             auto* record =
                 records +
@@ -6235,6 +6328,11 @@ encode_compiled_project_image(const string_table &strings,
             byte_offset +=
                 static_cast<std::uint32_t>(
                     target.size());
+
+            write_u32(
+                files_out +
+                    index * 4,
+                file.value());
 
             ++index;
         }

@@ -379,6 +379,7 @@ private:
 
             const auto added =
                 output.add(
+                    file,
                     source,
                     target);
 

@@ -23,12 +23,12 @@
 
 namespace cw::server {
 
-inline constexpr std::uint32_t compiled_project_format_version = 10;
+inline constexpr std::uint32_t compiled_project_format_version = 11;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;
 
-inline constexpr std::size_t compiled_project_directory_count = 29;
+inline constexpr std::size_t compiled_project_directory_count = 30;
 
 inline constexpr std::size_t
 compiled_project_directory_entry_size = 32;
@@ -59,18 +59,19 @@ enum class compiled_project_section : std::uint32_t {
     graph_identity_index = 15,
     assign_records = 16,
     assign_bytes = 17,
-    source_contributions = 18,
-    source_roots = 19,
-    source_files = 20,
-    source_file_indices = 21,
-    source_paths = 22,
-    derived_index = 23,
-    link_target_index = 24,
-    endpoint_paths = 25,
-    endpoint_path_steps = 26,
-    endpoint_path_index = 27,
-    bases = 28,
-    member_name_index = 29,
+    assign_files = 18,
+    source_contributions = 19,
+    source_roots = 20,
+    source_files = 21,
+    source_file_indices = 22,
+    source_paths = 23,
+    derived_index = 24,
+    link_target_index = 25,
+    endpoint_paths = 26,
+    endpoint_path_steps = 27,
+    endpoint_path_index = 28,
+    bases = 29,
+    member_name_index = 30,
 };
 
 enum class compiled_project_image_result : std::uint8_t {
@@ -346,6 +347,10 @@ public:
         std::size_t index,
         std::string_view& source,
         std::string_view& target) const noexcept;
+
+    [[nodiscard]] bool assign_file(
+        std::size_t index,
+        file_id& output) const noexcept;
 
     [[nodiscard]] std::size_t source_file_count() const noexcept;
     [[nodiscard]] std::size_t source_contribution_count() const noexcept;

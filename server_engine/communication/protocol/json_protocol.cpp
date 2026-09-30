@@ -730,6 +730,96 @@ void append_response(
         output += "]}";
         break;
 
+    case server_response_payload_kind::runtime_link:
+        output += ",\"payload\":{\"objects\":[";
+
+        for (std::size_t index = 0;
+             index <
+                response.result.link.objects.size();
+             ++index) {
+
+            if (index != 0) {
+                output.push_back(',');
+            }
+
+            const auto& item =
+                response.result.link.objects[index];
+
+            output += "{\"object\":";
+            append_escaped(
+                item.object,
+                output);
+
+            output += ",\"links\":[";
+
+            for (std::size_t link = 0;
+                 link <
+                    item.links.size();
+                 ++link) {
+
+                if (link != 0) {
+                    output.push_back(',');
+                }
+
+                const auto& value =
+                    item.links[link];
+
+                output += "{\"source\":";
+                append_escaped(
+                    value.source,
+                    output);
+
+                output += ",\"target\":";
+                append_escaped(
+                    value.target,
+                    output);
+
+                output += ",\"file\":";
+                append_escaped(
+                    value.file,
+                    output);
+
+                output.push_back('}');
+            }
+
+            output += "],\"assigns\":[";
+
+            for (std::size_t assign = 0;
+                 assign <
+                    item.assigns.size();
+                 ++assign) {
+
+                if (assign != 0) {
+                    output.push_back(',');
+                }
+
+                const auto& value =
+                    item.assigns[assign];
+
+                output += "{\"source\":";
+                append_escaped(
+                    value.source,
+                    output);
+
+                output += ",\"target\":";
+                append_escaped(
+                    value.target,
+                    output);
+
+                output += ",\"file\":";
+                append_escaped(
+                    value.file,
+                    output);
+
+                output.push_back('}');
+            }
+
+            output += "]}";
+        }
+
+        output += "]}";
+        break;
+
     case server_response_payload_kind::runtime_value:
         output += ",\"payload\":{\"type\":";
         append_integer(
@@ -978,6 +1068,9 @@ json_decode_result decode_json_request(
             } else if (command == "GET_TYPE") {
                 request.kind =
                     server_request_kind::get_type;
+            } else if (command == "GET_LINK") {
+                request.kind =
+                    server_request_kind::get_link;
             } else if (command == "GET_VALUE") {
                 request.kind =
                     server_request_kind::get_value;
@@ -1118,6 +1211,7 @@ json_decode_result decode_json_request(
                 break;
 
             case server_request_kind::get_type:
+            case server_request_kind::get_link:
                 if (!only(
                         handler.seen,
                         objects_bit) ||

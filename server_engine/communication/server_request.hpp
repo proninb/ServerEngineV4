@@ -24,6 +24,7 @@ enum class server_request_kind {
     get_state,
     get_object,
     get_type,
+    get_link,
     get_value,
     snap_ic,
     reset_ic,
@@ -46,7 +47,7 @@ struct server_request {
     // Optional Runtime query type filter.
     std::string type;
 
-    // Batch object targets used by GET_TYPE.
+    // Batch object targets used by GET_TYPE and GET_LINK.
     std::vector<std::string> objects;
 
     snap_ic_options snap_options = snap_ic_options::none;

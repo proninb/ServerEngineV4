@@ -1518,15 +1518,31 @@ tests.expect(
         !success(
             tests,
             fixture.assigns.add(
+                file_id{5},
                 "sensor.value",
                 "ui.value"),
             "add first Assign") ||
         !success(
             tests,
             fixture.assigns.add(
+                file_id{5},
                 "source.path",
                 "target.path"),
-            "add second Assign")) {
+            "add second Assign") ||
+        !success(
+            tests,
+            fixture.assigns.add(
+                file_id{5},
+                "demo::right.value",
+                "demo::left.peer"),
+            "add object-member Assign") ||
+        !success(
+            tests,
+            fixture.assigns.add(
+                file_id{5},
+                "remote",
+                "demo::left"),
+            "add whole-object Assign")) {
 
         return false;
     }
@@ -1547,7 +1563,10 @@ tests.expect(
                  file_kind::header},
              std::pair{
                  "objects.source",
-                 file_kind::source}}) {
+                 file_kind::source},
+             std::pair{
+                 "wiring.assign",
+                 file_kind::assign}}) {
 
         file_id file;
 
@@ -2412,6 +2431,29 @@ void test_round_trip(
             assign_target ==
                 "target.path",
         "second raw Assign preservation");
+
+    file_id assign_file;
+
+    std::string_view assign_path;
+    file_kind assign_kind;
+    source_map_range assign_range;
+
+    tests.expect(
+        view.assign_file(
+            0,
+            assign_file) &&
+        assign_file ==
+            file_id{5} &&
+        view.source_file(
+            assign_file,
+            assign_path,
+            assign_kind,
+            assign_range) &&
+        assign_kind ==
+            file_kind::assign &&
+        assign_path.ends_with(
+            "wiring.assign"),
+        "Assign preserves physical file provenance");
 }
 
 void test_structural_corruption(
@@ -3062,6 +3104,123 @@ void test_runtime_type_query(
             result) ==
                 runtime_query_result::invalid_input,
         "GET_TYPE requires at least one object");
+}
+
+
+void test_runtime_link_query(
+    test_state& tests,
+    const compiled_test_image& image) {
+
+    compiled_project_view view;
+
+    if (!tests.expect(
+            view.bind(
+                image.bytes) ==
+                compiled_project_image_result::success,
+            "bind GET_LINK query image")) {
+
+        return;
+    }
+
+    const std::vector<std::string>
+        objects{
+            "demo::left",
+            "demo::right",
+            "demo::scalar",
+        };
+
+    runtime_link_query result;
+
+    if (!tests.expect(
+            get_runtime_link(
+                view,
+                objects,
+                result) ==
+                    runtime_query_result::success &&
+            result.objects.size() == 3,
+            "GET_LINK returns one result per object")) {
+
+        return;
+    }
+
+    tests.expect(
+        result.objects[0].object ==
+                "demo::left" &&
+        result.objects[0].links.size() == 1 &&
+        result.objects[0].links[0].source ==
+                "demo::left.value" &&
+        result.objects[0].links[0].target ==
+                "demo::right.peer" &&
+        std::string_view{
+            result.objects[0].links[0].file}.ends_with(
+                "objects.source"),
+        "GET_LINK returns all Graph links touching object");
+
+    tests.expect(
+        result.objects[1].object ==
+                "demo::right" &&
+        result.objects[1].links.size() == 1 &&
+        result.objects[1].links[0].source ==
+                "demo::left.value" &&
+        result.objects[1].links[0].target ==
+                "demo::right.peer",
+        "GET_LINK reports same Graph link for both participating objects");
+
+    tests.expect(
+        result.objects[0].assigns.size() == 2 &&
+        result.objects[0].assigns[0].source ==
+                "demo::right.value" &&
+        result.objects[0].assigns[0].target ==
+                "demo::left.peer" &&
+        result.objects[0].assigns[1].source ==
+                "remote" &&
+        result.objects[0].assigns[1].target ==
+                "demo::left" &&
+        std::string_view{
+            result.objects[0].assigns[0].file}.ends_with(
+                "wiring.assign") &&
+        std::string_view{
+            result.objects[0].assigns[1].file}.ends_with(
+                "wiring.assign"),
+        "GET_LINK associates raw Assign endpoints textually");
+
+    tests.expect(
+        result.objects[1].assigns.size() == 1 &&
+        result.objects[1].assigns[0].source ==
+                "demo::right.value" &&
+        result.objects[1].assigns[0].target ==
+                "demo::left.peer",
+        "GET_LINK associates Assign source object");
+
+    tests.expect(
+        result.objects[2].links.empty() &&
+        result.objects[2].assigns.empty(),
+        "GET_LINK returns empty collections for unconnected object");
+
+    const std::vector<std::string>
+        missing{
+            "demo::left",
+            "demo::missing",
+        };
+
+    tests.expect(
+        get_runtime_link(
+            view,
+            missing,
+            result) ==
+                runtime_query_result::not_found &&
+        result.objects.empty(),
+        "GET_LINK batch fails closed on missing object");
+
+    const std::vector<std::string> empty;
+
+    tests.expect(
+        get_runtime_link(
+            view,
+            empty,
+            result) ==
+                runtime_query_result::invalid_input,
+        "GET_LINK requires at least one object");
 }
 
 
@@ -8673,7 +8832,7 @@ void test_persisted_sources(test_state &tests, const compiled_test_image &image)
     std::string_view path;
     file_kind kind;
     tests.expect(
-        view.source_file_count() == 4 &&
+        view.source_file_count() == 5 &&
         view.source_contribution_count() == 6 &&
         view.source_root(
             file_id{1},
@@ -8883,6 +9042,10 @@ int main() {
             first);
 
         test_runtime_type_query(
+            tests,
+            first);
+
+        test_runtime_link_query(
             tests,
             first);
 

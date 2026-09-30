@@ -5,6 +5,7 @@
 namespace cw::server {
 
 server_status assign_table::add(
+    file_id file,
     std::string_view source_value,
     std::string_view target_value) noexcept {
 
@@ -40,6 +41,9 @@ server_status assign_table::add(
         entries.reserve(
             entries.size() + 1);
 
+        files.reserve(
+            files.size() + 1);
+
         bytes.reserve(
             bytes.size() +
             source_value.size() +
@@ -64,6 +68,9 @@ server_status assign_table::add(
                 target_value.size()),
         });
 
+        files.push_back(
+            file);
+
         return server_status::success;
     }
     catch (...) {
@@ -74,6 +81,7 @@ server_status assign_table::add(
 void assign_table::clear() noexcept {
 
     entries.clear();
+    files.clear();
     bytes.clear();
 }
 

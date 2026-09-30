@@ -641,6 +641,48 @@ int main() {
     }
 
     {
+        json_request request;
+
+        const auto decoded =
+            decode_json_request(
+                R"({"request_id":65,"command":"GET_LINK","arguments":{"objects":["demo::left","demo::right"]}})",
+                request);
+
+        if (!decoded.ok() ||
+            request.kind !=
+                json_request_kind::server) {
+
+            return 65;
+        }
+
+        const auto& server =
+            std::get<server_request>(
+                request.payload);
+
+        if (server.kind !=
+                server_request_kind::get_link ||
+            server.objects.size() != 2 ||
+            server.objects[0] !=
+                "demo::left" ||
+            server.objects[1] !=
+                "demo::right") {
+
+            return 66;
+        }
+    }
+
+    {
+        json_request request;
+
+        if (decode_json_request(
+                R"({"request_id":67,"command":"GET_LINK","arguments":{"objects":[]}})",
+                request).ok()) {
+
+            return 67;
+        }
+    }
+
+    {
         outbound_write message;
         message.connection_sequence = 30;
 
@@ -698,6 +740,67 @@ int main() {
                 std::string::npos) {
 
             return 64;
+        }
+    }
+
+    {
+        outbound_write message;
+        message.connection_sequence = 31;
+
+        server_response response;
+        response.status =
+            server_status::success;
+        response.payload =
+            server_response_payload_kind::
+                runtime_link;
+
+        runtime_object_links item;
+        item.object =
+            "demo::left";
+
+        item.links.push_back({
+            "demo::left.value",
+            "demo::right.peer",
+            "objects.source",
+        });
+
+        item.assigns.push_back({
+            "demo::right.value",
+            "demo::left.peer",
+            "wiring.assign",
+        });
+
+        response.link.objects.push_back(
+            std::move(item));
+
+        message.message.payload =
+            protocol_response{
+                request_id{68},
+                response,
+            };
+
+        std::string json;
+
+        if (!encode_json_outbound(
+                message,
+                json) ||
+            json.find(
+                R"("object":"demo::left")") ==
+                std::string::npos ||
+            json.find(
+                R"("links":[)") ==
+                std::string::npos ||
+            json.find(
+                R"("source":"demo::left.value","target":"demo::right.peer","file":"objects.source")") ==
+                std::string::npos ||
+            json.find(
+                R"("assigns":[)") ==
+                std::string::npos ||
+            json.find(
+                R"("source":"demo::right.value","target":"demo::left.peer","file":"wiring.assign")") ==
+                std::string::npos) {
+
+            return 68;
         }
     }
 
