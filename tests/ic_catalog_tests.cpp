@@ -200,6 +200,26 @@ int main() {
         return 18;
     }
 
+#ifdef _WIN32
+    {
+        ic_catalog invalid;
+        ic_catalog_entry invalid_entry;
+        invalid_entry.path =
+            std::filesystem::path{"C:relative.ic"};
+
+        invalid.items.push_back(
+            std::move(invalid_entry));
+
+        if (save_ic_catalog(
+                catalog_path,
+                invalid) !=
+            ic_catalog_result::invalid) {
+
+            return 19;
+        }
+    }
+#endif
+
     std::filesystem::remove_all(
         directory,
         error);

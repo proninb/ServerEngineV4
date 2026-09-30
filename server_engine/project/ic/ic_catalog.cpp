@@ -350,15 +350,21 @@ private:
                 return false;
             }
 
-            const auto left_path =
-                resolve_ic_path(
-                    catalog_path,
-                    entry.path);
+            std::filesystem::path left_locator;
+
+            if (!normalize_ic_path(
+                    entry.path,
+                    left_locator)) {
+
+                return false;
+            }
 
             filesystem_path_key left_key;
 
             if (make_filesystem_path_key(
-                    left_path,
+                    resolve_ic_path(
+                        catalog_path,
+                        left_locator),
                     left_key) != filesystem_path_result::success) {
 
                 return false;
@@ -370,15 +376,21 @@ private:
 
                 const auto& other = catalog.items[right];
 
-                const auto right_path =
-                    resolve_ic_path(
-                        catalog_path,
-                        other.path);
+                std::filesystem::path right_locator;
+
+                if (!normalize_ic_path(
+                        other.path,
+                        right_locator)) {
+
+                    return false;
+                }
 
                 filesystem_path_key right_key;
 
                 if (make_filesystem_path_key(
-                        right_path,
+                        resolve_ic_path(
+                            catalog_path,
+                            right_locator),
                         right_key) != filesystem_path_result::success) {
 
                     return false;
