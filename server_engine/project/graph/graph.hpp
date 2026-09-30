@@ -336,6 +336,17 @@ struct link_record final {
 static_assert(sizeof(link_record) == 16);
 static_assert(std::is_trivially_copyable_v<link_record>);
 
+// Canonical instance-specific initialization owned by one object subobject.
+// G retains only the final explicit init for a target; type/member defaults
+// remain independently stored in member_construction.
+struct object_initialization_record final {
+    object_endpoint target{};
+    construction_value value{};
+};
+
+static_assert(sizeof(object_initialization_record) == 24);
+static_assert(std::is_trivially_copyable_v<object_initialization_record>);
+
 // Owns one complete semantic G. Member construction is dense per member; object
 // construction is sparse cold storage addressed from the compact object state.
 class graph final {
@@ -372,6 +383,15 @@ public:
         object_endpoint source,
         object_endpoint target,
         link_handle& output) noexcept;
+
+    [[nodiscard]] server_status add_initialization(
+        object_endpoint target,
+        construction_value value,
+        bool& replaced) noexcept;
+
+    [[nodiscard]] bool initialization(
+        object_endpoint target,
+        object_initialization_record& output) const noexcept;
 
     [[nodiscard]] type_ref intrinsic(
         intrinsic_type type) const noexcept;
@@ -499,6 +519,10 @@ public:
         return links.size();
     }
 
+    [[nodiscard]] std::size_t initialization_count() const noexcept {
+        return object_initializations.size();
+    }
+
     [[nodiscard]] std::size_t derived_type_count() const noexcept {
         return derived_types.size();
     }
@@ -556,6 +580,11 @@ public:
         return links;
     }
 
+    [[nodiscard]] std::span<const object_initialization_record>
+    initialization_entries() const noexcept {
+        return object_initializations;
+    }
+
     [[nodiscard]] std::span<const derived_type_record>
     derived_type_entries() const noexcept {
         return derived_types;
@@ -593,7 +622,14 @@ private:
         link_handle link{};
     };
 
+    struct initialization_target_index_slot final {
+        std::uint64_t key = 0;
+        std::uint32_t position = 0;
+        std::uint32_t reserved = 0;
+    };
+
     static_assert(sizeof(derived_index_slot) == 8);
+    static_assert(sizeof(initialization_target_index_slot) == 16);
     static_assert(sizeof(endpoint_path_index_slot) == 8);
 
     [[nodiscard]] static std::uint32_t encode_location(
@@ -672,9 +708,23 @@ private:
     [[nodiscard]] link_handle find_link_target(
         object_endpoint target) const noexcept;
 
+    [[nodiscard]] server_status ensure_initialization_target_index_capacity(
+        std::size_t additional) noexcept;
+
+    void insert_initialization_target_index(
+        std::vector<initialization_target_index_slot>& target,
+        std::uint64_t key,
+        std::uint32_t position) const noexcept;
+
+    [[nodiscard]] std::uint32_t find_initialization_position(
+        object_endpoint target) const noexcept;
+
     [[nodiscard]] bool reference_binding_compatible(
         type_ref target,
         type_ref source) const noexcept;
+
+    [[nodiscard]] bool scalar_initialization_target(
+        type_ref type) const noexcept;
 
     [[nodiscard]] bool endpoint_type(
         object_endpoint endpoint,
@@ -697,6 +747,13 @@ private:
     std::vector<endpoint_path_index_slot> endpoint_path_index;
 
     std::vector<link_record> links;
+    std::vector<object_initialization_record>
+        object_initializations;
+
+    // Transient lookup used only while constructing canonical final G.
+    std::vector<initialization_target_index_slot>
+        initialization_target_index;
+    std::size_t initialization_target_index_count = 0;
 
     // Transient canonical lookup over the dense link array; not semantic payload.
     std::vector<link_target_index_slot> link_target_index;

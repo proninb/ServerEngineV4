@@ -23,6 +23,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace cw::server {
 namespace {
@@ -81,6 +82,51 @@ namespace {
         return server_status::io_error;
     }
 }
+
+[[nodiscard]] server_status emit_parser_warnings(
+    file_context& files,
+    const std::vector<parser_warning>& warnings,
+    operation_id operation,
+    diagnostic_collection& diagnostics) {
+
+    for (const auto& warning :
+         warnings) {
+
+        const diagnostic_descriptor* descriptor =
+            nullptr;
+
+        switch (warning.kind) {
+        case parser_warning_kind::
+                duplicate_initialization:
+            descriptor =
+                &diagnostics::
+                    project_duplicate_initialization;
+            break;
+        }
+
+        if (descriptor == nullptr) {
+            return server_status::
+                project_configuration_invalid;
+        }
+
+        const auto emitted =
+            emit_source_failure(
+                files,
+                warning.file,
+                warning.source,
+                *descriptor,
+                warning.detail,
+                operation,
+                diagnostics);
+
+        if (!succeeded(emitted)) {
+            return emitted;
+        }
+    }
+
+    return server_status::success;
+}
+
 
 enum class full_persistence_status : std::uint8_t {
     pending,
@@ -743,6 +789,8 @@ server_status construct_full_project(
         mode == full_construction_mode::rebuild);
 
     parser_failure semantic_failure;
+    std::vector<parser_warning>
+        semantic_warnings;
 
     const auto parsed =
         parse_semantic_project(
@@ -754,7 +802,19 @@ server_status construct_full_project(
             context.identities,
             context.G,
             context.sources,
-            &semantic_failure);
+            &semantic_failure,
+            &semantic_warnings);
+
+    const auto warnings_emitted =
+        emit_parser_warnings(
+            context.files,
+            semantic_warnings,
+            operation,
+            diagnostics);
+
+    if (!succeeded(warnings_emitted)) {
+        return warnings_emitted;
+    }
 
     if (!succeeded(parsed)) {
         if (semantic_failure.file) {

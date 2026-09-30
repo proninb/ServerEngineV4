@@ -121,7 +121,8 @@ public:
         identity_space& identities,
         graph& G,
         source_map& sources,
-        parser_failure* failure) noexcept
+        parser_failure* failure,
+        std::vector<parser_warning>* warnings) noexcept
         : files(files_value),
           input(
               files_value,
@@ -132,7 +133,8 @@ public:
           identities(identities),
           G(G),
           sources(sources),
-          failure(failure) {
+          failure(failure),
+          warnings(warnings) {
     }
 
     [[nodiscard]] server_status parse(
@@ -346,6 +348,30 @@ private:
         }
 
         return server_status::project_configuration_invalid;
+    }
+
+    [[nodiscard]] server_status warn_at(
+        parser_warning_kind kind,
+        std::string_view detail,
+        semantic_source_location location) noexcept {
+
+        if (warnings == nullptr) {
+            return server_status::success;
+        }
+
+        try {
+            warnings->push_back({
+                kind,
+                location.file,
+                location.source,
+                detail,
+            });
+
+            return server_status::success;
+        }
+        catch (...) {
+            return server_status::io_error;
+        }
     }
 
     [[nodiscard]] bool reference_referent(
@@ -3741,16 +3767,16 @@ private:
         return server_status::success;
     }
 
-    [[nodiscard]] server_status parse_link(
+    [[nodiscard]] server_status parse_source_assignment(
         identity_ref scope) noexcept {
 
         if (domain != semantic_domain::source) {
             return fail(
                 parser_failure_kind::unsupported,
-                "Static Project links are supported only in Source inputs");
+                "Source assignments are supported only in Source inputs");
         }
 
-        const auto link_file =
+        const auto statement_file =
             current.file;
 
         resolved_link_endpoint target;
@@ -3767,23 +3793,13 @@ private:
         status =
             expect(
                 token_kind::assign,
-                "Expected '=' between link endpoints");
+                "Expected '=' after Source target endpoint");
 
         if (!succeeded(status)) {
             return status;
         }
 
         status = advance();
-        if (!succeeded(status)) {
-            return status;
-        }
-
-        resolved_link_endpoint source;
-
-        status =
-            endpoint(
-                scope,
-                source);
 
         if (!succeeded(status)) {
             return status;
@@ -3791,57 +3807,156 @@ private:
 
         type_ref target_referent;
 
-        if (!reference_referent(
+        if (reference_referent(
                 target.type,
                 target_referent)) {
 
-            return fail_at(
-                parser_failure_kind::semantic,
-                "Link target member must be a reference",
-                target.location);
+            resolved_link_endpoint source;
+
+            status =
+                endpoint(
+                    scope,
+                    source);
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            if (!reference_binding_compatible(
+                    target.type,
+                    source.type)) {
+
+                return fail_at(
+                    parser_failure_kind::semantic,
+                    "Link source type does not match target reference type",
+                    source.location);
+            }
+
+            status =
+                expect(
+                    token_kind::semicolon,
+                    "Expected ';' after link");
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            link_handle link;
+
+            status =
+                G.add_link(
+                    source.endpoint,
+                    target.endpoint,
+                    link);
+
+            if (!succeeded(status)) {
+                return fail(
+                    parser_failure_kind::semantic,
+                    "Link conflicts with an existing binding for the target endpoint");
+            }
+
+            status =
+                sources.add(
+                    statement_file,
+                    source_data_ref::link(
+                        link));
+
+            if (!succeeded(status)) {
+                return status;
+            }
+
+            return advance();
         }
 
-        if (!reference_binding_compatible(
+        if (at(token_kind::identifier) ||
+            at(token_kind::kw_this)) {
+
+            return fail(
+                parser_failure_kind::unsupported,
+                "Source value initialization requires a scalar constant");
+        }
+
+        pending_construction initial;
+
+        status =
+            parse_construction_atom(
                 target.type,
-                source.type)) {
+                false,
+                initial);
+
+        if (!succeeded(status)) {
+            return status;
+        }
+
+        if (initial.kind !=
+                pending_construction_kind::value ||
+            !construction_compatible(
+                G,
+                target.type,
+                initial.value)) {
 
             return fail_at(
                 parser_failure_kind::semantic,
-                "Link source type does not match target reference type",
-                source.location);
+                "Source value initializer is not compatible with target type",
+                initial.location);
         }
 
         status =
             expect(
                 token_kind::semicolon,
-                "Expected ';' after link");
+                "Expected ';' after Source value initialization");
 
         if (!succeeded(status)) {
             return status;
         }
 
-        link_handle link;
+        bool replaced = false;
 
         status =
-            G.add_link(
-                source.endpoint,
+            G.add_initialization(
                 target.endpoint,
-                link);
+                initial.value,
+                replaced);
 
         if (!succeeded(status)) {
-            return fail(
+            return fail_at(
                 parser_failure_kind::semantic,
-                "Link conflicts with an existing binding for the target endpoint");
+                "Source value initialization target must be a writable scalar non-reference subobject",
+                target.location);
+        }
+
+        const auto object_identity =
+            G.identity(
+                target.endpoint.object);
+
+        if (!object_identity) {
+            return fail_at(
+                parser_failure_kind::semantic,
+                "Source value initialization object has no semantic identity",
+                target.location);
         }
 
         status =
             sources.add(
-                link_file,
-                source_data_ref::link(
-                    link));
+                statement_file,
+                source_data_ref::object(
+                    object_identity));
 
         if (!succeeded(status)) {
             return status;
+        }
+
+        if (replaced) {
+            status =
+                warn_at(
+                    parser_warning_kind::
+                        duplicate_initialization,
+                    "Object member is initialized more than once; the last initialization is used",
+                    target.location);
+
+            if (!succeeded(status)) {
+                return status;
+            }
         }
 
         return advance();
@@ -3908,7 +4023,8 @@ private:
                     current.identifier)) {
 
                 const auto status =
-                    parse_link(scope);
+                    parse_source_assignment(
+                        scope);
 
                 if (!succeeded(status)) {
                     return status;
@@ -3945,6 +4061,7 @@ private:
     graph& G;
     source_map& sources;
     parser_failure* failure = nullptr;
+    std::vector<parser_warning>* warnings = nullptr;
     semantic_domain domain =
         semantic_domain::header;
     file_id semantic_root{};
@@ -3974,10 +4091,15 @@ server_status parse_semantic_project(
     identity_space& identities,
     graph& G,
     source_map& sources,
-    parser_failure* failure) noexcept {
+    parser_failure* failure,
+    std::vector<parser_warning>* warnings) noexcept {
 
     if (failure != nullptr) {
         *failure = {};
+    }
+
+    if (warnings != nullptr) {
+        warnings->clear();
     }
 
     if (frontend_root_count >
@@ -4002,7 +4124,8 @@ server_status parse_semantic_project(
         identities,
         G,
         sources,
-        failure};
+        failure,
+        warnings};
 
     for (const auto domain :
          {semantic_domain::header,

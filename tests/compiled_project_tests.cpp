@@ -2687,6 +2687,299 @@ void test_direct_mmap_encoding(
 
 
 
+void test_object_initialization_persistence_runtime(
+    test_state& tests) {
+
+    compiled_fixture fixture;
+
+    if (!build_fixture(
+            tests,
+            fixture)) {
+
+        return;
+    }
+
+    bool replaced = false;
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.add_initialization(
+                    {
+                        fixture.left,
+                        endpoint_ref{
+                            fixture.value_member},
+                    },
+                    construction_value::constant(
+                        construction_kind::
+                            signed_integer,
+                        55),
+                    replaced)) &&
+            !replaced,
+            "add first canonical object initialization")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            succeeded(
+                fixture.G.add_initialization(
+                    {
+                        fixture.left,
+                        endpoint_ref{
+                            fixture.value_member},
+                    },
+                    construction_value::constant(
+                        construction_kind::
+                            signed_integer,
+                        91),
+                    replaced)) &&
+            replaced &&
+            fixture.G.initialization_count() == 1,
+            "last object initialization replaces canonical value")) {
+
+        return;
+    }
+
+    compiled_test_image image;
+
+    if (!tests.expect(
+            build_test_compiled_image(
+                fixture,
+                image) ==
+                compiled_project_image_result::success,
+            "persist canonical object initialization")) {
+
+        return;
+    }
+
+    compiled_project_view view;
+
+    if (!tests.expect(
+            view.bind(
+                image.bytes) ==
+                compiled_project_image_result::success &&
+            view.verify_contents() ==
+                compiled_project_image_result::success &&
+            view.initialization_count() == 1,
+            "bind and audit persisted object initialization")) {
+
+        return;
+    }
+
+    object_initialization_record persisted;
+
+    const object_endpoint target{
+        fixture.left,
+        endpoint_ref{
+            fixture.value_member},
+    };
+
+    if (!tests.expect(
+            view.initialization(
+                target,
+                persisted) &&
+            persisted.target ==
+                target &&
+            persisted.value.kind ==
+                construction_kind::
+                    signed_integer &&
+            persisted.value.bits() == 91,
+            "compiled mmap exposes canonical final object init")) {
+
+        return;
+    }
+
+    {
+        auto corrupted =
+            image.bytes;
+
+        const auto offset =
+            section_offset(
+                corrupted,
+                compiled_project_section::
+                    object_initializations);
+
+        write_u32(
+            corrupted.data() +
+                offset,
+            0);
+
+        rewrite_section_crc(
+            corrupted,
+            compiled_project_section::
+                object_initializations);
+
+        compiled_project_view corrupted_view;
+
+        tests.expect(
+            corrupted_view.bind(
+                corrupted) ==
+                    compiled_project_image_result::
+                        success &&
+            corrupted_view.verify_contents() ==
+                    compiled_project_image_result::
+                        invalid_image,
+            "cold audit rejects invalid object initialization target");
+    }
+
+    {
+        auto corrupted =
+            image.bytes;
+
+        const auto section =
+            compiled_project_section::
+                object_initialization_target_index;
+
+        const auto directory_index =
+            section_directory_index(
+                section);
+
+        const auto* directory_entry =
+            corrupted.data() +
+            directory_offset +
+            directory_index *
+                compiled_project_directory_entry_size;
+
+        const auto count =
+            read_u64(
+                directory_entry + 16);
+
+        const auto offset =
+            section_offset(
+                corrupted,
+                section);
+
+        bool changed = false;
+
+        for (std::uint64_t index = 0;
+             index < count;
+             ++index) {
+
+            auto* slot =
+                corrupted.data() +
+                offset +
+                static_cast<std::size_t>(
+                    index) * 8;
+
+            if (read_u32(
+                    slot + 4) == 0) {
+
+                continue;
+            }
+
+            write_u32(
+                slot,
+                read_u32(slot) ^
+                    0x00000001u);
+
+            changed = true;
+            break;
+        }
+
+        if (!tests.expect(
+                changed,
+                "find persisted object initialization index slot")) {
+
+            return;
+        }
+
+        rewrite_section_crc(
+            corrupted,
+            section);
+
+        compiled_project_view corrupted_view;
+
+        tests.expect(
+            corrupted_view.bind(
+                corrupted) ==
+                    compiled_project_image_result::
+                        success &&
+            corrupted_view.verify_contents() ==
+                    compiled_project_image_result::
+                        invalid_image,
+            "cold audit rejects object initialization target-index corruption");
+    }
+
+#if defined(_WIN32)
+    const server_abi_configuration abi{
+        abi_target::windows_x64,
+        8,
+    };
+#else
+    const server_abi_configuration abi{
+        abi_target::posix_x64,
+        8,
+    };
+#endif
+
+    runtime_layout layout;
+
+    if (!tests.expect(
+            prepare_runtime_layout(
+                view,
+                abi,
+                layout) ==
+                runtime_layout_result::success,
+            "prepare Runtime layout with object init")) {
+
+        return;
+    }
+
+    std::vector<std::byte> runtime(
+        static_cast<std::size_t>(
+            layout.size()),
+        std::byte{0xcc});
+
+    if (!tests.expect(
+            materialize_fixed_direct(
+                view,
+                layout,
+                abi,
+                runtime) ==
+                fixed_direct_materialization_result::
+                    success,
+            "materialize default init link order")) {
+
+        return;
+    }
+
+    runtime_binding_index bindings;
+
+    if (!tests.expect(
+            layout.release_bindings(
+                bindings),
+            "release object-init Runtime bindings")) {
+
+        return;
+    }
+
+    runtime_value left;
+    runtime_value peer;
+
+    tests.expect(
+        get_runtime_value(
+            view,
+            bindings,
+            runtime,
+            "demo::left.value",
+            left) ==
+                runtime_query_result::success &&
+        left.bits == 91,
+        "object init overrides type member default");
+
+    tests.expect(
+        get_runtime_value(
+            view,
+            bindings,
+            runtime,
+            "demo::right.peer",
+            peer) ==
+                runtime_query_result::success &&
+        peer.bits == 91,
+        "reference link observes final initialized value");
+}
+
+
 void test_runtime_query(
     test_state& tests,
     const compiled_test_image& image) {
@@ -9123,6 +9416,9 @@ int main() {
         }
 
         test_source_map_provenance(tests, fixture);
+
+        test_object_initialization_persistence_runtime(
+            tests);
 
         compiled_test_image first;
         compiled_test_image second;

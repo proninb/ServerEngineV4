@@ -322,16 +322,6 @@ public:
             return links_marked;
         }
 
-        const auto links_materialized =
-            materialize_links();
-
-        if (links_materialized !=
-            fixed_direct_materialization_result::
-                success) {
-
-            return links_materialized;
-        }
-
         for (std::size_t index = 0;
              index <
                  project.object_count();
@@ -383,6 +373,26 @@ public:
 
                 return materialized;
             }
+        }
+
+        const auto initialized =
+            apply_object_initializations();
+
+        if (initialized !=
+            fixed_direct_materialization_result::
+                success) {
+
+            return initialized;
+        }
+
+        const auto links_materialized =
+            materialize_links();
+
+        if (links_materialized !=
+            fixed_direct_materialization_result::
+                success) {
+
+            return links_materialized;
         }
 
         return fixed_direct_materialization_result::
@@ -1724,6 +1734,8 @@ private:
                 }
 
                 if (runtime_address(
+                        stored) ||
+                    is_pending_link(
                         stored)) {
 
                     continue;
@@ -1883,6 +1895,8 @@ private:
                 }
 
                 if (runtime_address(
+                        stored) ||
+                    is_pending_link(
                         stored)) {
 
                     continue;
@@ -3818,6 +3832,150 @@ private:
             next.local,
             next.slot,
             output);
+    }
+
+    [[nodiscard]] bool endpoint_value_type(
+        object_endpoint endpoint,
+        type_ref& output) const noexcept {
+
+        output = {};
+
+        object_entry object;
+
+        if (!endpoint.object ||
+            !endpoint.member ||
+            !project.object(
+                endpoint.object,
+                object)) {
+
+            return false;
+        }
+
+        if (endpoint.member.is_path()) {
+            endpoint_path_record path;
+
+            if (!project.endpoint_path(
+                    endpoint.member.path(),
+                    path) ||
+                path.root_type !=
+                    object.type) {
+
+                return false;
+            }
+
+            output =
+                path.value_type;
+
+            return static_cast<bool>(
+                output);
+        }
+
+        type_handle record;
+
+        if (!record_type(
+                object.type,
+                record)) {
+
+            return false;
+        }
+
+        member_record member;
+
+        if (!project.member(
+                record,
+                endpoint.member.direct_member(),
+                member)) {
+
+            return false;
+        }
+
+        output =
+            member.type;
+
+        return static_cast<bool>(
+            output);
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    apply_object_initializations() noexcept {
+
+        for (std::size_t index = 0;
+             index <
+                 project.initialization_count();
+             ++index) {
+
+            object_initialization_record initialization;
+
+            if (!project.initialization_at(
+                    index,
+                    initialization)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            reference_state next;
+            bool reference = false;
+            std::uint64_t target_address_value = 0;
+
+            const auto resolved =
+                endpoint_reference_or_value(
+                    initialization.target,
+                    next,
+                    reference,
+                    target_address_value);
+
+            if (resolved !=
+                    fixed_direct_materialization_result::
+                        success ||
+                reference ||
+                !runtime_address(
+                    target_address_value)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            type_ref target_type;
+
+            if (!endpoint_value_type(
+                    initialization.target,
+                    target_type)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            const auto offset =
+                target_address_value -
+                target_base_address;
+
+            auto* target =
+                address(
+                    offset);
+
+            if (target == nullptr) {
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            const auto materialized =
+                normal_value(
+                    target_type,
+                    initialization.value,
+                    target,
+                    {});
+
+            if (materialized !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return materialized;
+            }
+        }
+
+        return fixed_direct_materialization_result::
+            success;
     }
 
     [[nodiscard]] fixed_direct_materialization_result

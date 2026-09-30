@@ -23,12 +23,12 @@
 
 namespace cw::server {
 
-inline constexpr std::uint32_t compiled_project_format_version = 11;
+inline constexpr std::uint32_t compiled_project_format_version = 12;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;
 
-inline constexpr std::size_t compiled_project_directory_count = 30;
+inline constexpr std::size_t compiled_project_directory_count = 32;
 
 inline constexpr std::size_t
 compiled_project_directory_entry_size = 32;
@@ -72,6 +72,8 @@ enum class compiled_project_section : std::uint32_t {
     endpoint_path_index = 28,
     bases = 29,
     member_name_index = 30,
+    object_initializations = 31,
+    object_initialization_target_index = 32,
 };
 
 enum class compiled_project_image_result : std::uint8_t {
@@ -191,6 +193,13 @@ public:
 
     [[nodiscard]] std::size_t link_count() const noexcept {
         return link_count_value;
+    }
+
+    [[nodiscard]] std::size_t initialization_count() const noexcept {
+        return static_cast<std::size_t>(
+            section(
+                compiled_project_section::
+                    object_initializations).count);
     }
 
     [[nodiscard]] std::size_t assign_count() const noexcept {
@@ -334,6 +343,15 @@ public:
         link_handle handle,
         link_record& output) const noexcept;
 
+    [[nodiscard]] bool initialization_at(
+        std::size_t index,
+        object_initialization_record& output) const noexcept;
+
+    // O(1) lookup of the canonical final init for one object subobject.
+    [[nodiscard]] bool initialization(
+        object_endpoint target,
+        object_initialization_record& output) const noexcept;
+
     // Persisted O(1) target ownership lookup. Graph link semantics require one
     // binding per target endpoint, so sparse BUILD must not scan all OLD links.
     [[nodiscard]] link_handle find_link_target(
@@ -377,6 +395,9 @@ public:
 
     [[nodiscard]] std::span<const std::byte> section_bytes(
         compiled_project_section kind) const noexcept;
+
+    [[nodiscard]] std::size_t initialization_position(
+        object_endpoint target) const noexcept;
 
     [[nodiscard]] string_id string_from_raw(
         std::uint32_t value) const noexcept;

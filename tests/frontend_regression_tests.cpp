@@ -1141,6 +1141,354 @@ void test_header_static_constructor_binding(
 }
 
 
+void test_source_value_initialization(
+    test_state& tests) {
+
+    const temporary_source header{
+        "source_value_initialization_header",
+        "struct T { int param; int& in; int out; };\n"};
+
+    const temporary_source source{
+        "source_value_initialization_source",
+        "T a;\n"
+        "T b;\n"
+        "a.param = 5;\n"
+        "a.in = b.out;\n"};
+
+    file_context files;
+    lexical_generation lexical;
+
+    file_id header_id;
+    file_id source_id;
+
+    if (!tests.expect(
+            succeeded(
+                files.resolve(
+                    header.path(),
+                    file_kind::header,
+                    header_id)) &&
+            succeeded(
+                files.resolve(
+                    source.path(),
+                    file_kind::source,
+                    source_id)),
+            "resolve Source value initialization roots")) {
+
+        return;
+    }
+
+    const std::array<file_id, 2> roots{
+        header_id,
+        source_id};
+
+    if (!prepare_all_roots(
+            tests,
+            files,
+            lexical,
+            roots)) {
+
+        return;
+    }
+
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    preprocessor_configuration configuration;
+    parser_failure failure;
+
+    if (!tests.expect(
+            succeeded(
+                parse_semantic_project(
+                    files,
+                    lexical,
+                    roots.size(),
+                    configuration,
+                    strings,
+                    identities,
+                    G,
+                    sources,
+                    &failure)),
+            "parse Source scalar initialization and reference link")) {
+
+        return;
+    }
+
+    const auto a =
+        G.find_object(
+            identities.find(
+                identities.root(),
+                strings.find("a"),
+                identity_kind::object));
+
+    const auto type =
+        G.find_type(
+            identities.find(
+                identities.root(),
+                strings.find("T"),
+                identity_kind::type));
+
+    const auto param =
+        G.find_member(
+            type,
+            strings.find("param"));
+
+    const auto initializations =
+        G.initialization_entries();
+
+    tests.expect(
+        a &&
+        param &&
+        initializations.size() == 1 &&
+        initializations[0].target.object == a &&
+        initializations[0].target.member ==
+            endpoint_ref{param} &&
+        initializations[0].value.kind ==
+            construction_kind::unsigned_integer &&
+        initializations[0].value.bits() == 5 &&
+        G.link_count() == 1,
+        "Source keeps scalar initialization separate from reference link");
+
+    const temporary_source invalid_source{
+        "source_value_copy_rejected",
+        "T a;\n"
+        "T b;\n"
+        "a.param = b.out;\n"};
+
+    file_context invalid_files;
+    lexical_generation invalid_lexical;
+
+    file_id invalid_header_id;
+    file_id invalid_source_id;
+
+    if (!tests.expect(
+            succeeded(
+                invalid_files.resolve(
+                    header.path(),
+                    file_kind::header,
+                    invalid_header_id)) &&
+            succeeded(
+                invalid_files.resolve(
+                    invalid_source.path(),
+                    file_kind::source,
+                    invalid_source_id)),
+            "resolve invalid Source value-copy roots")) {
+
+        return;
+    }
+
+    const std::array<file_id, 2> invalid_roots{
+        invalid_header_id,
+        invalid_source_id};
+
+    if (!prepare_all_roots(
+            tests,
+            invalid_files,
+            invalid_lexical,
+            invalid_roots)) {
+
+        return;
+    }
+
+    string_table invalid_strings;
+    identity_space invalid_identities{
+        invalid_strings};
+    graph invalid_G;
+    source_map invalid_sources;
+    preprocessor_configuration
+        invalid_configuration;
+    parser_failure invalid_failure;
+
+    const auto invalid_status =
+        parse_semantic_project(
+            invalid_files,
+            invalid_lexical,
+            invalid_roots.size(),
+            invalid_configuration,
+            invalid_strings,
+            invalid_identities,
+            invalid_G,
+            invalid_sources,
+            &invalid_failure);
+
+    tests.expect(
+        invalid_status ==
+            server_status::
+                project_configuration_invalid &&
+        invalid_failure.kind ==
+            parser_failure_kind::unsupported &&
+        invalid_G.initialization_count() == 0,
+        "Source rejects value-to-value assignment");
+}
+
+
+void test_source_value_initialization_last_wins(
+    test_state& tests) {
+
+    const temporary_source header{
+        "source_value_last_wins_header",
+        "struct T { int param = 1; };\n"};
+
+    const std::string first_text{
+        "T a;\n"
+        "a.param = 5;\n"};
+
+    const std::string second_text{
+        "a.param = 7;\n"};
+
+    const temporary_source first{
+        "source_value_last_wins_first",
+        first_text};
+
+    const temporary_source second{
+        "source_value_last_wins_second",
+        second_text};
+
+    file_context files;
+    lexical_generation lexical;
+
+    file_id header_id;
+    file_id first_id;
+    file_id second_id;
+
+    if (!tests.expect(
+            succeeded(
+                files.resolve(
+                    header.path(),
+                    file_kind::header,
+                    header_id)) &&
+            succeeded(
+                files.resolve(
+                    first.path(),
+                    file_kind::source,
+                    first_id)) &&
+            succeeded(
+                files.resolve(
+                    second.path(),
+                    file_kind::source,
+                    second_id)),
+            "resolve Source last-wins initialization roots")) {
+
+        return;
+    }
+
+    const std::array<file_id, 3> roots{
+        header_id,
+        first_id,
+        second_id};
+
+    if (!prepare_all_roots(
+            tests,
+            files,
+            lexical,
+            roots)) {
+
+        return;
+    }
+
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    preprocessor_configuration configuration;
+    parser_failure failure;
+    std::vector<parser_warning> warnings;
+
+    if (!tests.expect(
+            succeeded(
+                parse_semantic_project(
+                    files,
+                    lexical,
+                    roots.size(),
+                    configuration,
+                    strings,
+                    identities,
+                    G,
+                    sources,
+                    &failure,
+                    &warnings)),
+            "parse Source last-wins initialization")) {
+
+        return;
+    }
+
+    const auto type =
+        G.find_type(
+            identities.find(
+                identities.root(),
+                strings.find("T"),
+                identity_kind::type));
+
+    const auto object_identity =
+        identities.find(
+            identities.root(),
+            strings.find("a"),
+            identity_kind::object);
+
+    const auto object =
+        G.find_object(
+            object_identity);
+
+    const auto member =
+        G.find_member(
+            type,
+            strings.find("param"));
+
+    const auto* default_value =
+        G.construction(
+            type,
+            member);
+
+    object_initialization_record init;
+
+    const bool has_init =
+        G.initialization(
+            {
+                object,
+                endpoint_ref{member},
+            },
+            init);
+
+    tests.expect(
+        default_value != nullptr &&
+        default_value->kind ==
+            construction_kind::unsigned_integer &&
+        default_value->bits() == 1 &&
+        has_init &&
+        init.value.kind ==
+            construction_kind::unsigned_integer &&
+        init.value.bits() == 7 &&
+        G.initialization_count() == 1,
+        "type default and object init remain distinct; last init wins");
+
+    tests.expect(
+        warnings.size() == 1 &&
+        warnings[0].kind ==
+            parser_warning_kind::
+                duplicate_initialization &&
+        warnings[0].file ==
+            second_id &&
+        warnings[0].source.offset ==
+            second_text.find("param") &&
+        warnings[0].source.length == 5,
+        "duplicate object init emits warning at replacing target");
+
+    const auto second_contributions =
+        sources.root(
+            second_id);
+
+    tests.expect(
+        second_contributions.size() == 1 &&
+        second_contributions[0].file ==
+            second_id &&
+        second_contributions[0].data.kind() ==
+            source_data_kind::object &&
+        second_contributions[0].data.slot() ==
+            object_identity.slot(),
+        "object init is provenance of its owning object");
+}
+
+
 void test_source_link_semantic_dependencies(
     test_state& tests) {
 
@@ -2447,14 +2795,14 @@ void test_semantic_type_diagnostics(
             status ==
                 server_status::project_configuration_invalid &&
             failure.kind ==
-                parser_failure_kind::semantic &&
+                parser_failure_kind::unsupported &&
             failure.file == source_id &&
             failure.source.offset ==
-                source_text.find("value") &&
-            failure.source.length == 5 &&
+                source_text.find("y.value") &&
+            failure.source.length == 1 &&
             failure.detail ==
-                "Link target member must be a reference",
-            "link target must be a native reference");
+                "Source value initialization requires a scalar constant",
+            "Source value initialization rejects value-to-value copy");
     }
 }
 
@@ -2543,6 +2891,12 @@ int main() {
         test_record_scratch_isolation(tests);
 
         test_class_abi_semantics(
+            tests);
+
+        test_source_value_initialization(
+            tests);
+
+        test_source_value_initialization_last_wins(
             tests);
 
         test_source_link_semantic_dependencies(

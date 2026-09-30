@@ -2052,6 +2052,163 @@ link_handle graph::find_link_target(
     return {};
 }
 
+server_status graph::ensure_initialization_target_index_capacity(
+    std::size_t additional) noexcept {
+
+    if (additional >
+        (std::numeric_limits<std::size_t>::max)() -
+            initialization_target_index_count) {
+
+        return server_status::io_error;
+    }
+
+    const auto required =
+        initialization_target_index_count +
+        additional;
+
+    if (!initialization_target_index.empty() &&
+        required <=
+            initialization_target_index.size() / 2) {
+
+        return server_status::success;
+    }
+
+    const auto capacity =
+        next_index_capacity(
+            required);
+
+    if (capacity == 0) {
+        return server_status::io_error;
+    }
+
+    try {
+        std::vector<initialization_target_index_slot>
+            candidate(
+                capacity);
+
+        for (const auto& value :
+             initialization_target_index) {
+
+            if (value.key != 0) {
+                insert_initialization_target_index(
+                    candidate,
+                    value.key,
+                    value.position);
+            }
+        }
+
+        initialization_target_index =
+            std::move(candidate);
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
+void graph::insert_initialization_target_index(
+    std::vector<initialization_target_index_slot>& target,
+    std::uint64_t key,
+    std::uint32_t position) const noexcept {
+
+    const auto mask =
+        target.size() - 1;
+
+    auto index =
+        static_cast<std::size_t>(
+            mix64(key)) &
+        mask;
+
+    while (target[index].key != 0) {
+        index =
+            (index + 1) &
+            mask;
+    }
+
+    target[index] = {
+        key,
+        position,
+        0,
+    };
+}
+
+std::uint32_t graph::find_initialization_position(
+    object_endpoint target) const noexcept {
+
+    const auto key =
+        link_target_key(
+            target);
+
+    if (key == 0 ||
+        initialization_target_index.empty()) {
+
+        return 0;
+    }
+
+    const auto mask =
+        initialization_target_index.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            mix64(key)) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe <
+             initialization_target_index.size();
+         ++probe) {
+
+        const auto& slot =
+            initialization_target_index[
+                position];
+
+        if (slot.key == 0) {
+            return 0;
+        }
+
+        if (slot.key == key) {
+            return slot.position;
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return 0;
+}
+
+bool graph::initialization(
+    object_endpoint target,
+    object_initialization_record& output) const noexcept {
+
+    output = {};
+
+    const auto position =
+        find_initialization_position(
+            target);
+
+    if (position == 0 ||
+        position >
+            object_initializations.size()) {
+
+        return false;
+    }
+
+    const auto& value =
+        object_initializations[
+            position - 1];
+
+    if (value.target != target) {
+        return false;
+    }
+
+    output = value;
+    return true;
+}
+
+
 bool graph::reference_binding_compatible(
     type_ref target,
     type_ref source) const noexcept {
@@ -2085,6 +2242,61 @@ bool graph::reference_binding_compatible(
     return target_type.child ==
         source;
 }
+
+bool graph::scalar_initialization_target(
+    type_ref type) const noexcept {
+
+    derived_type_record derived_value;
+
+    for (;;) {
+        if (!derived(
+                type,
+                derived_value)) {
+
+            break;
+        }
+
+        if (derived_value.kind ==
+            derived_type_kind::const_qualified) {
+
+            return false;
+        }
+
+        if (derived_value.kind ==
+            derived_type_kind::volatile_qualified) {
+
+            type =
+                derived_value.child;
+            continue;
+        }
+
+        break;
+    }
+
+    if (type.kind() ==
+        type_ref_kind::intrinsic) {
+
+        const auto intrinsic =
+            static_cast<intrinsic_type>(
+                type.payload());
+
+        return intrinsic >
+                intrinsic_type::none &&
+            intrinsic <=
+                intrinsic_type::nullptr_type &&
+            intrinsic !=
+                intrinsic_type::void_type;
+    }
+
+    return type.kind() ==
+            type_ref_kind::derived &&
+        derived(
+            type,
+            derived_value) &&
+        derived_value.kind ==
+            derived_type_kind::pointer;
+}
+
 
 bool graph::endpoint_type(
     object_endpoint endpoint,
@@ -2164,6 +2376,112 @@ bool graph::endpoint_type(
     output = value->type;
     return static_cast<bool>(output);
 }
+
+server_status graph::add_initialization(
+    object_endpoint target,
+    construction_value value,
+    bool& replaced) noexcept {
+
+    replaced = false;
+
+    type_ref target_type;
+
+    if (!endpoint_type(
+            target,
+            target_type) ||
+        !scalar_initialization_target(
+            target_type) ||
+        !valid_construction(
+            value) ||
+        value.kind ==
+            construction_kind::member_binding ||
+        value.kind ==
+            construction_kind::object_binding ||
+        value.kind ==
+            construction_kind::unsupported ||
+        !construction_compatible(
+            *this,
+            target_type,
+            value)) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    const auto key =
+        link_target_key(
+            target);
+
+    if (key == 0) {
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    const auto existing =
+        find_initialization_position(
+            target);
+
+    if (existing != 0) {
+        if (existing >
+            object_initializations.size()) {
+
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        auto& current =
+            object_initializations[
+                existing - 1];
+
+        if (current.target != target) {
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        current.value = value;
+        replaced = true;
+
+        return server_status::success;
+    }
+
+    if (object_initializations.size() >=
+        (std::numeric_limits<std::uint32_t>::max)()) {
+
+        return server_status::io_error;
+    }
+
+    const auto prepared =
+        ensure_initialization_target_index_capacity(
+            1);
+
+    if (!succeeded(prepared)) {
+        return prepared;
+    }
+
+    try {
+        object_initializations.push_back({
+            target,
+            value,
+        });
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+
+    const auto position =
+        static_cast<std::uint32_t>(
+            object_initializations.size());
+
+    insert_initialization_target_index(
+        initialization_target_index,
+        key,
+        position);
+
+    ++initialization_target_index_count;
+
+    return server_status::success;
+}
+
 
 server_status graph::add_link(
     object_endpoint source,

@@ -61,6 +61,7 @@ constexpr std::uint32_t derived_record_size = 16;
 constexpr std::uint32_t object_record_size = 8;
 constexpr std::uint32_t object_identity_size = 4;
 constexpr std::uint32_t link_record_size = 16;
+constexpr std::uint32_t object_initialization_record_size = 24;
 constexpr std::uint32_t endpoint_path_record_size = 16;
 constexpr std::uint32_t endpoint_path_step_record_size = 16;
 constexpr std::uint32_t graph_identity_record_size = 4;
@@ -620,6 +621,9 @@ void write_u64(
     case compiled_project_section::links:
         return link_record_size;
 
+    case compiled_project_section::object_initializations:
+        return object_initialization_record_size;
+
     case compiled_project_section::endpoint_paths:
         return endpoint_path_record_size;
 
@@ -650,6 +654,7 @@ void write_u64(
     case compiled_project_section::link_target_index:
     case compiled_project_section::endpoint_path_index:
     case compiled_project_section::member_name_index:
+    case compiled_project_section::object_initialization_target_index:
         return index_record_size;
     }
 
@@ -1108,6 +1113,18 @@ compiled_project_view::bind(
                 compiled_project_section::
                     links)];
 
+    const auto& object_initializations =
+        candidate[
+            section_index(
+                compiled_project_section::
+                    object_initializations)];
+
+    const auto& object_initialization_target_index =
+        candidate[
+            section_index(
+                compiled_project_section::
+                    object_initialization_target_index)];
+
     const auto& link_target_index =
         candidate[
             section_index(
@@ -1178,6 +1195,10 @@ compiled_project_view::bind(
         index_capacity(
             links.count);
 
+    const auto expected_initialization_target_index_count =
+        index_capacity(
+            object_initializations.count);
+
     const auto expected_endpoint_path_index_count =
         index_capacity(
             endpoint_paths.count);
@@ -1192,6 +1213,8 @@ compiled_project_view::bind(
         object_count >
             object_handle::maximum_slot ||
         link_count >
+            (std::numeric_limits<std::uint32_t>::max)() ||
+        object_initializations.count >
             (std::numeric_limits<std::uint32_t>::max)() ||
         assign_count >
             (std::numeric_limits<std::uint32_t>::max)() ||
@@ -1208,6 +1231,7 @@ compiled_project_view::bind(
         expected_member_index_count == 0 ||
         expected_derived_index_count == 0 ||
         expected_link_target_index_count == 0 ||
+        expected_initialization_target_index_count == 0 ||
         expected_endpoint_path_index_count == 0 ||
         endpoint_paths.count >
             endpoint_path_handle::maximum_slot ||
@@ -1243,6 +1267,8 @@ compiled_project_view::bind(
             link_count ||
         link_target_index.count !=
             expected_link_target_index_count ||
+        object_initialization_target_index.count !=
+            expected_initialization_target_index_count ||
         endpoint_path_index.count !=
             expected_endpoint_path_index_count ||
         graph_identity.count !=
@@ -2750,6 +2776,185 @@ bool compiled_project_view::link(
     }
 
     return true;
+}
+
+
+bool compiled_project_view::initialization_at(
+    std::size_t index,
+    object_initialization_record& output) const noexcept {
+
+    output = {};
+
+    const auto& values =
+        section(
+            compiled_project_section::
+                object_initializations);
+
+    if (!valid() ||
+        index >= values.count) {
+
+        return false;
+    }
+
+    const auto* record =
+        values.data +
+        index *
+            object_initialization_record_size;
+
+    const auto object =
+        object_from_raw(
+            read_u32(record));
+
+    const auto endpoint =
+        endpoint_ref::from_raw(
+            read_u32(
+                record + 4));
+
+    if (!object ||
+        !endpoint) {
+
+        return false;
+    }
+
+    if (endpoint.is_path() &&
+        endpoint.path().value() >
+            endpoint_path_count()) {
+
+        return false;
+    }
+
+    construction_value value;
+
+    value.low =
+        read_u32(
+            record + 8);
+
+    value.high =
+        read_u32(
+            record + 12);
+
+    value.operand =
+        read_u32(
+            record + 16);
+
+    value.kind =
+        static_cast<construction_kind>(
+            read_u32(
+                record + 20));
+
+    if (!valid_construction(value)) {
+        return false;
+    }
+
+    output = {
+        {
+            object,
+            endpoint,
+        },
+        value,
+    };
+
+    return true;
+}
+
+std::size_t compiled_project_view::initialization_position(
+    object_endpoint target) const noexcept {
+
+    if (!target.object ||
+        !target.member ||
+        target.object.value() >
+            object_count_value) {
+
+        return 0;
+    }
+
+    const auto& index =
+        section(
+            compiled_project_section::
+                object_initialization_target_index);
+
+    if (index.count == 0 ||
+        (index.count &
+            (index.count - 1)) != 0) {
+
+        return 0;
+    }
+
+    const auto hash =
+        link_target_hash(
+            target);
+
+    const auto fingerprint =
+        identity_fingerprint(
+            hash);
+
+    const auto mask =
+        index.count - 1;
+
+    auto position =
+        hash &
+        mask;
+
+    for (std::uint64_t probe = 0;
+         probe < index.count;
+         ++probe) {
+
+        const auto* slot =
+            index.data +
+            static_cast<std::size_t>(
+                position) *
+                index_record_size;
+
+        const auto raw =
+            read_u32(
+                slot + 4);
+
+        if (raw == 0) {
+            return 0;
+        }
+
+        if (read_u32(slot) ==
+            fingerprint) {
+
+            object_initialization_record
+                candidate;
+
+            if (raw <=
+                    initialization_count() &&
+                initialization_at(
+                    raw - 1,
+                    candidate) &&
+                candidate.target ==
+                    target) {
+
+                return raw;
+            }
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return 0;
+}
+
+bool compiled_project_view::initialization(
+    object_endpoint target,
+    object_initialization_record& output) const noexcept {
+
+    output = {};
+
+    const auto position =
+        initialization_position(
+            target);
+
+    return position != 0 &&
+        initialization_at(
+            position - 1,
+            output) &&
+        output.target ==
+            target;
 }
 
 
@@ -4311,6 +4516,247 @@ compiled_project_view::verify_contents() const noexcept {
         }
     }
 
+    // Object initialization is canonical final object state. The persisted
+    // target index proves one final init per object subobject without an O(n)
+    // temporary set during cold verification.
+    {
+        const auto endpoint_type =
+            [this](
+                object_endpoint endpoint,
+                type_ref& output) noexcept {
+
+                output = {};
+
+                object_entry object_value;
+
+                if (!object(
+                        endpoint.object,
+                        object_value) ||
+                    !endpoint.member) {
+
+                    return false;
+                }
+
+                if (endpoint.member.is_path()) {
+                    endpoint_path_record path;
+
+                    if (!endpoint_path(
+                            endpoint.member.path(),
+                            path) ||
+                        path.root_type !=
+                            object_value.type) {
+
+                        return false;
+                    }
+
+                    output =
+                        path.value_type;
+
+                    return static_cast<bool>(
+                        output);
+                }
+
+                auto object_type =
+                    object_value.type;
+
+                derived_type_record derived_value;
+
+                while (derived(
+                           object_type,
+                           derived_value) &&
+                       (derived_value.kind ==
+                            derived_type_kind::const_qualified ||
+                        derived_value.kind ==
+                            derived_type_kind::volatile_qualified)) {
+
+                    object_type =
+                        derived_value.child;
+                }
+
+                if (object_type.kind() !=
+                    type_ref_kind::named) {
+
+                    return false;
+                }
+
+                const auto record =
+                    type_from_raw(
+                        object_type.payload());
+
+                member_record member_value;
+
+                if (!record ||
+                    !member(
+                        record,
+                        endpoint.member.direct_member(),
+                        member_value)) {
+
+                    return false;
+                }
+
+                output =
+                    member_value.type;
+
+                return static_cast<bool>(
+                    output);
+            };
+
+        const auto writable_scalar =
+            [this](
+                type_ref type) noexcept {
+
+                derived_type_record derived_value;
+
+                for (;;) {
+                    if (!derived(
+                            type,
+                            derived_value)) {
+
+                        break;
+                    }
+
+                    if (derived_value.kind ==
+                        derived_type_kind::const_qualified) {
+
+                        return false;
+                    }
+
+                    if (derived_value.kind ==
+                        derived_type_kind::volatile_qualified) {
+
+                        type =
+                            derived_value.child;
+                        continue;
+                    }
+
+                    break;
+                }
+
+                if (type.kind() ==
+                    type_ref_kind::intrinsic) {
+
+                    const auto intrinsic =
+                        static_cast<intrinsic_type>(
+                            type.payload());
+
+                    return intrinsic >
+                            intrinsic_type::none &&
+                        intrinsic <=
+                            intrinsic_type::nullptr_type &&
+                        intrinsic !=
+                            intrinsic_type::void_type;
+                }
+
+                return type.kind() ==
+                        type_ref_kind::derived &&
+                    derived(
+                        type,
+                        derived_value) &&
+                    derived_value.kind ==
+                        derived_type_kind::pointer;
+            };
+
+        for (std::size_t index = 0;
+             index <
+                 initialization_count();
+             ++index) {
+
+            object_initialization_record value;
+            type_ref target_type;
+
+            if (!initialization_at(
+                    index,
+                    value) ||
+                !endpoint_type(
+                    value.target,
+                    target_type) ||
+                !writable_scalar(
+                    target_type) ||
+                !construction_compatible(
+                    *this,
+                    target_type,
+                    value.value) ||
+                initialization_position(
+                    value.target) !=
+                    index + 1) {
+
+                return compiled_project_image_result::
+                    invalid_image;
+            }
+        }
+
+        const auto& target_index =
+            section(
+                compiled_project_section::
+                    object_initialization_target_index);
+
+        std::size_t indexed = 0;
+
+        for (std::uint64_t index = 0;
+             index <
+                 target_index.count;
+             ++index) {
+
+            const auto* slot =
+                target_index.data +
+                static_cast<std::size_t>(
+                    index) *
+                    index_record_size;
+
+            const auto fingerprint =
+                read_u32(slot);
+
+            const auto raw =
+                read_u32(
+                    slot + 4);
+
+            if (raw == 0) {
+                if (fingerprint != 0) {
+                    return compiled_project_image_result::
+                        invalid_image;
+                }
+
+                continue;
+            }
+
+            object_initialization_record value;
+
+            if (raw >
+                    initialization_count() ||
+                !initialization_at(
+                    raw - 1,
+                    value)) {
+
+                return compiled_project_image_result::
+                    invalid_image;
+            }
+
+            const auto hash =
+                link_target_hash(
+                    value.target);
+
+            if (fingerprint !=
+                    identity_fingerprint(
+                        hash) ||
+                initialization_position(
+                    value.target) !=
+                    raw) {
+
+                return compiled_project_image_result::
+                    invalid_image;
+            }
+
+            ++indexed;
+        }
+
+        if (indexed !=
+            initialization_count()) {
+
+            return compiled_project_image_result::
+                invalid_image;
+        }
+    }
+
     // Target uniqueness and lookup are validated against the persisted
     // O(1) link target index; cold audit performs no transient O(L) allocation.
     for (std::size_t index = 0;
@@ -4541,8 +4987,12 @@ prepare_compiled_project_layout(const string_table &strings,
                                 compiled_project_layout &output) noexcept {
 
     output = {};
-    if (!sources.finalized() || sources.file_entries().size() != files.size())
+
+    if (!sources.finalized() ||
+        sources.file_entries().size() != files.size()) {
+
         return compiled_project_image_result::invalid_state;
+    }
     std::uint64_t source_path_bytes = 0;
     for (std::size_t i = 0; i < files.size(); ++i) {
         std::size_t length = 0;
@@ -4599,6 +5049,10 @@ prepare_compiled_project_layout(const string_table &strings,
         static_cast<std::uint64_t>(
             G.link_count());
 
+    const auto initialization_count =
+        static_cast<std::uint64_t>(
+            G.initialization_count());
+
     const auto endpoint_path_count =
         static_cast<std::uint64_t>(
             G.endpoint_path_count());
@@ -4626,6 +5080,8 @@ prepare_compiled_project_layout(const string_table &strings,
         object_count >
             object_handle::maximum_slot ||
         link_count >
+            (std::numeric_limits<std::uint32_t>::max)() ||
+        initialization_count >
             (std::numeric_limits<std::uint32_t>::max)() ||
         endpoint_path_count >
             endpoint_path_handle::maximum_slot ||
@@ -4677,6 +5133,10 @@ prepare_compiled_project_layout(const string_table &strings,
         index_capacity(
             link_count);
 
+    const auto initialization_target_index_count =
+        index_capacity(
+            initialization_count);
+
     const auto endpoint_path_index_count =
         index_capacity(
             endpoint_path_count);
@@ -4686,6 +5146,7 @@ prepare_compiled_project_layout(const string_table &strings,
         member_index_count == 0 ||
         derived_index_count == 0 ||
         link_target_index_count == 0 ||
+        initialization_target_index_count == 0 ||
         endpoint_path_index_count == 0) {
 
         return compiled_project_image_result::
@@ -4822,6 +5283,16 @@ prepare_compiled_project_layout(const string_table &strings,
             compiled_project_section::member_name_index,
             index_record_size,
             member_index_count,
+        },
+        {
+            compiled_project_section::object_initializations,
+            object_initialization_record_size,
+            initialization_count,
+        },
+        {
+            compiled_project_section::object_initialization_target_index,
+            index_record_size,
+            initialization_target_index_count,
         },
     }};
 
@@ -4973,6 +5444,10 @@ encode_compiled_project_image(const string_table &strings,
 
     clear_section(
         compiled_project_section::
+            object_initialization_target_index);
+
+    clear_section(
+        compiled_project_section::
             endpoint_path_index);
 
     const auto count =
@@ -5021,6 +5496,11 @@ encode_compiled_project_image(const string_table &strings,
         count(
             compiled_project_section::
                 links);
+
+    const auto initialization_count =
+        count(
+            compiled_project_section::
+                object_initializations);
 
     const auto endpoint_path_count =
         count(
@@ -5072,6 +5552,11 @@ encode_compiled_project_image(const string_table &strings,
             compiled_project_section::
                 link_target_index);
 
+    const auto initialization_target_index_count =
+        count(
+            compiled_project_section::
+                object_initialization_target_index);
+
     const auto endpoint_path_index_count =
         count(
             compiled_project_section::
@@ -5099,6 +5584,11 @@ encode_compiled_project_image(const string_table &strings,
             G.object_construction_entries().size() ||
         link_count !=
             G.link_count() ||
+        initialization_count !=
+            G.initialization_count() ||
+        initialization_target_index_count !=
+            index_capacity(
+                initialization_count) ||
         endpoint_path_count !=
             G.endpoint_path_count() ||
         endpoint_path_step_count !=
@@ -6159,6 +6649,102 @@ encode_compiled_project_image(const string_table &strings,
 
             return compiled_project_image_result::
                 invalid_state;
+        }
+    }
+
+    // Canonical final object init plus O(1) target lookup for validation and
+    // future sparse BUILD baseline access.
+    {
+        auto* values =
+            section_data(
+                compiled_project_section::
+                    object_initializations);
+
+        auto* index_out =
+            section_data(
+                compiled_project_section::
+                    object_initialization_target_index);
+
+        const auto initializations =
+            G.initialization_entries();
+
+        const auto mask =
+            initialization_target_index_count -
+            1;
+
+        for (std::size_t index = 0;
+             index <
+                 initializations.size();
+             ++index) {
+
+            const auto& value =
+                initializations[index];
+
+            auto* record =
+                values +
+                index *
+                    object_initialization_record_size;
+
+            write_u32(
+                record,
+                value.target.object.value());
+
+            write_u32(
+                record + 4,
+                value.target.member.value());
+
+            write_u32(
+                record + 8,
+                value.value.low);
+
+            write_u32(
+                record + 12,
+                value.value.high);
+
+            write_u32(
+                record + 16,
+                value.value.operand);
+
+            write_u32(
+                record + 20,
+                static_cast<std::uint32_t>(
+                    value.value.kind));
+
+            const auto hash =
+                link_target_hash(
+                    value.target);
+
+            auto position =
+                hash &
+                mask;
+
+            for (;;) {
+                auto* slot =
+                    index_out +
+                    static_cast<std::size_t>(
+                        position) *
+                        index_record_size;
+
+                if (read_u32(
+                        slot + 4) == 0) {
+
+                    write_u32(
+                        slot,
+                        identity_fingerprint(
+                            hash));
+
+                    write_u32(
+                        slot + 4,
+                        static_cast<std::uint32_t>(
+                            index + 1));
+
+                    break;
+                }
+
+                position =
+                    (position + 1) &
+                    mask;
+            }
         }
     }
 

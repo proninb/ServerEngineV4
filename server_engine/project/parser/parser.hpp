@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
+#include <vector>
 
 namespace cw::server {
 
@@ -44,6 +45,18 @@ struct parser_failure final {
     std::string_view detail;
 };
 
+enum class parser_warning_kind : std::uint8_t {
+    duplicate_initialization = 1,
+};
+
+struct parser_warning final {
+    parser_warning_kind kind =
+        parser_warning_kind::duplicate_initialization;
+    file_id file{};
+    source_range source;
+    std::string_view detail;
+};
+
 [[nodiscard]] server_status parse_semantic_project(
     file_context& files,
     lexical_generation& lexical,
@@ -53,6 +66,7 @@ struct parser_failure final {
     identity_space& identities,
     graph& G,
     source_map& sources,
-    parser_failure* failure = nullptr) noexcept;
+    parser_failure* failure = nullptr,
+    std::vector<parser_warning>* warnings = nullptr) noexcept;
 
 }
