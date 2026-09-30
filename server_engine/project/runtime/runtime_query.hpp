@@ -49,11 +49,36 @@ struct runtime_object_query final {
     std::vector<runtime_object_match> objects;
 };
 
+struct runtime_type_member final {
+    std::string name;
+    std::string type;
+};
+
+struct runtime_type_spec final {
+    std::string name;
+    std::vector<std::string> bases;
+    std::vector<runtime_type_member> members;
+};
+
+struct runtime_object_type final {
+    std::string object;
+    runtime_type_spec type;
+};
+
+struct runtime_type_query final {
+    std::vector<runtime_object_type> types;
+};
+
 [[nodiscard]] runtime_query_result get_runtime_object(
     const compiled_project_view& project,
     std::string_view name,
     std::string_view type,
     runtime_object_query& output) noexcept;
+
+[[nodiscard]] runtime_query_result get_runtime_type(
+    const compiled_project_view& project,
+    std::span<const std::string> objects,
+    runtime_type_query& output) noexcept;
 
 [[nodiscard]] runtime_query_result get_runtime_value(
     const compiled_project_view& project,

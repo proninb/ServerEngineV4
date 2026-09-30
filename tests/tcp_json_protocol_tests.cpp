@@ -587,5 +587,119 @@ int main() {
         }
     }
 
+    {
+        json_request request;
+
+        const auto decoded =
+            decode_json_request(
+                R"({"request_id":60,"command":"GET_TYPE","arguments":{"objects":["demo::left","demo::scalar"]}})",
+                request);
+
+        if (!decoded.ok() ||
+            request.kind !=
+                json_request_kind::server) {
+
+            return 60;
+        }
+
+        const auto& server =
+            std::get<server_request>(
+                request.payload);
+
+        if (server.kind !=
+                server_request_kind::get_type ||
+            server.objects.size() != 2 ||
+            server.objects[0] !=
+                "demo::left" ||
+            server.objects[1] !=
+                "demo::scalar") {
+
+            return 61;
+        }
+    }
+
+    {
+        json_request request;
+
+        if (decode_json_request(
+                R"({"request_id":62,"command":"GET_TYPE","arguments":{"objects":[]}})",
+                request).ok()) {
+
+            return 62;
+        }
+    }
+
+    {
+        json_request request;
+
+        if (decode_json_request(
+                R"({"request_id":63,"command":"GET_TYPE","arguments":{"objects":["demo::left",7]}})",
+                request).ok()) {
+
+            return 63;
+        }
+    }
+
+    {
+        outbound_write message;
+        message.connection_sequence = 30;
+
+        server_response response;
+        response.status =
+            server_status::success;
+        response.payload =
+            server_response_payload_kind::
+                runtime_type;
+
+        runtime_object_type item;
+        item.object =
+            "demo::left";
+        item.type.name =
+            "demo::Widget";
+        item.type.members.push_back(
+            {
+                "value",
+                "int",
+            });
+        item.type.members.push_back(
+            {
+                "peer",
+                "int&",
+            });
+
+        response.type.types.push_back(
+            std::move(item));
+
+        message.message.payload =
+            protocol_response{
+                request_id{64},
+                response,
+            };
+
+        std::string json;
+
+        if (!encode_json_outbound(
+                message,
+                json) ||
+            json.find(
+                R"("object":"demo::left")") ==
+                std::string::npos ||
+            json.find(
+                R"("name":"demo::Widget")") ==
+                std::string::npos ||
+            json.find(
+                R"("members":[)") ==
+                std::string::npos ||
+            json.find(
+                R"("name":"value","type":"int")") ==
+                std::string::npos ||
+            json.find(
+                R"("name":"peer","type":"int&")") ==
+                std::string::npos) {
+
+            return 64;
+        }
+    }
+
     return 0;
 }

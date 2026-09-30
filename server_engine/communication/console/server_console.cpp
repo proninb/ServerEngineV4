@@ -9,6 +9,7 @@
  *   REBUILD <project-path>
  *   GET_STATE
  *   GET_OBJECT <name-pattern> [type]
+ *   GET_TYPE <object> [object...]
  *   GET_VALUE <qualified-object[.member...]>
  *   SNAP_IC [/options=0] <ic-path>
  *   RESET_IC [/options=<0..7>] <ic-path>
@@ -304,6 +305,26 @@ void server_console::run() {
 
             publish(
                 std::move(request));
+        } else if (verb == "GET_TYPE") {
+            server_request request;
+            request.kind =
+                server_request_kind::get_type;
+
+            std::string object;
+
+            while (stream >> object) {
+                request.objects.push_back(
+                    std::move(object));
+            }
+
+            if (request.objects.empty()) {
+                std::cout
+                    << "GET_TYPE requires <object> [object...]\n";
+                continue;
+            }
+
+            publish(
+                std::move(request));
         } else if (verb == "GET_VALUE") {
             std::string name;
             std::getline(
@@ -418,6 +439,39 @@ void server_console::present(
                 << " file="
                 << object.file
                 << '\n';
+        }
+        break;
+
+    case server_response_payload_kind::runtime_type:
+        for (const auto& item :
+             result.type.types) {
+
+            std::cout
+                << "TYPE object="
+                << item.object
+                << " type="
+                << item.type.name
+                << '\n';
+
+            for (const auto& base :
+                 item.type.bases) {
+
+                std::cout
+                    << "  BASE "
+                    << base
+                    << '\n';
+            }
+
+            for (const auto& member :
+                 item.type.members) {
+
+                std::cout
+                    << "  MEMBER "
+                    << member.name
+                    << " type="
+                    << member.type
+                    << '\n';
+            }
         }
         break;
 

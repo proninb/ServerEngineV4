@@ -2940,6 +2940,131 @@ void test_runtime_object_query(
 }
 
 
+void test_runtime_type_query(
+    test_state& tests,
+    const compiled_test_image& image) {
+
+    compiled_project_view view;
+
+    if (!tests.expect(
+            view.bind(
+                image.bytes) ==
+                compiled_project_image_result::success,
+            "bind GET_TYPE query image")) {
+
+        return;
+    }
+
+    const std::vector<std::string>
+        objects{
+            "demo::left",
+            "demo::right",
+            "demo::scalar",
+        };
+
+    runtime_type_query result;
+
+    if (!tests.expect(
+            get_runtime_type(
+                view,
+                objects,
+                result) ==
+                    runtime_query_result::success &&
+            result.types.size() == 3,
+            "GET_TYPE returns one type spec per object")) {
+
+        return;
+    }
+
+    tests.expect(
+        result.types[0].object ==
+                "demo::left" &&
+        result.types[0].type.name ==
+                "demo::Widget" &&
+        result.types[0].type.bases.empty() &&
+        result.types[0].type.members.size() == 2 &&
+        result.types[0].type.members[0].name ==
+                "value" &&
+        result.types[0].type.members[0].type ==
+                "int" &&
+        result.types[0].type.members[1].name ==
+                "peer" &&
+        result.types[0].type.members[1].type ==
+                "int&",
+        "GET_TYPE returns named record specification");
+
+    tests.expect(
+        result.types[1].object ==
+                "demo::right" &&
+        result.types[1].type.name ==
+                "demo::Widget" &&
+        result.types[1].type.members.size() == 2,
+        "GET_TYPE preserves input order and repeated type specs");
+
+    tests.expect(
+        result.types[2].object ==
+                "demo::scalar" &&
+        result.types[2].type.name ==
+                "int" &&
+        result.types[2].type.bases.empty() &&
+        result.types[2].type.members.empty(),
+        "GET_TYPE returns intrinsic type specification");
+
+    const std::vector<std::string>
+        global{
+            "::demo::left",
+        };
+
+    tests.expect(
+        get_runtime_type(
+            view,
+            global,
+            result) ==
+                runtime_query_result::success &&
+        result.types.size() == 1 &&
+        result.types[0].object ==
+            "demo::left",
+        "GET_TYPE accepts leading global scope");
+
+    const std::vector<std::string>
+        missing{
+            "demo::missing",
+        };
+
+    tests.expect(
+        get_runtime_type(
+            view,
+            missing,
+            result) ==
+                runtime_query_result::not_found &&
+        result.types.empty(),
+        "GET_TYPE fails closed on missing object");
+
+    const std::vector<std::string>
+        wildcard{
+            "demo::*",
+        };
+
+    tests.expect(
+        get_runtime_type(
+            view,
+            wildcard,
+            result) ==
+                runtime_query_result::invalid_input,
+        "GET_TYPE does not accept wildcard object names");
+
+    const std::vector<std::string> empty;
+
+    tests.expect(
+        get_runtime_type(
+            view,
+            empty,
+            result) ==
+                runtime_query_result::invalid_input,
+        "GET_TYPE requires at least one object");
+}
+
+
 void test_runtime_ic_cross_generation(
     test_state& tests,
     const compiled_fixture& first_fixture,
@@ -8754,6 +8879,10 @@ int main() {
             first);
 
         test_runtime_object_query(
+            tests,
+            first);
+
+        test_runtime_type_query(
             tests,
             first);
 

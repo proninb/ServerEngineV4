@@ -16,6 +16,7 @@ enum class server_response_payload_kind : std::uint8_t {
     none = 0,
     state,
     runtime_object,
+    runtime_type,
     runtime_value,
     ic_catalog,
 };
@@ -29,6 +30,7 @@ struct server_response {
 
     server_state_snapshot state;
     runtime_object_query object;
+    runtime_type_query type;
     runtime_value value;
     ic_catalog catalog;
 

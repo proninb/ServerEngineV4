@@ -23,6 +23,7 @@ enum field_bit : std::uint32_t {
     parameters_bit = 1u << 6,
     options_bit = 1u << 7,
     type_bit = 1u << 8,
+    objects_bit = 1u << 9,
 };
 
 class request_handler final : public json_event_handler {
@@ -60,16 +61,35 @@ public:
     }
 
     void array_begin() override {
+        if (depth == 2 &&
+            key_value == "objects" &&
+            !objects_array &&
+            mark(objects_bit)) {
+
+            objects_array = true;
+            depth = 3;
+            return;
+        }
+
         valid_value = false;
         ++depth;
     }
 
     void array_end() override {
+        if (depth == 3 &&
+            objects_array) {
+
+            objects_array = false;
+            --depth;
+            return;
+        }
+
         if (depth == 0) {
             valid_value = false;
             return;
         }
 
+        valid_value = false;
         --depth;
     }
 
@@ -79,6 +99,23 @@ public:
 
     void value(json_value_view value) override {
         if (!valid_value) {
+            return;
+        }
+
+        if (depth == 3 &&
+            objects_array) {
+
+            std::string object;
+
+            if (!value.get(object) ||
+                object.empty()) {
+
+                valid_value = false;
+                return;
+            }
+
+            objects_value.push_back(
+                std::move(object));
             return;
         }
 
@@ -143,6 +180,7 @@ public:
     std::string login_value;
     std::string arg_value;
     std::string parameters_value;
+    std::vector<std::string> objects_value;
     std::uint64_t options_value = 0;
     std::uint32_t seen = 0;
 
@@ -168,6 +206,7 @@ private:
     std::size_t depth = 0;
     bool valid_value = true;
     bool arguments_seen = false;
+    bool objects_array = false;
     std::string key_value;
 };
 
@@ -617,6 +656,80 @@ void append_response(
         output += "]}";
         break;
 
+    case server_response_payload_kind::runtime_type:
+        output += ",\"payload\":{\"types\":[";
+
+        for (std::size_t index = 0;
+             index <
+                response.result.type.types.size();
+             ++index) {
+
+            if (index != 0) {
+                output.push_back(',');
+            }
+
+            const auto& item =
+                response.result.type.types[index];
+
+            output += "{\"object\":";
+            append_escaped(
+                item.object,
+                output);
+
+            output += ",\"type\":{\"name\":";
+            append_escaped(
+                item.type.name,
+                output);
+
+            output += ",\"bases\":[";
+
+            for (std::size_t base = 0;
+                 base <
+                    item.type.bases.size();
+                 ++base) {
+
+                if (base != 0) {
+                    output.push_back(',');
+                }
+
+                append_escaped(
+                    item.type.bases[base],
+                    output);
+            }
+
+            output += "],\"members\":[";
+
+            for (std::size_t member = 0;
+                 member <
+                    item.type.members.size();
+                 ++member) {
+
+                if (member != 0) {
+                    output.push_back(',');
+                }
+
+                const auto& value =
+                    item.type.members[member];
+
+                output += "{\"name\":";
+                append_escaped(
+                    value.name,
+                    output);
+
+                output += ",\"type\":";
+                append_escaped(
+                    value.type,
+                    output);
+
+                output.push_back('}');
+            }
+
+            output += "]}}";
+        }
+
+        output += "]}";
+        break;
+
     case server_response_payload_kind::runtime_value:
         output += ",\"payload\":{\"type\":";
         append_integer(
@@ -862,6 +975,9 @@ json_decode_result decode_json_request(
             } else if (command == "GET_OBJECT") {
                 request.kind =
                     server_request_kind::get_object;
+            } else if (command == "GET_TYPE") {
+                request.kind =
+                    server_request_kind::get_type;
             } else if (command == "GET_VALUE") {
                 request.kind =
                     server_request_kind::get_value;
@@ -999,6 +1115,24 @@ json_decode_result decode_json_request(
                 request.type =
                     std::move(
                         handler.type_value);
+                break;
+
+            case server_request_kind::get_type:
+                if (!only(
+                        handler.seen,
+                        objects_bit) ||
+                    (handler.seen &
+                     objects_bit) == 0 ||
+                    handler.objects_value.empty()) {
+
+                    return {
+                        json_protocol_error::invalid_schema,
+                    };
+                }
+
+                request.objects =
+                    std::move(
+                        handler.objects_value);
                 break;
 
             case server_request_kind::get_value:

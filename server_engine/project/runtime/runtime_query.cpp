@@ -621,6 +621,132 @@ struct resolved_member final {
     return filter == actual;
 }
 
+[[nodiscard]] bool build_type_spec(
+    const compiled_project_view& project,
+    type_ref type,
+    runtime_type_spec& output,
+    std::vector<identity_ref>& identity_scratch) {
+
+    output = {};
+
+    if (!format_type_name(
+            project,
+            type,
+            output.name,
+            identity_scratch)) {
+
+        return false;
+    }
+
+    if (type.kind() !=
+        type_ref_kind::named) {
+
+        return true;
+    }
+
+    if (type.payload() == 0) {
+        return false;
+    }
+
+    const auto handle =
+        project.type_at(
+            static_cast<std::size_t>(
+                type.payload() - 1));
+
+    if (!handle) {
+        return false;
+    }
+
+    type_entry entry;
+
+    if (!project.type(
+            handle,
+            entry)) {
+
+        return false;
+    }
+
+    output.bases.reserve(
+        entry.bases.count);
+
+    for (std::uint32_t index = 0;
+         index < entry.bases.count;
+         ++index) {
+
+        base_record base;
+
+        if (!project.base_at(
+                static_cast<std::size_t>(
+                    entry.bases.begin) +
+                    index,
+                base)) {
+
+            return false;
+        }
+
+        std::string base_name;
+
+        if (!qualified_identity_name(
+                project,
+                project.identity(
+                    base.type),
+                base_name,
+                identity_scratch)) {
+
+            return false;
+        }
+
+        output.bases.push_back(
+            std::move(base_name));
+    }
+
+    output.members.reserve(
+        entry.members.count);
+
+    for (std::uint32_t index = 0;
+         index < entry.members.count;
+         ++index) {
+
+        member_record member;
+
+        if (!project.member(
+                handle,
+                index,
+                member)) {
+
+            return false;
+        }
+
+        const auto member_name =
+            project.string(
+                member.name);
+
+        if (member_name.empty()) {
+            return false;
+        }
+
+        runtime_type_member value;
+
+        value.name.assign(
+            member_name.data(),
+            member_name.size());
+
+        if (!format_type_name(
+                project,
+                member.type,
+                value.type,
+                identity_scratch)) {
+
+            return false;
+        }
+
+        output.members.push_back(
+            std::move(value));
+    }
+
+    return true;
+}
+
 [[nodiscard]] runtime_query_result resolve_object(
     const compiled_project_view& project,
     std::string_view qualified,
@@ -947,6 +1073,95 @@ runtime_query_result get_runtime_object(
 
             output.objects.push_back(
                 std::move(match));
+        }
+
+        return runtime_query_result::success;
+    }
+    catch (...) {
+        output = {};
+        return runtime_query_result::
+            invalid_runtime;
+    }
+}
+
+runtime_query_result get_runtime_type(
+    const compiled_project_view& project,
+    std::span<const std::string> objects,
+    runtime_type_query& output) noexcept {
+
+    output = {};
+
+    if (!project.valid() ||
+        objects.empty()) {
+
+        return runtime_query_result::invalid_input;
+    }
+
+    try {
+        output.types.reserve(
+            objects.size());
+
+        std::vector<identity_ref>
+            identity_scratch;
+
+        for (const auto& requested :
+             objects) {
+
+            if (requested.empty() ||
+                wildcard_query(
+                    requested)) {
+
+                output = {};
+                return runtime_query_result::
+                    invalid_input;
+            }
+
+            object_handle object;
+
+            const auto resolved =
+                resolve_object(
+                    project,
+                    requested,
+                    object);
+
+            if (resolved !=
+                runtime_query_result::success) {
+
+                output = {};
+                return resolved;
+            }
+
+            object_entry entry;
+
+            if (!project.object(
+                    object,
+                    entry)) {
+
+                output = {};
+                return runtime_query_result::
+                    invalid_runtime;
+            }
+
+            runtime_object_type result;
+
+            if (!qualified_identity_name(
+                    project,
+                    project.identity(object),
+                    result.object,
+                    identity_scratch) ||
+                !build_type_spec(
+                    project,
+                    entry.type,
+                    result.type,
+                    identity_scratch)) {
+
+                output = {};
+                return runtime_query_result::
+                    invalid_runtime;
+            }
+
+            output.types.push_back(
+                std::move(result));
         }
 
         return runtime_query_result::success;
