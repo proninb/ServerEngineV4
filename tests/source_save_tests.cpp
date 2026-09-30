@@ -366,8 +366,9 @@ void test_direct_source_save(
                 succeeded(
                     sources.add(
                         second,
-                        source_data_ref::type_definition(
-                            identity))) &&
+                        source_data_ref::type(
+                            identity,
+                            owner == first))) &&
                 succeeded(
                     sources.add(
                         owner,
@@ -444,8 +445,8 @@ void test_direct_source_save(
     }
 
     tests.expect(writable_view.type_presence_count() == 1 &&
-                     writable_view.type_presence(0) == source_type_presence{2, 2},
-                 "presence persisted by root ownership");
+                     writable_view.type_presence(0) == source_type_presence{2, 1},
+                 "presence persists declarations separately from definitions");
 
     source_dependency_ref first_dependency;
     source_dependency_ref second_dependency;
@@ -536,6 +537,65 @@ void test_direct_source_save(
                      verify_source_save_presence(writable_view, compiled) ==
                          source_save_result::success,
                  "presence matches compiled root ownership");
+
+    {
+        source_save_semantic_invalidation_plan
+            plan;
+
+        source_save_semantic_invalidation_metrics
+            metrics;
+
+        const std::array<file_id, 1>
+            roots{first};
+
+        tests.expect(
+            succeeded(
+                collect_source_save_semantic_invalidation(
+                    writable_view,
+                    compiled,
+                    roots,
+                    plan,
+                    &metrics)) &&
+            plan.retire_types.empty() &&
+            plan.clear_type_definitions.size() == 1 &&
+            plan.clear_type_definitions[0] == type &&
+            plan.retire_objects.empty() &&
+            plan.retire_links.empty() &&
+            metrics.visited_roots == 1 &&
+            metrics.producer_contributions == 2 &&
+            metrics.touched_entities == 2,
+            "sparse invalidation clears the last OLD definition while surviving declarations remain");
+    }
+
+    {
+        source_save_semantic_invalidation_plan
+            plan;
+
+        source_save_semantic_invalidation_metrics
+            metrics;
+
+        const std::array<file_id, 2>
+            roots{first, second};
+
+        tests.expect(
+            succeeded(
+                collect_source_save_semantic_invalidation(
+                    writable_view,
+                    compiled,
+                    roots,
+                    plan,
+                    &metrics)) &&
+            plan.retire_types.size() == 1 &&
+            plan.retire_types[0] == type &&
+            plan.clear_type_definitions.empty() &&
+            plan.retire_objects.size() == 1 &&
+            plan.retire_objects[0] == object &&
+            plan.retire_links.empty() &&
+            metrics.visited_roots == 2 &&
+            metrics.producer_contributions == 4 &&
+            metrics.touched_entities == 2,
+            "sparse invalidation retires semantic entities only when all OLD producers disappear");
+    }
 
     const std::array<file_id, 1>
         semantic_seed{first};

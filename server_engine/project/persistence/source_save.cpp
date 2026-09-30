@@ -5362,6 +5362,611 @@ server_status collect_source_save_semantic_dependency_closure(
     }
 }
 
+server_status collect_source_save_semantic_invalidation(
+    const source_save_view& persisted,
+    const compiled_project_view& compiled,
+    std::span<const file_id> roots,
+    source_save_semantic_invalidation_plan& plan,
+    source_save_semantic_invalidation_metrics* metrics) noexcept {
+
+    plan.retire_types.clear();
+    plan.clear_type_definitions.clear();
+    plan.retire_objects.clear();
+    plan.retire_links.clear();
+
+    if (metrics != nullptr) {
+        *metrics = {};
+    }
+
+    if (!persisted.valid() ||
+        !compiled.valid() ||
+        persisted.file_count() !=
+            compiled.source_file_count() ||
+        persisted.type_presence_count() !=
+            compiled.type_count() ||
+        persisted.object_presence_count() !=
+            compiled.object_count() ||
+        persisted.link_presence_count() !=
+            compiled.link_count()) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    struct counter_slot final {
+        std::uint32_t key = 0;
+        std::uint32_t count = 0;
+    };
+
+    std::vector<counter_slot> counters;
+    std::size_t counter_count = 0;
+
+    const auto semantic_key =
+        [](source_data_kind kind,
+           std::uint32_t slot) noexcept {
+
+            return slot != 0 &&
+                slot <=
+                    source_data_ref::slot_mask
+                ? (static_cast<std::uint32_t>(
+                       kind) <<
+                       source_data_ref::
+                           kind_shift) |
+                      slot
+                : 0u;
+        };
+
+    const auto insert_raw =
+        [](std::vector<counter_slot>& target,
+           counter_slot value) noexcept {
+
+            if (target.empty() ||
+                value.key == 0 ||
+                value.count == 0) {
+
+                return false;
+            }
+
+            const auto mask =
+                target.size() - 1;
+
+            auto position =
+                static_cast<std::size_t>(
+                    mix64(value.key)) &
+                mask;
+
+            for (std::size_t probe = 0;
+                 probe < target.size();
+                 ++probe) {
+
+                auto& slot =
+                    target[position];
+
+                if (slot.key == 0) {
+                    slot = value;
+                    return true;
+                }
+
+                position =
+                    (position + 1) &
+                    mask;
+            }
+
+            return false;
+        };
+
+    const auto find_count =
+        [&](std::uint32_t key) noexcept
+        -> std::uint32_t {
+
+            if (key == 0 ||
+                counters.empty()) {
+
+                return 0;
+            }
+
+            const auto mask =
+                counters.size() - 1;
+
+            auto position =
+                static_cast<std::size_t>(
+                    mix64(key)) &
+                mask;
+
+            for (std::size_t probe = 0;
+                 probe < counters.size();
+                 ++probe) {
+
+                const auto& slot =
+                    counters[position];
+
+                if (slot.key == 0) {
+                    return 0;
+                }
+
+                if (slot.key == key) {
+                    return slot.count;
+                }
+
+                position =
+                    (position + 1) &
+                    mask;
+            }
+
+            return 0;
+        };
+
+    const auto increment =
+        [&](std::uint32_t key)
+        -> server_status {
+
+            if (key == 0) {
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            if (!counters.empty()) {
+                const auto mask =
+                    counters.size() - 1;
+
+                auto position =
+                    static_cast<std::size_t>(
+                        mix64(key)) &
+                    mask;
+
+                for (std::size_t probe = 0;
+                     probe < counters.size();
+                     ++probe) {
+
+                    auto& slot =
+                        counters[position];
+
+                    if (slot.key == 0) {
+                        break;
+                    }
+
+                    if (slot.key == key) {
+                        if (slot.count ==
+                            (std::numeric_limits<
+                                std::uint32_t>::max)()) {
+
+                            return server_status::
+                                io_error;
+                        }
+
+                        ++slot.count;
+                        return server_status::success;
+                    }
+
+                    position =
+                        (position + 1) &
+                        mask;
+                }
+            }
+
+            const auto required =
+                counter_count + 1;
+
+            const auto threshold =
+                counters.empty()
+                ? 0
+                : counters.size() -
+                    counters.size() / 4;
+
+            if (counters.empty() ||
+                required > threshold) {
+
+                const auto capacity =
+                    next_capacity(
+                        required);
+
+                if (capacity == 0 ||
+                    capacity <=
+                        counters.size()) {
+
+                    return server_status::
+                        io_error;
+                }
+
+                try {
+                    std::vector<counter_slot>
+                        candidate(
+                            capacity);
+
+                    for (const auto existing :
+                         counters) {
+
+                        if (existing.key != 0 &&
+                            !insert_raw(
+                                candidate,
+                                existing)) {
+
+                            return server_status::
+                                project_artifact_invalid;
+                        }
+                    }
+
+                    counters =
+                        std::move(candidate);
+                }
+                catch (...) {
+                    return server_status::io_error;
+                }
+            }
+
+            if (!insert_raw(
+                    counters,
+                    {key, 1})) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            ++counter_count;
+            return server_status::success;
+        };
+
+    source_save_semantic_invalidation_metrics
+        local;
+
+    file_id previous_root;
+
+    try {
+        for (const auto root : roots) {
+            if (!root ||
+                (previous_root &&
+                 root.value() <=
+                     previous_root.value())) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            previous_root = root;
+
+            source_save_file_view state;
+            source_map_range range;
+
+            if (!persisted.file(
+                    root,
+                    state) ||
+                !state.current_member ||
+                (state.kind !=
+                    file_kind::header &&
+                 state.kind !=
+                    file_kind::source) ||
+                !compiled.source_root(
+                    root,
+                    range)) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            ++local.visited_roots;
+
+            for (std::uint32_t offset = 0;
+                 offset < range.count;
+                 ++offset) {
+
+                source_contribution_record
+                    contribution;
+
+                if (!compiled.source_contribution(
+                        range.begin + offset,
+                        contribution)) {
+
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                if (local.producer_contributions ==
+                    (std::numeric_limits<
+                        std::uint64_t>::max)()) {
+
+                    return server_status::io_error;
+                }
+
+                ++local.producer_contributions;
+
+                server_status counted =
+                    server_status::success;
+
+                if (contribution.data.kind() ==
+                        source_data_kind::
+                            type_declaration ||
+                    contribution.data.kind() ==
+                        source_data_kind::
+                            type_definition) {
+
+                    const auto identity =
+                        compiled.identity_at_slot(
+                            contribution.data.slot());
+
+                    const auto type =
+                        identity.kind() ==
+                            identity_kind::type
+                        ? compiled.find_type(
+                            identity)
+                        : type_handle{};
+
+                    if (!type) {
+                        return server_status::
+                            project_artifact_invalid;
+                    }
+
+                    counted =
+                        increment(
+                            semantic_key(
+                                source_data_kind::
+                                    type_declaration,
+                                type.value()));
+
+                    if (succeeded(counted) &&
+                        contribution.data.kind() ==
+                            source_data_kind::
+                                type_definition) {
+
+                        counted =
+                            increment(
+                                semantic_key(
+                                    source_data_kind::
+                                        type_definition,
+                                    type.value()));
+                    }
+                }
+                else if (contribution.data.kind() ==
+                    source_data_kind::object) {
+
+                    const auto identity =
+                        compiled.identity_at_slot(
+                            contribution.data.slot());
+
+                    const auto object =
+                        identity.kind() ==
+                            identity_kind::object
+                        ? compiled.find_object(
+                            identity)
+                        : object_handle{};
+
+                    if (!object) {
+                        return server_status::
+                            project_artifact_invalid;
+                    }
+
+                    counted =
+                        increment(
+                            semantic_key(
+                                source_data_kind::
+                                    object,
+                                object.value()));
+                }
+                else if (contribution.data.kind() ==
+                    source_data_kind::link) {
+
+                    const auto link =
+                        compiled.link_at(
+                            contribution.data.slot() -
+                            1);
+
+                    if (!link ||
+                        link.value() !=
+                            contribution.data.slot()) {
+
+                        return server_status::
+                            project_artifact_invalid;
+                    }
+
+                    counted =
+                        increment(
+                            semantic_key(
+                                source_data_kind::
+                                    link,
+                                link.value()));
+                }
+                else {
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                if (!succeeded(counted)) {
+                    return counted;
+                }
+            }
+        }
+
+        for (const auto& slot : counters) {
+            if (slot.key == 0) {
+                continue;
+            }
+
+            const auto kind =
+                static_cast<source_data_kind>(
+                    slot.key >>
+                    source_data_ref::
+                        kind_shift);
+
+            const auto semantic_slot =
+                slot.key &
+                source_data_ref::
+                    slot_mask;
+
+            if (kind ==
+                source_data_kind::
+                    type_definition) {
+
+                continue;
+            }
+
+            ++local.touched_entities;
+
+            if (kind ==
+                source_data_kind::
+                    type_declaration) {
+
+                if (semantic_slot >
+                    persisted.
+                        type_presence_count()) {
+
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                const auto presence =
+                    persisted.type_presence(
+                        semantic_slot - 1);
+
+                const auto definitions =
+                    find_count(
+                        semantic_key(
+                            source_data_kind::
+                                type_definition,
+                            semantic_slot));
+
+                if (slot.count >
+                        presence.declarations ||
+                    definitions >
+                        presence.definitions) {
+
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                const auto type =
+                    std::bit_cast<type_handle>(
+                        semantic_slot);
+
+                if (slot.count ==
+                    presence.declarations) {
+
+                    plan.retire_types.push_back(
+                        type);
+                }
+                else if (definitions != 0 &&
+                         definitions ==
+                            presence.definitions) {
+
+                    plan.clear_type_definitions.
+                        push_back(
+                            type);
+                }
+
+                continue;
+            }
+
+            if (kind ==
+                source_data_kind::object) {
+
+                if (semantic_slot >
+                    persisted.
+                        object_presence_count()) {
+
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                const auto presence =
+                    persisted.object_presence(
+                        semantic_slot - 1);
+
+                if (presence == 0 ||
+                    slot.count > presence) {
+
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                if (slot.count == presence) {
+                    plan.retire_objects.push_back(
+                        std::bit_cast<object_handle>(
+                            semantic_slot));
+                }
+
+                continue;
+            }
+
+            if (kind ==
+                source_data_kind::link) {
+
+                if (semantic_slot >
+                    persisted.
+                        link_presence_count()) {
+
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                const auto presence =
+                    persisted.link_presence(
+                        semantic_slot - 1);
+
+                if (presence == 0 ||
+                    slot.count > presence) {
+
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                if (slot.count == presence) {
+                    plan.retire_links.push_back(
+                        std::bit_cast<link_handle>(
+                            semantic_slot));
+                }
+
+                continue;
+            }
+
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        const auto by_value =
+            [](const auto& left,
+               const auto& right) noexcept {
+                return left.value() <
+                    right.value();
+            };
+
+        std::sort(
+            plan.retire_types.begin(),
+            plan.retire_types.end(),
+            by_value);
+
+        std::sort(
+            plan.clear_type_definitions.begin(),
+            plan.clear_type_definitions.end(),
+            by_value);
+
+        std::sort(
+            plan.retire_objects.begin(),
+            plan.retire_objects.end(),
+            by_value);
+
+        std::sort(
+            plan.retire_links.begin(),
+            plan.retire_links.end(),
+            by_value);
+
+        if (metrics != nullptr) {
+            *metrics = local;
+        }
+
+        return server_status::success;
+    }
+    catch (...) {
+        plan.retire_types.clear();
+        plan.clear_type_definitions.clear();
+        plan.retire_objects.clear();
+        plan.retire_links.clear();
+
+        if (metrics != nullptr) {
+            *metrics = {};
+        }
+
+        return server_status::io_error;
+    }
+}
+
 source_save_result verify_source_save_presence(const source_save_view &source,
                                                const compiled_project_view &compiled) noexcept {
     if (!source.valid() || !compiled.valid() ||

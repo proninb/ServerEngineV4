@@ -318,6 +318,19 @@ struct source_save_semantic_dependency_metrics final {
     std::uint64_t visited_slots = 0;
 };
 
+struct source_save_semantic_invalidation_plan final {
+    std::vector<type_handle> retire_types;
+    std::vector<type_handle> clear_type_definitions;
+    std::vector<object_handle> retire_objects;
+    std::vector<link_handle> retire_links;
+};
+
+struct source_save_semantic_invalidation_metrics final {
+    std::uint64_t visited_roots = 0;
+    std::uint64_t producer_contributions = 0;
+    std::uint64_t touched_entities = 0;
+};
+
 // Checkpoint for source.bin produced by this BUILD. It is captured before
 // dirty detection begins. Filesystem changes after that point remain visible to
 // the next BUILD. Portable fallback clears it because journal identity
@@ -392,6 +405,17 @@ collect_source_save_semantic_dependency_closure(
     std::span<const file_id> initial_roots,
     std::vector<file_id>& roots,
     source_save_semantic_dependency_metrics* metrics = nullptr) noexcept;
+
+// Derives the OLD semantic state that disappears when the supplied canonical
+// semantic roots are invalidated. Work and storage are proportional to touched
+// contributions; no type/object/link-count-sized scratch arrays are built.
+[[nodiscard]] server_status
+collect_source_save_semantic_invalidation(
+    const source_save_view& persisted,
+    const compiled_project_view& compiled,
+    std::span<const file_id> roots,
+    source_save_semantic_invalidation_plan& plan,
+    source_save_semantic_invalidation_metrics* metrics = nullptr) noexcept;
 
 // Cold cross-artifact audit: presence is derived from root -> contribution ownership.
 [[nodiscard]] source_save_result

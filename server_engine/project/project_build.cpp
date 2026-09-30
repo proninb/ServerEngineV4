@@ -1119,6 +1119,132 @@ server_status build_project(
         return initialization_invalidated;
     }
 
+    source_save_semantic_invalidation_plan
+        semantic_invalidation_plan;
+
+    source_save_semantic_invalidation_metrics
+        semantic_invalidation_metrics;
+
+    const auto semantic_invalidation_collected =
+        collect_source_save_semantic_invalidation(
+            context.source,
+            context.compiled,
+            semantic_invalidated_roots,
+            semantic_invalidation_plan,
+            &semantic_invalidation_metrics);
+
+    if (!succeeded(
+            semantic_invalidation_collected)) {
+
+        diagnostics.emit(
+            diagnostic(
+                semantic_invalidation_collected ==
+                        server_status::io_error
+                    ? diagnostics::
+                        project_build_incomplete
+                    : diagnostics::
+                        project_source_save_invalid,
+                operation)
+                .file(
+                    semantic_invalidation_collected ==
+                            server_status::io_error
+                        ? layout.compiled
+                        : layout.source_save)
+                .detail(
+                    semantic_invalidation_collected ==
+                            server_status::io_error
+                        ? "BUILD could not allocate sparse semantic invalidation state"
+                        : "Persisted semantic root ownership/presence disagrees with compiled.bin")
+                .build());
+
+        return semantic_invalidation_collected;
+    }
+
+    const auto apply_semantic_invalidation =
+        [&]() -> server_status {
+
+            for (const auto link :
+                 semantic_invalidation_plan.
+                     retire_links) {
+
+                const auto status =
+                    context.graph_changes.retire(
+                        link);
+
+                if (!succeeded(status)) {
+                    return status;
+                }
+            }
+
+            for (const auto object :
+                 semantic_invalidation_plan.
+                     retire_objects) {
+
+                const auto status =
+                    context.graph_changes.retire(
+                        object);
+
+                if (!succeeded(status)) {
+                    return status;
+                }
+            }
+
+            for (const auto type :
+                 semantic_invalidation_plan.
+                     clear_type_definitions) {
+
+                const auto status =
+                    context.graph_changes.
+                        clear_definition(
+                            type);
+
+                if (!succeeded(status)) {
+                    return status;
+                }
+            }
+
+            for (const auto type :
+                 semantic_invalidation_plan.
+                     retire_types) {
+
+                const auto status =
+                    context.graph_changes.retire(
+                        type);
+
+                if (!succeeded(status)) {
+                    return status;
+                }
+            }
+
+            return server_status::success;
+        };
+
+    const auto semantic_invalidated =
+        apply_semantic_invalidation();
+
+    if (!succeeded(
+            semantic_invalidated)) {
+
+        diagnostics.emit(
+            diagnostic(
+                semantic_invalidated ==
+                        server_status::io_error
+                    ? diagnostics::
+                        project_build_incomplete
+                    : diagnostics::
+                        project_compiled_invalid,
+                operation)
+                .file(layout.compiled)
+                .detail(
+                    semantic_invalidated ==
+                            server_status::io_error
+                        ? "BUILD could not materialize sparse Graph semantic tombstones"
+                        : "compiled.bin semantic baseline could not apply SourceSave invalidation plan")
+                .build());
+
+        return semantic_invalidated;
+    }
+
     try {
         for (const auto root :
              semantic_dependency_roots) {
@@ -1383,6 +1509,30 @@ server_status build_project(
             std::to_string(
                 initialization_invalidation_metrics.
                     tombstones) +
+            ", semantic_invalidation_contributions=" +
+            std::to_string(
+                semantic_invalidation_metrics.
+                    producer_contributions) +
+            ", semantic_invalidation_entities=" +
+            std::to_string(
+                semantic_invalidation_metrics.
+                    touched_entities) +
+            ", retired_types=" +
+            std::to_string(
+                semantic_invalidation_plan.
+                    retire_types.size()) +
+            ", cleared_type_definitions=" +
+            std::to_string(
+                semantic_invalidation_plan.
+                    clear_type_definitions.size()) +
+            ", retired_objects=" +
+            std::to_string(
+                semantic_invalidation_plan.
+                    retire_objects.size()) +
+            ", retired_links=" +
+            std::to_string(
+                semantic_invalidation_plan.
+                    retire_links.size()) +
             ", database_mapped=" +
             std::to_string(
                 database_bound ? 1 : 0) +
