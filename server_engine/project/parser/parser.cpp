@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <limits>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace cw::server {
@@ -111,6 +112,7 @@ struct parsed_declarator final {
     semantic_source_location location;
 };
 
+template <typename Graph, typename Sources>
 class semantic_parser final {
 public:
     semantic_parser(
@@ -119,8 +121,8 @@ public:
         const preprocessor_configuration& configuration,
         string_table& strings,
         identity_space& identities,
-        graph& G,
-        source_map& sources,
+        Graph& G,
+        Sources& sources,
         parser_failure* failure,
         std::vector<parser_warning>* warnings) noexcept
         : files(files_value),
@@ -191,6 +193,108 @@ public:
     }
 
 private:
+    [[nodiscard]] bool read_type(
+        type_handle type,
+        type_entry& output) const noexcept {
+
+        output = {};
+
+        if constexpr (
+            std::is_same_v<Graph, graph>) {
+
+            const auto* value =
+                G.find(type);
+
+            if (value == nullptr) {
+                return false;
+            }
+
+            output = *value;
+            return true;
+        }
+        else {
+            return G.type(
+                type,
+                output);
+        }
+    }
+
+    [[nodiscard]] bool read_object(
+        object_handle object,
+        object_entry& output) const noexcept {
+
+        output = {};
+
+        if constexpr (
+            std::is_same_v<Graph, graph>) {
+
+            const auto* value =
+                G.find(object);
+
+            if (value == nullptr) {
+                return false;
+            }
+
+            output = *value;
+            return true;
+        }
+        else {
+            return G.object(
+                object,
+                output);
+        }
+    }
+
+    [[nodiscard]] bool read_member(
+        type_handle type,
+        member_index member,
+        member_record& output) const noexcept {
+
+        output = {};
+
+        if constexpr (
+            std::is_same_v<Graph, graph>) {
+
+            const auto* value =
+                G.member(
+                    type,
+                    member);
+
+            if (value == nullptr) {
+                return false;
+            }
+
+            output = *value;
+            return true;
+        }
+        else {
+            return G.member(
+                type,
+                member,
+                output);
+        }
+    }
+
+    [[nodiscard]] bool record_polymorphic(
+        type_handle type) const noexcept {
+
+        if constexpr (
+            std::is_same_v<Graph, graph>) {
+
+            return G.polymorphic(
+                type);
+        }
+        else {
+            type_entry value;
+
+            return read_type(
+                       type,
+                       value) &&
+                value.defined() &&
+                value.polymorphic();
+        }
+    }
+
     [[nodiscard]] server_status ensure_internal_static_scope_name() noexcept {
 
         if (internal_static_scope_name) {
@@ -291,11 +395,13 @@ private:
                 const auto object =
                     G.find_object(identity);
 
-                const auto* value =
-                    G.find(object);
+                object_entry value;
 
-                if (value != nullptr &&
-                    value->internal_static()) {
+                if (object &&
+                    read_object(
+                        object,
+                        value) &&
+                    value.internal_static()) {
 
                     return object;
                 }
@@ -475,13 +581,14 @@ private:
                 location);
         }
 
-        const auto* object_value =
-            G.find(object);
+        object_entry object_value;
 
-        if (object_value == nullptr ||
+        if (!read_object(
+                object,
+                object_value) ||
             !reference_binding_compatible(
                 target,
-                object_value->type)) {
+                object_value.type)) {
 
             return fail_at(
                 parser_failure_kind::semantic,
@@ -2462,14 +2569,15 @@ private:
                 G.find_type(
                     base_identity);
 
-            const auto* base_type =
-                G.find(base);
+            type_entry base_type;
 
             if (!base_identity ||
                 !base ||
-                base_type == nullptr ||
-                !base_type->defined() ||
-                base_type->record_kind ==
+                !read_type(
+                    base,
+                    base_type) ||
+                !base_type.defined() ||
+                base_type.record_kind ==
                     graph_record_kind::union_type) {
 
                 return fail(
@@ -2558,7 +2666,7 @@ private:
 
         const bool base_polymorphic =
             !bases.empty() &&
-            G.polymorphic(
+            record_polymorphic(
                 bases.front().type);
 
         const auto contextual =
@@ -3362,6 +3470,8 @@ private:
         output = {};
         endpoint_steps.clear();
 
+        member_index direct_member;
+
         if (!at(token_kind::identifier) ||
             !current.identifier) {
 
@@ -3388,11 +3498,12 @@ private:
             G.find_object(
                 object_identity);
 
-        const auto* object_value =
-            G.find(object);
+        object_entry object_value;
 
         if (!object ||
-            object_value == nullptr) {
+            !read_object(
+                object,
+                object_value)) {
 
             return fail(
                 parser_failure_kind::semantic,
@@ -3408,7 +3519,7 @@ private:
         }
 
         auto current_type =
-            object_value->type;
+            object_value.type;
 
         auto status = advance();
 
@@ -3524,6 +3635,8 @@ private:
                     return status;
                 }
 
+                direct_member = {};
+
                 try {
                     endpoint_steps.push_back({
                         index,
@@ -3604,16 +3717,25 @@ private:
                         member_location);
                 }
 
-                const auto* member_value =
-                    G.member(
-                        record,
-                        member);
+                member_record member_value;
 
-                if (member_value == nullptr) {
+                if (!read_member(
+                        record,
+                        member,
+                        member_value)) {
+
                     return fail_at(
                         parser_failure_kind::semantic,
                         "Link endpoint member is not present in G",
                         member_location);
+                }
+
+                if (endpoint_steps.empty()) {
+                    direct_member =
+                        member;
+                }
+                else {
+                    direct_member = {};
                 }
 
                 try {
@@ -3629,7 +3751,7 @@ private:
                 }
 
                 current_type =
-                    member_value->type;
+                    member_value.type;
 
                 output.location =
                     member_location;
@@ -3660,65 +3782,11 @@ private:
             endpoint_steps.front().kind ==
                 endpoint_path_step_kind::member) {
 
-            auto root =
-                object_value->type;
-
-            strip_cv(
-                root);
-
-            type_handle record;
-
-            if (!G.named(
-                    root,
-                    record)) {
-
-                return fail_at(
-                    parser_failure_kind::semantic,
-                    "Direct link endpoint root is not a record",
-                    output.location);
-            }
-
-            const auto* type =
-                G.find(record);
-
             const auto raw =
                 endpoint_steps.front().value;
 
-            if (type == nullptr ||
-                raw >=
-                    type->members.count) {
-
-                return fail_at(
-                    parser_failure_kind::semantic,
-                    "Direct link member index is invalid",
-                    output.location);
-            }
-
-            const auto global =
-                static_cast<std::size_t>(
-                    type->members.begin) +
-                static_cast<std::size_t>(
-                    raw);
-
-            const auto entries =
-                G.member_entries();
-
-            if (global >=
-                entries.size()) {
-
-                return fail_at(
-                    parser_failure_kind::semantic,
-                    "Direct link member storage is invalid",
-                    output.location);
-            }
-
-            const auto member =
-                G.find_member(
-                    record,
-                    entries[global].name);
-
-            if (!member ||
-                member.value() !=
+            if (!direct_member ||
+                direct_member.value() !=
                     raw) {
 
                 return fail_at(
@@ -3729,7 +3797,7 @@ private:
 
             output.endpoint = {
                 object,
-                member,
+                direct_member,
             };
 
             return server_status::success;
@@ -3740,7 +3808,7 @@ private:
 
         status =
             G.intern_endpoint_path(
-                object_value->type,
+                object_value.type,
                 endpoint_steps,
                 path,
                 &resolved);
@@ -4058,8 +4126,8 @@ private:
     semantic_input input;
     string_table& strings;
     identity_space& identities;
-    graph& G;
-    source_map& sources;
+    Graph& G;
+    Sources& sources;
     parser_failure* failure = nullptr;
     std::vector<parser_warning>* warnings = nullptr;
     semantic_domain domain =
@@ -4116,7 +4184,7 @@ server_status parse_semantic_project(
         return source_reset;
     }
 
-    semantic_parser parser{
+    semantic_parser<graph, source_map> parser{
         files,
         lexical,
         configuration,
