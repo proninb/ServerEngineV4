@@ -104,7 +104,8 @@ per client. Outbound enqueue wakes that event loop.
 
 Wire requests use `request_id`, uppercase `command`, and optional `arguments`.
 Supported V1 commands are LOGIN, LOAD, PUBLISH, BUILD, UNLOAD, REBUILD,
-GET_STATE, GET_VALUE, SHUTDOWN, and CLIENT. CLIENT `parameters` is Base64.
+GET_STATE, GET_VALUE, SNAP_IC, RESET_IC, DELETE_IC, LIST_IC, RUN, FREEZE,
+SHUTDOWN, and CLIENT. CLIENT `parameters` is Base64.
 
 Every outbound JSON object contains `sequence`. Responses additionally contain
 `request_id` and boolean `status`; payload and diagnostics are emitted only when
@@ -134,26 +135,23 @@ returns failure; it never synthesizes a Server request.
 
 ## Project IC commands
 
-IC identity is one unique `name`.
+IC identity is the resolved filesystem `path`.
 
-- `SNAP_IC(name, path, options)`
-- `RESET_IC(name, options)`
-- `DELETE_IC(name)`
+- `SNAP_IC(path, options)`
+- `RESET_IC(path, options)`
+- `DELETE_IC(path)`
 - `LIST_IC()`
 
-`SNAP_IC` accepts the snapshot path. The path may be absolute or relative to
-the directory containing `IC.json`, and is stored in the catalog.
+The path may be absolute or relative to the directory containing `IC.json`.
 
-`RESET_IC` accepts only the IC name and options. It resolves the snapshot path
-from the resident IC catalog.
+Relative and absolute locators that resolve to the same platform filesystem
+identity address the same IC.
 
-`DELETE_IC` accepts only the IC name and resolves the stored path from the
-resident catalog.
+`SNAP_IC` creates or replaces the snapshot identified by that path.
+`RESET_IC` and `DELETE_IC` identify the IC by path using the same platform
+filesystem-equivalence semantics as the catalog.
 
-IC names are unique. Different entries cannot resolve to the same physical
-snapshot path.
-
-`group` is not part of the IC model.
+`name` and `group` are not part of the IC model.
 
 SNAP and RESET use transient `SNAPPING_IC` / `RESETTING_IC` states and return
 to the previous LOADED/FREEZE state after the operation.

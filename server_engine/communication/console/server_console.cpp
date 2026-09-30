@@ -9,9 +9,9 @@
  *   REBUILD <project-path>
  *   GET_STATE
  *   GET_VALUE <qualified-object[.member...]>
- *   SNAP_IC [/options=0] <name> <ic-path>
- *   RESET_IC [/options=<0..7>] <name>
- *   DELETE_IC <name>
+ *   SNAP_IC [/options=0] <ic-path>
+ *   RESET_IC [/options=<0..7>] <ic-path>
+ *   DELETE_IC <ic-path>
  *   LIST_IC
  *   RUN
  *   FREEZE
@@ -43,63 +43,76 @@ namespace {
 }
 
 struct parsed_ic_arguments final {
-    std::string name;
     std::filesystem::path path;
     std::uint32_t options = 0;
 };
 
 [[nodiscard]] bool parse_ic_arguments(
     std::istringstream& stream,
-    bool path_required,
+    bool allow_options,
     std::uint32_t max_options,
     parsed_ic_arguments& output) {
 
     output = {};
-    std::string token;
 
-    while (stream >> token) {
-        constexpr std::string_view options_prefix = "/options=";
-        const auto view = std::string_view(token);
+    std::string first;
+    if (!(stream >> first)) {
+        return false;
+    }
 
-        if (view.starts_with(options_prefix)) {
-            const auto value_text = view.substr(options_prefix.size());
-            std::uint32_t value = 0;
-            const auto parsed = std::from_chars(
+    constexpr std::string_view options_prefix = "/options=";
+    const auto view = std::string_view(first);
+
+    if (view.starts_with(options_prefix)) {
+        if (!allow_options) {
+            return false;
+        }
+
+        const auto value_text =
+            view.substr(
+                options_prefix.size());
+
+        std::uint32_t value = 0;
+
+        const auto parsed =
+            std::from_chars(
                 value_text.data(),
                 value_text.data() + value_text.size(),
                 value);
 
-            if (value_text.empty() ||
-                parsed.ec != std::errc{} ||
-                parsed.ptr != value_text.data() + value_text.size() ||
-                value > max_options) {
-                return false;
-            }
+        if (value_text.empty() ||
+            parsed.ec != std::errc{} ||
+            parsed.ptr != value_text.data() + value_text.size() ||
+            value > max_options) {
 
-            output.options = value;
-            continue;
+            return false;
         }
 
-        output.name = std::move(token);
-        break;
+        output.options = value;
+
+        std::string path;
+        std::getline(
+            stream >> std::ws,
+            path);
+
+        if (path.empty()) {
+            return false;
+        }
+
+        output.path = std::move(path);
+        return true;
     }
 
-    if (output.name.empty()) {
+    std::string remainder;
+    std::getline(stream, remainder);
+
+    first += remainder;
+
+    if (first.empty()) {
         return false;
     }
 
-    if (!path_required) {
-        std::string extra;
-        return !(stream >> extra);
-    }
-
-    std::string path;
-    std::getline(stream >> std::ws, path);
-    if (path.empty()) {
-        return false;
-    }
-
-    output.path = std::move(path);
+    output.path = std::move(first);
     return true;
 }
 
@@ -207,13 +220,12 @@ void server_console::run() {
 
             if (!parse_ic_arguments(stream, true, 0, parsed)) {
                 std::cout
-                    << "SNAP_IC requires [/options=0] <name> <ic-path>\n";
+                    << "SNAP_IC requires [/options=0] <ic-path>\n";
                 continue;
             }
 
             server_request request;
             request.kind = server_request_kind::snap_ic;
-            request.name = std::move(parsed.name);
             request.path = std::move(parsed.path);
             request.snap_options =
                 static_cast<snap_ic_options>(parsed.options);
@@ -223,18 +235,18 @@ void server_console::run() {
 
             if (!parse_ic_arguments(
                     stream,
-                    false,
+                    true,
                     reset_ic_options_mask,
                     parsed)) {
 
                 std::cout
-                    << "RESET_IC requires [/options=<0..7>] <name>\n";
+                    << "RESET_IC requires [/options=<0..7>] <ic-path>\n";
                 continue;
             }
 
             server_request request;
             request.kind = server_request_kind::reset_ic;
-            request.name = std::move(parsed.name);
+            request.path = std::move(parsed.path);
             request.reset_options =
                 static_cast<reset_ic_options>(parsed.options);
             publish(std::move(request));
@@ -243,13 +255,13 @@ void server_console::run() {
 
             if (!parse_ic_arguments(stream, false, 0, parsed)) {
                 std::cout
-                    << "DELETE_IC requires <name>\n";
+                    << "DELETE_IC requires <ic-path>\n";
                 continue;
             }
 
             server_request request;
             request.kind = server_request_kind::delete_ic;
-            request.name = std::move(parsed.name);
+            request.path = std::move(parsed.path);
             publish(std::move(request));
         } else if (verb == "LIST_IC") {
             publish({server_request_kind::list_ic, {}});
@@ -373,8 +385,10 @@ void server_console::present(
         break;
 
     case server_response_payload_kind::ic_catalog:
-        for (const auto& node : result.catalog.items) {
-            std::cout << node.name << '\n';
+        for (const auto& entry : result.catalog.items) {
+            std::cout
+                << entry.path.generic_string()
+                << '\n';
         }
         break;
     }

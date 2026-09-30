@@ -35,10 +35,10 @@ enum class server_request_kind {
 struct server_request {
     server_request_kind kind = server_request_kind::shutdown;
 
-    // Project entry path for lifecycle commands; IC data path for SNAP_IC.
+    // Project entry path for lifecycle commands; IC identity for IC commands.
     std::filesystem::path path;
 
-    // Runtime query target or unique IC name.
+    // Runtime query target.
     std::string name;
 
     snap_ic_options snap_options = snap_ic_options::none;

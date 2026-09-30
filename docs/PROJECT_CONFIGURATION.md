@@ -68,6 +68,7 @@ version
 name
 project
 preprocessor
+[ic]
 ```
 
 Nested `project.json` field order:
@@ -633,7 +634,6 @@ The catalog is flat:
   "version": 1,
   "items": [
     {
-      "name": "Cold",
       "description": "",
       "size": 48128,
       "path": "D:/Snapshots/cold.ic"

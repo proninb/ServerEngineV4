@@ -22,7 +22,6 @@ enum class schema_context : std::uint8_t {
 };
 
 enum class entry_stage : std::uint8_t {
-    name,
     description,
     size,
     path,
@@ -32,7 +31,7 @@ enum class entry_stage : std::uint8_t {
 struct frame final {
     schema_context context = schema_context::root;
     std::uint8_t index = 0;
-    entry_stage stage = entry_stage::name;
+    entry_stage stage = entry_stage::description;
     ic_catalog_entry* entry = nullptr;
 };
 
@@ -45,24 +44,33 @@ struct frame final {
         : (catalog_path.parent_path() / path).lexically_normal();
 }
 
-[[nodiscard]] bool same_ic_path(
-    const std::filesystem::path& left,
-    const std::filesystem::path& right) noexcept {
+[[nodiscard]] bool normalize_ic_path(
+    const std::filesystem::path& path,
+    std::filesystem::path& output) noexcept {
 
-    filesystem_path_key left_key;
-    filesystem_path_key right_key;
+    output.clear();
 
-    if (make_filesystem_path_key(
-            left,
-            left_key) != filesystem_path_result::success ||
-        make_filesystem_path_key(
-            right,
-            right_key) != filesystem_path_result::success) {
-
+    if (path.empty()) {
         return false;
     }
 
-    return left_key == right_key;
+    try {
+        output = path.lexically_normal();
+
+        if (!output.is_absolute() &&
+            (output.has_root_name() ||
+             output.has_root_directory())) {
+
+            output.clear();
+            return false;
+        }
+
+        return true;
+    }
+    catch (...) {
+        output.clear();
+        return false;
+    }
 }
 
 class ic_catalog_handler final : public json_event_handler {
@@ -106,7 +114,7 @@ public:
         stack.push_back({
             schema_context::entry,
             0,
-            entry_stage::name,
+            entry_stage::description,
             &output.items.back(),
         });
     }
@@ -203,9 +211,6 @@ public:
         }
 
         switch (current.stage) {
-        case entry_stage::name:
-            valid_value = value == "name";
-            return;
         case entry_stage::description:
             valid_value = value == "description";
             return;
@@ -260,17 +265,6 @@ public:
         auto& entry = *current.entry;
 
         switch (current.stage) {
-        case entry_stage::name:
-            if (!value.get(entry.name) ||
-                entry.name.empty()) {
-
-                valid_value = false;
-                return;
-            }
-
-            current.stage = entry_stage::description;
-            return;
-
         case entry_stage::description:
             if (!value.get(entry.description)) {
                 valid_value = false;
@@ -352,9 +346,7 @@ private:
 
             const auto& entry = catalog.items[left];
 
-            if (entry.name.empty() ||
-                entry.path.empty()) {
-
+            if (entry.path.empty()) {
                 return false;
             }
 
@@ -377,10 +369,6 @@ private:
                  ++right) {
 
                 const auto& other = catalog.items[right];
-
-                if (entry.name == other.name) {
-                    return false;
-                }
 
                 const auto right_path =
                     resolve_ic_path(
@@ -474,12 +462,7 @@ void append_json_string(
         return false;
     }
 
-    output += "{\"name\":";
-    append_json_string(
-        entry.name,
-        output);
-
-    output += ",\"description\":";
+    output += "{\"description\":";
     append_json_string(
         entry.description,
         output);
@@ -680,107 +663,125 @@ ic_catalog_result save_ic_catalog(
 
 const ic_catalog_entry* find_ic_catalog_entry(
     const ic_catalog& catalog,
-    std::string_view name) noexcept {
+    const std::filesystem::path& catalog_path,
+    const std::filesystem::path& path) noexcept {
 
-    if (name.empty()) {
+    if (catalog_path.empty() ||
+        path.empty()) {
+
         return nullptr;
     }
 
-    const auto found =
-        std::find_if(
-            catalog.items.begin(),
-            catalog.items.end(),
-            [&](const ic_catalog_entry& entry) {
-                return entry.name == name;
-            });
+    try {
+        std::filesystem::path normalized;
 
-    return found == catalog.items.end()
-        ? nullptr
-        : &*found;
+        if (!normalize_ic_path(
+                path,
+                normalized)) {
+
+            return nullptr;
+        }
+
+        filesystem_path_key target_key;
+
+        if (make_filesystem_path_key(
+                resolve_ic_path(
+                    catalog_path,
+                    normalized),
+                target_key) != filesystem_path_result::success) {
+
+            return nullptr;
+        }
+
+        for (const auto& entry : catalog.items) {
+            filesystem_path_key entry_key;
+
+            if (make_filesystem_path_key(
+                    resolve_ic_path(
+                        catalog_path,
+                        entry.path),
+                    entry_key) != filesystem_path_result::success) {
+
+                return nullptr;
+            }
+
+            if (entry_key == target_key) {
+                return &entry;
+            }
+        }
+
+        return nullptr;
+    }
+    catch (...) {
+        return nullptr;
+    }
 }
 
 ic_catalog_entry* find_ic_catalog_entry(
     ic_catalog& catalog,
-    std::string_view name) noexcept {
+    const std::filesystem::path& catalog_path,
+    const std::filesystem::path& path) noexcept {
 
     return const_cast<ic_catalog_entry*>(
         find_ic_catalog_entry(
             static_cast<const ic_catalog&>(
                 catalog),
-            name));
+            catalog_path,
+            path));
 }
 
 bool upsert_ic_catalog_entry(
     ic_catalog& catalog,
     const std::filesystem::path& catalog_path,
-    std::string_view name,
     const std::filesystem::path& path,
     std::uint64_t size) noexcept {
 
     if (catalog_path.empty() ||
-        name.empty() ||
         path.empty()) {
 
         return false;
     }
 
     try {
-        const auto normalized =
-            path.lexically_normal();
+        std::filesystem::path normalized;
 
-        const auto resolved =
-            resolve_ic_path(
-                catalog_path,
-                normalized);
-
-        filesystem_path_key resolved_key;
-
-        if (make_filesystem_path_key(
-                resolved,
-                resolved_key) != filesystem_path_result::success) {
+        if (!normalize_ic_path(
+                path,
+                normalized)) {
 
             return false;
         }
 
-        auto found =
-            catalog.items.end();
+        filesystem_path_key target_key;
 
-        for (auto current =
-                 catalog.items.begin();
-             current != catalog.items.end();
-             ++current) {
+        if (make_filesystem_path_key(
+                resolve_ic_path(
+                    catalog_path,
+                    normalized),
+                target_key) != filesystem_path_result::success) {
 
-            if (current->name == name) {
-                found = current;
-                continue;
-            }
+            return false;
+        }
 
-            filesystem_path_key current_key;
+        for (auto& entry : catalog.items) {
+            filesystem_path_key entry_key;
 
             if (make_filesystem_path_key(
                     resolve_ic_path(
                         catalog_path,
-                        current->path),
-                    current_key) != filesystem_path_result::success) {
+                        entry.path),
+                    entry_key) != filesystem_path_result::success) {
 
                 return false;
             }
 
-            if (current_key == resolved_key) {
-                return false;
+            if (entry_key == target_key) {
+                entry.size = size;
+                return true;
             }
-        }
-
-        if (found != catalog.items.end()) {
-            found->path = normalized;
-            found->size = size;
-            return true;
         }
 
         ic_catalog_entry entry;
-        entry.name.assign(
-            name.data(),
-            name.size());
         entry.path = normalized;
         entry.size = size;
 
@@ -796,31 +797,64 @@ bool upsert_ic_catalog_entry(
 
 bool erase_ic_catalog_entry(
     ic_catalog& catalog,
-    std::string_view name,
+    const std::filesystem::path& catalog_path,
+    const std::filesystem::path& path,
     std::filesystem::path& removed_path) noexcept {
 
     removed_path.clear();
 
-    if (name.empty()) {
-        return false;
-    }
+    if (catalog_path.empty() ||
+        path.empty()) {
 
-    const auto found =
-        std::find_if(
-            catalog.items.begin(),
-            catalog.items.end(),
-            [&](const ic_catalog_entry& entry) {
-                return entry.name == name;
-            });
-
-    if (found == catalog.items.end()) {
         return false;
     }
 
     try {
-        removed_path = found->path;
-        catalog.items.erase(found);
-        return true;
+        std::filesystem::path normalized;
+
+        if (!normalize_ic_path(
+                path,
+                normalized)) {
+
+            return false;
+        }
+
+        filesystem_path_key target_key;
+
+        if (make_filesystem_path_key(
+                resolve_ic_path(
+                    catalog_path,
+                    normalized),
+                target_key) != filesystem_path_result::success) {
+
+            return false;
+        }
+
+        for (auto current = catalog.items.begin();
+             current != catalog.items.end();
+             ++current) {
+
+            filesystem_path_key current_key;
+
+            if (make_filesystem_path_key(
+                    resolve_ic_path(
+                        catalog_path,
+                        current->path),
+                    current_key) != filesystem_path_result::success) {
+
+                return false;
+            }
+
+            if (current_key != target_key) {
+                continue;
+            }
+
+            removed_path = current->path;
+            catalog.items.erase(current);
+            return true;
+        }
+
+        return false;
     }
     catch (...) {
         removed_path.clear();

@@ -517,12 +517,7 @@ void append_ic_catalog_entry(
         entry.path,
         path_text);
 
-    output += "{\"name\":";
-    append_escaped(
-        entry.name,
-        output);
-
-    output += ",\"description\":";
+    output += "{\"description\":";
     append_escaped(
         entry.description,
         output);
@@ -868,12 +863,9 @@ json_decode_result decode_json_request(
             case server_request_kind::snap_ic:
                 if (!only(
                         handler.seen,
-                        name_bit |
-                            path_bit |
+                        path_bit |
                             options_bit) ||
-                    (handler.seen & name_bit) == 0 ||
                     (handler.seen & path_bit) == 0 ||
-                    handler.name_value.empty() ||
                     handler.path_value.empty() ||
                     handler.options_value != 0) {
 
@@ -881,10 +873,6 @@ json_decode_result decode_json_request(
                         json_protocol_error::invalid_schema,
                     };
                 }
-
-                request.name =
-                    std::move(
-                        handler.name_value);
 
                 request.path =
                     std::move(
@@ -898,10 +886,10 @@ json_decode_result decode_json_request(
             case server_request_kind::reset_ic:
                 if (!only(
                         handler.seen,
-                        name_bit |
+                        path_bit |
                             options_bit) ||
-                    (handler.seen & name_bit) == 0 ||
-                    handler.name_value.empty() ||
+                    (handler.seen & path_bit) == 0 ||
+                    handler.path_value.empty() ||
                     handler.options_value >
                         reset_ic_options_mask) {
 
@@ -910,9 +898,9 @@ json_decode_result decode_json_request(
                     };
                 }
 
-                request.name =
+                request.path =
                     std::move(
-                        handler.name_value);
+                        handler.path_value);
 
                 request.reset_options =
                     static_cast<reset_ic_options>(
@@ -922,18 +910,18 @@ json_decode_result decode_json_request(
             case server_request_kind::delete_ic:
                 if (!only(
                         handler.seen,
-                        name_bit) ||
-                    (handler.seen & name_bit) == 0 ||
-                    handler.name_value.empty()) {
+                        path_bit) ||
+                    (handler.seen & path_bit) == 0 ||
+                    handler.path_value.empty()) {
 
                     return {
                         json_protocol_error::invalid_schema,
                     };
                 }
 
-                request.name =
+                request.path =
                     std::move(
-                        handler.name_value);
+                        handler.path_value);
                 break;
 
             case server_request_kind::get_value:

@@ -59,20 +59,19 @@ public:
         diagnostic_collection& diagnostics);
 
     [[nodiscard]] server_status snap_ic(
-        const std::string& name,
         const std::filesystem::path& path,
         snap_ic_options options,
         operation_id operation,
         diagnostic_collection& diagnostics);
 
     [[nodiscard]] server_status reset_ic(
-        const std::string& name,
+        const std::filesystem::path& path,
         reset_ic_options options,
         operation_id operation,
         diagnostic_collection& diagnostics);
 
     [[nodiscard]] server_status delete_ic(
-        const std::string& name,
+        const std::filesystem::path& path,
         operation_id operation,
         diagnostic_collection& diagnostics);
 

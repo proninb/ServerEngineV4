@@ -51,7 +51,7 @@ int main() {
 
         const auto decoded =
             decode_json_request(
-                R"({"request_id":30,"command":"SNAP_IC","arguments":{"name":"Cold","path":"D:/Snapshots/cold.ic"}})",
+                R"({"request_id":30,"command":"SNAP_IC","arguments":{"path":"D:/Snapshots/cold.ic"}})",
                 request);
 
         if (!decoded.ok() ||
@@ -67,8 +67,6 @@ int main() {
 
         if (server.kind !=
                 server_request_kind::snap_ic ||
-            server.name !=
-                "Cold" ||
             server.path !=
                 "D:/Snapshots/cold.ic") {
 
@@ -81,7 +79,7 @@ int main() {
 
         const auto decoded =
             decode_json_request(
-                R"({"request_id":32,"command":"RESET_IC","arguments":{"name":"Cold"}})",
+                R"({"request_id":32,"command":"RESET_IC","arguments":{"path":"D:/Snapshots/cold.ic"}})",
                 request);
 
         if (!decoded.ok() ||
@@ -97,8 +95,6 @@ int main() {
 
         if (server.kind !=
                 server_request_kind::reset_ic ||
-            server.name !=
-                "Cold" ||
             server.reset_options !=
                 reset_ic_options::none) {
 
@@ -111,7 +107,7 @@ int main() {
 
         const auto decoded =
             decode_json_request(
-                R"({"request_id":34,"command":"RESET_IC","arguments":{"name":"Cold","options":3}})",
+                R"({"request_id":34,"command":"RESET_IC","arguments":{"path":"cold.ic","options":3}})",
                 request);
 
         if (!decoded.ok()) {
@@ -135,7 +131,7 @@ int main() {
 
         const auto decoded =
             decode_json_request(
-                R"({"request_id":36,"command":"RESET_IC","arguments":{"name":"Cold","options":7}})",
+                R"({"request_id":36,"command":"RESET_IC","arguments":{"path":"cold.ic","options":7}})",
                 request);
 
         if (!decoded.ok()) {
@@ -159,7 +155,7 @@ int main() {
         json_request request;
 
         if (decode_json_request(
-                R"({"request_id":38,"command":"RESET_IC","arguments":{"name":"Cold","options":8}})",
+                R"({"request_id":38,"command":"RESET_IC","arguments":{"path":"cold.ic","options":8}})",
                 request).ok()) {
 
             return 38;
@@ -170,7 +166,7 @@ int main() {
         json_request request;
 
         if (decode_json_request(
-                R"({"request_id":39,"command":"SNAP_IC","arguments":{"name":"Cold","path":"cold.ic","options":1}})",
+                R"({"request_id":39,"command":"SNAP_IC","arguments":{"path":"cold.ic","options":1}})",
                 request).ok()) {
 
             return 39;
@@ -193,7 +189,7 @@ int main() {
 
         const auto decoded =
             decode_json_request(
-                R"({"request_id":46,"command":"DELETE_IC","arguments":{"name":"Cold"}})",
+                R"({"request_id":46,"command":"DELETE_IC","arguments":{"path":"cold.ic"}})",
                 request);
 
         if (!decoded.ok() ||
@@ -211,7 +207,7 @@ int main() {
         json_request request;
 
         if (decode_json_request(
-                R"({"request_id":47,"command":"RESET_IC","arguments":{"name":"Cold","path":"legacy.ic"}})",
+                R"({"request_id":47,"command":"RESET_IC","arguments":{"name":"Cold"}})",
                 request).ok()) {
 
             return 47;
@@ -222,7 +218,7 @@ int main() {
         json_request request;
 
         if (decode_json_request(
-                R"({"request_id":49,"command":"DELETE_IC","arguments":{"name":"Cold","group":["Legacy"]}})",
+                R"({"request_id":49,"command":"DELETE_IC","arguments":{"path":"cold.ic","name":"Legacy"}})",
                 request).ok()) {
 
             return 49;

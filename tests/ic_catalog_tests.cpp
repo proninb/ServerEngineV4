@@ -28,14 +28,15 @@ int main() {
     const auto catalog_path =
         directory / "IC.json";
 
+    const std::filesystem::path cold_path{
+        "snapshots/cold.ic"};
+
     ic_catalog catalog;
 
     if (!upsert_ic_catalog_entry(
             catalog,
             catalog_path,
-            "Cold",
-            std::filesystem::path{
-                "snapshots/cold.ic"},
+            cold_path,
             128)) {
 
         return 2;
@@ -44,38 +45,56 @@ int main() {
     const auto* entry =
         find_ic_catalog_entry(
             catalog,
-            "Cold");
+            catalog_path,
+            cold_path);
 
     if (entry == nullptr ||
         entry->size != 128 ||
-        entry->path !=
-            std::filesystem::path{
-                "snapshots/cold.ic"}) {
+        entry->path != cold_path) {
 
         return 3;
     }
 
-    if (upsert_ic_catalog_entry(
+    // Equivalent absolute locator addresses the same IC.
+    if (!upsert_ic_catalog_entry(
             catalog,
             catalog_path,
-            "Duplicate",
             directory /
                 "snapshots" /
                 "cold.ic",
-            64)) {
+            129)) {
 
         return 4;
+    }
+
+    if (catalog.items.size() != 1) {
+        return 5;
+    }
+
+    entry =
+        find_ic_catalog_entry(
+            catalog,
+            catalog_path,
+            cold_path);
+
+    if (entry == nullptr ||
+        entry->size != 129) {
+
+        return 6;
     }
 
     if (!upsert_ic_catalog_entry(
             catalog,
             catalog_path,
-            "Warm",
             std::filesystem::path{
                 "snapshots/warm.ic"},
             256)) {
 
-        return 5;
+        return 7;
+    }
+
+    if (catalog.items.size() != 2) {
+        return 8;
     }
 
     if (save_ic_catalog(
@@ -83,7 +102,7 @@ int main() {
             catalog) !=
         ic_catalog_result::success) {
 
-        return 6;
+        return 9;
     }
 
     ic_catalog loaded;
@@ -93,32 +112,29 @@ int main() {
             loaded) !=
         ic_catalog_result::success) {
 
-        return 7;
+        return 10;
     }
 
     entry =
         find_ic_catalog_entry(
             loaded,
-            "Cold");
+            catalog_path,
+            cold_path);
 
     if (entry == nullptr ||
-        entry->size != 128 ||
-        entry->path !=
-            std::filesystem::path{
-                "snapshots/cold.ic"}) {
+        entry->size != 129 ||
+        entry->path != cold_path) {
 
-        return 8;
+        return 11;
     }
 
     if (!upsert_ic_catalog_entry(
             loaded,
             catalog_path,
-            "Cold",
-            std::filesystem::path{
-                "snapshots/cold.ic"},
-            129)) {
+            cold_path,
+            130)) {
 
-        return 9;
+        return 12;
     }
 
     if (save_ic_catalog(
@@ -126,7 +142,7 @@ int main() {
             loaded) !=
         ic_catalog_result::success) {
 
-        return 10;
+        return 13;
     }
 
     auto temporary_catalog_path =
@@ -137,7 +153,7 @@ int main() {
     if (std::filesystem::exists(
             temporary_catalog_path)) {
 
-        return 11;
+        return 14;
     }
 
     ic_catalog replaced;
@@ -147,38 +163,41 @@ int main() {
             replaced) !=
         ic_catalog_result::success) {
 
-        return 12;
+        return 15;
     }
 
     entry =
         find_ic_catalog_entry(
             replaced,
-            "Cold");
+            catalog_path,
+            cold_path);
 
     if (entry == nullptr ||
-        entry->size != 129) {
+        entry->size != 130) {
 
-        return 13;
+        return 16;
     }
 
     std::filesystem::path removed_path;
 
     if (!erase_ic_catalog_entry(
             replaced,
-            "Cold",
+            catalog_path,
+            directory /
+                "snapshots" /
+                "cold.ic",
             removed_path)) {
 
-        return 14;
+        return 17;
     }
 
-    if (removed_path !=
-            std::filesystem::path{
-                "snapshots/cold.ic"} ||
+    if (removed_path != cold_path ||
         find_ic_catalog_entry(
             replaced,
-            "Cold") != nullptr) {
+            catalog_path,
+            cold_path) != nullptr) {
 
-        return 15;
+        return 18;
     }
 
     std::filesystem::remove_all(
