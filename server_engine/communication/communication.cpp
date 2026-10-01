@@ -87,9 +87,13 @@ void communication::stop() noexcept {
         console->stop();
     }
 
-    for (auto* connection : connections) {
-        (void)connection->begin_close();
-        connection->teardown_subscriptions();
+    for (auto& entry : connections) {
+        if (entry.connection == nullptr) {
+            continue;
+        }
+
+        (void)entry.connection->begin_close();
+        entry.connection->teardown_subscriptions();
     }
 
     connections.clear();
@@ -109,16 +113,26 @@ bool communication::register_connection(
         std::find_if(
             connections.begin(),
             connections.end(),
-            [&connection](const communication_connection* current) {
-                return current == &connection ||
-                    current->id() == connection.id();
+            [&connection](const registered_connection& current) {
+                return current.connection == &connection ||
+                    (current.connection != nullptr &&
+                     current.connection->id() == connection.id());
             });
 
     if (duplicate != connections.end()) {
         return false;
     }
 
-    connections.push_back(&connection);
+    try {
+        connections.push_back({
+            &connection,
+            connection.hold(),
+        });
+    }
+    catch (...) {
+        return false;
+    }
+
     return true;
 }
 
@@ -129,15 +143,16 @@ void communication::unregister_connection(
         std::find_if(
             connections.begin(),
             connections.end(),
-            [id](const communication_connection* connection) {
-                return connection->id() == id;
+            [id](const registered_connection& entry) {
+                return entry.connection != nullptr &&
+                    entry.connection->id() == id;
             });
 
     if (position == connections.end()) {
         return;
     }
 
-    (*position)->teardown_subscriptions();
+    position->connection->teardown_subscriptions();
     connections.erase(position);
 }
 
@@ -149,8 +164,14 @@ void communication::publish_server_state(
         return;
     }
 
-    for (auto* connection : connections) {
-        if (connection->logged_in()) {
+    for (auto& entry : connections) {
+        auto* connection =
+            entry.connection;
+
+        if (connection != nullptr &&
+            connection->logged_in() &&
+            !connection->closing()) {
+
             (void)connection->enqueue_server_state(
                 old_state,
                 new_state);
@@ -169,8 +190,14 @@ std::size_t communication::route_client(
     std::size_t routed = 0;
     const std::string from(sender.login_name());
 
-    for (auto* connection : connections) {
-        if (!connection->logged_in() || connection->closing()) {
+    for (auto& entry : connections) {
+        auto* connection =
+            entry.connection;
+
+        if (connection == nullptr ||
+            !connection->logged_in() ||
+            connection->closing()) {
+
             continue;
         }
 

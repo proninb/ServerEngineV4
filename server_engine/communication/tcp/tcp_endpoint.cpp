@@ -68,6 +68,24 @@ void close_socket(native_socket value) noexcept {
                &enabled) == 0;
 }
 
+[[nodiscard]] bool configure_send_socket(
+    native_socket) noexcept {
+
+    return true;
+}
+
+[[nodiscard]] int socket_send(
+    native_socket value,
+    const char* data,
+    int size) noexcept {
+
+    return send(
+        value,
+        data,
+        size,
+        0);
+}
+
 [[nodiscard]] int poll_sockets(
     poll_descriptor* descriptors,
     unsigned long count,
@@ -118,6 +136,45 @@ void close_socket(native_socket value) noexcept {
             value,
             F_SETFL,
             flags | O_NONBLOCK) == 0;
+}
+
+[[nodiscard]] bool configure_send_socket(
+    native_socket value) noexcept {
+
+#if defined(SO_NOSIGPIPE)
+    const int enabled = 1;
+
+    return setsockopt(
+               value,
+               SOL_SOCKET,
+               SO_NOSIGPIPE,
+               &enabled,
+               sizeof(enabled)) == 0;
+#else
+    static_cast<void>(value);
+    return true;
+#endif
+}
+
+[[nodiscard]] int socket_send(
+    native_socket value,
+    const char* data,
+    int size) noexcept {
+
+#if defined(MSG_NOSIGNAL)
+    constexpr int flags =
+        MSG_NOSIGNAL;
+#else
+    constexpr int flags = 0;
+#endif
+
+    return static_cast<int>(
+        ::send(
+            value,
+            data,
+            static_cast<std::size_t>(
+                size),
+            flags));
 }
 
 [[nodiscard]] int poll_sockets(
@@ -337,7 +394,9 @@ struct socket_owner final {
         return false;
     }
 
-    if (!set_nonblocking(
+    if (!configure_send_socket(
+            send_socket.value) ||
+        !set_nonblocking(
             receive_socket.value) ||
         !set_nonblocking(
             send_socket.value)) {
@@ -551,11 +610,10 @@ private:
         const char value = 1;
 
         static_cast<void>(
-            send(
+            socket_send(
                 wake_sender.value,
                 &value,
-                1,
-                0));
+                1));
     }
 
     void run() {
@@ -630,31 +688,32 @@ private:
                     wake_receiver.value);
             }
 
+            const auto polled_peer_count =
+                descriptors.size() - 2;
+
             if ((descriptors[0].revents &
                  POLLIN) != 0) {
 
                 accept_peers();
             }
 
-            const auto peer_count =
-                peers.size();
+            // descriptors[] is a snapshot of the pre-accept peer order.
+            // Process it backwards so erase cannot shift an unprocessed peer.
+            for (std::size_t remaining =
+                     polled_peer_count;
+                 remaining > 0;
+                 --remaining) {
 
-            for (std::size_t index = 0;
-                 index < peer_count &&
-                 index < peers.size();) {
+                const auto index =
+                    remaining - 1;
 
-                const auto descriptor_index =
-                    index + 2;
-
-                if (descriptor_index >=
-                    descriptors.size()) {
-
-                    break;
+                if (index >= peers.size()) {
+                    continue;
                 }
 
                 const auto events =
                     descriptors[
-                        descriptor_index].revents;
+                        index + 2].revents;
 
                 bool alive = true;
 
@@ -700,11 +759,7 @@ private:
                         static_cast<
                             std::ptrdiff_t>(
                             index));
-
-                    continue;
                 }
-
-                ++index;
             }
         }
     }
@@ -737,7 +792,9 @@ private:
                 return;
             }
 
-            if (!set_nonblocking(
+            if (!configure_send_socket(
+                    accepted.value) ||
+                !set_nonblocking(
                     accepted.value) ||
                 gate == nullptr ||
                 !gate->acquire()) {
@@ -1152,7 +1209,7 @@ private:
                 value.send_offset;
 
             const auto sent =
-                send(
+                socket_send(
                     value.socket.value,
                     value.send_buffer.data() +
                         value.send_offset,
@@ -1160,8 +1217,7 @@ private:
                         std::min<std::size_t>(
                             remaining,
                             static_cast<std::size_t>(
-                                std::numeric_limits<int>::max()))),
-                    0);
+                                std::numeric_limits<int>::max()))));
 
             if (sent > 0) {
                 value.send_offset +=

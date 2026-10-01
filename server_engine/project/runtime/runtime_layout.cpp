@@ -1989,6 +1989,18 @@ bool runtime_binding_index::base_offset(
     return true;
 }
 
+bool runtime_binding_index::reference_layout(
+    std::uint8_t& size,
+    std::uint64_t& target_base_address) const noexcept {
+
+    size = reference_size_value;
+    target_base_address =
+        target_base_address_value;
+
+    return size == 4 ||
+        size == 8;
+}
+
 bool runtime_binding_index::intrinsic_size(
     intrinsic_type type,
     std::uint8_t& output_value) const noexcept {
@@ -2031,11 +2043,49 @@ bool runtime_layout::object_offset(
 }
 
 bool runtime_layout::release_bindings(
-    runtime_binding_index& output) noexcept {
+    runtime_binding_index& output,
+    std::uint64_t target_base_address) noexcept {
 
     if (!prepared_value) {
         return false;
     }
+
+    abi_properties properties;
+
+    if (!abi_layout_properties(
+            target_value,
+            properties) ||
+        (properties.reference_size != 4 &&
+         properties.reference_size != 8)) {
+
+        return false;
+    }
+
+    const auto address_mask =
+        properties.reference_size == 4
+        ? static_cast<std::uint64_t>(
+            (std::numeric_limits<
+                std::uint32_t>::max)())
+        : (std::numeric_limits<
+            std::uint64_t>::max)();
+
+    if (target_base_address != 0 &&
+        (target_base_address >
+             address_mask ||
+         (size_value != 0 &&
+          size_value - 1 >
+              address_mask -
+                  target_base_address))) {
+
+        return false;
+    }
+
+    output.target_base_address_value =
+        target_base_address;
+
+    output.reference_size_value =
+        static_cast<std::uint8_t>(
+            properties.reference_size);
 
     output.intrinsic_sizes.fill(0);
 

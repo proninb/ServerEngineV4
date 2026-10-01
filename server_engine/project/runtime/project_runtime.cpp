@@ -376,7 +376,8 @@ server_status create_resident_project(
     runtime_binding_index bindings;
 
     if (!layout.release_bindings(
-            bindings)) {
+            bindings,
+            settings.shm.fixed_base_address)) {
 
         diagnostics.emit(
             diagnostic(

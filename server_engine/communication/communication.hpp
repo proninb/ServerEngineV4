@@ -56,9 +56,14 @@ private:
     tcp_connection_gate tcp_gate;
     std::atomic_uint64_t next_session_id = 1;
 
-    // Raw pointers are valid while registered: transport ownership or an in-flight
-    // close control item keeps each connection object alive. Server thread only.
-    std::vector<communication_connection*> connections;
+    struct registered_connection final {
+        communication_connection* connection = nullptr;
+        connection_lifetime_token lifetime;
+    };
+
+    // The registry owns one lifetime token for every logged-in connection.
+    // Transport ownership and queued control items are independent lifetimes.
+    std::vector<registered_connection> connections;
 };
 
 }

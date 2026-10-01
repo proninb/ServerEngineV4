@@ -73,6 +73,10 @@ public:
         intrinsic_type type,
         std::uint8_t& output) const noexcept;
 
+    [[nodiscard]] bool reference_layout(
+        std::uint8_t& size,
+        std::uint64_t& target_base_address) const noexcept;
+
 private:
     static constexpr std::size_t
     intrinsic_slot_count =
@@ -83,6 +87,9 @@ private:
         std::uint8_t,
         intrinsic_slot_count>
         intrinsic_sizes{};
+
+    std::uint64_t target_base_address_value = 0;
+    std::uint8_t reference_size_value = 0;
 
     std::vector<runtime_offset> object_offsets;
     std::vector<record_offset> member_offsets;
@@ -157,7 +164,8 @@ public:
         runtime_offset& output) const noexcept;
 
     [[nodiscard]] bool release_bindings(
-        runtime_binding_index& output) noexcept;
+        runtime_binding_index& output,
+        std::uint64_t target_base_address = 0) noexcept;
 
 private:
     enum class slot_state : std::uint8_t {

@@ -69,13 +69,10 @@ struct resolved_member final {
 
 [[nodiscard]] runtime_query_result normalize_location(
     const compiled_project_view& project,
+    const runtime_binding_index& bindings,
     std::span<const std::byte> runtime,
     type_ref& type,
     runtime_offset& offset) noexcept {
-
-    const auto runtime_base =
-        reinterpret_cast<std::uintptr_t>(
-            runtime.data());
 
     const auto limit =
         project.derived_type_count() + 1;
@@ -109,30 +106,48 @@ struct resolved_member final {
 
         case derived_type_kind::lvalue_reference:
         case derived_type_kind::rvalue_reference: {
-            if (offset >
-                    static_cast<runtime_offset>(
-                        runtime.size()) ||
-                sizeof(std::uintptr_t) >
-                    static_cast<runtime_offset>(
-                        runtime.size()) - offset) {
+            std::uint8_t reference_size = 0;
+            std::uint64_t target_base_address = 0;
+
+            if (!bindings.reference_layout(
+                    reference_size,
+                    target_base_address)) {
 
                 return runtime_query_result::invalid_runtime;
             }
 
-            std::uintptr_t target = 0;
+            if (target_base_address == 0) {
+                target_base_address =
+                    static_cast<std::uint64_t>(
+                        reinterpret_cast<
+                            std::uintptr_t>(
+                                runtime.data()));
+            }
 
-            std::memcpy(
-                &target,
-                runtime.data() +
-                    static_cast<std::size_t>(offset),
-                sizeof(target));
+            std::uint64_t target = 0;
 
-            if (target < runtime_base) {
+            const auto read =
+                read_native_bits(
+                    runtime,
+                    offset,
+                    reference_size,
+                    target);
+
+            if (read !=
+                runtime_query_result::success) {
+
+                return read;
+            }
+
+            if (target <
+                target_base_address) {
+
                 return runtime_query_result::invalid_runtime;
             }
 
             const auto relative =
-                target - runtime_base;
+                target -
+                target_base_address;
 
             if (relative >= runtime.size()) {
                 return runtime_query_result::invalid_runtime;
@@ -2005,6 +2020,7 @@ runtime_query_result get_runtime_value(
             const auto normalized =
                 normalize_location(
                     project,
+                    bindings,
                     runtime,
                     type,
                     offset);
@@ -2088,6 +2104,7 @@ runtime_query_result get_runtime_value(
     const auto normalized =
         normalize_location(
             project,
+            bindings,
             runtime,
             type,
             offset);
