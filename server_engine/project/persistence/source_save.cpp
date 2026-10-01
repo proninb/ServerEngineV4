@@ -317,6 +317,27 @@ struct directory_index_slot final {
     return capacity;
 }
 
+// Mutable sparse tables grow at 75% occupancy. The persisted-index capacity
+// helper above reserves only 25% extra and can return the current capacity
+// (e.g. 49 entries in 64 slots), which is not sufficient for this threshold.
+[[nodiscard]] std::size_t sparse_capacity(
+    std::size_t count) noexcept {
+
+    std::size_t capacity = 16;
+
+    while (count > capacity - capacity / 4) {
+        if (capacity >
+            (std::numeric_limits<std::size_t>::max)() / 2) {
+
+            return 0;
+        }
+
+        capacity *= 2;
+    }
+
+    return capacity;
+}
+
 enum class sparse_file_insert_result : std::uint8_t {
     inserted,
     existing,
@@ -424,7 +445,7 @@ insert_sparse_file(
         required > threshold) {
 
         const auto capacity =
-            next_capacity(
+            sparse_capacity(
                 required);
 
         if (capacity == 0 ||
@@ -8298,7 +8319,7 @@ server_status collect_source_save_semantic_invalidation(
                 required > threshold) {
 
                 const auto capacity =
-                    next_capacity(
+                    sparse_capacity(
                         required);
 
                 if (capacity == 0 ||

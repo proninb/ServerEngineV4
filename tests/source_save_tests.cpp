@@ -1539,6 +1539,7 @@ void test_affected_semantic_roots(
     }
 
     constexpr std::size_t unrelated_count = 64;
+    std::vector<file_id> unrelated_files;
 
     for (std::size_t index = 0;
          index < unrelated_count;
@@ -1574,6 +1575,8 @@ void test_affected_semantic_roots(
 
             return;
         }
+
+        unrelated_files.push_back(unrelated);
     }
 
     if (!tests.expect(
@@ -1692,6 +1695,17 @@ void test_affected_semantic_roots(
         roots.size() == 1 &&
         roots[0] == semantic_root,
         "OLD physical closure selects zero-contribution semantic root");
+
+    for (const std::size_t count : {48u, 49u, 64u}) {
+        std::vector<file_id> changed(
+            unrelated_files.begin(), unrelated_files.begin() + count);
+        std::vector<file_id> result;
+        tests.expect(
+            succeeded(collect_source_save_affected(
+                persisted, changed, result)) &&
+            result == changed,
+            "sparse affected-file set grows beyond 48 entries without losing roots");
+    }
 }
 
 }

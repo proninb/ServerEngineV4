@@ -154,3 +154,34 @@ Write-Host "PASS: compiled/source/database changed"
 Write-Host "PASS: project.manifest remained stable"
 Write-Host "PASS: LOAD audit observes 3 final types"
 Write-Host "PASS: no .build-new/.build-old files remain"
+
+# Exercise sparse semantic-counter growth at and beyond 75% occupancy.
+# The old capacity calculation failed at 49 unique producers in 64 slots.
+$source = Join-Path $fixture 'objects.cpp'
+$config.project += [ordered]@{
+    name = 'objects.cpp'
+    type = 'source'
+    path = 'objects.cpp'
+}
+[IO.File]::WriteAllText($project, ($config | ConvertTo-Json -Depth 8), $utf8)
+foreach ($objectCount in @(48, 49, 97, 193)) {
+    $declarations = [Text.StringBuilder]::new()
+    for ($index = 0; $index -lt $objectCount; ++$index) {
+        [void]$declarations.Append("T000000000 object_$index;`n")
+    }
+    $original = $declarations.ToString()
+    [IO.File]::WriteAllText($source, $original, $utf8)
+    Invoke-Lifecycle -Mode rebuild -ExpectedTypes 3
+    $oldCompiled = Artifact-Hash 'compiled.bin'
+    [IO.File]::WriteAllText($source, $original.Replace(' object_0;', ' renamed_0;'), $utf8)
+    $changedOutput = @(Invoke-Lifecycle -Mode build -ExpectedTypes 3)
+    $changedOutput | Write-Output
+    if (($changedOutput -join "`n") -notmatch ",objects=$objectCount,") {
+        throw "Changed BUILD did not preserve $objectCount objects"
+    }
+    if ($oldCompiled -eq (Artifact-Hash 'compiled.bin')) {
+        throw "Changed BUILD did not publish renamed object for $objectCount producers"
+    }
+    Invoke-Lifecycle -Mode audit -ExpectedTypes 3
+    Write-Host "PASS: renamed object with $objectCount producers survives sparse table growth"
+}
