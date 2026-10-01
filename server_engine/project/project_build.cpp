@@ -11,6 +11,7 @@
 #include "parser/parser.hpp"
 #include "project_configuration_manifest_store.hpp"
 #include "persistence/project_artifact.hpp"
+#include "persistence/compiled_project_build.hpp"
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 
@@ -1826,6 +1827,78 @@ server_status build_project(
         return assign_candidate_bound;
     }
 
+    const auto graph_candidate_prepared =
+        context.graph_candidate.prepare(
+            context.graph_changes);
+
+    if (!succeeded(
+            graph_candidate_prepared)) {
+
+        diagnostics.emit(
+            diagnostic(
+                graph_candidate_prepared ==
+                        server_status::io_error
+                    ? diagnostics::
+                        project_build_incomplete
+                    : diagnostics::
+                        project_compiled_invalid,
+                operation)
+                .file(layout.compiled)
+                .detail(
+                    graph_candidate_prepared ==
+                            server_status::io_error
+                        ? "BUILD could not allocate dense final-G remap state"
+                        : "Sparse Graph candidate cannot project to one dense final G")
+                .build());
+
+        return graph_candidate_prepared;
+    }
+
+    compiled_project_layout
+        compiled_candidate_layout;
+
+    const auto compiled_candidate_prepared =
+        prepare_build_compiled_project_layout(
+            context.strings,
+            context.identities,
+            context.graph_changes,
+            context.graph_candidate,
+            context.assign_candidate,
+            context.files,
+            context.source_candidate,
+            compiled_candidate_layout);
+
+    if (compiled_candidate_prepared !=
+        compiled_project_image_result::
+            success) {
+
+        diagnostics.emit(
+            diagnostic(
+                compiled_candidate_prepared ==
+                        compiled_project_image_result::
+                            failed
+                    ? diagnostics::
+                        project_build_incomplete
+                    : diagnostics::
+                        project_compiled_invalid,
+                operation)
+                .file(layout.compiled)
+                .detail(
+                    compiled_candidate_prepared ==
+                            compiled_project_image_result::
+                                failed
+                        ? "BUILD could not prepare exact final compiled.bin layout"
+                        : "Sparse BUILD candidates disagree with final compiled.bin layout contract")
+                .build());
+
+        return compiled_candidate_prepared ==
+                compiled_project_image_result::
+                    failed
+            ? server_status::io_error
+            : server_status::
+                project_artifact_invalid;
+    }
+
     std::string detail;
 
     try {
@@ -2008,13 +2081,31 @@ server_status build_project(
             ", assign_candidate_bytes=" +
             std::to_string(
                 context.assign_candidate.byte_size()) +
+            ", final_types=" +
+            std::to_string(
+                context.graph_candidate.type_count()) +
+            ", final_members=" +
+            std::to_string(
+                context.graph_candidate.member_count()) +
+            ", final_bases=" +
+            std::to_string(
+                context.graph_candidate.base_count()) +
+            ", final_objects=" +
+            std::to_string(
+                context.graph_candidate.object_count()) +
+            ", final_links=" +
+            std::to_string(
+                context.graph_candidate.link_count()) +
+            ", final_compiled_bytes=" +
+            std::to_string(
+                compiled_candidate_layout.size()) +
             ", baseline_strings=" +
             std::to_string(
                 context.compiled.string_count()) +
             ", baseline_identities=" +
             std::to_string(
                 context.compiled.identity_count()) +
-            "; sparse semantic/Assign candidates completed; direct final artifact construction is not implemented yet";
+            "; exact dense final-G and compiled.bin layout completed; direct mmap encoding/publication is not implemented yet";
     }
     catch (...) {
         return server_status::io_error;

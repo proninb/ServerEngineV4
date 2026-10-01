@@ -23,6 +23,10 @@
 
 namespace cw::server {
 
+class graph_delta;
+class graph_dense_projection;
+class source_map_overlay_view;
+
 inline constexpr std::uint32_t compiled_project_format_version = 12;
 
 inline constexpr std::size_t
@@ -92,6 +96,32 @@ public:
     }
 
 private:
+    struct preparation_counts final {
+        std::uint64_t string_count = 0;
+        std::uint64_t string_bytes_count = 0;
+        std::uint64_t identity_count = 0;
+        std::uint64_t type_count = 0;
+        std::uint64_t member_count = 0;
+        std::uint64_t base_count = 0;
+        std::uint64_t derived_count = 0;
+        std::uint64_t object_count = 0;
+        std::uint64_t object_construction_count = 0;
+        std::uint64_t link_count = 0;
+        std::uint64_t initialization_count = 0;
+        std::uint64_t endpoint_path_count = 0;
+        std::uint64_t endpoint_path_step_count = 0;
+        std::uint64_t assign_count = 0;
+        std::uint64_t assign_bytes_count = 0;
+        std::uint64_t source_contribution_count = 0;
+        std::uint64_t source_file_count = 0;
+        std::uint64_t source_path_bytes = 0;
+    };
+
+    [[nodiscard]] static compiled_project_image_result
+    prepare_counts(
+        const preparation_counts& counts,
+        compiled_project_layout& output) noexcept;
+
     struct section_record final {
         compiled_project_section kind{};
         std::uint32_t record_size = 0;
@@ -114,6 +144,17 @@ private:
                                     const file_context &,
                                     const source_map &,
                                     compiled_project_layout &) noexcept;
+
+    friend compiled_project_image_result
+    prepare_build_compiled_project_layout(
+        const string_table&,
+        const identity_space&,
+        const graph_delta&,
+        const graph_dense_projection&,
+        const assign_overlay_view&,
+        const file_context&,
+        const source_map_overlay_view&,
+        compiled_project_layout&) noexcept;
 
     friend compiled_project_image_result
     encode_compiled_project_image(const string_table &,

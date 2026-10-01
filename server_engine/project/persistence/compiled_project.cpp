@@ -5113,134 +5113,55 @@ compiled_project_view::verify_contents() const noexcept {
 }
 
 compiled_project_image_result
-prepare_compiled_project_layout(const string_table &strings,
-                                const identity_space &identities,
-                                const graph &G,
-                                const assign_table &assigns,
-                                const file_context &files,
-                                const source_map &sources,
-                                compiled_project_layout &output) noexcept {
+compiled_project_layout::prepare_counts(
+    const preparation_counts& counts,
+    compiled_project_layout& output) noexcept {
 
     output = {};
 
-    if (!sources.finalized() ||
-        sources.file_entries().size() != files.size()) {
-
-        return compiled_project_image_result::invalid_state;
-    }
-    std::uint64_t source_path_bytes = 0;
-    for (std::size_t i = 0; i < files.size(); ++i) {
-        std::size_t length = 0;
-        if (filesystem_path_utf8_size(files.path(file_id{static_cast<std::uint32_t>(i + 1)}),
-                                      length) != filesystem_path_result::success ||
-            length > UINT32_MAX || source_path_bytes > UINT32_MAX - length)
-            return compiled_project_image_result::invalid_state;
-        source_path_bytes += length;
-    }
-
-    if (identities.size() == 0 ||
-        G.type_entries().size() !=
-            G.type_identity_entries().size() ||
-        G.member_entries().size() !=
-            G.member_construction_entries().size() ||
-        G.object_entries().size() !=
-            G.object_identity_entries().size() ||
-        assigns.records().size() !=
-            assigns.file_entries().size()) {
-
-        return compiled_project_image_result::
-            invalid_state;
-    }
-
-    const auto string_count =
+    constexpr auto maximum_u32 =
         static_cast<std::uint64_t>(
-            strings.size());
+            (std::numeric_limits<
+                std::uint32_t>::max)());
 
-    const auto identity_count =
-        static_cast<std::uint64_t>(
-            identities.size());
-
-    const auto type_count =
-        static_cast<std::uint64_t>(
-            G.type_count());
-
-    const auto member_count =
-        static_cast<std::uint64_t>(
-            G.member_count());
-
-    const auto base_count =
-        static_cast<std::uint64_t>(
-            G.base_count());
-
-    const auto derived_count =
-        static_cast<std::uint64_t>(
-            G.derived_type_count());
-
-    const auto object_count =
-        static_cast<std::uint64_t>(
-            G.object_count());
-
-    const auto link_count =
-        static_cast<std::uint64_t>(
-            G.link_count());
-
-    const auto initialization_count =
-        static_cast<std::uint64_t>(
-            G.initialization_count());
-
-    const auto endpoint_path_count =
-        static_cast<std::uint64_t>(
-            G.endpoint_path_count());
-
-    const auto endpoint_path_step_count =
-        static_cast<std::uint64_t>(
-            G.endpoint_path_step_count());
-
-    const auto assign_count =
-        static_cast<std::uint64_t>(
-            assigns.size());
-
-    if (string_count >
-            (std::numeric_limits<std::uint32_t>::max)() ||
-        identity_count >
+    if (counts.identity_count == 0 ||
+        counts.string_count >
+            maximum_u32 ||
+        counts.string_bytes_count >
+            maximum_u32 ||
+        counts.identity_count >
             identity_ref::maximum_slot ||
-        type_count >
+        counts.type_count >
             type_handle::maximum_slot ||
-        member_count >
-            (std::numeric_limits<std::uint32_t>::max)() ||
-        base_count >
-            (std::numeric_limits<std::uint32_t>::max)() ||
-        derived_count >
+        counts.member_count >
+            maximum_u32 ||
+        counts.base_count >
+            maximum_u32 ||
+        counts.derived_count >
             type_ref::maximum_payload ||
-        object_count >
+        counts.object_count >
             object_handle::maximum_slot ||
-        link_count >
-            (std::numeric_limits<std::uint32_t>::max)() ||
-        initialization_count >
-            (std::numeric_limits<std::uint32_t>::max)() ||
-        endpoint_path_count >
-            endpoint_path_handle::maximum_slot ||
-        endpoint_path_step_count >
-            (std::numeric_limits<std::uint32_t>::max)() ||
-        assign_count >
-            (std::numeric_limits<std::uint32_t>::max)()) {
-
-        return compiled_project_image_result::
-            invalid_state;
-    }
-
-    const auto string_bytes_count =
-        static_cast<std::uint64_t>(
-            strings.byte_size());
-
-    const auto assign_bytes_count =
-        static_cast<std::uint64_t>(
-            assigns.byte_size());
-
-    if (string_bytes_count >
-            (std::numeric_limits<std::uint32_t>::max)() ||
-        assign_bytes_count >
-            (std::numeric_limits<std::uint32_t>::max)()) {
+        counts.object_construction_count >
+            graph_object_construction_slot_mask ||
+        counts.link_count >
+            maximum_u32 ||
+        counts.initialization_count >
+            maximum_u32 ||
+        counts.endpoint_path_count >
+            endpoint_path_handle::
+                maximum_slot ||
+        counts.endpoint_path_step_count >
+            maximum_u32 ||
+        counts.assign_count >
+            maximum_u32 ||
+        counts.assign_bytes_count >
+            maximum_u32 ||
+        counts.source_contribution_count >
+            maximum_u32 ||
+        counts.source_file_count >
+            maximum_u32 ||
+        counts.source_path_bytes >
+            maximum_u32) {
 
         return compiled_project_image_result::
             invalid_state;
@@ -5248,33 +5169,33 @@ prepare_compiled_project_layout(const string_table &strings,
 
     const auto string_index_count =
         index_capacity(
-            string_count);
+            counts.string_count);
 
     const auto identity_index_count =
         index_capacity(
-            identity_count > 0
-                ? identity_count - 1
+            counts.identity_count > 0
+                ? counts.identity_count - 1
                 : 0);
 
     const auto member_index_count =
         index_capacity(
-            member_count);
+            counts.member_count);
 
     const auto derived_index_count =
         index_capacity(
-            derived_count);
+            counts.derived_count);
 
     const auto link_target_index_count =
         index_capacity(
-            link_count);
+            counts.link_count);
 
     const auto initialization_target_index_count =
         index_capacity(
-            initialization_count);
+            counts.initialization_count);
 
     const auto endpoint_path_index_count =
         index_capacity(
-            endpoint_path_count);
+            counts.endpoint_path_count);
 
     if (string_index_count == 0 ||
         identity_index_count == 0 ||
@@ -5288,153 +5209,178 @@ prepare_compiled_project_layout(const string_table &strings,
             failed;
     }
 
-    std::array<compiled_project_layout::section_record, compiled_project_directory_count> layout{{
-        {
-            compiled_project_section::string_core,
-            string_core_size,
-            string_count,
-        },
-        {
-            compiled_project_section::string_index,
-            index_record_size,
-            string_index_count,
-        },
-        {
-            compiled_project_section::string_bytes,
-            1,
-            string_bytes_count,
-        },
-        {
-            compiled_project_section::identity_core,
-            identity_core_size,
-            identity_count,
-        },
-        {
-            compiled_project_section::identity_index,
-            index_record_size,
-            identity_index_count,
-        },
-        {
-            compiled_project_section::types,
-            type_record_size,
-            type_count,
-        },
-        {
-            compiled_project_section::type_identities,
-            type_identity_size,
-            type_count,
-        },
-        {
-            compiled_project_section::members,
-            member_record_size,
-            member_count,
-        },
-        {
-            compiled_project_section::member_construction,
-            construction_record_size,
-            member_count,
-        },
-        {
-            compiled_project_section::derived_types,
-            derived_record_size,
-            derived_count,
-        },
-        {
-            compiled_project_section::objects,
-            object_record_size,
-            object_count,
-        },
-        {
-            compiled_project_section::object_identities,
-            object_identity_size,
-            object_count,
-        },
-        {
-            compiled_project_section::object_construction,
-            construction_record_size,
-            G.object_construction_entries().size(),
-        },
-        {
-            compiled_project_section::links,
-            link_record_size,
-            link_count,
-        },
-        {
-            compiled_project_section::graph_identity_index,
-            graph_identity_record_size,
-            identity_count + 1,
-        },
-        {
-            compiled_project_section::assign_records,
-            assign_record_size,
-            assign_count,
-        },
-        {
-            compiled_project_section::assign_bytes,
-            1,
-            assign_bytes_count,
-        },
-        {
-            compiled_project_section::assign_files,
-            4,
-            assign_count,
-        },
-        {compiled_project_section::source_contributions, 8, sources.contribution_entries().size()},
-        {compiled_project_section::source_roots, 8, sources.root_entries().size()},
-        {compiled_project_section::source_files, 20, files.size()},
-        {compiled_project_section::source_file_indices, 4, sources.file_index_entries().size()},
-        {compiled_project_section::source_paths, 1, source_path_bytes},
-        {
-            compiled_project_section::derived_index,
-            index_record_size,
-            derived_index_count,
-        },
-        {
-            compiled_project_section::link_target_index,
-            index_record_size,
-            link_target_index_count,
-        },
-        {
-            compiled_project_section::endpoint_paths,
-            endpoint_path_record_size,
-            endpoint_path_count,
-        },
-        {
-            compiled_project_section::endpoint_path_steps,
-            endpoint_path_step_record_size,
-            endpoint_path_step_count,
-        },
-        {
-            compiled_project_section::endpoint_path_index,
-            index_record_size,
-            endpoint_path_index_count,
-        },
-        {
-            compiled_project_section::bases,
-            base_record_size,
-            base_count,
-        },
-        {
-            compiled_project_section::member_name_index,
-            index_record_size,
-            member_index_count,
-        },
-        {
-            compiled_project_section::object_initializations,
-            object_initialization_record_size,
-            initialization_count,
-        },
-        {
-            compiled_project_section::object_initialization_target_index,
-            index_record_size,
-            initialization_target_index_count,
-        },
-    }};
+    std::array<
+        compiled_project_layout::section_record,
+        compiled_project_directory_count>
+        layout{{
+            {
+                compiled_project_section::string_core,
+                string_core_size,
+                counts.string_count,
+            },
+            {
+                compiled_project_section::string_index,
+                index_record_size,
+                string_index_count,
+            },
+            {
+                compiled_project_section::string_bytes,
+                1,
+                counts.string_bytes_count,
+            },
+            {
+                compiled_project_section::identity_core,
+                identity_core_size,
+                counts.identity_count,
+            },
+            {
+                compiled_project_section::identity_index,
+                index_record_size,
+                identity_index_count,
+            },
+            {
+                compiled_project_section::types,
+                type_record_size,
+                counts.type_count,
+            },
+            {
+                compiled_project_section::type_identities,
+                type_identity_size,
+                counts.type_count,
+            },
+            {
+                compiled_project_section::members,
+                member_record_size,
+                counts.member_count,
+            },
+            {
+                compiled_project_section::member_construction,
+                construction_record_size,
+                counts.member_count,
+            },
+            {
+                compiled_project_section::derived_types,
+                derived_record_size,
+                counts.derived_count,
+            },
+            {
+                compiled_project_section::objects,
+                object_record_size,
+                counts.object_count,
+            },
+            {
+                compiled_project_section::object_identities,
+                object_identity_size,
+                counts.object_count,
+            },
+            {
+                compiled_project_section::object_construction,
+                construction_record_size,
+                counts.object_construction_count,
+            },
+            {
+                compiled_project_section::links,
+                link_record_size,
+                counts.link_count,
+            },
+            {
+                compiled_project_section::graph_identity_index,
+                graph_identity_record_size,
+                counts.identity_count + 1,
+            },
+            {
+                compiled_project_section::assign_records,
+                assign_record_size,
+                counts.assign_count,
+            },
+            {
+                compiled_project_section::assign_bytes,
+                1,
+                counts.assign_bytes_count,
+            },
+            {
+                compiled_project_section::assign_files,
+                4,
+                counts.assign_count,
+            },
+            {
+                compiled_project_section::source_contributions,
+                8,
+                counts.source_contribution_count,
+            },
+            {
+                compiled_project_section::source_roots,
+                8,
+                counts.source_file_count,
+            },
+            {
+                compiled_project_section::source_files,
+                20,
+                counts.source_file_count,
+            },
+            {
+                compiled_project_section::source_file_indices,
+                4,
+                counts.source_contribution_count,
+            },
+            {
+                compiled_project_section::source_paths,
+                1,
+                counts.source_path_bytes,
+            },
+            {
+                compiled_project_section::derived_index,
+                index_record_size,
+                derived_index_count,
+            },
+            {
+                compiled_project_section::link_target_index,
+                index_record_size,
+                link_target_index_count,
+            },
+            {
+                compiled_project_section::endpoint_paths,
+                endpoint_path_record_size,
+                counts.endpoint_path_count,
+            },
+            {
+                compiled_project_section::endpoint_path_steps,
+                endpoint_path_step_record_size,
+                counts.endpoint_path_step_count,
+            },
+            {
+                compiled_project_section::endpoint_path_index,
+                index_record_size,
+                endpoint_path_index_count,
+            },
+            {
+                compiled_project_section::bases,
+                base_record_size,
+                counts.base_count,
+            },
+            {
+                compiled_project_section::member_name_index,
+                index_record_size,
+                member_index_count,
+            },
+            {
+                compiled_project_section::object_initializations,
+                object_initialization_record_size,
+                counts.initialization_count,
+            },
+            {
+                compiled_project_section::object_initialization_target_index,
+                index_record_size,
+                initialization_target_index_count,
+            },
+        }};
 
     std::uint64_t cursor =
         first_section_offset;
 
-    for (auto& value : layout) {
+    for (auto& value :
+         layout) {
+
         if (!align64(
                 cursor,
                 value.offset)) {
@@ -5460,12 +5406,12 @@ prepare_compiled_project_layout(const string_table &strings,
     }
 
     if (cursor >
-        (std::numeric_limits<std::size_t>::max)()) {
+        (std::numeric_limits<
+            std::size_t>::max)()) {
 
         return compiled_project_image_result::
             failed;
     }
-
 
     output.sections =
         layout;
@@ -5476,6 +5422,118 @@ prepare_compiled_project_layout(const string_table &strings,
 
     return compiled_project_image_result::
         success;
+}
+
+compiled_project_image_result
+prepare_compiled_project_layout(
+    const string_table& strings,
+    const identity_space& identities,
+    const graph& G,
+    const assign_table& assigns,
+    const file_context& files,
+    const source_map& sources,
+    compiled_project_layout& output) noexcept {
+
+    output = {};
+
+    if (!sources.finalized() ||
+        sources.file_entries().size() !=
+            files.size() ||
+        sources.root_entries().size() !=
+            files.size() ||
+        sources.file_index_entries().size() !=
+            sources.contribution_entries().size() ||
+        identities.size() == 0 ||
+        G.type_entries().size() !=
+            G.type_identity_entries().size() ||
+        G.member_entries().size() !=
+            G.member_construction_entries().size() ||
+        G.object_entries().size() !=
+            G.object_identity_entries().size() ||
+        assigns.records().size() !=
+            assigns.file_entries().size()) {
+
+        return compiled_project_image_result::
+            invalid_state;
+    }
+
+    std::uint64_t source_path_bytes = 0;
+
+    for (std::size_t index = 0;
+         index < files.size();
+         ++index) {
+
+        std::size_t length = 0;
+
+        if (filesystem_path_utf8_size(
+                files.path(
+                    file_id{
+                        static_cast<std::uint32_t>(
+                            index + 1)}),
+                length) !=
+                filesystem_path_result::
+                    success ||
+            length >
+                (std::numeric_limits<
+                    std::uint32_t>::max)() ||
+            source_path_bytes >
+                (std::numeric_limits<
+                    std::uint32_t>::max)() -
+                    length) {
+
+            return compiled_project_image_result::
+                invalid_state;
+        }
+
+        source_path_bytes +=
+            length;
+    }
+
+    const compiled_project_layout::
+        preparation_counts counts{
+            static_cast<std::uint64_t>(
+                strings.size()),
+            static_cast<std::uint64_t>(
+                strings.byte_size()),
+            static_cast<std::uint64_t>(
+                identities.size()),
+            static_cast<std::uint64_t>(
+                G.type_count()),
+            static_cast<std::uint64_t>(
+                G.member_count()),
+            static_cast<std::uint64_t>(
+                G.base_count()),
+            static_cast<std::uint64_t>(
+                G.derived_type_count()),
+            static_cast<std::uint64_t>(
+                G.object_count()),
+            static_cast<std::uint64_t>(
+                G.object_construction_entries().
+                    size()),
+            static_cast<std::uint64_t>(
+                G.link_count()),
+            static_cast<std::uint64_t>(
+                G.initialization_count()),
+            static_cast<std::uint64_t>(
+                G.endpoint_path_count()),
+            static_cast<std::uint64_t>(
+                G.endpoint_path_step_count()),
+            static_cast<std::uint64_t>(
+                assigns.size()),
+            static_cast<std::uint64_t>(
+                assigns.byte_size()),
+            static_cast<std::uint64_t>(
+                sources.contribution_entries().
+                    size()),
+            static_cast<std::uint64_t>(
+                files.size()),
+            source_path_bytes,
+        };
+
+    return compiled_project_layout::
+        prepare_counts(
+            counts,
+            output);
 }
 
 compiled_project_image_result

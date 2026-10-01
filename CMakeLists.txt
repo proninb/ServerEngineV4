@@ -97,6 +97,7 @@ add_executable(ServerEngineV4
     server_engine/project/project_path.cpp
     server_engine/project/persistence/project_artifact.cpp
     server_engine/project/persistence/compiled_project.cpp
+    server_engine/project/persistence/compiled_project_build.cpp
     server_engine/project/persistence/source_save.cpp
     server_engine/project/persistence/database.cpp
     server_engine/project/persistence/source_save_view.cpp
@@ -782,11 +783,13 @@ if(BUILD_TESTING)
         server_engine/project/file/file_context.cpp
         server_engine/project/persistence/source_save.cpp
         server_engine/project/graph/graph.cpp
+        server_engine/project/graph/graph_delta.cpp
         server_engine/project/source/source_map.cpp
         server_engine/project/string/string_table.cpp
         server_engine/project/semantic/identity.cpp
         server_engine/project/assign/assign_table.cpp
         server_engine/project/persistence/compiled_project.cpp
+        server_engine/project/persistence/compiled_project_build.cpp
     )
 
     target_include_directories(ServerEngineV4SourceSaveTests PRIVATE

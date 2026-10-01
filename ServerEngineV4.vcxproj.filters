@@ -300,6 +300,9 @@
     <ClCompile Include="server_engine\project\persistence\compiled_project.cpp">
       <Filter>server_engine\project\persistence</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\project\persistence\compiled_project_build.cpp">
+      <Filter>server_engine\project\persistence</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\project\persistence\source_save.cpp">
       <Filter>server_engine\project\persistence</Filter>
     </ClCompile>
@@ -570,6 +573,9 @@
       <Filter>server_engine\project\persistence</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\persistence\compiled_project.hpp">
+      <Filter>server_engine\project\persistence</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\persistence\compiled_project_build.hpp">
       <Filter>server_engine\project\persistence</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\persistence\crc64_ecma.hpp">

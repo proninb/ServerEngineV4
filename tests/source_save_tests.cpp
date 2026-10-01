@@ -3,7 +3,9 @@
 #include "writable_file_mapping.hpp"
 #include "project/file/file_context.hpp"
 #include "project/graph/graph.hpp"
+#include "project/graph/graph_delta.hpp"
 #include "project/persistence/source_save.hpp"
+#include "project/persistence/compiled_project_build.hpp"
 #include "project/source/source_map.hpp"
 #include "project/persistence/compiled_project.hpp"
 
@@ -537,6 +539,68 @@ void test_direct_source_save(
                      verify_source_save_presence(writable_view, compiled) ==
                          source_save_result::success,
                  "presence matches compiled root ownership");
+
+    {
+        graph_delta changes;
+        graph_dense_projection projection;
+        source_map_delta replay;
+        source_map_overlay_view source_candidate;
+        assign_table assign_changes;
+        assign_overlay_view assign_candidate;
+        compiled_project_layout
+            sparse_layout;
+
+        tests.expect(
+            succeeded(
+                changes.bind_baseline(
+                    compiled)) &&
+            succeeded(
+                projection.prepare(
+                    changes)) &&
+            succeeded(
+                replay.reset()) &&
+            succeeded(
+                source_candidate.bind(
+                    writable_view,
+                    compiled,
+                    replay,
+                    {})) &&
+            succeeded(
+                assign_candidate.bind(
+                    compiled,
+                    assign_changes,
+                    {})) &&
+            prepare_build_compiled_project_layout(
+                strings,
+                identities,
+                changes,
+                projection,
+                assign_candidate,
+                files,
+                source_candidate,
+                sparse_layout) ==
+                    compiled_project_image_result::
+                        success &&
+            sparse_layout.size() ==
+                compiled_layout.size() &&
+            projection.type_count() ==
+                G.type_count() &&
+            projection.member_count() ==
+                G.member_count() &&
+            projection.base_count() ==
+                G.base_count() &&
+            projection.object_count() ==
+                G.object_count() &&
+            projection.link_count() ==
+                G.link_count() &&
+            projection.derived_type_count() ==
+                G.derived_type_count() &&
+            projection.endpoint_path_count() ==
+                G.endpoint_path_count() &&
+            projection.endpoint_path_step_count() ==
+                G.endpoint_path_step_count(),
+            "sparse BUILD candidate prepares byte-identical final compiled.bin layout counts");
+    }
 
     {
         source_map_delta replay;

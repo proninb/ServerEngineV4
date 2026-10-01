@@ -4944,6 +4944,10 @@ void graph_dense_projection::reset() noexcept {
     final_link_count = 0;
     final_derived_count = 0;
     final_endpoint_path_count = 0;
+    final_member_count = 0;
+    final_base_count = 0;
+    final_object_construction_count = 0;
+    final_endpoint_path_step_count = 0;
 }
 
 type_handle graph_dense_projection::remap(
@@ -5370,6 +5374,18 @@ server_status graph_dense_projection::prepare(
             }
         }
 
+        if (record.steps.count >
+            (std::numeric_limits<
+                std::uint32_t>::max)() -
+                final_endpoint_path_step_count) {
+
+            reset();
+            return server_status::io_error;
+        }
+
+        final_endpoint_path_step_count +=
+            record.steps.count;
+
         endpoint_path_slots[
             lineage.value()] =
             static_cast<std::uint32_t>(
@@ -5398,6 +5414,28 @@ server_status graph_dense_projection::prepare(
             return server_status::
                 project_artifact_invalid;
         }
+
+        constexpr auto maximum =
+            static_cast<std::size_t>(
+                (std::numeric_limits<
+                    std::uint32_t>::max)());
+
+        if (type.members.count >
+                maximum -
+                    final_member_count ||
+            type.bases.count >
+                maximum -
+                    final_base_count) {
+
+            reset();
+            return server_status::io_error;
+        }
+
+        final_member_count +=
+            type.members.count;
+
+        final_base_count +=
+            type.bases.count;
 
         for (std::uint32_t local = 0;
              local < type.bases.count;
@@ -5474,6 +5512,40 @@ server_status graph_dense_projection::prepare(
             !remap(
                 construction,
                 remapped)) {
+
+            reset();
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        if (object.non_default_initializer()) {
+            if (object.construction_slot() == 0 ||
+                construction.kind ==
+                    construction_kind::
+                        member_binding ||
+                construction.kind ==
+                    construction_kind::
+                        object_binding ||
+                final_object_construction_count ==
+                    graph_object_construction_slot_mask) {
+
+                reset();
+                return construction.kind ==
+                            construction_kind::
+                                member_binding ||
+                       construction.kind ==
+                            construction_kind::
+                                object_binding
+                    ? server_status::
+                        project_artifact_invalid
+                    : server_status::io_error;
+            }
+
+            ++final_object_construction_count;
+        }
+        else if (object.construction_slot() != 0 ||
+                 construction !=
+                    construction_value{}) {
 
             reset();
             return server_status::

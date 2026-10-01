@@ -763,6 +763,27 @@ public:
         return final_endpoint_path_count;
     }
 
+    [[nodiscard]] std::size_t member_count() const noexcept {
+        return final_member_count;
+    }
+
+    [[nodiscard]] std::size_t base_count() const noexcept {
+        return final_base_count;
+    }
+
+    [[nodiscard]] std::size_t object_construction_count() const noexcept {
+        return final_object_construction_count;
+    }
+
+    [[nodiscard]] std::size_t endpoint_path_step_count() const noexcept {
+        return final_endpoint_path_step_count;
+    }
+
+    [[nodiscard]] bool prepared_for(
+        const graph_delta& graph) const noexcept {
+        return source == &graph;
+    }
+
     [[nodiscard]] type_handle remap(
         type_handle value) const noexcept;
 
@@ -800,6 +821,10 @@ private:
     std::size_t final_link_count = 0;
     std::size_t final_derived_count = 0;
     std::size_t final_endpoint_path_count = 0;
+    std::size_t final_member_count = 0;
+    std::size_t final_base_count = 0;
+    std::size_t final_object_construction_count = 0;
+    std::size_t final_endpoint_path_step_count = 0;
 };
 
 }

@@ -61,6 +61,7 @@ public:
     string_table strings;
     identity_space identities;
     graph_delta graph_changes;
+    graph_dense_projection graph_candidate;
     source_map_delta source_changes;
     source_map_overlay_view source_candidate;
     assign_table assign_changes;
