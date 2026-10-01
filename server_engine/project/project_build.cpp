@@ -12,10 +12,12 @@
 #include "project_configuration_manifest_store.hpp"
 #include "persistence/project_artifact.hpp"
 #include "persistence/compiled_project_build.hpp"
+#include "../writable_file_mapping.hpp"
 #include "../diagnostics/diagnostic_builder.hpp"
 #include "../diagnostics/diagnostic_descriptor.hpp"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -24,6 +26,153 @@
 
 namespace cw::server {
 namespace {
+
+struct build_candidate_paths final {
+    std::filesystem::path compiled;
+    std::filesystem::path source;
+    std::filesystem::path database;
+    std::filesystem::path manifest;
+};
+
+[[nodiscard]] bool make_build_candidate_paths(
+    const project_artifact_layout& layout,
+    build_candidate_paths& output) noexcept {
+
+    output = {};
+
+    try {
+        output.compiled =
+            layout.compiled;
+
+        output.source =
+            layout.source_save;
+
+        output.database =
+            layout.database;
+
+        output.manifest =
+            layout.manifest;
+
+        output.compiled +=
+            ".build-new";
+
+        output.source +=
+            ".build-new";
+
+        output.database +=
+            ".build-new";
+
+        output.manifest +=
+            ".build-new";
+
+        const std::array<
+            const std::filesystem::path*,
+            8>
+            paths{
+                &layout.compiled,
+                &layout.source_save,
+                &layout.database,
+                &layout.manifest,
+                &output.compiled,
+                &output.source,
+                &output.database,
+                &output.manifest,
+            };
+
+        for (std::size_t left = 0;
+             left < paths.size();
+             ++left) {
+
+            if (paths[left] == nullptr ||
+                paths[left]->empty()) {
+
+                output = {};
+                return false;
+            }
+
+            for (std::size_t right =
+                     left + 1;
+                 right < paths.size();
+                 ++right) {
+
+                if (*paths[left] ==
+                    *paths[right]) {
+
+                    output = {};
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+    catch (...) {
+        output = {};
+        return false;
+    }
+}
+
+void remove_build_candidate(
+    const std::filesystem::path& path) noexcept {
+
+    if (path.empty()) {
+        return;
+    }
+
+    try {
+        std::error_code error;
+
+        (void)std::filesystem::remove(
+            path,
+            error);
+    }
+    catch (...) {
+    }
+}
+
+void remove_build_candidates(
+    const build_candidate_paths& paths) noexcept {
+
+    remove_build_candidate(
+        paths.compiled);
+
+    remove_build_candidate(
+        paths.source);
+
+    remove_build_candidate(
+        paths.database);
+
+    remove_build_candidate(
+        paths.manifest);
+}
+
+class build_candidate_cleanup final {
+public:
+    explicit build_candidate_cleanup(
+        const build_candidate_paths& value) noexcept
+        : paths(&value) {
+    }
+
+    ~build_candidate_cleanup() {
+        if (paths != nullptr) {
+            remove_build_candidates(
+                *paths);
+        }
+    }
+
+    build_candidate_cleanup(
+        const build_candidate_cleanup&) = delete;
+
+    build_candidate_cleanup& operator=(
+        const build_candidate_cleanup&) = delete;
+
+    void release() noexcept {
+        paths = nullptr;
+    }
+
+private:
+    const build_candidate_paths* paths = nullptr;
+};
 
 [[nodiscard]] server_status report_build_incomplete(
     operation_id operation,
@@ -1581,7 +1730,12 @@ server_status build_project(
 
     bool database_bound = false;
 
-    if (!semantic_replay_roots.empty()) {
+    const auto database_cardinality_changed =
+        context.files.size() !=
+            context.source.file_count();
+
+    if (!semantic_replay_roots.empty() ||
+        database_cardinality_changed) {
         const auto database_opened =
             context.database_mapping.open(
                 layout.database);
@@ -1899,6 +2053,453 @@ server_status build_project(
                 project_artifact_invalid;
     }
 
+    const bool database_candidate_required =
+        database_bound &&
+        (!lexical_replacement_files.empty() ||
+         context.files.size() !=
+            context.database.file_count());
+
+    const bool manifest_candidate_required =
+        configuration_probe_changed;
+
+    source_save_layout
+        source_candidate_layout;
+
+    const source_save_build_options
+        source_candidate_options{
+            scan.next_checkpoint};
+
+    const auto source_candidate_prepared =
+        prepare_build_source_save_layout(
+            context.files,
+            context.identities,
+            context.graph_changes,
+            context.graph_candidate,
+            context.source_candidate,
+            source_candidate_options,
+            source_candidate_layout);
+
+    if (source_candidate_prepared !=
+        source_save_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                source_candidate_prepared ==
+                        source_save_result::failed
+                    ? diagnostics::
+                        project_source_save_io_failed
+                    : diagnostics::
+                        project_source_save_invalid,
+                operation)
+                .file(layout.source_save)
+                .detail(
+                    "BUILD could not prepare the final source.bin v6 candidate layout")
+                .build());
+
+        return source_candidate_prepared ==
+                source_save_result::failed
+            ? server_status::io_error
+            : server_status::
+                project_artifact_invalid;
+    }
+
+    database_layout
+        database_candidate_layout;
+
+    if (database_candidate_required) {
+        const auto database_prepared =
+            prepare_database_layout(
+                context.files,
+                context.lexical,
+                database_candidate_layout);
+
+        if (database_prepared !=
+            database_image_result::success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    database_prepared ==
+                            database_image_result::
+                                failed
+                        ? diagnostics::
+                            project_database_io_failed
+                        : diagnostics::
+                            project_database_invalid,
+                    operation)
+                    .file(layout.database)
+                    .detail(
+                        "BUILD could not prepare the final database.bin candidate layout")
+                    .build());
+
+            return database_prepared ==
+                    database_image_result::
+                        failed
+                ? server_status::io_error
+                : server_status::
+                    project_artifact_invalid;
+        }
+    }
+
+    project_configuration_manifest_layout
+        manifest_candidate_layout;
+
+    if (manifest_candidate_required) {
+        const auto manifest_prepared =
+            prepare_project_configuration_manifest_layout(
+                context.manifest,
+                manifest_candidate_layout);
+
+        if (manifest_prepared !=
+            project_configuration_manifest_store_result::
+                success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    manifest_prepared ==
+                            project_configuration_manifest_store_result::
+                                io_failed
+                        ? diagnostics::
+                            project_manifest_io_failed
+                        : diagnostics::
+                            project_manifest_invalid,
+                    operation)
+                    .file(layout.manifest)
+                    .detail(
+                        "BUILD could not prepare the final project.manifest candidate layout")
+                    .build());
+
+            return manifest_prepared ==
+                    project_configuration_manifest_store_result::
+                        io_failed
+                ? server_status::io_error
+                : server_status::
+                    project_artifact_invalid;
+        }
+    }
+
+    build_candidate_paths
+        candidate_paths;
+
+    if (!make_build_candidate_paths(
+            layout,
+            candidate_paths)) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::
+                    project_build_incomplete,
+                operation)
+                .file(layout.root)
+                .detail(
+                    "BUILD candidate artifact paths are invalid or collide with configured artifact paths")
+                .build());
+
+        return server_status::io_error;
+    }
+
+    remove_build_candidates(
+        candidate_paths);
+
+    build_candidate_cleanup
+        candidate_cleanup{
+            candidate_paths};
+
+    writable_file_mapping
+        compiled_candidate_mapping;
+
+    writable_file_mapping
+        source_candidate_mapping;
+
+    writable_file_mapping
+        database_candidate_mapping;
+
+    writable_file_mapping
+        manifest_candidate_mapping;
+
+    if (compiled_candidate_mapping.create(
+            candidate_paths.compiled,
+            compiled_candidate_layout.size()) !=
+            writable_file_mapping_result::
+                success ||
+        source_candidate_mapping.create(
+            candidate_paths.source,
+            source_candidate_layout.size()) !=
+            writable_file_mapping_result::
+                success ||
+        (database_candidate_required &&
+         database_candidate_mapping.create(
+             candidate_paths.database,
+             database_candidate_layout.size()) !=
+             writable_file_mapping_result::
+                 success) ||
+        (manifest_candidate_required &&
+         manifest_candidate_mapping.create(
+             candidate_paths.manifest,
+             manifest_candidate_layout.size()) !=
+             writable_file_mapping_result::
+                 success)) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::
+                    project_build_incomplete,
+                operation)
+                .file(layout.root)
+                .detail(
+                    "BUILD could not create writable candidate artifact mappings")
+                .build());
+
+        return server_status::io_error;
+    }
+
+    const auto compiled_encoded =
+        encode_build_compiled_project_image(
+            context.strings,
+            context.identities,
+            context.graph_changes,
+            context.graph_candidate,
+            context.assign_candidate,
+            context.files,
+            context.source_candidate,
+            compiled_candidate_layout,
+            compiled_candidate_mapping.bytes());
+
+    if (compiled_encoded !=
+        compiled_project_image_result::
+            success) {
+
+        diagnostics.emit(
+            diagnostic(
+                compiled_encoded ==
+                        compiled_project_image_result::
+                            failed
+                    ? diagnostics::
+                        project_compiled_io_failed
+                    : diagnostics::
+                        project_compiled_invalid,
+                operation)
+                .file(candidate_paths.compiled)
+                .detail(
+                    "BUILD direct compiled.bin candidate encoding failed")
+                .build());
+
+        return compiled_encoded ==
+                compiled_project_image_result::
+                    failed
+            ? server_status::io_error
+            : server_status::
+                project_artifact_invalid;
+    }
+
+    compiled_project_view
+        candidate_compiled;
+
+    if (candidate_compiled.bind(
+            compiled_candidate_mapping.bytes()) !=
+            compiled_project_image_result::
+                success ||
+        candidate_compiled.verify_contents() !=
+            compiled_project_image_result::
+                success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::
+                    project_compiled_invalid,
+                operation)
+                .file(candidate_paths.compiled)
+                .detail(
+                    "BUILD compiled.bin candidate failed cold semantic verification")
+                .build());
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    const auto source_encoded =
+        encode_build_source_save_image(
+            context.files,
+            context.identities,
+            context.graph_changes,
+            context.graph_candidate,
+            context.source_candidate,
+            source_candidate_layout,
+            source_candidate_mapping.bytes());
+
+    if (source_encoded !=
+        source_save_result::success ||
+        validate_source_save_image(
+            source_candidate_mapping.bytes()) !=
+            source_save_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                source_encoded ==
+                        source_save_result::failed
+                    ? diagnostics::
+                        project_source_save_io_failed
+                    : diagnostics::
+                        project_source_save_invalid,
+                operation)
+                .file(candidate_paths.source)
+                .detail(
+                    "BUILD source.bin candidate encoding or cold validation failed")
+                .build());
+
+        return source_encoded ==
+                source_save_result::failed
+            ? server_status::io_error
+            : server_status::
+                project_artifact_invalid;
+    }
+
+    source_save_view
+        candidate_source;
+
+    if (candidate_source.bind(
+            source_candidate_mapping.bytes()) !=
+            source_save_result::success ||
+        verify_source_save_presence(
+            candidate_source,
+            candidate_compiled) !=
+            source_save_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::
+                    project_source_save_invalid,
+                operation)
+                .file(candidate_paths.source)
+                .detail(
+                    "BUILD source.bin candidate disagrees with final compiled.bin semantic presence")
+                .build());
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    if (database_candidate_required) {
+        const auto database_encoded =
+            encode_database_image(
+                context.files,
+                context.lexical,
+                database_candidate_layout,
+                database_candidate_mapping.bytes());
+
+        if (database_encoded !=
+                database_image_result::success ||
+            verify_database_image(
+                database_candidate_mapping.bytes(),
+                context.files,
+                context.lexical) !=
+                database_image_result::success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    database_encoded ==
+                            database_image_result::
+                                failed
+                        ? diagnostics::
+                            project_database_io_failed
+                        : diagnostics::
+                            project_database_invalid,
+                    operation)
+                    .file(candidate_paths.database)
+                    .detail(
+                        "BUILD database.bin candidate encoding or cold verification failed")
+                    .build());
+
+            return database_encoded ==
+                    database_image_result::
+                        failed
+                ? server_status::io_error
+                : server_status::
+                    project_artifact_invalid;
+        }
+    }
+
+    if (manifest_candidate_required) {
+        const auto manifest_encoded =
+            encode_project_configuration_manifest(
+                context.manifest,
+                manifest_candidate_layout,
+                manifest_candidate_mapping.bytes());
+
+        project_configuration_manifest
+            decoded_manifest;
+
+        if (manifest_encoded !=
+                project_configuration_manifest_store_result::
+                    success ||
+            decode_project_configuration_manifest(
+                manifest_candidate_mapping.bytes(),
+                decoded_manifest) !=
+                project_configuration_manifest_store_result::
+                    success ||
+            !(decoded_manifest.configuration_hash ==
+              context.manifest.configuration_hash) ||
+            !(decoded_manifest.preprocessor_hash ==
+              context.manifest.preprocessor_hash) ||
+            decoded_manifest.files.size() !=
+                context.manifest.files.size()) {
+
+            diagnostics.emit(
+                diagnostic(
+                    manifest_encoded ==
+                            project_configuration_manifest_store_result::
+                                io_failed
+                        ? diagnostics::
+                            project_manifest_io_failed
+                        : diagnostics::
+                            project_manifest_invalid,
+                    operation)
+                    .file(candidate_paths.manifest)
+                    .detail(
+                        "BUILD project.manifest candidate encoding or decode verification failed")
+                    .build());
+
+            return manifest_encoded ==
+                    project_configuration_manifest_store_result::
+                        io_failed
+                ? server_status::io_error
+                : server_status::
+                    project_artifact_invalid;
+        }
+    }
+
+    if (compiled_candidate_mapping.flush() !=
+            writable_file_mapping_result::
+                success ||
+        source_candidate_mapping.flush() !=
+            writable_file_mapping_result::
+                success ||
+        (database_candidate_required &&
+         database_candidate_mapping.flush() !=
+             writable_file_mapping_result::
+                 success) ||
+        (manifest_candidate_required &&
+         manifest_candidate_mapping.flush() !=
+             writable_file_mapping_result::
+                 success)) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::
+                    project_build_incomplete,
+                operation)
+                .file(layout.root)
+                .detail(
+                    "BUILD could not flush one or more validated candidate artifacts")
+                .build());
+
+        return server_status::io_error;
+    }
+
+    compiled_candidate_mapping.reset();
+    source_candidate_mapping.reset();
+    database_candidate_mapping.reset();
+    manifest_candidate_mapping.reset();
+
     std::string detail;
 
     try {
@@ -2099,13 +2700,26 @@ server_status build_project(
             ", final_compiled_bytes=" +
             std::to_string(
                 compiled_candidate_layout.size()) +
+            ", final_source_bytes=" +
+            std::to_string(
+                source_candidate_layout.size()) +
+            ", database_candidate=" +
+            std::to_string(
+                database_candidate_required
+                    ? 1
+                    : 0) +
+            ", manifest_candidate=" +
+            std::to_string(
+                manifest_candidate_required
+                    ? 1
+                    : 0) +
             ", baseline_strings=" +
             std::to_string(
                 context.compiled.string_count()) +
             ", baseline_identities=" +
             std::to_string(
                 context.compiled.identity_count()) +
-            "; exact dense final-G and compiled.bin layout completed; direct mmap encoding/publication is not implemented yet";
+            "; final BUILD artifacts were direct-encoded and cold-validated without touching OLD persisted state; promotion is not implemented yet";
     }
     catch (...) {
         return server_status::io_error;
