@@ -881,6 +881,18 @@ private:
             }
         }
 
+        if (at(token_kind::identifier) &&
+            strings.get(current.identifier) == "__int64") {
+            if (is_short || long_count != 0) {
+                return fail(parser_failure_kind::syntax,
+                    "__int64 cannot use short/long modifiers");
+            }
+            output = is_unsigned
+                ? intrinsic_type::unsigned_long_long
+                : intrinsic_type::signed_long_long;
+            return advance();
+        }
+
         if (at(token_kind::kw_char)) {
             if (is_short || long_count != 0) {
                 return fail(
@@ -1050,7 +1062,8 @@ private:
             }
         }
 
-        if (builtin_start(current.kind)) {
+        if (builtin_start(current.kind) ||
+            (at(token_kind::identifier) && strings.get(current.identifier) == "__int64")) {
             intrinsic_type intrinsic;
             const auto parsed =
                 parse_intrinsic(intrinsic);
@@ -1179,7 +1192,8 @@ private:
 
     [[nodiscard]] server_status parse_declarator_node(
         parsed_declarator& output,
-        std::size_t depth) noexcept {
+        std::size_t depth,
+        bool allow_named_operator = false) noexcept {
 
         if (depth >=
             declarator_depth_limit) {
@@ -1226,7 +1240,42 @@ private:
         const auto prefix_end =
             declarator_modifiers.size();
 
-        if (at(token_kind::identifier) &&
+        if (allow_named_operator && depth == 0 && at(token_kind::kw_operator)) {
+            output.location = current_location();
+            auto status = advance();
+            if (!succeeded(status)) {
+                return status;
+            }
+            std::string_view operator_name = "operator=";
+            if (at(token_kind::l_bracket)) {
+                operator_name = "operator[]";
+                status = advance();
+                if (!succeeded(status)) {
+                    return status;
+                }
+                if (!at(token_kind::r_bracket)) {
+                    return fail(parser_failure_kind::syntax,
+                        "Expected ']' in operator[] declarator");
+                }
+            }
+            else if (!at(token_kind::assign)) {
+                return fail(parser_failure_kind::unsupported,
+                    "Only operator= and operator[] are supported in named operator declarators");
+            }
+            status = strings.intern(operator_name, output.name);
+            if (!succeeded(status)) {
+                return status;
+            }
+            status = advance();
+            if (!succeeded(status)) {
+                return status;
+            }
+            if (!at(token_kind::l_paren)) {
+                return fail(parser_failure_kind::syntax,
+                    "Expected '(' after named operator");
+            }
+        }
+        else if (at(token_kind::identifier) &&
             current.identifier) {
 
             if (output.name) {
@@ -1493,7 +1542,8 @@ private:
     [[nodiscard]] server_status parse_declared_type(
         identity_ref scope,
         type_ref& output,
-        parsed_declarator& declarator) noexcept {
+        parsed_declarator& declarator,
+        bool allow_named_operator = false) noexcept {
 
         output = {};
         declarator = {};
@@ -1513,7 +1563,8 @@ private:
         status =
             parse_declarator_node(
                 declarator,
-                0);
+                0,
+                allow_named_operator);
 
         if (!succeeded(status)) {
             return status;
@@ -2680,7 +2731,9 @@ private:
             };
 
         const auto parse_method_tail =
-            [&](bool virtual_prefix) -> server_status {
+            [&](bool virtual_prefix, bool conversion = false,
+                bool assignment_operator = false,
+                bool subscript_operator = false) -> server_status {
                 if (!at(token_kind::l_paren)) {
                     return fail(
                         parser_failure_kind::syntax,
@@ -2688,12 +2741,36 @@ private:
                 }
 
                 std::size_t depth = 0;
+                bool conversion_void = false;
+                std::size_t parameter_tokens = 0;
+                bool sole_void = false;
 
                 for (;;) {
                     if (at(token_kind::invalid)) {
                         return fail(
                             parser_failure_kind::syntax,
                             "Method parameter list is not closed");
+                    }
+
+                    if ((assignment_operator || subscript_operator) &&
+                        depth == 1 && !at(token_kind::r_paren)) {
+                        if (at(token_kind::comma) || at(token_kind::ellipsis) ||
+                            at(token_kind::assign)) {
+                            return fail(parser_failure_kind::syntax,
+                                "Named operator requires one parameter without a default argument");
+                        }
+                        sole_void = parameter_tokens == 0 && at(token_kind::kw_void);
+                        ++parameter_tokens;
+                    }
+
+                    if (conversion && depth != 0 && !at(token_kind::r_paren)) {
+                        if (!conversion_void && at(token_kind::kw_void)) {
+                            conversion_void = true;
+                        }
+                        else {
+                            return fail(parser_failure_kind::syntax,
+                                "Conversion operator must have an empty parameter list");
+                        }
                     }
 
                     if (at(token_kind::l_paren)) {
@@ -2719,10 +2796,26 @@ private:
                     }
                 }
 
+                if ((assignment_operator || subscript_operator) &&
+                    (parameter_tokens == 0 || sole_void)) {
+                    return fail(parser_failure_kind::syntax,
+                        "Named operator requires one parameter");
+                }
+
                 bool override_seen = false;
                 bool final_seen = false;
+                bool ref_qualifier_seen = false;
 
                 for (;;) {
+                    if ((conversion || assignment_operator || subscript_operator) && !ref_qualifier_seen &&
+                        (at(token_kind::ampersand) || at(token_kind::logical_and))) {
+                        ref_qualifier_seen = true;
+                        const auto advanced = advance();
+                        if (!succeeded(advanced)) {
+                            return advanced;
+                        }
+                        continue;
+                    }
                     if (at(token_kind::kw_const) ||
                         at(token_kind::kw_volatile)) {
 
@@ -2831,7 +2924,7 @@ private:
 
                         pure = true;
                     }
-                    else if (!at(token_kind::kw_default) &&
+                    else if ((conversion || subscript_operator || !at(token_kind::kw_default)) &&
                              !at(token_kind::kw_delete)) {
 
                         return fail(
@@ -3013,6 +3106,73 @@ private:
                     "Static data members and static methods are not part of the current instance ABI slice");
             }
 
+            if (at(token_kind::kw_explicit)) {
+                status = advance();
+                if (!succeeded(status)) {
+                    return status;
+                }
+                if (!at(token_kind::kw_operator)) {
+                    return fail(parser_failure_kind::unsupported,
+                        "explicit is supported here only on conversion operator declarations");
+                }
+            }
+
+            if (at(token_kind::kw_operator)) {
+                status = advance();
+                if (!succeeded(status)) {
+                    return status;
+                }
+                type_ref conversion_type;
+                status = parse_type_specifier(scope, conversion_type);
+                if (!succeeded(status)) {
+                    return status;
+                }
+                while (at(token_kind::star) || at(token_kind::ampersand) ||
+                       at(token_kind::logical_and)) {
+                    const auto modifier = at(token_kind::star)
+                        ? derived_type_kind::pointer
+                        : at(token_kind::ampersand)
+                            ? derived_type_kind::lvalue_reference
+                            : derived_type_kind::rvalue_reference;
+                    if (reference_type(conversion_type) ||
+                        (modifier != derived_type_kind::pointer && is_void_type(conversion_type))) {
+                        return fail(parser_failure_kind::semantic,
+                            "Invalid pointer or reference conversion target");
+                    }
+                    type_ref wrapped;
+                    status = G.derive(conversion_type, modifier, 0, wrapped);
+                    if (!succeeded(status)) {
+                        return status;
+                    }
+                    conversion_type = wrapped;
+                    status = advance();
+                    if (!succeeded(status)) {
+                        return status;
+                    }
+                    if (modifier == derived_type_kind::pointer) {
+                        bool const_qualified = false;
+                        bool volatile_qualified = false;
+                        while (at(token_kind::kw_const) || at(token_kind::kw_volatile)) {
+                            const_qualified |= at(token_kind::kw_const);
+                            volatile_qualified |= at(token_kind::kw_volatile);
+                            status = advance();
+                            if (!succeeded(status)) {
+                                return status;
+                            }
+                        }
+                        status = apply_qualifiers(const_qualified, volatile_qualified, conversion_type);
+                        if (!succeeded(status)) {
+                            return status;
+                        }
+                    }
+                }
+                status = parse_method_tail(virtual_prefix, true);
+                if (!succeeded(status)) {
+                    return status;
+                }
+                continue;
+            }
+
             type_ref member_type;
             parsed_declarator declarator;
 
@@ -3020,7 +3180,8 @@ private:
                 parse_declared_type(
                     scope,
                     member_type,
-                    declarator);
+                    declarator,
+                    true);
 
             if (!succeeded(status)) {
                 return status;
@@ -3029,7 +3190,9 @@ private:
             if (at(token_kind::l_paren)) {
                 status =
                     parse_method_tail(
-                        virtual_prefix);
+                        virtual_prefix, false,
+                        strings.get(declarator.name) == "operator=",
+                        strings.get(declarator.name) == "operator[]");
 
                 if (!succeeded(status)) {
                     return status;

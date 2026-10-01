@@ -1,6 +1,7 @@
 #include "project/frontend/directive_executor.hpp"
 #include "project/frontend/lexer.hpp"
 #include "project/frontend/lexical_generation.hpp"
+#include "project/frontend/semantic_input.hpp"
 #include "project/graph/graph.hpp"
 #include "project/parser/parser.hpp"
 #include "project/preprocessor/preprocessor.hpp"
@@ -294,6 +295,182 @@ private:
         files, lexical, 1, configuration, strings, identities, G, sources, &failure);
 }
 
+void test_conversion_operators(test_state& tests) {
+    const temporary_source header{"conversion_operators",
+        "struct Target {};\n"
+        "struct Value { int data; Value() : data(7) {}\n"
+        "operator char*(); operator const char*() const;\n"
+        "explicit operator bool() const noexcept;\n"
+        "operator int&() &; operator double&&() &&;\n"
+        "operator int* const*() const; operator Target() const;\n"
+        "operator unsigned long(void) const; operator float() = delete; };\n"
+        "struct Base { virtual operator bool() const = 0; };\n"
+        "struct Derived : Base { operator bool() const override; };\n"};
+    file_context files;
+    lexical_generation lexical;
+    file_id root;
+    if (!prepare_root(tests, header.path(), files, lexical, root)) {
+        return;
+    }
+    preprocessor_configuration configuration;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    parser_failure failure;
+    const auto status = parse_semantic_project(
+        files, lexical, 1, configuration, strings, identities, G, sources, &failure);
+    (void)tests.expect(succeeded(status), "parse conversion operator declarations");
+    (void)tests.expect(G.type_count() == 4 && G.member_count() == 1,
+        "conversion operators do not introduce data members");
+
+    for (const auto text : {
+        "struct Bad { operator int(int argument); };",
+        "struct Bad { operator Unknown(); };",
+        "struct Bad { operator int[2](); };",
+        "struct Bad { operator void&(); };",
+        "struct Bad { operator int&*(); };",
+        "struct Bad { operator int&&&(); };",
+        "struct Bad { operator int() = default; };",
+        "struct Bad { operator int() { return 1; } };",
+        "struct Bad { operator int() override; };"}) {
+        const temporary_source invalid{"invalid_conversion", text};
+        (void)tests.expect(!succeeded(parse_file(tests, invalid.path(), failure)),
+            "reject invalid or unsupported conversion declarations");
+    }
+}
+
+void test_assignment_operators(test_state& tests) {
+    const temporary_source header{"assignment_operators",
+        "struct Value { int data; Value() : data(7) {}\n"
+        "Value& operator=(const char* value);\n"
+        "Value& operator=(const Value&) & = default;\n"
+        "Value& operator=(Value&&) noexcept = delete;\n"
+        "void operator=(int); };\n"
+        "struct Base { virtual Base& operator=(int) = 0; };\n"
+        "struct Derived : Base { Base& operator=(int) override; };\n"};
+    file_context files;
+    lexical_generation lexical;
+    file_id root;
+    if (!prepare_root(tests, header.path(), files, lexical, root)) {
+        return;
+    }
+    preprocessor_configuration configuration;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    parser_failure failure;
+    const auto status = parse_semantic_project(
+        files, lexical, 1, configuration, strings, identities, G, sources, &failure);
+    (void)tests.expect(succeeded(status), "parse assignment operator declarations");
+    (void)tests.expect(G.type_count() == 3 && G.member_count() == 1,
+        "assignment declarations do not add data members");
+    for (const auto text : {
+        "struct Bad { Bad& operator=(); };",
+        "struct Bad { Bad& operator=(void); };",
+        "struct Bad { Bad& operator=(int, int); };",
+        "struct Bad { Bad& operator=(int x = 1); };",
+        "struct Bad { Bad& operator=(...); };",
+        "struct Bad { Bad& operator=; };",
+        "struct Bad { static Bad& operator=(int); };",
+        "struct Bad { Bad& operator=(int) { return *this; } };",
+        "struct Bad {}; Bad& operator=(int);",
+        "struct Bad { Bad& operator+(int); };"}) {
+        const temporary_source invalid{"invalid_assignment", text};
+        (void)tests.expect(!succeeded(parse_file(tests, invalid.path(), failure)),
+            "reject invalid or unsupported assignment declarations");
+    }
+}
+
+void test_subscript_operators(test_state& tests) {
+    const temporary_source header{"subscript_operators",
+        "struct Value { short data[32];\n"
+        "short& operator[](int index);\n"
+        "const short& operator[](int) const & noexcept;\n"
+        "short operator[](unsigned int) && = delete; };\n"
+        "struct Base { virtual short& operator[](int) = 0; };\n"
+        "struct Derived : Base { short& operator[](int) override; };\n"};
+    file_context files;
+    lexical_generation lexical;
+    file_id root;
+    if (!prepare_root(tests, header.path(), files, lexical, root)) {
+        return;
+    }
+    preprocessor_configuration configuration;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    parser_failure failure;
+    const auto status = parse_semantic_project(
+        files, lexical, 1, configuration, strings, identities, G, sources, &failure);
+    (void)tests.expect(succeeded(status), "parse subscript operator declarations");
+    (void)tests.expect(G.type_count() == 3 && G.member_count() == 1,
+        "subscript declarations do not add instance data members");
+    for (const auto text : {
+        "struct Bad { int operator[(); };",
+        "struct Bad { int operator[1](int); };",
+        "struct Bad { int operator[]; };",
+        "struct Bad { int operator[](); };",
+        "struct Bad { int operator[](void); };",
+        "struct Bad { int operator[](int, int); };",
+        "struct Bad { int operator[](int x = 0); };",
+        "struct Bad { int operator[](...) ; };",
+        "struct Bad { int operator[](int) = default; };",
+        "struct Bad { int operator[](int) { return 0; } };",
+        "struct Bad { static int operator[](int); };",
+        "int operator[](int);"}) {
+        const temporary_source invalid{"invalid_subscript", text};
+        (void)tests.expect(!succeeded(parse_file(tests, invalid.path(), failure)),
+            "reject malformed or unsupported subscript declarations");
+    }
+}
+
+void test_microsoft_int64(test_state& tests) {
+    const temporary_source header{"microsoft_int64",
+        "struct Wide { __int64 a; signed __int64 b; unsigned __int64 c;\n"
+        "operator __int64() const; operator unsigned __int64() const; };\n"};
+    file_context files;
+    lexical_generation lexical;
+    file_id root;
+    if (!prepare_root(tests, header.path(), files, lexical, root)) {
+        return;
+    }
+    preprocessor_configuration configuration;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    parser_failure failure;
+    const auto status = parse_semantic_project(
+        files, lexical, 1, configuration, strings, identities, G, sources, &failure);
+    (void)tests.expect(succeeded(status), "parse Microsoft int64 declarations and conversions");
+    (void)tests.expect(G.type_count() == 1 && G.member_count() == 3,
+        "Microsoft int64 members retained");
+    const auto type = G.find_type(identities.find(identities.root(), strings.find("Wide"), identity_kind::type));
+    if (type) {
+        for (const auto name : {"a", "b", "c"}) {
+            const auto member = G.find_member(type, strings.find(name));
+            intrinsic_type intrinsic = intrinsic_type::none;
+            const auto* record = G.member(type, member);
+            (void)tests.expect(record && G.intrinsic(record->type, intrinsic) &&
+                intrinsic == (std::string_view{name} == "c"
+                    ? intrinsic_type::unsigned_long_long : intrinsic_type::signed_long_long),
+                "Microsoft int64 maps to the correct signedness and width");
+        }
+    }
+    for (const auto text : {
+        "struct Bad { short __int64 value; };",
+        "struct Bad { long __int64 value; };",
+        "struct Bad { unsigned signed __int64 value; };",
+        "struct Bad { __int64 int value; };"}) {
+        const temporary_source invalid{"invalid_int64", text};
+        (void)tests.expect(!succeeded(parse_file(tests, invalid.path(), failure)),
+            "reject invalid Microsoft int64 type combinations");
+    }
+}
+
 void test_header_name_diagnostics(
     test_state& tests) {
 
@@ -448,6 +625,78 @@ void test_conditional_entry_floor(
     }
 
     return source;
+}
+
+void test_pragma_once_and_angled_includes(test_state& tests) {
+    const temporary_source child{"pragma_once_child",
+        "#pragma once // physical file guard\nVALUE\n"};
+    const auto filename = child.path().filename().string();
+    const temporary_source root{"pragma_once_root",
+        "#include <" + filename + ">\n#include \"./" + filename + "\"\n"};
+
+    file_context files;
+    lexical_generation lexical;
+    file_id root_id;
+    if (!prepare_root(tests, root.path(), files, lexical, root_id)) {
+        return;
+    }
+    preprocessor_configuration configuration;
+    configuration.predefines.push_back({"VALUE", "ConfiguredValue"});
+    string_table strings;
+    string_id expected;
+    tests.expect(succeeded(strings.intern("ConfiguredValue", expected)), "intern configured alias");
+    semantic_input input{files, lexical, configuration, strings};
+    for (int replay = 0; replay < 2; ++replay) {
+        tests.expect(succeeded(input.start(root_id, semantic_input_mode::header)), "start once replay");
+        std::size_t identifiers = 0;
+        server_status status = server_status::success;
+        while (!input.finished() && succeeded(status)) {
+            semantic_token token;
+            status = input.next(token);
+            if (succeeded(status) && token.kind == token_kind::identifier) {
+                ++identifiers;
+                tests.expect(token.identifier == expected, "predefine applies inside angled include");
+            }
+        }
+        tests.expect(succeeded(status) && identifiers == 1,
+            "once deduplicates mixed include spellings and resets for next root replay");
+    }
+
+    const temporary_source inactive{"inactive_once",
+        "#ifdef NEVER_DEFINED\n#pragma once\n#endif\nVALUE\n"};
+    const auto inactive_name = inactive.path().filename().string();
+    const temporary_source inactive_root{"inactive_once_root",
+        "#include <" + inactive_name + ">\n#include <" + inactive_name + ">\n"};
+    file_context inactive_files;
+    lexical_generation inactive_lexical;
+    file_id inactive_id;
+    if (prepare_root(tests, inactive_root.path(), inactive_files, inactive_lexical, inactive_id)) {
+        semantic_input inactive_input{inactive_files, inactive_lexical, configuration, strings};
+        tests.expect(succeeded(inactive_input.start(inactive_id, semantic_input_mode::header)),
+            "start inactive once replay");
+        std::size_t identifiers = 0;
+        server_status status = server_status::success;
+        while (!inactive_input.finished() && succeeded(status)) {
+            semantic_token token;
+            status = inactive_input.next(token);
+            identifiers += succeeded(status) && token.kind == token_kind::identifier ? 1 : 0;
+        }
+        tests.expect(succeeded(status) && identifiers == 2, "inactive pragma once does not suppress inclusion");
+    }
+
+    const temporary_source self{"self_once", ""};
+    {
+        std::ofstream stream{self.path(), std::ios::binary | std::ios::trunc};
+        stream << "#pragma once\n#include <" << self.path().filename().string()
+               << ">\nstruct SelfOnce {};\n";
+    }
+    parser_failure failure;
+    tests.expect(succeeded(parse_file(tests, self.path(), failure)), "pragma once stops self inclusion");
+    for (const auto text : {"#pragma once extra\n", "#pragma unknown\n", "#include <>\n"}) {
+        const temporary_source invalid{"invalid_once_include", text};
+        tests.expect(!succeeded(parse_file(tests, invalid.path(), failure)),
+            "unsupported pragma and empty include fail closed");
+    }
 }
 
 void test_self_include_guard(
@@ -702,7 +951,7 @@ void test_header_source_semantic_split(
         source_dependencies.size() == 1 &&
         source_dependencies[0] ==
             source_dependency_ref::type(
-                type_handle_value),
+                type_identity),
         "Source semantic root records dependency on global Header type");
 }
 
@@ -1756,17 +2005,17 @@ void test_source_link_semantic_dependencies(
     const auto type_dependents =
         sources.dependents(
             source_dependency_ref::type(
-                type));
+                type_identity));
 
     const auto x_dependents =
         sources.dependents(
             source_dependency_ref::object(
-                x));
+                x_identity));
 
     const auto y_dependents =
         sources.dependents(
             source_dependency_ref::object(
-                y));
+                y_identity));
 
     tests.expect(
         type &&
@@ -1775,13 +2024,13 @@ void test_source_link_semantic_dependencies(
         dependencies.size() == 3 &&
         dependencies[0] ==
             source_dependency_ref::type(
-                type) &&
+                type_identity) &&
         dependencies[1] ==
             source_dependency_ref::object(
-                x) &&
+                x_identity) &&
         dependencies[2] ==
             source_dependency_ref::object(
-                y) &&
+                y_identity) &&
         type_dependents.size() == 1 &&
         type_dependents[0] == source_id &&
         x_dependents.size() == 1 &&
@@ -3086,9 +3335,15 @@ int main() {
         test_header_name_diagnostics(
             tests);
 
+        test_conversion_operators(tests);
+        test_assignment_operators(tests);
+        test_subscript_operators(tests);
+        test_microsoft_int64(tests);
+
         test_conditional_entry_floor(
             tests);
 
+        test_pragma_once_and_angled_includes(tests);
         test_self_include_guard(
             tests);
 

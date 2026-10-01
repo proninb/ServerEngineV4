@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <string_view>
+#include <unordered_set>
 
 namespace cw::server {
 
@@ -131,6 +132,8 @@ private:
     preprocessor preprocessing;
     directive_executor executor;
     lexical_stream include_stream;
+    // Physical file identities protected by an executed pragma, per root replay.
+    std::unordered_set<std::uint32_t> once_files;
 
     semantic_input_failure failure_value;
     semantic_input_mode mode_value =

@@ -27,6 +27,7 @@ inline constexpr std::size_t directive_conditional_depth_limit = 256;
 enum class directive_execution_kind : std::uint8_t {
     none = 0,
     include,
+    pragma_once,
 };
 
 enum class directive_execution_error_kind : std::uint8_t {

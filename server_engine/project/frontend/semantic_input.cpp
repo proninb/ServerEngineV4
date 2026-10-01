@@ -152,6 +152,7 @@ server_status semantic_input::start(
 
     preprocessing.reset();
     executor.reset();
+    once_files.clear();
 
     const auto opened =
         input.start(root);
@@ -371,13 +372,14 @@ server_status semantic_input::resolve_include(
 
     output = {};
 
-    if (request.form != include_form::quoted ||
+    if ((request.form != include_form::quoted &&
+         request.form != include_form::angled) ||
         request.locator.length < 2) {
 
         return fail(
             request.source,
             request.locator,
-            "Only direct quoted includes are supported by semantic preprocessing",
+            "Only direct quoted or angled includes are supported by semantic preprocessing",
             server_status::project_configuration_invalid);
     }
 
@@ -390,8 +392,8 @@ server_status semantic_input::resolve_include(
             request.locator.length,
             spelling) ||
         spelling.size() < 2 ||
-        spelling.front() != '"' ||
-        spelling.back() != '"') {
+        spelling.front() != (request.form == include_form::quoted ? '"' : '<') ||
+        spelling.back() != (request.form == include_form::quoted ? '"' : '>')) {
 
         return fail(
             request.source,
@@ -579,6 +581,17 @@ server_status semantic_input::consume_directive(
             executed);
     }
 
+    if (result.kind == directive_execution_kind::pragma_once) {
+        try {
+            once_files.insert(file.value());
+        }
+        catch (...) {
+            return fail(file, directive.range.source,
+                "Pragma once state could not be recorded", server_status::io_error);
+        }
+        return server_status::success;
+    }
+
     if (result.kind !=
         directive_execution_kind::include) {
 
@@ -594,6 +607,11 @@ server_status semantic_input::consume_directive(
 
     if (!succeeded(resolved)) {
         return resolved;
+    }
+
+    // Resolve and stage the dependency even when replay of the body is skipped.
+    if (once_files.contains(target.value())) {
+        return server_status::success;
     }
 
     const auto entered =

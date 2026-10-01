@@ -477,9 +477,21 @@ server_status directive_executor::execute(
 
         return server_status::success;
 
+    case directive_kind::pragma: {
+        std::string_view name;
+        if (range_view(source, directive.pragma_name, name) && name == "once") {
+            output.kind = directive_execution_kind::pragma_once;
+            return server_status::success;
+        }
+        return fail(
+            directive_execution_error_kind::unsupported_directive,
+            directive.range.file,
+            directive.range.source,
+            error);
+    }
+
     case directive_kind::line:
     case directive_kind::error:
-    case directive_kind::pragma:
     case directive_kind::unknown:
         return fail(
             directive_execution_error_kind::

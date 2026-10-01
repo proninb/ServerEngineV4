@@ -65,6 +65,7 @@ struct preprocessing_directive final {
     directive_range range;
     include_directive include;
     identifier_directive identifier;
+    source_range pragma_name;
 };
 
 // Stateless decoder for one preprocessing directive at the current input

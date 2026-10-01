@@ -91,6 +91,7 @@ server_status directive_decoder::decode(
 
     include_directive include;
     identifier_directive identifier;
+    source_range pragma_name;
 
     std::uint32_t argument_count = 0;
     bool direct_include = false;
@@ -167,11 +168,19 @@ server_status directive_decoder::decode(
             };
             output.include = include;
             output.identifier = identifier;
+            output.pragma_name = argument_count == 1 ? pragma_name : source_range{};
 
             return server_status::success;
         }
 
         switch (kind) {
+        case directive_kind::pragma:
+            if (argument_count == 0 && current.kind == token_kind::identifier) {
+                pragma_name = {current.source_offset, current.source_length};
+            }
+            ++argument_count;
+            break;
+
         case directive_kind::include:
             if (argument_count == 0) {
                 const auto form =

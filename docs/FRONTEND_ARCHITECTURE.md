@@ -1166,6 +1166,43 @@ It is ordinary Preprocessor state.
 
 ---
 
+## Conversion Operator Declarations
+
+The Microsoft type spellings `__int64`, `signed __int64` and
+`unsigned __int64` map to the existing signed/unsigned `long long` intrinsic
+types. They are accepted in supported type positions, including conversion
+targets, without adding a separate ABI type or changing lexical token IDs.
+Combining `__int64` with `short` or `long` is rejected.
+
+Header record parsing accepts conversion declarations such as `operator char*();`,
+`operator const char*() const;`, and `explicit operator bool() const noexcept;`.
+Targets use the supported type specifiers with pointer and reference modifiers;
+pointer cv-qualification is supported. Parameter lists must be empty (`()` or
+`(void)`). Conversion declarations may use member ref-qualifiers, `virtual`,
+`override`, `final`, pure declarations, or `= delete` under the existing method
+rules. They do not add instance data members; virtual declarations participate
+in the existing polymorphic-layout calculation.
+
+This is declaration/ABI support, not execution of conversion functions. Bodies,
+conditional `explicit(...)`, array/function conversion targets, and `= default`
+conversion declarations are unsupported.
+
+Header records also accept named assignment operator declarations, including
+`Value& operator=(const char* value);`, copy/move forms, ref-qualified forms,
+`noexcept`, and the existing virtual method suffixes. The parameter list must
+contain one parameter without a default argument or ellipsis. `= default` and
+`= delete` use the existing declaration-only method handling; this does not
+implement assignment execution or full C++ special-member validation.
+Assignment operators add no instance data members. Global/static assignment
+operators and method bodies are rejected.
+
+Subscript declarations such as `short& operator[](int index);` also use the
+declaration-only method path. The supported subset has exactly one parameter,
+with no default argument or ellipsis. Const/ref qualifiers, `noexcept`, virtual
+method suffixes and `= delete` are accepted. Empty/multiple-parameter and static
+subscripts, `= default`, global declarations and method bodies are unsupported.
+Subscripts add no instance data members and are not executed by the engine.
+
 ## File Dependency Topology
 
 File Context owns the logical direct file topology.

@@ -371,7 +371,17 @@ Only the root `project.json` owns immutable preprocessing configuration.
 }
 ```
 
-The current representation supports the restricted object-like forms:
+Header preprocessing accepts `#pragma once` and direct `#include "path"` or
+`#include <path>`. Both include forms resolve relative to the including Header;
+there is no system include path or configured include-directory search.
+An executed `#pragma once` suppresses later entries of the same physical file
+within one frontend root replay, including self-inclusion. Its state resets for
+each root, and a pragma in an inactive conditional branch has no effect.
+Skipped entries still contribute include dependencies. Unknown pragmas and
+extra operands after `once` are rejected. Source inputs still reject preprocessing.
+Configured predefines apply to the root Header and its included Headers.
+
+The supported predefine forms are:
 
 ```text
 NAME
