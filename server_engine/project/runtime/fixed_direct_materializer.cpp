@@ -524,19 +524,9 @@ private:
             if (type.kind() ==
                 type_ref_kind::named) {
 
-                const auto handle =
-                    project.type_at(
-                        type.payload() - 1);
-
-                if (!handle ||
-                    handle.value() !=
-                        type.payload()) {
-
-                    return false;
-                }
-
-                output = handle;
-                return true;
+                return project.named(
+                    type,
+                    output);
             }
 
             if (type.kind() !=
@@ -620,13 +610,16 @@ private:
                 success;
 
         case type_ref_kind::named: {
-            const auto handle =
-                project.type_at(
-                    type.payload() - 1);
+            type_handle handle;
 
-            return canonical_record(
-                handle,
-                target);
+            return project.named(
+                       type,
+                       handle)
+                ? canonical_record(
+                    handle,
+                    target)
+                : fixed_direct_materialization_result::
+                    invalid_input;
         }
 
         case type_ref_kind::derived: {
@@ -955,14 +948,17 @@ private:
                     invalid_input;
             }
 
-            const auto handle =
-                project.type_at(
-                    type.payload() - 1);
+            type_handle handle;
 
-            return normal_record(
-                handle,
-                target,
-                top_object);
+            return project.named(
+                       type,
+                       handle)
+                ? normal_record(
+                    handle,
+                    target,
+                    top_object)
+                : fixed_direct_materialization_result::
+                    invalid_input;
         }
 
         case type_ref_kind::derived: {
@@ -2345,15 +2341,12 @@ private:
                     invalid_input;
             }
 
-            const auto record =
-                project.type_at(
-                    current_type.payload() - 1);
-
+            type_handle record;
             type_entry record_entry;
 
-            if (!record ||
-                record.value() !=
-                    current_type.payload() ||
+            if (!project.named(
+                    current_type,
+                    record) ||
                 !project.type(
                     record,
                     record_entry) ||

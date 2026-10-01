@@ -531,16 +531,14 @@ private:
                 value);
 
         case type_ref_kind::named: {
-            if (type.payload() == 0 ||
-                type.payload() >
-                    project.type_count()) {
+            type_handle handle;
+
+            if (!project.named(
+                    type,
+                    handle)) {
 
                 return runtime_layout_result::invalid_input;
             }
-
-            const auto handle =
-                project.type_at(
-                    type.payload() - 1);
 
             return resolve_record(
                 handle,
@@ -1240,6 +1238,32 @@ private:
             return runtime_layout_result::invalid_input;
         }
 
+        const auto identity =
+            project.identity(
+                handle);
+
+        if (!identity ||
+            identity.kind() !=
+                identity_kind::type ||
+            identity.slot() == 0 ||
+            identity.slot() >
+                output.type_handles_by_identity.size()) {
+
+            return runtime_layout_result::invalid_input;
+        }
+
+        auto& current =
+            output.type_handles_by_identity[
+                identity.slot() - 1];
+
+        if (current &&
+            current != handle) {
+
+            return runtime_layout_result::invalid_input;
+        }
+
+        current = handle;
+
         auto& slot =
             output.type_slots[
                 handle.value() - 1];
@@ -1686,6 +1710,7 @@ private:
 
 void runtime_layout::reset() noexcept {
     type_slots.clear();
+    type_handles_by_identity.clear();
     derived_slots.clear();
     member_offsets.clear();
     base_offsets.clear();
@@ -1737,15 +1762,26 @@ bool runtime_layout::value(
     case type_ref_kind::named:
         if (type_value.payload() == 0 ||
             type_value.payload() >
-                type_slots.size()) {
+                type_handles_by_identity.size()) {
 
             return false;
         }
 
         {
+            const auto handle =
+                type_handles_by_identity[
+                    type_value.payload() - 1];
+
+            if (!handle ||
+                handle.value() >
+                    type_slots.size()) {
+
+                return false;
+            }
+
             const auto& slot =
                 type_slots[
-                    type_value.payload() - 1];
+                    handle.value() - 1];
 
             if (slot.state !=
                 slot_state::ready) {
@@ -2159,6 +2195,9 @@ runtime_layout_result prepare_runtime_layout(
         output.type_slots.resize(
             project.type_count());
 
+        output.type_handles_by_identity.resize(
+            project.identity_count());
+
         output.derived_slots.resize(
             project.derived_type_count());
 
@@ -2174,7 +2213,7 @@ runtime_layout_result prepare_runtime_layout(
             project.object_count());
 
         output.unconnected_type_offsets.assign(
-            project.type_count(),
+            project.identity_count(),
             invalid_offset);
 
         output.unconnected_derived_offsets.assign(

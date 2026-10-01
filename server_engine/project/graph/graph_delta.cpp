@@ -967,9 +967,11 @@ bool graph_delta::contains(
     if (type_value.kind() ==
         type_ref_kind::named) {
 
-        return contains(
-            type_handle{
-                type_value.payload()});
+        return static_cast<bool>(
+            find_type(
+                identity_ref::make(
+                    type_value.payload(),
+                    identity_kind::type)));
     }
 
     if (type_value.kind() !=
@@ -2810,10 +2812,15 @@ type_ref graph_delta::intrinsic(
 type_ref graph_delta::named(
     type_handle type_value) const noexcept {
 
-    return contains(type_value)
+    const auto value =
+        identity(type_value);
+
+    return value &&
+        value.kind() ==
+            identity_kind::type
         ? type_ref::make(
             type_ref_kind::named,
-            type_value.value())
+            value.slot())
         : type_ref{};
 }
 
@@ -3159,7 +3166,7 @@ bool graph_delta::named(
 
     output = {};
 
-    if (!contains(type_value) ||
+    if (!type_value ||
         type_value.kind() !=
             type_ref_kind::named) {
 
@@ -3167,10 +3174,13 @@ bool graph_delta::named(
     }
 
     output =
-        type_handle{
-            type_value.payload()};
+        find_type(
+            identity_ref::make(
+                type_value.payload(),
+                identity_kind::type));
 
-    return contains(output);
+    return static_cast<bool>(
+        output);
 }
 
 bool graph_delta::derived(
@@ -5053,21 +5063,14 @@ type_ref graph_dense_projection::remap(
     if (value.kind() ==
         type_ref_kind::named) {
 
-        if (value.payload() >=
-            type_slots.size()) {
+        type_handle lineage;
 
-            return {};
-        }
-
-        const auto raw =
-            dense_type_ref_raw(
+        return source != nullptr &&
+            source->named(
                 value,
-                type_slots[
-                    value.payload()]);
-
-        return raw != 0
-            ? dense_from_raw<type_ref>(
-                raw)
+                lineage) &&
+            remap(lineage)
+            ? value
             : type_ref{};
     }
 

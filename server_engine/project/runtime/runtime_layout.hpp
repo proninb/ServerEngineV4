@@ -192,6 +192,7 @@ private:
             intrinsic_type::nullptr_type) + 1;
 
     std::vector<layout_slot> type_slots;
+    std::vector<type_handle> type_handles_by_identity;
     std::vector<layout_slot> derived_slots;
     std::vector<record_offset> member_offsets;
     std::vector<record_offset> base_offsets;

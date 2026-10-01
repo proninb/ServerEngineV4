@@ -24,6 +24,8 @@ enum class identity_kind : std::uint8_t {
 };
 
 class identity_space;
+class graph;
+class graph_delta;
 class compiled_project_view;
 
 class identity_ref final {
@@ -80,6 +82,8 @@ private:
     std::uint32_t packed = 0;
 
     friend class identity_space;
+    friend class graph;
+    friend class graph_delta;
     friend class compiled_project_view;
 };
 

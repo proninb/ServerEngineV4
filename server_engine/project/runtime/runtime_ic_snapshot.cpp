@@ -471,17 +471,12 @@ runtime_ic_snapshot_result walk_type(
                 inherited_path);
 
         case type_ref_kind::named: {
-            if (type.payload() == 0) {
-                return runtime_ic_snapshot_result::
-                    invalid_runtime;
-            }
+            type_handle named;
 
-            const auto named =
-                state.project.type_at(
-                    static_cast<std::size_t>(
-                        type.payload() - 1));
+            if (!state.project.named(
+                    type,
+                    named)) {
 
-            if (!named) {
                 return runtime_ic_snapshot_result::
                     invalid_runtime;
             }
@@ -1132,15 +1127,12 @@ runtime_ic_snapshot_result native_walk_type(
                 inherited_path);
 
         case type_ref_kind::named: {
-            if (type.payload() == 0) {
-                return runtime_ic_snapshot_result::invalid_runtime;
-            }
+            type_handle named;
 
-            const auto named =
-                state.project.type_at(
-                    static_cast<std::size_t>(type.payload() - 1));
+            if (!state.project.named(
+                    type,
+                    named)) {
 
-            if (!named) {
                 return runtime_ic_snapshot_result::invalid_runtime;
             }
 

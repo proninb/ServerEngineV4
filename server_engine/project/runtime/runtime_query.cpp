@@ -477,12 +477,12 @@ struct resolved_member final {
             return false;
         }
 
-        const auto handle =
-            project.type_at(
-                static_cast<std::size_t>(
-                    type.payload() - 1));
+        type_handle handle;
 
-        if (!handle) {
+        if (!project.named(
+                type,
+                handle)) {
+
             return false;
         }
 
@@ -825,12 +825,12 @@ read_runtime_system_value(
         return false;
     }
 
-    const auto handle =
-        project.type_at(
-            static_cast<std::size_t>(
-                type.payload() - 1));
+    type_handle handle;
 
-    if (!handle) {
+    if (!project.named(
+            type,
+            handle)) {
+
         return false;
     }
 
@@ -950,14 +950,13 @@ read_runtime_system_value(
         return false;
     }
 
-    const auto owner =
-        project.type_at(
-            static_cast<std::size_t>(
-                type.payload() - 1));
+    type_handle owner;
 
     member_record member;
 
-    if (!owner ||
+    if (!project.named(
+            type,
+            owner) ||
         !project.member(
             owner,
             local,
@@ -2033,12 +2032,12 @@ runtime_query_result get_runtime_value(
                 return runtime_query_result::unsupported_type;
             }
 
-            const auto owner =
-                project.type_at(
-                    static_cast<std::size_t>(
-                        type.payload() - 1));
+            type_handle owner;
 
-            if (!owner) {
+            if (!project.named(
+                    type,
+                    owner)) {
+
                 return runtime_query_result::invalid_runtime;
             }
 

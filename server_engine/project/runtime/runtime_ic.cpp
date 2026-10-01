@@ -371,16 +371,12 @@ runtime_ic_result resolve_runtime_ic_scalar(
             return runtime_ic_result::unsupported_type;
         }
 
-        if (type.payload() == 0) {
-            return runtime_ic_result::invalid_runtime;
-        }
+        type_handle owner;
 
-        const auto owner =
-            project.type_at(
-                static_cast<std::size_t>(
-                    type.payload() - 1));
+        if (!project.named(
+                type,
+                owner)) {
 
-        if (!owner) {
             return runtime_ic_result::invalid_runtime;
         }
 

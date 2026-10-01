@@ -537,16 +537,12 @@ resolve_binary_member_step(
         return runtime_ic_reset_result::unsupported_type;
     }
 
-    if (state.type.payload() == 0) {
-        return runtime_ic_reset_result::invalid_runtime;
-    }
+    type_handle owner;
 
-    const auto owner =
-        project.type_at(
-            static_cast<std::size_t>(
-                state.type.payload() - 1));
+    if (!project.named(
+            state.type,
+            owner)) {
 
-    if (!owner) {
         return runtime_ic_reset_result::invalid_runtime;
     }
 

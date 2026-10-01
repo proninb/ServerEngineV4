@@ -3672,7 +3672,8 @@ void test_graph_dense_projection(
         remapped_live_named &&
         remapped_live_named.kind() ==
             type_ref_kind::named &&
-        remapped_live_named.payload() == 1 &&
+        remapped_live_named ==
+            live_named &&
         remapped_reference &&
         remapped_pointer,
         "dense projection compacts type lineage without runtime tombstones");

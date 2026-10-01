@@ -1,8 +1,8 @@
 /*
- * Compact Graph-local type expression reference.
+ * Compact semantic type expression reference.
  *
- * type_ref packs kind + payload into four bytes. Intrinsic and named types need
- * no lookup table; derived expressions use a Graph-owned canonical slot.
+ * type_ref packs kind + payload into four bytes. Named payloads are semantic
+ * type identity slots; derived expressions use a Graph-owned canonical slot.
  */
 #pragma once
 

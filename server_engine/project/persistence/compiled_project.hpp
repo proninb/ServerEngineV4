@@ -27,7 +27,7 @@ class graph_delta;
 class graph_dense_projection;
 class source_map_overlay_view;
 
-inline constexpr std::uint32_t compiled_project_format_version = 12;
+inline constexpr std::uint32_t compiled_project_format_version = 13;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;
@@ -397,6 +397,10 @@ public:
     [[nodiscard]] member_index find_member(
         type_handle type,
         string_id name) const noexcept;
+
+    [[nodiscard]] bool named(
+        type_ref type,
+        type_handle& output) const noexcept;
 
     [[nodiscard]] bool derived(
         type_ref type,

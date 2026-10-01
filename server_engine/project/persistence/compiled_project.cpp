@@ -1430,12 +1430,21 @@ type_ref compiled_project_view::type_ref_from_raw(
         }
         break;
 
-    case type_ref_kind::named:
-        if (payload >
-            type_count_value) {
+    case type_ref_kind::named: {
+        const auto identity =
+            identity_ref::make(
+                payload,
+                identity_kind::type);
+
+        if (!identity_valid(
+                identity) ||
+            !find_type(
+                identity)) {
+
             return {};
         }
         break;
+    }
 
     case type_ref_kind::derived:
         if (payload >
@@ -2256,6 +2265,29 @@ member_index compiled_project_view::find_member(
     }
 
     return {};
+}
+
+bool compiled_project_view::named(
+    type_ref type,
+    type_handle& output) const noexcept {
+
+    output = {};
+
+    if (!type ||
+        type.kind() !=
+            type_ref_kind::named) {
+
+        return false;
+    }
+
+    output =
+        find_type(
+            identity_ref::make(
+                type.payload(),
+                identity_kind::type));
+
+    return static_cast<bool>(
+        output);
 }
 
 bool compiled_project_view::derived(
@@ -4494,14 +4526,14 @@ compiled_project_view::verify_contents() const noexcept {
                         invalid_image;
                 }
 
-                const auto record_handle =
-                    type_from_raw(
-                        current_type.payload());
+                type_handle record_handle;
 
                 type_entry record;
                 member_record member_value;
 
-                if (!record_handle ||
+                if (!named(
+                        current_type,
+                        record_handle) ||
                     !type(
                         record_handle,
                         record) ||
@@ -4714,13 +4746,13 @@ compiled_project_view::verify_contents() const noexcept {
                     return false;
                 }
 
-                const auto record =
-                    type_from_raw(
-                        object_type.payload());
+                type_handle record;
 
                 member_record member_value;
 
-                if (!record ||
+                if (!named(
+                        object_type,
+                        record) ||
                     !member(
                         record,
                         endpoint.member.direct_member(),
@@ -4972,13 +5004,13 @@ compiled_project_view::verify_contents() const noexcept {
                     return false;
                 }
 
-                const auto record =
-                    type_from_raw(
-                        object_type.payload());
+                type_handle record;
 
                 member_record member_value;
 
-                if (!record ||
+                if (!named(
+                        object_type,
+                        record) ||
                     !member(
                         record,
                         endpoint.member.direct_member(),

@@ -193,9 +193,11 @@ bool graph::contains(
                     intrinsic_type::nullptr_type);
 
     case type_ref_kind::named:
-        return
-            type.payload() <=
-                types.size();
+        return static_cast<bool>(
+            find_type(
+                identity_ref::make(
+                    type.payload(),
+                    identity_kind::type)));
 
     case type_ref_kind::derived:
         return
@@ -879,10 +881,15 @@ type_ref graph::intrinsic(
 type_ref graph::named(
     type_handle type) const noexcept {
 
-    return contains(type)
+    const auto value =
+        identity(type);
+
+    return value &&
+        value.kind() ==
+            identity_kind::type
         ? type_ref::make(
             type_ref_kind::named,
-            type.value())
+            value.slot())
         : type_ref{};
 }
 
@@ -1459,7 +1466,7 @@ bool graph::named(
 
     output = {};
 
-    if (!contains(type) ||
+    if (!type ||
         type.kind() !=
             type_ref_kind::named) {
 
@@ -1467,10 +1474,13 @@ bool graph::named(
     }
 
     output =
-        type_handle{
-            type.payload()};
+        find_type(
+            identity_ref::make(
+                type.payload(),
+                identity_kind::type));
 
-    return contains(output);
+    return static_cast<bool>(
+        output);
 }
 
 bool graph::derived(
