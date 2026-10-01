@@ -207,6 +207,32 @@ public:
         object_handle object,
         construction_value& output) const noexcept;
 
+    [[nodiscard]] bool member(
+        type_handle type,
+        std::uint32_t local_member,
+        member_record& output) const noexcept;
+
+    [[nodiscard]] bool construction(
+        type_handle type,
+        std::uint32_t local_member,
+        construction_value& output) const noexcept;
+
+    [[nodiscard]] type_handle type_at(
+        std::size_t index) const noexcept {
+
+        if (index >= type_count()) {
+            return {};
+        }
+
+        const type_handle output{
+            static_cast<std::uint32_t>(
+                index + 1)};
+
+        return contains(output)
+            ? output
+            : type_handle{};
+    }
+
     [[nodiscard]] object_handle object_at(
         std::size_t index) const noexcept {
 
@@ -222,6 +248,52 @@ public:
             ? output
             : object_handle{};
     }
+
+    [[nodiscard]] link_handle link_at(
+        std::size_t index) const noexcept {
+
+        if (index >= link_count()) {
+            return {};
+        }
+
+        const link_handle output{
+            static_cast<std::uint32_t>(
+                index + 1)};
+
+        return contains(output)
+            ? output
+            : link_handle{};
+    }
+
+    [[nodiscard]] type_ref derived_at(
+        std::size_t index) const noexcept {
+
+        return index < derived_type_count()
+            ? type_ref::make(
+                type_ref_kind::derived,
+                static_cast<std::uint32_t>(
+                    index + 1))
+            : type_ref{};
+    }
+
+    [[nodiscard]] endpoint_path_handle endpoint_path_at(
+        std::size_t index) const noexcept {
+
+        return index < endpoint_path_count()
+            ? endpoint_path_handle{
+                static_cast<std::uint32_t>(
+                    index + 1)}
+            : endpoint_path_handle{};
+    }
+
+    using initialization_visitor =
+        server_status (*)(
+            void* context,
+            const object_initialization_record& value) noexcept;
+
+    [[nodiscard]] server_status visit_initializations(
+        void* context,
+        initialization_visitor visitor) const noexcept;
 
     [[nodiscard]] bool intrinsic(
         type_ref type,
@@ -646,6 +718,88 @@ private:
     std::vector<endpoint_path_record> endpoint_paths;
     std::vector<endpoint_path_step> endpoint_path_steps;
     std::vector<endpoint_path_index_slot> endpoint_path_index;
+
+};
+
+// BUILD-only projection from graph_delta lineage slots to one dense final G.
+// It owns only remap tables; semantic payload stays in graph_delta/baseline.
+// Runtime never sees these maps.
+class graph_dense_projection final {
+public:
+    graph_dense_projection() = default;
+
+    graph_dense_projection(
+        const graph_dense_projection&) = delete;
+
+    graph_dense_projection& operator=(
+        const graph_dense_projection&) = delete;
+
+    [[nodiscard]] server_status prepare(
+        const graph_delta& graph) noexcept;
+
+    void reset() noexcept;
+
+    [[nodiscard]] bool valid() const noexcept {
+        return source != nullptr;
+    }
+
+    [[nodiscard]] std::size_t type_count() const noexcept {
+        return final_type_count;
+    }
+
+    [[nodiscard]] std::size_t object_count() const noexcept {
+        return final_object_count;
+    }
+
+    [[nodiscard]] std::size_t link_count() const noexcept {
+        return final_link_count;
+    }
+
+    [[nodiscard]] std::size_t derived_type_count() const noexcept {
+        return final_derived_count;
+    }
+
+    [[nodiscard]] std::size_t endpoint_path_count() const noexcept {
+        return final_endpoint_path_count;
+    }
+
+    [[nodiscard]] type_handle remap(
+        type_handle value) const noexcept;
+
+    [[nodiscard]] object_handle remap(
+        object_handle value) const noexcept;
+
+    [[nodiscard]] link_handle remap(
+        link_handle value) const noexcept;
+
+    [[nodiscard]] type_ref remap(
+        type_ref value) const noexcept;
+
+    [[nodiscard]] endpoint_path_handle remap(
+        endpoint_path_handle value) const noexcept;
+
+    [[nodiscard]] bool remap(
+        object_endpoint value,
+        object_endpoint& output) const noexcept;
+
+    [[nodiscard]] bool remap(
+        construction_value value,
+        construction_value& output) const noexcept;
+
+private:
+    const graph_delta* source = nullptr;
+
+    std::vector<std::uint32_t> type_slots;
+    std::vector<std::uint32_t> object_slots;
+    std::vector<std::uint32_t> link_slots;
+    std::vector<std::uint32_t> derived_slots;
+    std::vector<std::uint32_t> endpoint_path_slots;
+
+    std::size_t final_type_count = 0;
+    std::size_t final_object_count = 0;
+    std::size_t final_link_count = 0;
+    std::size_t final_derived_count = 0;
+    std::size_t final_endpoint_path_count = 0;
 };
 
 }

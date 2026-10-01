@@ -3127,6 +3127,363 @@ void test_object_initialization_persistence_runtime(
 }
 
 
+void test_graph_dense_projection(
+    test_state& tests) {
+
+    string_table strings;
+    identity_space identities{
+        strings};
+    graph_delta G;
+
+    string_id dead_name;
+    string_id live_name;
+    string_id value_name;
+    string_id input_name;
+    string_id a_name;
+    string_id b_name;
+    string_id c_name;
+
+    const auto intern =
+        [&](std::string_view text,
+            string_id& output) {
+            return succeeded(
+                strings.intern(
+                    text,
+                    output));
+        };
+
+    if (!tests.expect(
+            intern("Dead", dead_name) &&
+            intern("Live", live_name) &&
+            intern("value", value_name) &&
+            intern("input", input_name) &&
+            intern("a", a_name) &&
+            intern("b", b_name) &&
+            intern("c", c_name),
+            "prepare dense projection strings")) {
+
+        return;
+    }
+
+    identity_ref dead_identity;
+    identity_ref live_identity;
+    identity_ref a_identity;
+    identity_ref b_identity;
+    identity_ref c_identity;
+
+    if (!tests.expect(
+            succeeded(
+                identities.resolve(
+                    identities.root(),
+                    dead_name,
+                    identity_kind::type,
+                    dead_identity)) &&
+            succeeded(
+                identities.resolve(
+                    identities.root(),
+                    live_name,
+                    identity_kind::type,
+                    live_identity)) &&
+            succeeded(
+                identities.resolve(
+                    identities.root(),
+                    a_name,
+                    identity_kind::object,
+                    a_identity)) &&
+            succeeded(
+                identities.resolve(
+                    identities.root(),
+                    b_name,
+                    identity_kind::object,
+                    b_identity)) &&
+            succeeded(
+                identities.resolve(
+                    identities.root(),
+                    c_name,
+                    identity_kind::object,
+                    c_identity)),
+            "prepare dense projection identities")) {
+
+        return;
+    }
+
+    type_handle dead_type;
+    type_handle live_type;
+
+    if (!tests.expect(
+            succeeded(
+                G.declare_record(
+                    dead_identity,
+                    graph_record_kind::struct_type,
+                    dead_type)) &&
+            succeeded(
+                G.define_record(
+                    dead_type,
+                    graph_record_kind::struct_type,
+                    {})) &&
+            succeeded(
+                G.declare_record(
+                    live_identity,
+                    graph_record_kind::struct_type,
+                    live_type)),
+            "prepare dense projection lineage types")) {
+
+        return;
+    }
+
+    const auto integer =
+        G.intrinsic(
+            intrinsic_type::signed_int);
+
+    type_ref integer_reference;
+
+    if (!tests.expect(
+            succeeded(
+                G.derive(
+                    integer,
+                    derived_type_kind::lvalue_reference,
+                    0,
+                    integer_reference)),
+            "prepare dense projection reference type")) {
+
+        return;
+    }
+
+    const std::array<member_record, 2>
+        members{{
+            {
+                value_name,
+                integer,
+                graph_member_access::public_access,
+            },
+            {
+                input_name,
+                integer_reference,
+                graph_member_access::public_access,
+            },
+        }};
+
+    if (!tests.expect(
+            succeeded(
+                G.define_record(
+                    live_type,
+                    graph_record_kind::struct_type,
+                    members)) &&
+            succeeded(
+                G.retire(
+                    dead_type)),
+            "retire first lineage type before dense projection")) {
+
+        return;
+    }
+
+    const auto live_named =
+        G.named(
+            live_type);
+
+    type_ref live_pointer;
+
+    if (!tests.expect(
+            succeeded(
+                G.derive(
+                    live_named,
+                    derived_type_kind::pointer,
+                    0,
+                    live_pointer)),
+            "prepare derived type that references remapped named type")) {
+
+        return;
+    }
+
+    object_handle a;
+    object_handle b;
+    object_handle c;
+
+    if (!tests.expect(
+            succeeded(
+                G.add_object(
+                    a_identity,
+                    live_named,
+                    a)) &&
+            succeeded(
+                G.add_object(
+                    b_identity,
+                    live_named,
+                    b)) &&
+            succeeded(
+                G.add_object(
+                    c_identity,
+                    live_named,
+                    c)),
+            "prepare dense projection objects")) {
+
+        return;
+    }
+
+    const auto value_member =
+        G.find_member(
+            live_type,
+            value_name);
+
+    const auto input_member =
+        G.find_member(
+            live_type,
+            input_name);
+
+    link_handle first_link;
+    link_handle second_link;
+
+    if (!tests.expect(
+            value_member &&
+            input_member &&
+            succeeded(
+                G.add_link(
+                    {
+                        a,
+                        endpoint_ref{
+                            value_member},
+                    },
+                    {
+                        b,
+                        endpoint_ref{
+                            input_member},
+                    },
+                    first_link)) &&
+            succeeded(
+                G.add_link(
+                    {
+                        c,
+                        endpoint_ref{
+                            value_member},
+                    },
+                    {
+                        a,
+                        endpoint_ref{
+                            input_member},
+                    },
+                    second_link)),
+            "prepare dense projection links")) {
+
+        return;
+    }
+
+    bool replaced = false;
+
+    if (!tests.expect(
+            succeeded(
+                G.add_initialization(
+                    {
+                        c,
+                        endpoint_ref{
+                            value_member},
+                    },
+                    construction_value::constant(
+                        construction_kind::
+                            signed_integer,
+                        17),
+                    replaced)) &&
+            !replaced,
+            "prepare dense projection initialization")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            succeeded(
+                G.retire(
+                    first_link)) &&
+            succeeded(
+                G.retire(
+                    b)),
+            "create object/link tombstones before final projection")) {
+
+        return;
+    }
+
+    graph_dense_projection projection;
+
+    if (!tests.expect(
+            succeeded(
+                projection.prepare(
+                    G)),
+            "prepare dense final G projection")) {
+
+        return;
+    }
+
+    const auto remapped_live_type =
+        projection.remap(
+            live_type);
+
+    const auto remapped_live_named =
+        projection.remap(
+            live_named);
+
+    const auto remapped_reference =
+        projection.remap(
+            integer_reference);
+
+    const auto remapped_pointer =
+        projection.remap(
+            live_pointer);
+
+    tests.expect(
+        projection.type_count() == 1 &&
+        projection.object_count() == 2 &&
+        projection.link_count() == 1 &&
+        projection.derived_type_count() == 2 &&
+        !projection.remap(
+            dead_type) &&
+        remapped_live_type &&
+        remapped_live_type.value() == 1 &&
+        remapped_live_named &&
+        remapped_live_named.kind() ==
+            type_ref_kind::named &&
+        remapped_live_named.payload() == 1 &&
+        remapped_reference &&
+        remapped_pointer,
+        "dense projection compacts type lineage without runtime tombstones");
+
+    tests.expect(
+        projection.remap(a).value() == 1 &&
+        !projection.remap(b) &&
+        projection.remap(c).value() == 2 &&
+        !projection.remap(first_link) &&
+        projection.remap(second_link).value() == 1,
+        "dense projection compacts object/link lineage in original order");
+
+    object_endpoint remapped_endpoint;
+
+    tests.expect(
+        projection.remap(
+            {
+                c,
+                endpoint_ref{
+                    value_member},
+            },
+            remapped_endpoint) &&
+        remapped_endpoint.object.value() == 2 &&
+        remapped_endpoint.member ==
+            endpoint_ref{
+                value_member},
+        "dense projection remaps object endpoints and preserves local member indices");
+
+    construction_value remapped_binding;
+
+    tests.expect(
+        projection.remap(
+            construction_value::
+                object_binding(
+                    c.value()),
+            remapped_binding) &&
+        remapped_binding.kind ==
+            construction_kind::
+                object_binding &&
+        remapped_binding.operand == 2,
+        "dense projection remaps object-binding construction operands");
+}
+
+
 void test_graph_delta_initialization_overlay(
     test_state& tests) {
 
@@ -9841,6 +10198,9 @@ int main() {
         test_source_map_provenance(tests, fixture);
 
         test_object_initialization_persistence_runtime(
+            tests);
+
+        test_graph_dense_projection(
             tests);
 
         test_graph_delta_initialization_overlay(

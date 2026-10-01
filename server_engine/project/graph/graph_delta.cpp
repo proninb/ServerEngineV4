@@ -2,7 +2,9 @@
 #include "construction_semantics.hpp"
 #include "../persistence/compiled_project.hpp"
 
+#include <bit>
 #include <limits>
+#include <type_traits>
 #include <utility>
 
 namespace cw::server {
@@ -2222,6 +2224,36 @@ bool graph_delta::member(
     return true;
 }
 
+bool graph_delta::member(
+    type_handle type_value,
+    std::uint32_t local_member,
+    member_record& output) const noexcept {
+
+    const auto value =
+        std::bit_cast<member_index>(
+            local_member);
+
+    return member(
+        type_value,
+        value,
+        output);
+}
+
+bool graph_delta::construction(
+    type_handle type_value,
+    std::uint32_t local_member,
+    construction_value& output) const noexcept {
+
+    const auto value =
+        std::bit_cast<member_index>(
+            local_member);
+
+    return construction(
+        type_value,
+        value,
+        output);
+}
+
 const construction_value* graph_delta::construction(
     type_handle type_value,
     member_index member_value) const noexcept {
@@ -4347,6 +4379,95 @@ bool graph_delta::initialization(
             output);
 }
 
+server_status graph_delta::visit_initializations(
+    void* context,
+    initialization_visitor visitor) const noexcept {
+
+    if (visitor == nullptr) {
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    std::size_t emitted = 0;
+
+    if (baseline != nullptr) {
+        for (std::size_t index = 0;
+             index <
+                baseline->initialization_count();
+             ++index) {
+
+            object_initialization_record value;
+
+            if (!baseline->initialization_at(
+                    index,
+                    value)) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            if (const auto* patch =
+                    find_initialization_patch(
+                        value.target);
+                patch != nullptr) {
+
+                if (!patch->live) {
+                    continue;
+                }
+
+                value =
+                    patch->value;
+            }
+
+            const auto visited =
+                visitor(
+                    context,
+                    value);
+
+            if (!succeeded(visited)) {
+                return visited;
+            }
+
+            ++emitted;
+        }
+    }
+
+    for (const auto& patch :
+         initialization_patches) {
+
+        if (!patch.live) {
+            continue;
+        }
+
+        object_initialization_record baseline_value;
+
+        if (baseline != nullptr &&
+            baseline->initialization(
+                patch.value.target,
+                baseline_value)) {
+
+            continue;
+        }
+
+        const auto visited =
+            visitor(
+                context,
+                patch.value);
+
+        if (!succeeded(visited)) {
+            return visited;
+        }
+
+        ++emitted;
+    }
+
+    return emitted ==
+            live_initialization_count_value
+        ? server_status::success
+        : server_status::
+            project_artifact_invalid;
+}
+
 server_status graph_delta::add_initialization(
     object_endpoint target,
     construction_value value,
@@ -4771,6 +4892,660 @@ server_status graph_delta::retire(
     }
 
     --live_link_count_value;
+
+    return server_status::success;
+}
+
+namespace {
+
+template <typename T>
+[[nodiscard]] T dense_from_raw(
+    std::uint32_t value) noexcept {
+
+    static_assert(
+        sizeof(T) ==
+            sizeof(std::uint32_t));
+
+    static_assert(
+        std::is_trivially_copyable_v<T>);
+
+    return std::bit_cast<T>(
+        value);
+}
+
+[[nodiscard]] std::uint32_t
+dense_type_ref_raw(
+    type_ref lineage,
+    std::uint32_t payload) noexcept {
+
+    return payload != 0 &&
+        payload <=
+            type_ref::maximum_payload
+        ? (lineage.value() &
+           ~type_ref::maximum_payload) |
+              payload
+        : 0;
+}
+
+}
+
+void graph_dense_projection::reset() noexcept {
+
+    source = nullptr;
+
+    type_slots.clear();
+    object_slots.clear();
+    link_slots.clear();
+    derived_slots.clear();
+    endpoint_path_slots.clear();
+
+    final_type_count = 0;
+    final_object_count = 0;
+    final_link_count = 0;
+    final_derived_count = 0;
+    final_endpoint_path_count = 0;
+}
+
+type_handle graph_dense_projection::remap(
+    type_handle value) const noexcept {
+
+    if (!valid() ||
+        !value ||
+        value.value() >=
+            type_slots.size()) {
+
+        return {};
+    }
+
+    const auto slot =
+        type_slots[
+            value.value()];
+
+    return slot != 0
+        ? dense_from_raw<type_handle>(
+            slot)
+        : type_handle{};
+}
+
+object_handle graph_dense_projection::remap(
+    object_handle value) const noexcept {
+
+    if (!valid() ||
+        !value ||
+        value.value() >=
+            object_slots.size()) {
+
+        return {};
+    }
+
+    const auto slot =
+        object_slots[
+            value.value()];
+
+    return slot != 0
+        ? dense_from_raw<object_handle>(
+            slot)
+        : object_handle{};
+}
+
+link_handle graph_dense_projection::remap(
+    link_handle value) const noexcept {
+
+    if (!valid() ||
+        !value ||
+        value.value() >=
+            link_slots.size()) {
+
+        return {};
+    }
+
+    const auto slot =
+        link_slots[
+            value.value()];
+
+    return slot != 0
+        ? dense_from_raw<link_handle>(
+            slot)
+        : link_handle{};
+}
+
+type_ref graph_dense_projection::remap(
+    type_ref value) const noexcept {
+
+    if (!valid() ||
+        !value) {
+
+        return {};
+    }
+
+    if (value.kind() ==
+        type_ref_kind::intrinsic) {
+
+        return value;
+    }
+
+    if (value.kind() ==
+        type_ref_kind::named) {
+
+        if (value.payload() >=
+            type_slots.size()) {
+
+            return {};
+        }
+
+        const auto raw =
+            dense_type_ref_raw(
+                value,
+                type_slots[
+                    value.payload()]);
+
+        return raw != 0
+            ? dense_from_raw<type_ref>(
+                raw)
+            : type_ref{};
+    }
+
+    if (value.kind() ==
+        type_ref_kind::derived) {
+
+        if (value.payload() >=
+            derived_slots.size()) {
+
+            return {};
+        }
+
+        const auto raw =
+            dense_type_ref_raw(
+                value,
+                derived_slots[
+                    value.payload()]);
+
+        return raw != 0
+            ? dense_from_raw<type_ref>(
+                raw)
+            : type_ref{};
+    }
+
+    return {};
+}
+
+endpoint_path_handle
+graph_dense_projection::remap(
+    endpoint_path_handle value) const noexcept {
+
+    if (!valid() ||
+        !value ||
+        value.value() >=
+            endpoint_path_slots.size()) {
+
+        return {};
+    }
+
+    const auto slot =
+        endpoint_path_slots[
+            value.value()];
+
+    return slot != 0
+        ? dense_from_raw<
+            endpoint_path_handle>(
+                slot)
+        : endpoint_path_handle{};
+}
+
+bool graph_dense_projection::remap(
+    object_endpoint value,
+    object_endpoint& output) const noexcept {
+
+    output = {};
+
+    const auto object =
+        remap(
+            value.object);
+
+    if (!object ||
+        !value.member) {
+
+        return false;
+    }
+
+    endpoint_ref member =
+        value.member;
+
+    if (member.is_path()) {
+        const auto path =
+            remap(
+                member.path());
+
+        if (!path) {
+            return false;
+        }
+
+        member =
+            endpoint_ref::from_path(
+                path);
+    }
+
+    output = {
+        object,
+        member,
+    };
+
+    return true;
+}
+
+bool graph_dense_projection::remap(
+    construction_value value,
+    construction_value& output) const noexcept {
+
+    output = {};
+
+    if (!valid_construction(
+            value)) {
+
+        return false;
+    }
+
+    if (value.kind ==
+        construction_kind::
+            object_binding) {
+
+        if (value.operand == 0 ||
+            value.operand >=
+                object_slots.size()) {
+
+            return false;
+        }
+
+        const auto object =
+            object_slots[
+                value.operand];
+
+        if (object == 0) {
+            return false;
+        }
+
+        value.operand =
+            object;
+    }
+
+    output =
+        value;
+
+    return true;
+}
+
+server_status graph_dense_projection::prepare(
+    const graph_delta& graph) noexcept {
+
+    reset();
+
+    if (graph.type_count() >
+            type_handle::maximum_slot ||
+        graph.object_count() >
+            object_handle::maximum_slot ||
+        graph.link_count() >
+            link_handle::maximum_slot ||
+        graph.derived_type_count() >
+            type_ref::maximum_payload ||
+        graph.endpoint_path_count() >
+            endpoint_path_handle::
+                maximum_slot) {
+
+        return server_status::io_error;
+    }
+
+    try {
+        type_slots.assign(
+            graph.type_count() + 1,
+            0);
+
+        object_slots.assign(
+            graph.object_count() + 1,
+            0);
+
+        link_slots.assign(
+            graph.link_count() + 1,
+            0);
+
+        derived_slots.assign(
+            graph.derived_type_count() + 1,
+            0);
+
+        endpoint_path_slots.assign(
+            graph.endpoint_path_count() + 1,
+            0);
+    }
+    catch (...) {
+        reset();
+        return server_status::io_error;
+    }
+
+    source =
+        &graph;
+
+    for (std::size_t index = 0;
+         index < graph.type_count();
+         ++index) {
+
+        const auto lineage =
+            graph.type_at(
+                index);
+
+        if (!lineage) {
+            continue;
+        }
+
+        type_slots[
+            lineage.value()] =
+            static_cast<std::uint32_t>(
+                ++final_type_count);
+    }
+
+    for (std::size_t index = 0;
+         index < graph.object_count();
+         ++index) {
+
+        const auto lineage =
+            graph.object_at(
+                index);
+
+        if (!lineage) {
+            continue;
+        }
+
+        object_slots[
+            lineage.value()] =
+            static_cast<std::uint32_t>(
+                ++final_object_count);
+    }
+
+    for (std::size_t index = 0;
+         index < graph.link_count();
+         ++index) {
+
+        const auto lineage =
+            graph.link_at(
+                index);
+
+        if (!lineage) {
+            continue;
+        }
+
+        link_slots[
+            lineage.value()] =
+            static_cast<std::uint32_t>(
+                ++final_link_count);
+    }
+
+    if (final_type_count !=
+            graph.live_type_count() ||
+        final_object_count !=
+            graph.live_object_count() ||
+        final_link_count !=
+            graph.live_link_count()) {
+
+        reset();
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    for (std::size_t index = 0;
+         index <
+            graph.derived_type_count();
+         ++index) {
+
+        const auto lineage =
+            graph.derived_at(
+                index);
+
+        derived_type_record record;
+
+        if (!lineage ||
+            !graph.derived(
+                lineage,
+                record)) {
+
+            reset();
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        if (!remap(
+                record.child)) {
+
+            continue;
+        }
+
+        derived_slots[
+            lineage.payload()] =
+            static_cast<std::uint32_t>(
+                ++final_derived_count);
+    }
+
+    for (std::size_t index = 0;
+         index <
+            graph.endpoint_path_count();
+         ++index) {
+
+        const auto lineage =
+            graph.endpoint_path_at(
+                index);
+
+        endpoint_path_record record;
+
+        if (!lineage ||
+            !graph.endpoint_path(
+                lineage,
+                record)) {
+
+            reset();
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        if (!remap(
+                record.root_type) ||
+            !remap(
+                record.value_type)) {
+
+            continue;
+        }
+
+        for (std::uint32_t step = 0;
+             step <
+                record.steps.count;
+             ++step) {
+
+            endpoint_path_step value;
+
+            if (!graph.endpoint_path_step_at(
+                    static_cast<std::size_t>(
+                        record.steps.begin) +
+                        step,
+                    value)) {
+
+                reset();
+                return server_status::
+                    project_artifact_invalid;
+            }
+        }
+
+        endpoint_path_slots[
+            lineage.value()] =
+            static_cast<std::uint32_t>(
+                ++final_endpoint_path_count);
+    }
+
+    for (std::size_t index = 0;
+         index < graph.type_count();
+         ++index) {
+
+        const auto lineage =
+            graph.type_at(
+                index);
+
+        if (!lineage) {
+            continue;
+        }
+
+        type_entry type;
+
+        if (!graph.type(
+                lineage,
+                type)) {
+
+            reset();
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        for (std::uint32_t local = 0;
+             local < type.bases.count;
+             ++local) {
+
+            base_record base;
+
+            if (!graph.base(
+                    lineage,
+                    local,
+                    base) ||
+                !remap(
+                    base.type)) {
+
+                reset();
+                return server_status::
+                    project_artifact_invalid;
+            }
+        }
+
+        for (std::uint32_t local = 0;
+             local < type.members.count;
+             ++local) {
+
+            member_record member;
+            construction_value construction;
+            construction_value remapped;
+
+            if (!graph.member(
+                    lineage,
+                    local,
+                    member) ||
+                !remap(
+                    member.type) ||
+                !graph.construction(
+                    lineage,
+                    local,
+                    construction) ||
+                !remap(
+                    construction,
+                    remapped)) {
+
+                reset();
+                return server_status::
+                    project_artifact_invalid;
+            }
+        }
+    }
+
+    for (std::size_t index = 0;
+         index < graph.object_count();
+         ++index) {
+
+        const auto lineage =
+            graph.object_at(
+                index);
+
+        if (!lineage) {
+            continue;
+        }
+
+        object_entry object;
+        construction_value construction;
+        construction_value remapped;
+
+        if (!graph.object(
+                lineage,
+                object) ||
+            !remap(
+                object.type) ||
+            !graph.construction(
+                lineage,
+                construction) ||
+            !remap(
+                construction,
+                remapped)) {
+
+            reset();
+            return server_status::
+                project_artifact_invalid;
+        }
+    }
+
+    for (std::size_t index = 0;
+         index < graph.link_count();
+         ++index) {
+
+        const auto lineage =
+            graph.link_at(
+                index);
+
+        if (!lineage) {
+            continue;
+        }
+
+        link_record link;
+        object_endpoint source_endpoint;
+        object_endpoint target_endpoint;
+
+        if (!graph.link(
+                lineage,
+                link) ||
+            !remap(
+                link.source,
+                source_endpoint) ||
+            !remap(
+                link.target,
+                target_endpoint)) {
+
+            reset();
+            return server_status::
+                project_artifact_invalid;
+        }
+    }
+
+    const auto initialization_check =
+        [](void* context,
+           const object_initialization_record& value) noexcept
+        -> server_status {
+
+            const auto& projection =
+                *static_cast<
+                    const graph_dense_projection*>(
+                        context);
+
+            object_endpoint target;
+            construction_value construction;
+
+            return projection.remap(
+                       value.target,
+                       target) &&
+                   projection.remap(
+                       value.value,
+                       construction)
+                ? server_status::success
+                : server_status::
+                    project_artifact_invalid;
+        };
+
+    const auto visited =
+        graph.visit_initializations(
+            this,
+            initialization_check);
+
+    if (!succeeded(visited)) {
+        reset();
+        return visited;
+    }
 
     return server_status::success;
 }
