@@ -2330,18 +2330,30 @@ void test_round_trip(
 
     tests.expect(
         view.type_count() ==
-            fixture.G.type_count(),
-        "type count");
+            fixture.G.type_count() &&
+        view.type_slot_count() ==
+            view.type_count() &&
+        view.live_type_count() ==
+            view.type_count(),
+        "type live/slot count");
 
     tests.expect(
         view.object_count() ==
-            fixture.G.object_count(),
-        "object count");
+            fixture.G.object_count() &&
+        view.object_slot_count() ==
+            view.object_count() &&
+        view.live_object_count() ==
+            view.object_count(),
+        "object live/slot count");
 
     tests.expect(
         view.link_count() ==
-            fixture.G.link_count(),
-        "link count");
+            fixture.G.link_count() &&
+        view.link_slot_count() ==
+            view.link_count() &&
+        view.live_link_count() ==
+            view.link_count(),
+        "link live/slot count");
 
     tests.expect(
         view.assign_count() ==
@@ -2387,12 +2399,25 @@ void test_round_trip(
         "type handle preservation");
 
     type_entry type_value;
+    type_entry raw_type_value;
 
     tests.expect(
+        view.type_slot_live(
+            fixture.type) &&
+        view.find_type_lineage(
+            fixture.type_identity) ==
+            fixture.type &&
+        view.type_raw(
+            fixture.type,
+            raw_type_value) &&
         view.type(
             fixture.type,
-            type_value),
-        "read type");
+            type_value) &&
+        raw_type_value.members.begin ==
+            type_value.members.begin &&
+        raw_type_value.members.count ==
+            type_value.members.count,
+        "read live and lineage type slot");
 
     const auto* source_type =
         fixture.G.find(
@@ -2510,11 +2535,22 @@ void test_round_trip(
         "object handle preservation");
 
     object_entry scalar_object;
+    object_entry raw_scalar_object;
 
     tests.expect(
+        view.object_slot_live(
+            fixture.scalar) &&
+        view.find_object_lineage(
+            fixture.scalar_identity) ==
+            fixture.scalar &&
+        view.object_raw(
+            fixture.scalar,
+            raw_scalar_object) &&
         view.object(
             fixture.scalar,
             scalar_object) &&
+        raw_scalar_object.type ==
+            scalar_object.type &&
             scalar_object.type ==
                 fixture.integer_type &&
             scalar_object.non_default_initializer(),
@@ -2537,17 +2573,31 @@ void test_round_trip(
     const auto source_link =
         fixture.G.link_entries()[0];
 
+    link_record raw_link_value;
+
     tests.expect(
+        view.link_slot_live(
+            fixture.link) &&
+        view.link_raw(
+            fixture.link,
+            raw_link_value) &&
         view.link(
             fixture.link,
             link_value) &&
-            link_value.source ==
-                source_link.source &&
-            link_value.target ==
-                source_link.target,
-        "link preservation");
+        raw_link_value.source ==
+            link_value.source &&
+        raw_link_value.target ==
+            link_value.target &&
+        link_value.source ==
+            source_link.source &&
+        link_value.target ==
+            source_link.target,
+        "link live/raw slot preservation");
 
     tests.expect(
+        view.find_link_target_lineage(
+            source_link.target) ==
+            fixture.link &&
         view.find_link_target(
             source_link.target) ==
             fixture.link &&
@@ -9886,21 +9936,21 @@ void test_build_lineage_overlays(
     tests.expect(
         G.baseline_bound() &&
         G.type_count() ==
-            baseline.type_count() &&
+            baseline.type_slot_count() &&
         G.live_type_count() ==
-            baseline.type_count() &&
+            baseline.live_type_count() &&
         G.member_count() ==
             baseline.member_count() &&
         G.base_count() ==
             baseline.base_count() &&
         G.object_count() ==
-            baseline.object_count() &&
+            baseline.object_slot_count() &&
         G.live_object_count() ==
-            baseline.object_count() &&
+            baseline.live_object_count() &&
         G.link_count() ==
-            baseline.link_count() &&
+            baseline.link_slot_count() &&
         G.live_link_count() ==
-            baseline.link_count() &&
+            baseline.live_link_count() &&
         G.derived_type_count() ==
             baseline.derived_type_count(),
         "BUILD graph_delta binds baseline without dense reconstruction");

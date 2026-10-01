@@ -338,7 +338,7 @@ server_status graph_delta::bind_baseline(
     baseline = &value;
 
     baseline_type_count =
-        value.type_count();
+        value.type_slot_count();
 
     baseline_base_count =
         value.base_count();
@@ -347,13 +347,13 @@ server_status graph_delta::bind_baseline(
         value.member_count();
 
     baseline_object_count =
-        value.object_count();
+        value.object_slot_count();
 
     baseline_object_construction_count =
         value.object_construction_count();
 
     baseline_link_count =
-        value.link_count();
+        value.link_slot_count();
 
     baseline_derived_count =
         value.derived_type_count();
@@ -365,13 +365,13 @@ server_status graph_delta::bind_baseline(
         value.endpoint_path_step_count();
 
     live_type_count_value =
-        baseline_type_count;
+        value.live_type_count();
 
     live_object_count_value =
-        baseline_object_count;
+        value.live_object_count();
 
     live_link_count_value =
-        baseline_link_count;
+        value.live_link_count();
 
     live_initialization_count_value =
         value.initialization_count();
@@ -475,7 +475,7 @@ std::uint32_t graph_delta::lineage_location(
             identity_kind::type) {
 
             const auto type =
-                baseline->find_type(
+                baseline->find_type_lineage(
                     identity);
 
             return type
@@ -489,7 +489,7 @@ std::uint32_t graph_delta::lineage_location(
             identity_kind::object) {
 
             const auto object =
-                baseline->find_object(
+                baseline->find_object_lineage(
                     identity);
 
             return object
@@ -595,7 +595,7 @@ server_status graph_delta::ensure_type_patch(
 
     type_entry value;
 
-    if (!baseline->type(
+    if (!baseline->type_raw(
             type_value,
             value)) {
 
@@ -603,11 +603,15 @@ server_status graph_delta::ensure_type_patch(
             project_artifact_invalid;
     }
 
+    const bool live =
+        baseline->type_slot_live(
+            type_value);
+
     try {
         type_patches.push_back({
             type_value.value(),
             value,
-            true,
+            live,
         });
     }
     catch (...) {
@@ -686,12 +690,17 @@ server_status graph_delta::ensure_object_patch(
     object_entry value;
     construction_value construction;
 
-    if (!baseline->object(
+    const bool live =
+        baseline->object_slot_live(
+            object_value);
+
+    if (!baseline->object_raw(
             object_value,
             value) ||
-        !baseline->construction(
-            object_value,
-            construction)) {
+        (live &&
+         !baseline->construction(
+             object_value,
+             construction))) {
 
         return server_status::
             project_artifact_invalid;
@@ -702,7 +711,7 @@ server_status graph_delta::ensure_object_patch(
             object_value.value(),
             value,
             construction,
-            true,
+            live,
         });
     }
     catch (...) {
@@ -780,7 +789,7 @@ server_status graph_delta::ensure_link_patch(
 
     link_record value;
 
-    if (!baseline->link(
+    if (!baseline->link_raw(
             link_value,
             value)) {
 
@@ -788,11 +797,15 @@ server_status graph_delta::ensure_link_patch(
             project_artifact_invalid;
     }
 
+    const bool live =
+        baseline->link_slot_live(
+            link_value);
+
     try {
         link_patches.push_back({
             link_value.value(),
             value,
-            true,
+            live,
         });
     }
     catch (...) {
@@ -854,8 +867,11 @@ bool graph_delta::contains(
             find_type_patch(
                 type_value.value());
 
-        return patch == nullptr ||
-            patch->live;
+        return patch != nullptr
+            ? patch->live
+            : baseline != nullptr &&
+                baseline->type_slot_live(
+                    type_value);
     }
 
     const auto index =
@@ -883,8 +899,11 @@ bool graph_delta::contains(
             find_object_patch(
                 object_value.value());
 
-        return patch == nullptr ||
-            patch->live;
+        return patch != nullptr
+            ? patch->live
+            : baseline != nullptr &&
+                baseline->object_slot_live(
+                    object_value);
     }
 
     const auto index =
@@ -912,8 +931,11 @@ bool graph_delta::contains(
             find_link_patch(
                 link_value.value());
 
-        return patch == nullptr ||
-            patch->live;
+        return patch != nullptr
+            ? patch->live
+            : baseline != nullptr &&
+                baseline->link_slot_live(
+                    link_value);
     }
 
     const auto index =
@@ -3963,7 +3985,7 @@ link_handle graph_delta::lineage_link_target(
     }
 
     return baseline != nullptr
-        ? baseline->find_link_target(
+        ? baseline->find_link_target_lineage(
             target)
         : link_handle{};
 }

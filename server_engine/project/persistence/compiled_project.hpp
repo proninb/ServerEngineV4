@@ -212,6 +212,16 @@ public:
         return type_count_value;
     }
 
+    // Physical Graph lineage slots. BUILD may preserve retired slots while the
+    // live semantic count is smaller. v12 has no persisted tombstones yet.
+    [[nodiscard]] std::size_t type_slot_count() const noexcept {
+        return type_count_value;
+    }
+
+    [[nodiscard]] std::size_t live_type_count() const noexcept {
+        return type_count_value;
+    }
+
     [[nodiscard]] std::size_t member_count() const noexcept {
         return static_cast<std::size_t>(
             section(
@@ -244,7 +254,23 @@ public:
         return object_count_value;
     }
 
+    [[nodiscard]] std::size_t object_slot_count() const noexcept {
+        return object_count_value;
+    }
+
+    [[nodiscard]] std::size_t live_object_count() const noexcept {
+        return object_count_value;
+    }
+
     [[nodiscard]] std::size_t link_count() const noexcept {
+        return link_count_value;
+    }
+
+    [[nodiscard]] std::size_t link_slot_count() const noexcept {
+        return link_count_value;
+    }
+
+    [[nodiscard]] std::size_t live_link_count() const noexcept {
         return link_count_value;
     }
 
@@ -291,8 +317,33 @@ public:
         type_handle handle,
         type_entry& output) const noexcept;
 
+    // Raw lineage access includes retired slots once compiled.bin can persist
+    // tombstones. In v12 every physical slot is live.
+    [[nodiscard]] bool type_slot_live(
+        type_handle handle) const noexcept {
+
+        return handle &&
+            handle.value() <=
+                type_slot_count();
+    }
+
+    [[nodiscard]] bool type_raw(
+        type_handle handle,
+        type_entry& output) const noexcept {
+
+        return type(
+            handle,
+            output);
+    }
+
     [[nodiscard]] identity_ref identity(
         type_handle handle) const noexcept;
+
+    [[nodiscard]] identity_ref type_identity_raw(
+        type_handle handle) const noexcept {
+
+        return identity(handle);
+    }
 
     [[nodiscard]] bool base_at(
         std::size_t index,
@@ -300,6 +351,14 @@ public:
 
     [[nodiscard]] type_handle find_type(
         identity_ref identity) const noexcept;
+
+    // Historical identity -> Graph slot. v12 contains live slots only; v13
+    // will keep this mapping across BUILD tombstones.
+    [[nodiscard]] type_handle find_type_lineage(
+        identity_ref identity) const noexcept {
+
+        return find_type(identity);
+    }
 
     [[nodiscard]] bool member(
         type_handle type,
@@ -357,11 +416,40 @@ public:
         object_handle handle,
         object_entry& output) const noexcept;
 
+    [[nodiscard]] bool object_slot_live(
+        object_handle handle) const noexcept {
+
+        return handle &&
+            handle.value() <=
+                object_slot_count();
+    }
+
+    [[nodiscard]] bool object_raw(
+        object_handle handle,
+        object_entry& output) const noexcept {
+
+        return object(
+            handle,
+            output);
+    }
+
     [[nodiscard]] identity_ref identity(
         object_handle handle) const noexcept;
 
+    [[nodiscard]] identity_ref object_identity_raw(
+        object_handle handle) const noexcept {
+
+        return identity(handle);
+    }
+
     [[nodiscard]] object_handle find_object(
         identity_ref identity) const noexcept;
+
+    [[nodiscard]] object_handle find_object_lineage(
+        identity_ref identity) const noexcept {
+
+        return find_object(identity);
+    }
 
     [[nodiscard]] bool construction(
         object_handle object,
@@ -402,6 +490,23 @@ public:
         link_handle handle,
         link_record& output) const noexcept;
 
+    [[nodiscard]] bool link_slot_live(
+        link_handle handle) const noexcept {
+
+        return handle &&
+            handle.value() <=
+                link_slot_count();
+    }
+
+    [[nodiscard]] bool link_raw(
+        link_handle handle,
+        link_record& output) const noexcept {
+
+        return link(
+            handle,
+            output);
+    }
+
     [[nodiscard]] bool initialization_at(
         std::size_t index,
         object_initialization_record& output) const noexcept;
@@ -415,6 +520,12 @@ public:
     // binding per target endpoint, so sparse BUILD must not scan all OLD links.
     [[nodiscard]] link_handle find_link_target(
         object_endpoint target) const noexcept;
+
+    [[nodiscard]] link_handle find_link_target_lineage(
+        object_endpoint target) const noexcept {
+
+        return find_link_target(target);
+    }
 
     [[nodiscard]] link_handle find_link_target(
         object_handle object,
