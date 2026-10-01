@@ -5355,6 +5355,11 @@ server_status graph_dense_projection::prepare(
             continue;
         }
 
+        auto current_type =
+            record.root_type;
+
+        bool path_live = true;
+
         for (std::uint32_t step = 0;
              step <
                 record.steps.count;
@@ -5372,6 +5377,100 @@ server_status graph_dense_projection::prepare(
                 return server_status::
                     project_artifact_invalid;
             }
+
+            for (const auto reserved :
+                 value.reserved) {
+
+                if (reserved != 0) {
+                    reset();
+                    return server_status::
+                        project_artifact_invalid;
+                }
+            }
+
+            derived_type_record
+                derived_value;
+
+            while (graph.derived(
+                       current_type,
+                       derived_value) &&
+                   (derived_value.kind ==
+                        derived_type_kind::
+                            const_qualified ||
+                    derived_value.kind ==
+                        derived_type_kind::
+                            volatile_qualified)) {
+
+                current_type =
+                    derived_value.child;
+            }
+
+            if (value.kind ==
+                endpoint_path_step_kind::
+                    array_index) {
+
+                if (!graph.derived(
+                        current_type,
+                        derived_value) ||
+                    derived_value.kind !=
+                        derived_type_kind::
+                            bounded_array ||
+                    value.value >=
+                        derived_value.payload) {
+
+                    path_live = false;
+                    break;
+                }
+
+                current_type =
+                    derived_value.child;
+                continue;
+            }
+
+            if (value.kind !=
+                    endpoint_path_step_kind::
+                        member ||
+                value.value >
+                    (std::numeric_limits<
+                        std::uint32_t>::max)() ||
+                current_type.kind() !=
+                    type_ref_kind::named) {
+
+                path_live = false;
+                break;
+            }
+
+            type_handle record_type;
+
+            if (!graph.named(
+                    current_type,
+                    record_type)) {
+
+                path_live = false;
+                break;
+            }
+
+            member_record member;
+
+            if (!graph.member(
+                    record_type,
+                    static_cast<std::uint32_t>(
+                        value.value),
+                    member)) {
+
+                path_live = false;
+                break;
+            }
+
+            current_type =
+                member.type;
+        }
+
+        if (!path_live ||
+            current_type !=
+                record.value_type) {
+
+            continue;
         }
 
         if (record.steps.count >

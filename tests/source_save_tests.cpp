@@ -600,6 +600,38 @@ void test_direct_source_save(
             projection.endpoint_path_step_count() ==
                 G.endpoint_path_step_count(),
             "sparse BUILD candidate prepares byte-identical final compiled.bin layout counts");
+
+        std::vector<std::byte>
+            sparse_bytes(
+                sparse_layout.size(),
+                std::byte{0xa5});
+
+        compiled_project_view
+            sparse_compiled;
+
+        tests.expect(
+            encode_build_compiled_project_image(
+                strings,
+                identities,
+                changes,
+                projection,
+                assign_candidate,
+                files,
+                source_candidate,
+                sparse_layout,
+                sparse_bytes) ==
+                    compiled_project_image_result::
+                        success &&
+            sparse_bytes ==
+                compiled_bytes &&
+            sparse_compiled.bind(
+                sparse_bytes) ==
+                    compiled_project_image_result::
+                        success &&
+            sparse_compiled.verify_contents() ==
+                    compiled_project_image_result::
+                        success,
+            "unchanged sparse BUILD encodes byte-identical audited compiled.bin directly");
     }
 
     {

@@ -157,6 +157,18 @@ private:
         compiled_project_layout&) noexcept;
 
     friend compiled_project_image_result
+    encode_build_compiled_project_image(
+        const string_table&,
+        const identity_space&,
+        const graph_delta&,
+        const graph_dense_projection&,
+        const assign_overlay_view&,
+        const file_context&,
+        const source_map_overlay_view&,
+        const compiled_project_layout&,
+        std::span<std::byte>) noexcept;
+
+    friend compiled_project_image_result
     encode_compiled_project_image(const string_table &,
                                   const identity_space &,
                                   const graph &,
