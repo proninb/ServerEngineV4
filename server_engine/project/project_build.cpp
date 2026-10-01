@@ -174,19 +174,336 @@ private:
     const build_candidate_paths* paths = nullptr;
 };
 
-[[nodiscard]] server_status report_build_incomplete(
-    operation_id operation,
-    diagnostic_collection& diagnostics,
-    std::string_view detail) {
+enum class build_artifact_promotion_result : std::uint8_t {
+    success,
+    invalid_input,
+    io_failed,
+    rollback_failed,
+};
 
-    diagnostics.emit(
-        diagnostic(
-            diagnostics::project_build_incomplete,
-            operation)
-            .detail(detail)
-            .build());
+struct build_artifact_promotion_entry final {
+    const std::filesystem::path* final_path = nullptr;
+    const std::filesystem::path* candidate_path = nullptr;
+    std::filesystem::path rollback_path;
+    bool enabled = false;
+    bool old_moved = false;
+    bool candidate_moved = false;
+};
 
-    return server_status::unsupported;
+[[nodiscard]] bool restore_build_artifacts(
+    std::array<build_artifact_promotion_entry, 4>& entries) noexcept {
+
+    bool restored = true;
+
+    for (std::size_t offset = 0;
+         offset < entries.size();
+         ++offset) {
+
+        auto& entry =
+            entries[
+                entries.size() -
+                1 -
+                offset];
+
+        if (!entry.enabled) {
+            continue;
+        }
+
+        if (entry.candidate_moved) {
+            std::error_code error;
+
+            std::filesystem::rename(
+                *entry.final_path,
+                *entry.candidate_path,
+                error);
+
+            if (error) {
+                error.clear();
+
+                (void)std::filesystem::remove(
+                    *entry.final_path,
+                    error);
+
+                if (error) {
+                    restored = false;
+                }
+            }
+
+            entry.candidate_moved = false;
+        }
+
+        if (entry.old_moved) {
+            std::error_code error;
+
+            std::filesystem::rename(
+                entry.rollback_path,
+                *entry.final_path,
+                error);
+
+            if (error) {
+                restored = false;
+            }
+            else {
+                entry.old_moved = false;
+            }
+        }
+    }
+
+    return restored;
+}
+
+[[nodiscard]] build_artifact_promotion_result
+promote_build_artifacts(
+    const project_artifact_layout& layout,
+    const build_candidate_paths& candidates,
+    bool database_candidate,
+    bool manifest_candidate) noexcept {
+
+    std::array<
+        build_artifact_promotion_entry,
+        4>
+        entries{{
+            {
+                &layout.compiled,
+                &candidates.compiled,
+                {},
+                true,
+            },
+            {
+                &layout.source_save,
+                &candidates.source,
+                {},
+                true,
+            },
+            {
+                &layout.database,
+                &candidates.database,
+                {},
+                database_candidate,
+            },
+            {
+                &layout.manifest,
+                &candidates.manifest,
+                {},
+                manifest_candidate,
+            },
+        }};
+
+    try {
+        for (auto& entry :
+             entries) {
+
+            if (!entry.enabled ||
+                entry.final_path == nullptr ||
+                entry.candidate_path == nullptr ||
+                entry.final_path->empty() ||
+                entry.candidate_path->empty() ||
+                *entry.final_path ==
+                    *entry.candidate_path) {
+
+                if (entry.enabled) {
+                    return build_artifact_promotion_result::
+                        invalid_input;
+                }
+
+                continue;
+            }
+
+            entry.rollback_path =
+                *entry.final_path;
+
+            entry.rollback_path +=
+                ".build-old";
+
+            if (entry.rollback_path.empty() ||
+                entry.rollback_path ==
+                    *entry.final_path ||
+                entry.rollback_path ==
+                    *entry.candidate_path) {
+
+                return build_artifact_promotion_result::
+                    invalid_input;
+            }
+        }
+
+        for (std::size_t left = 0;
+             left < entries.size();
+             ++left) {
+
+            if (!entries[left].enabled) {
+                continue;
+            }
+
+            const std::array<
+                const std::filesystem::path*,
+                3>
+                left_paths{
+                    entries[left].final_path,
+                    entries[left].candidate_path,
+                    &entries[left].rollback_path,
+                };
+
+            for (std::size_t right =
+                     left + 1;
+                 right < entries.size();
+                 ++right) {
+
+                if (!entries[right].enabled) {
+                    continue;
+                }
+
+                const std::array<
+                    const std::filesystem::path*,
+                    3>
+                    right_paths{
+                        entries[right].final_path,
+                        entries[right].candidate_path,
+                        &entries[right].rollback_path,
+                    };
+
+                for (const auto* left_path :
+                     left_paths) {
+
+                    for (const auto* right_path :
+                         right_paths) {
+
+                        if (*left_path ==
+                            *right_path) {
+
+                            return build_artifact_promotion_result::
+                                invalid_input;
+                        }
+                    }
+                }
+            }
+        }
+
+        for (auto& entry :
+             entries) {
+
+            if (!entry.enabled) {
+                continue;
+            }
+
+            std::error_code error;
+
+            const auto final_exists =
+                std::filesystem::is_regular_file(
+                    *entry.final_path,
+                    error);
+
+            if (error ||
+                !final_exists) {
+
+                return build_artifact_promotion_result::
+                    io_failed;
+            }
+
+            error.clear();
+
+            const auto candidate_exists =
+                std::filesystem::is_regular_file(
+                    *entry.candidate_path,
+                    error);
+
+            if (error ||
+                !candidate_exists) {
+
+                return build_artifact_promotion_result::
+                    io_failed;
+            }
+
+            error.clear();
+
+            (void)std::filesystem::remove(
+                entry.rollback_path,
+                error);
+
+            if (error) {
+                return build_artifact_promotion_result::
+                    io_failed;
+            }
+        }
+
+        for (auto& entry :
+             entries) {
+
+            if (!entry.enabled) {
+                continue;
+            }
+
+            std::error_code error;
+
+            std::filesystem::rename(
+                *entry.final_path,
+                entry.rollback_path,
+                error);
+
+            if (error) {
+                return restore_build_artifacts(
+                    entries)
+                    ? build_artifact_promotion_result::
+                        io_failed
+                    : build_artifact_promotion_result::
+                        rollback_failed;
+            }
+
+            entry.old_moved = true;
+        }
+
+        for (auto& entry :
+             entries) {
+
+            if (!entry.enabled) {
+                continue;
+            }
+
+            std::error_code error;
+
+            std::filesystem::rename(
+                *entry.candidate_path,
+                *entry.final_path,
+                error);
+
+            if (error) {
+                return restore_build_artifacts(
+                    entries)
+                    ? build_artifact_promotion_result::
+                        io_failed
+                    : build_artifact_promotion_result::
+                        rollback_failed;
+            }
+
+            entry.candidate_moved = true;
+        }
+
+        // This is the BUILD persisted-state commit point. From here the complete
+        // new artifact set is visible. Rollback files are cleanup-only.
+        for (auto& entry :
+             entries) {
+
+            if (!entry.enabled) {
+                continue;
+            }
+
+            std::error_code error;
+
+            (void)std::filesystem::remove(
+                entry.rollback_path,
+                error);
+        }
+
+        return build_artifact_promotion_result::
+            success;
+    }
+    catch (...) {
+        return restore_build_artifacts(
+            entries)
+            ? build_artifact_promotion_result::
+                io_failed
+            : build_artifact_promotion_result::
+                rollback_failed;
+    }
 }
 
 [[nodiscard]] server_status emit_build_source_diagnostic(
@@ -1918,6 +2235,36 @@ server_status build_project(
         }
     }
 
+    const auto topology_finalized =
+        context.files.finalize_dependency_topology();
+
+    if (!succeeded(
+            topology_finalized)) {
+
+        diagnostics.emit(
+            diagnostic(
+                topology_finalized ==
+                        server_status::io_error
+                    ? diagnostics::
+                        project_build_incomplete
+                    : diagnostics::
+                        project_source_save_invalid,
+                operation)
+                .file(
+                    topology_finalized ==
+                            server_status::io_error
+                        ? project_path
+                        : layout.source_save)
+                .detail(
+                    topology_finalized ==
+                            server_status::io_error
+                        ? "BUILD could not finalize sparse physical dependency topology"
+                        : "Sparse BUILD physical dependency replacement is inconsistent with persisted source.bin")
+                .build());
+
+        return topology_finalized;
+    }
+
     const auto source_candidate_bound =
         context.source_candidate.bind(
             context.source,
@@ -2500,235 +2847,230 @@ server_status build_project(
     database_candidate_mapping.reset();
     manifest_candidate_mapping.reset();
 
-    std::string detail;
+    read_only_file_mapping
+        resident_compiled_mapping;
 
-    try {
-        detail =
-            "Persisted BUILD baseline ready: backend=" +
-            std::to_string(
-                static_cast<std::uint32_t>(
-                    scan.metrics.backend)) +
-            ", journal_records=" +
-            std::to_string(
-                scan.metrics.journal_records) +
-            ", matched_files=" +
-            std::to_string(
-                scan.metrics.matched_files) +
-            ", fallback=" +
-            std::to_string(
-                scan.metrics.fallback ? 1 : 0) +
-            ", candidates=" +
-            std::to_string(
-                candidates.size()) +
-            ", files_read=" +
-            std::to_string(
-                classification.files_read) +
-            ", bytes_read=" +
-            std::to_string(
-                classification.bytes_read) +
-            ", missing=" +
-            std::to_string(
-                classification.missing_files) +
-            ", semantic_changed=" +
-            std::to_string(
-                semantic_changed.size()) +
-            ", classify_lanes=" +
-            std::to_string(
-                classification.active_lanes) +
-            ", next_checkpoint=" +
-            std::to_string(
-                scan.next_checkpoint ? 1 : 0) +
-            ", affected=" +
-            std::to_string(
-                affected.size()) +
-            ", affected_edges=" +
-            std::to_string(
-                affected_metrics.dependency_edges) +
-            ", affected_slots=" +
-            std::to_string(
-                affected_metrics.visited_slots) +
-            ", affected_semantic_roots=" +
-            std::to_string(
-                affected_semantic_roots.size()) +
-            ", configuration_changed=" +
-            std::to_string(
-                configuration_identity_changed
-                    ? 1
-                    : 0) +
-            ", preprocessor_changed=" +
-            std::to_string(
-                preprocessor_changed
-                    ? 1
-                    : 0) +
-            ", semantic_invalidated_roots=" +
-            std::to_string(
-                semantic_invalidated_roots.size()) +
-            ", semantic_replay_roots=" +
-            std::to_string(
-                semantic_replay_roots.size()) +
-            ", semantic_dependency_roots=" +
-            std::to_string(
-                semantic_dependency_metrics.
-                    visited_roots) +
-            ", semantic_dependency_entities=" +
-            std::to_string(
-                semantic_dependency_metrics.
-                    semantic_entities) +
-            ", semantic_dependency_edges=" +
-            std::to_string(
-                semantic_dependency_metrics.
-                    dependency_edges) +
-            ", semantic_dependency_slots=" +
-            std::to_string(
-                semantic_dependency_metrics.
-                    visited_slots) +
-            ", initialization_invalidated_roots=" +
-            std::to_string(
-                initialization_invalidation_metrics.
-                    visited_roots) +
-            ", initialization_producer_targets=" +
-            std::to_string(
-                initialization_invalidation_metrics.
-                    producer_targets) +
-            ", initialization_tombstones=" +
-            std::to_string(
-                initialization_invalidation_metrics.
-                    tombstones) +
-            ", semantic_invalidation_contributions=" +
-            std::to_string(
-                semantic_invalidation_metrics.
-                    producer_contributions) +
-            ", semantic_invalidation_entities=" +
-            std::to_string(
-                semantic_invalidation_metrics.
-                    touched_entities) +
-            ", retired_types=" +
-            std::to_string(
-                semantic_invalidation_plan.
-                    retire_types.size()) +
-            ", cleared_type_definitions=" +
-            std::to_string(
-                semantic_invalidation_plan.
-                    clear_type_definitions.size()) +
-            ", retired_objects=" +
-            std::to_string(
-                semantic_invalidation_plan.
-                    retire_objects.size()) +
-            ", retired_links=" +
-            std::to_string(
-                semantic_invalidation_plan.
-                    retire_links.size()) +
-            ", database_mapped=" +
-            std::to_string(
-                database_bound ? 1 : 0) +
-            ", lexical_baseline=" +
-            std::to_string(
-                context.lexical.baseline_bound()
-                    ? context.lexical.size()
-                    : 0) +
-            ", lexical_replacement_files=" +
-            std::to_string(
-                lexical_replacement_files.size()) +
-            ", lexical_masked=" + std::to_string(lexical_metrics.masked_files) +
-            ", lexical_retokenized=" + std::to_string(lexical_metrics.retokenized_files) +
-            ", lexical_missing=" + std::to_string(lexical_metrics.missing_files) +
-            ", lexical_lanes=" + std::to_string(lexical_metrics.active_lanes) +
-            ", semantic_replayed_roots=" +
-            std::to_string(
-                context.source_changes.
-                    root_entries().size()) +
-            ", semantic_replay_contributions=" +
-            std::to_string(
-                context.source_changes.
-                    contribution_entries().size()) +
-            ", semantic_replay_dependencies=" +
-            std::to_string(
-                context.source_changes.
-                    dependency_entries().size()) +
-            ", semantic_replay_initializations=" +
-            std::to_string(
-                context.source_changes.
-                    initialization_target_entries().
-                        size()) +
-            ", source_candidate_invalidated_roots=" +
-            std::to_string(
-                context.source_candidate.
-                    invalidated_root_count()) +
-            ", source_candidate_replayed_roots=" +
-            std::to_string(
-                context.source_candidate.
-                    replayed_root_count()) +
-            ", source_candidate_replaced_roots=" +
-            std::to_string(
-                context.source_candidate.
-                    replaced_root_count()) +
-            ", source_candidate_removed_roots=" +
-            std::to_string(
-                context.source_candidate.
-                    removed_root_count()) +
-            ", source_candidate_added_roots=" +
-            std::to_string(
-                context.source_candidate.
-                    added_root_count()) +
-            ", assign_replacement_roots=" +
-            std::to_string(
-                assign_replacement_roots.size()) +
-            ", assign_reparsed_roots=" +
-            std::to_string(
-                assign_parse_roots.size()) +
-            ", assign_candidate_records=" +
-            std::to_string(
-                context.assign_candidate.size()) +
-            ", assign_candidate_bytes=" +
-            std::to_string(
-                context.assign_candidate.byte_size()) +
-            ", final_types=" +
-            std::to_string(
-                context.graph_candidate.type_count()) +
-            ", final_members=" +
-            std::to_string(
-                context.graph_candidate.member_count()) +
-            ", final_bases=" +
-            std::to_string(
-                context.graph_candidate.base_count()) +
-            ", final_objects=" +
-            std::to_string(
-                context.graph_candidate.object_count()) +
-            ", final_links=" +
-            std::to_string(
-                context.graph_candidate.link_count()) +
-            ", final_compiled_bytes=" +
-            std::to_string(
-                compiled_candidate_layout.size()) +
-            ", final_source_bytes=" +
-            std::to_string(
-                source_candidate_layout.size()) +
-            ", database_candidate=" +
-            std::to_string(
-                database_candidate_required
-                    ? 1
-                    : 0) +
-            ", manifest_candidate=" +
-            std::to_string(
-                manifest_candidate_required
-                    ? 1
-                    : 0) +
-            ", baseline_strings=" +
-            std::to_string(
-                context.compiled.string_count()) +
-            ", baseline_identities=" +
-            std::to_string(
-                context.compiled.identity_count()) +
-            "; final BUILD artifacts were direct-encoded and cold-validated without touching OLD persisted state; promotion is not implemented yet";
-    }
-    catch (...) {
+    if (resident_compiled_mapping.open(
+            candidate_paths.compiled) !=
+            read_only_file_mapping_result::
+                success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::
+                    project_build_incomplete,
+                operation)
+                .file(candidate_paths.compiled)
+                .detail(
+                    "BUILD could not reopen flushed compiled.bin candidate")
+                .build());
+
         return server_status::io_error;
     }
 
-    return report_build_incomplete(
-        operation,
-        diagnostics,
-        detail);
+    compiled_project_view
+        resident_compiled;
+
+    if (resident_compiled.bind(
+            resident_compiled_mapping.bytes()) !=
+            compiled_project_image_result::
+                success ||
+        resident_compiled.verify_contents() !=
+            compiled_project_image_result::
+                success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::
+                    project_compiled_invalid,
+                operation)
+                .file(candidate_paths.compiled)
+                .detail(
+                    "Reopened BUILD compiled.bin candidate failed cold verification")
+                .build());
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    {
+        read_only_file_mapping
+            reopened_source_mapping;
+
+        if (reopened_source_mapping.open(
+                candidate_paths.source) !=
+                read_only_file_mapping_result::
+                    success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::
+                        project_build_incomplete,
+                    operation)
+                    .file(candidate_paths.source)
+                    .detail(
+                        "BUILD could not reopen flushed source.bin candidate")
+                    .build());
+
+            return server_status::io_error;
+        }
+
+        source_save_view
+            reopened_source;
+
+        if (reopened_source.bind(
+                reopened_source_mapping.bytes()) !=
+                source_save_result::success ||
+            validate_source_save_image(
+                reopened_source_mapping.bytes()) !=
+                source_save_result::success ||
+            verify_source_save_presence(
+                reopened_source,
+                resident_compiled) !=
+                source_save_result::success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::
+                        project_source_save_invalid,
+                    operation)
+                    .file(candidate_paths.source)
+                    .detail(
+                        "Reopened BUILD source.bin candidate failed cold cross-artifact verification")
+                    .build());
+
+            return server_status::
+                project_artifact_invalid;
+        }
+    }
+
+    if (database_candidate_required) {
+        read_only_file_mapping
+            reopened_database_mapping;
+
+        if (reopened_database_mapping.open(
+                candidate_paths.database) !=
+                read_only_file_mapping_result::
+                    success ||
+            verify_database_image(
+                reopened_database_mapping.bytes(),
+                context.files,
+                context.lexical) !=
+                database_image_result::success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::
+                        project_database_invalid,
+                    operation)
+                    .file(candidate_paths.database)
+                    .detail(
+                        "Reopened BUILD database.bin candidate failed cold verification")
+                    .build());
+
+            return server_status::
+                project_artifact_invalid;
+        }
+    }
+
+    if (manifest_candidate_required) {
+        read_only_file_mapping
+            reopened_manifest_mapping;
+
+        project_configuration_manifest
+            reopened_manifest;
+
+        if (reopened_manifest_mapping.open(
+                candidate_paths.manifest) !=
+                read_only_file_mapping_result::
+                    success ||
+            decode_project_configuration_manifest(
+                reopened_manifest_mapping.bytes(),
+                reopened_manifest) !=
+                project_configuration_manifest_store_result::
+                    success ||
+            !(reopened_manifest.configuration_hash ==
+              context.manifest.configuration_hash) ||
+            !(reopened_manifest.preprocessor_hash ==
+              context.manifest.preprocessor_hash) ||
+            reopened_manifest.files.size() !=
+                context.manifest.files.size()) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::
+                        project_manifest_invalid,
+                    operation)
+                    .file(candidate_paths.manifest)
+                    .detail(
+                        "Reopened BUILD project.manifest candidate failed cold verification")
+                    .build());
+
+            return server_status::
+                project_artifact_invalid;
+        }
+    }
+
+    const auto resident_created =
+        create_resident_project(
+            project_path,
+            settings,
+            operation,
+            diagnostics,
+            std::move(
+                resident_compiled_mapping),
+            resident_compiled,
+            output);
+
+    if (!succeeded(
+            resident_created)) {
+
+        // Persisted Gn is still untouched here.
+        return resident_created;
+    }
+
+    const auto promoted =
+        promote_build_artifacts(
+            layout,
+            candidate_paths,
+            database_candidate_required,
+            manifest_candidate_required);
+
+    if (promoted !=
+        build_artifact_promotion_result::
+            success) {
+
+        output.reset();
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::
+                    project_build_incomplete,
+                operation)
+                .file(layout.root)
+                .detail(
+                    promoted ==
+                            build_artifact_promotion_result::
+                                rollback_failed
+                        ? "BUILD artifact promotion failed and rollback of OLD persisted state also failed"
+                        : promoted ==
+                                build_artifact_promotion_result::
+                                    invalid_input
+                            ? "BUILD artifact promotion paths are invalid or collide"
+                            : "BUILD artifact promotion failed; OLD persisted state was restored")
+                .build());
+
+        return promoted ==
+                build_artifact_promotion_result::
+                    invalid_input
+            ? server_status::
+                project_artifact_invalid
+            : server_status::io_error;
+    }
+
+    candidate_cleanup.release();
+
+    return server_status::success;
 }
 
 }

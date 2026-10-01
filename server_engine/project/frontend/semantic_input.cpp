@@ -136,6 +136,20 @@ server_status semantic_input::start(
             server_status::project_configuration_invalid);
     }
 
+    if (files.baseline_bound()) {
+        const auto replacement =
+            files.begin_dependency_replacement(
+                root);
+
+        if (!succeeded(replacement)) {
+            return fail(
+                root,
+                {},
+                "Semantic root dependency replacement could not begin",
+                replacement);
+        }
+    }
+
     preprocessing.reset();
     executor.reset();
 
@@ -455,6 +469,22 @@ server_status semantic_input::resolve_include(
             request.locator,
             "Included Header path resolution failed",
             server_status::io_error);
+    }
+
+    if (files.baseline_bound()) {
+        const auto replacement =
+            files.begin_dependency_replacement(
+                output);
+
+        if (!succeeded(replacement)) {
+            output = {};
+
+            return fail(
+                request.source,
+                request.locator,
+                "Included Header dependency replacement could not begin",
+                replacement);
+        }
     }
 
     const auto staged =

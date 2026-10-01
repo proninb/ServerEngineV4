@@ -10,6 +10,7 @@
 #include "project/persistence/project_artifact.hpp"
 #include "project/project_load.hpp"
 #include "project/project_publish.hpp"
+#include "project/project_build.hpp"
 #include "project/project_rebuild.hpp"
 
 #include <chrono>
@@ -35,6 +36,7 @@ namespace {
 enum class benchmark_mode {
     publish,
     load,
+    build,
     rebuild,
     audit,
 };
@@ -50,6 +52,11 @@ enum class benchmark_mode {
 
     if (value == "load") {
         output = benchmark_mode::load;
+        return true;
+    }
+
+    if (value == "build") {
+        output = benchmark_mode::build;
         return true;
     }
 
@@ -210,6 +217,7 @@ void print_usage() {
         << "Usage:\n"
         << "  ServerEngineV4PublishBenchmark publish <project.json> <expected-types>\n"
         << "  ServerEngineV4PublishBenchmark load    <project.json> <expected-types>\n"
+        << "  ServerEngineV4PublishBenchmark build   <project.json> <expected-types>\n"
         << "  ServerEngineV4PublishBenchmark rebuild <project.json> <expected-types>\n"
         << "  ServerEngineV4PublishBenchmark audit   <project.json> <expected-types>\n";
 }
@@ -305,6 +313,15 @@ int main(
                 diagnostics,
                 project);
     }
+    else if (mode == benchmark_mode::build) {
+        status =
+            cw::server::build_project(
+                project_path,
+                settings,
+                cw::server::operation_id{1},
+                diagnostics,
+                project);
+    }
     else if (mode == benchmark_mode::rebuild) {
         status = cw::server::rebuild_project(
             project_path, settings, cw::server::operation_id{1}, diagnostics, project);
@@ -381,6 +398,20 @@ int main(
         std::cerr
             << "PUBLISH contract violation: "
                "BUILD-acceleration artifact exists\n";
+
+        return 3;
+    }
+
+    if ((mode ==
+             benchmark_mode::build ||
+         mode ==
+             benchmark_mode::rebuild) &&
+        (!path_exists(artifacts.manifest) ||
+         !path_exists(artifacts.source_save) ||
+         !path_exists(artifacts.database))) {
+
+        std::cerr
+            << "BUILD lineage artifact is missing\n";
 
         return 3;
     }
