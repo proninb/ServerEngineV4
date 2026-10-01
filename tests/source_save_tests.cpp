@@ -357,10 +357,19 @@ void test_direct_source_save(
                 construction_value::constant(
                     construction_kind::
                         signed_integer,
+                    5),
+                initialization_replaced)) &&
+        !initialization_replaced &&
+        succeeded(
+            G.add_initialization(
+                source,
+                construction_value::constant(
+                    construction_kind::
+                        signed_integer,
                     7),
                 initialization_replaced)) &&
-        !initialization_replaced,
-        "presence initialization fixture");
+        initialization_replaced,
+        "presence initialization fixture keeps canonical last-wins value");
 
     for (auto owner : {first, second}) {
         tests.expect(
@@ -385,8 +394,11 @@ void test_direct_source_save(
                 succeeded(
                     sources.add_dependency(
                         type)) &&
+                succeeded(
+                    sources.add_dependency(
+                        object)) &&
                 succeeded(sources.end_root()),
-            "source-save Header root ownership");
+            "source-save Header root ownership and endpoint object dependency");
     }
 
     if (!tests.expect(succeeded(sources.finalize(files.size(), identities, G)),
@@ -452,6 +464,8 @@ void test_direct_source_save(
 
     source_dependency_ref first_dependency;
     source_dependency_ref second_dependency;
+    source_dependency_ref first_object_dependency;
+    source_dependency_ref second_object_dependency;
     file_id first_dependent;
     file_id second_dependent;
 
@@ -459,9 +473,13 @@ void test_direct_source_save(
         source_dependency_ref::type(
             type);
 
+    const auto object_dependency =
+        source_dependency_ref::object(
+            object);
+
     tests.expect(
-        writable_view.semantic_dependency_count(first) == 1 &&
-        writable_view.semantic_dependency_count(second) == 1 &&
+        writable_view.semantic_dependency_count(first) == 2 &&
+        writable_view.semantic_dependency_count(second) == 2 &&
         writable_view.semantic_dependency(
             first,
             0,
@@ -470,21 +488,33 @@ void test_direct_source_save(
             second,
             0,
             second_dependency) &&
+        writable_view.semantic_dependency(
+            first,
+            1,
+            first_object_dependency) &&
+        writable_view.semantic_dependency(
+            second,
+            1,
+            second_object_dependency) &&
         first_dependency == type_dependency &&
         second_dependency == type_dependency &&
+        first_object_dependency == object_dependency &&
+        second_object_dependency == object_dependency &&
         writable_view.semantic_dependent_count(
             type_dependency) == 2 &&
+        writable_view.semantic_dependent_count(
+            object_dependency) == 2 &&
         writable_view.semantic_dependent(
-            type_dependency,
+            object_dependency,
             0,
             first_dependent) &&
         writable_view.semantic_dependent(
-            type_dependency,
+            object_dependency,
             1,
             second_dependent) &&
         first_dependent == first &&
         second_dependent == second,
-        "semantic dependency sidecars persist mmap-native root and reverse views");
+        "semantic dependency sidecars preserve initialization co-producer object closure");
 
     object_endpoint first_initialization;
     object_endpoint second_initialization;
@@ -725,7 +755,7 @@ void test_direct_source_save(
             overlay.dependencies(
                 second,
                 second_dependencies) &&
-            second_dependencies == 1 &&
+            second_dependencies == 2 &&
             overlay.dependency(
                 second,
                 0,
@@ -927,10 +957,103 @@ void test_direct_source_save(
         semantic_closure[1] == second &&
         semantic_metrics.visited_roots == 2 &&
         semantic_metrics.semantic_entities == 4 &&
-        semantic_metrics.dependency_edges == 4 &&
+        semantic_metrics.dependency_edges == 8 &&
         semantic_metrics.visited_slots >=
             semantic_metrics.visited_roots,
         "semantic dependency closure expands invalidated roots sparsely");
+
+    {
+        const std::array<file_id, 1>
+            latest_producer{second};
+
+        std::vector<file_id>
+            producer_closure;
+
+        tests.expect(
+            succeeded(
+                collect_source_save_semantic_dependency_closure(
+                    writable_view,
+                    compiled,
+                    latest_producer,
+                    producer_closure)) &&
+            producer_closure.size() == 2 &&
+            producer_closure[0] == first &&
+            producer_closure[1] == second,
+            "invalidating latest initialization producer replays all object co-producers");
+
+        graph_delta recovery;
+
+        bool recovered_replaced = false;
+        bool invalidated_all = true;
+
+        tests.expect(
+            succeeded(
+                recovery.bind_baseline(
+                    compiled)),
+            "bind co-producer recovery Graph baseline");
+
+        for (const auto root_value :
+             producer_closure) {
+
+            std::size_t target_count = 0;
+
+            if (!writable_view.initialization_targets(
+                    root_value,
+                    target_count)) {
+
+                invalidated_all = false;
+                break;
+            }
+
+            for (std::size_t index = 0;
+                 index < target_count;
+                 ++index) {
+
+                object_endpoint persisted_target;
+
+                if (!writable_view.initialization_target(
+                        root_value,
+                        index,
+                        persisted_target) ||
+                    !succeeded(
+                        recovery.invalidate_initialization(
+                            persisted_target))) {
+
+                    invalidated_all = false;
+                    break;
+                }
+            }
+
+            if (!invalidated_all) {
+                break;
+            }
+        }
+
+        object_initialization_record
+            recovered_value;
+
+        tests.expect(
+            invalidated_all &&
+            succeeded(
+                recovery.add_initialization(
+                    source,
+                    construction_value::constant(
+                        construction_kind::
+                            signed_integer,
+                        5),
+                    recovered_replaced)) &&
+            !recovered_replaced &&
+            recovery.initialization(
+                source,
+                recovered_value) &&
+            recovered_value.value ==
+                construction_value::constant(
+                    construction_kind::
+                        signed_integer,
+                    5),
+            "replay of surviving co-producer restores previous initialization value");
+    }
+
     auto altered = std::vector<std::byte>(writable.bytes().begin(), writable.bytes().end());
     const auto semantic_sidecar_bytes =
         sources.root_dependency_entries().size() * 8 +
