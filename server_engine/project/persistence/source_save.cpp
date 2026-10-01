@@ -3,6 +3,7 @@
 #include "compiled_project.hpp"
 
 #include "../construction/execution_lanes.hpp"
+#include "../graph/graph_delta.hpp"
 #include "../../filesystem_path.hpp"
 
 #include <algorithm>
@@ -2289,6 +2290,2157 @@ source_save_result prepare_source_save_layout(const file_context &files,
 
     return source_save_result::success;
 }
+
+source_save_result prepare_build_source_save_layout(
+    const file_context& files,
+    const identity_space& identities,
+    const graph_delta& G,
+    const graph_dense_projection& projection,
+    const source_map_overlay_view& sources,
+    const source_save_build_options& options,
+    source_save_layout& output) noexcept {
+
+    output.reset();
+
+    if (!files.dependency_topology_finalized() ||
+        files.size() == 0 ||
+        files.size() >
+            static_cast<std::size_t>(
+                (std::numeric_limits<std::uint32_t>::max)())) {
+
+        return source_save_result::
+            invalid_state;
+    }
+
+    const auto file_count =
+        static_cast<std::uint32_t>(
+            files.size());
+
+    const auto path_index_capacity =
+        next_capacity(
+            files.size());
+
+    if (path_index_capacity == 0 ||
+        path_index_capacity >
+            static_cast<std::size_t>(
+                (std::numeric_limits<
+                    std::uint32_t>::max)())) {
+
+        return source_save_result::failed;
+    }
+
+    std::uint32_t path_bytes = 0;
+    std::uint32_t forward_count = 0;
+    std::uint32_t reverse_count = 0;
+
+    for (std::uint32_t value = 1;
+         value <= file_count;
+         ++value) {
+
+        const file_id file{value};
+
+        const auto* physical =
+            files.physical(
+                file);
+
+        if (physical == nullptr ||
+            !physical->present()) {
+
+            output.reset();
+
+            return source_save_result::
+                invalid_state;
+        }
+
+        std::size_t path_size = 0;
+
+        if (filesystem_path_utf8_size(
+                files.path(file),
+                path_size) !=
+                    filesystem_path_result::
+                        success ||
+            path_size == 0 ||
+            path_size >
+                static_cast<std::size_t>(
+                    (std::numeric_limits<
+                        std::uint32_t>::max)()) -
+                    path_bytes) {
+
+            output.reset();
+
+            return source_save_result::
+                invalid_state;
+        }
+
+        path_bytes +=
+            static_cast<std::uint32_t>(
+                path_size);
+
+        const auto dependencies =
+            files.dependencies(
+                file);
+
+        const auto dependents =
+            files.dependents(
+                file);
+
+        if (dependencies.size() >
+                static_cast<std::size_t>(
+                    (std::numeric_limits<
+                        std::uint32_t>::max)()) -
+                    forward_count ||
+            dependents.size() >
+                static_cast<std::size_t>(
+                    (std::numeric_limits<
+                        std::uint32_t>::max)()) -
+                    reverse_count) {
+
+            output.reset();
+
+            return source_save_result::
+                invalid_state;
+        }
+
+        forward_count +=
+            static_cast<std::uint32_t>(
+                dependencies.size());
+
+        reverse_count +=
+            static_cast<std::uint32_t>(
+                dependents.size());
+    }
+
+    if (forward_count !=
+        reverse_count) {
+
+        output.reset();
+
+        return source_save_result::
+            invalid_state;
+    }
+
+    if (!build_tracking_capture(
+            files,
+            options.change_checkpoint,
+            output.checkpoint,
+            output.file_index_references,
+            output.file_index_files,
+            output.directory_index_references,
+            output.directory_index_flags)) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    if (output.file_index_references.size() !=
+            output.file_index_files.size() ||
+        output.directory_index_references.size() !=
+            output.directory_index_flags.size() ||
+        output.file_index_references.size() >
+            static_cast<std::size_t>(
+                (std::numeric_limits<
+                    std::uint32_t>::max)()) ||
+        output.directory_index_references.size() >
+            static_cast<std::size_t>(
+                (std::numeric_limits<
+                    std::uint32_t>::max)())) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    const auto path_index_count =
+        static_cast<std::uint32_t>(
+            path_index_capacity);
+
+    const auto file_index_count =
+        static_cast<std::uint32_t>(
+            output.file_index_references.size());
+
+    const auto directory_index_count =
+        static_cast<std::uint32_t>(
+            output.directory_index_references.size());
+
+    std::size_t records_size = 0;
+    std::size_t path_index_size = 0;
+    std::size_t forward_size = 0;
+    std::size_t reverse_size = 0;
+    std::size_t file_index_size = 0;
+    std::size_t directory_index_size = 0;
+
+    if (!multiply_size(
+            file_count,
+            record_size,
+            records_size) ||
+        !multiply_size(
+            path_index_count,
+            path_index_record_size,
+            path_index_size) ||
+        !multiply_size(
+            forward_count,
+            sizeof(std::uint32_t),
+            forward_size) ||
+        !multiply_size(
+            reverse_count,
+            sizeof(std::uint32_t),
+            reverse_size) ||
+        !multiply_size(
+            file_index_count,
+            file_index_record_size,
+            file_index_size) ||
+        !multiply_size(
+            directory_index_count,
+            directory_index_record_size,
+            directory_index_size)) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    std::size_t cursor =
+        header_size;
+
+    output.records_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            records_size)) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    output.paths_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            path_bytes)) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    output.path_index_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            path_index_size)) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    output.forward_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            forward_size)) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    output.reverse_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            reverse_size)) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    output.file_index_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            file_index_size)) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    output.directory_index_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            directory_index_size)) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    if (!sources.valid() ||
+        !G.baseline_bound() ||
+        !projection.prepared_for(G) ||
+        identities.size() == 0 ||
+        projection.type_count() >
+            (std::numeric_limits<std::uint32_t>::max)() ||
+        projection.object_count() >
+            (std::numeric_limits<std::uint32_t>::max)() ||
+        projection.link_count() >
+            (std::numeric_limits<std::uint32_t>::max)()) {
+
+        output.reset();
+        return source_save_result::invalid_state;
+    }
+
+    output.presence_offset = cursor;
+
+    output.type_count =
+        static_cast<std::uint32_t>(
+            projection.type_count());
+
+    output.object_count =
+        static_cast<std::uint32_t>(
+            projection.object_count());
+
+    output.link_count =
+        static_cast<std::uint32_t>(
+            projection.link_count());
+
+    std::size_t presence_words =
+        output.type_count;
+
+    std::size_t presence_size = 0;
+
+    if (!add_size(
+            presence_words,
+            output.type_count) ||
+        !add_size(
+            presence_words,
+            output.object_count) ||
+        !add_size(
+            presence_words,
+            output.link_count) ||
+        !multiply_size(
+            presence_words,
+            4,
+            presence_size) ||
+        !add_size(
+            cursor,
+            presence_size)) {
+
+        output.reset();
+        return source_save_result::failed;
+    }
+
+    std::vector<source_dependency_ref>
+        unique_dependencies;
+
+    std::size_t unique_dependency_count = 0;
+    std::uint32_t semantic_dependency_count = 0;
+    std::uint32_t initialization_target_count = 0;
+
+    const auto remap_dependency =
+        [&](source_dependency_ref dependency,
+            source_dependency_ref& result) noexcept {
+
+            result = {};
+
+            if (!dependency) {
+                return false;
+            }
+
+            if (dependency.kind() ==
+                source_dependency_kind::type) {
+
+                const auto lineage =
+                    G.type_at(
+                        static_cast<std::size_t>(
+                            dependency.slot() - 1));
+
+                const auto dense =
+                    projection.remap(
+                        lineage);
+
+                result =
+                    source_dependency_ref::type(
+                        dense);
+
+                return static_cast<bool>(
+                    result);
+            }
+
+            if (dependency.kind() ==
+                source_dependency_kind::object) {
+
+                const auto lineage =
+                    G.object_at(
+                        static_cast<std::size_t>(
+                            dependency.slot() - 1));
+
+                const auto dense =
+                    projection.remap(
+                        lineage);
+
+                result =
+                    source_dependency_ref::object(
+                        dense);
+
+                return static_cast<bool>(
+                    result);
+            }
+
+            return false;
+        };
+
+    const auto insert_dependency =
+        [&](source_dependency_ref dependency)
+        -> source_save_result {
+
+            if (!dependency) {
+                return source_save_result::
+                    invalid_state;
+            }
+
+            for (;;) {
+                if (unique_dependencies.empty() ||
+                    unique_dependency_count + 1 >
+                        unique_dependencies.size() / 2) {
+
+                    std::size_t capacity =
+                        unique_dependencies.empty()
+                        ? 8
+                        : unique_dependencies.size() * 2;
+
+                    if (capacity < 8 ||
+                        capacity <=
+                            unique_dependencies.size() ||
+                        capacity >
+                            static_cast<std::size_t>(
+                                (std::numeric_limits<
+                                    std::uint32_t>::max)())) {
+
+                        return source_save_result::failed;
+                    }
+
+                    try {
+                        std::vector<
+                            source_dependency_ref>
+                            replacement(
+                                capacity);
+
+                        const auto replacement_mask =
+                            capacity - 1;
+
+                        for (const auto existing :
+                             unique_dependencies) {
+
+                            if (!existing) {
+                                continue;
+                            }
+
+                            auto position =
+                                static_cast<std::size_t>(
+                                    source_dependency_hash(
+                                        existing)) &
+                                replacement_mask;
+
+                            bool inserted = false;
+
+                            for (std::size_t probe = 0;
+                                 probe < capacity;
+                                 ++probe) {
+
+                                auto& slot =
+                                    replacement[
+                                        position];
+
+                                if (!slot) {
+                                    slot = existing;
+                                    inserted = true;
+                                    break;
+                                }
+
+                                position =
+                                    (position + 1) &
+                                    replacement_mask;
+                            }
+
+                            if (!inserted) {
+                                return source_save_result::
+                                    invalid_state;
+                            }
+                        }
+
+                        unique_dependencies =
+                            std::move(
+                                replacement);
+                    }
+                    catch (...) {
+                        return source_save_result::failed;
+                    }
+                }
+
+                const auto mask =
+                    unique_dependencies.size() - 1;
+
+                auto position =
+                    static_cast<std::size_t>(
+                        source_dependency_hash(
+                            dependency)) &
+                    mask;
+
+                for (std::size_t probe = 0;
+                     probe <
+                        unique_dependencies.size();
+                     ++probe) {
+
+                    auto& slot =
+                        unique_dependencies[
+                            position];
+
+                    if (!slot) {
+                        slot =
+                            dependency;
+
+                        ++unique_dependency_count;
+                        return source_save_result::success;
+                    }
+
+                    if (slot ==
+                        dependency) {
+
+                        return source_save_result::success;
+                    }
+
+                    position =
+                        (position + 1) &
+                        mask;
+                }
+
+                return source_save_result::
+                    invalid_state;
+            }
+        };
+
+    for (std::uint32_t raw_root = 1;
+         raw_root <= file_count;
+         ++raw_root) {
+
+        const file_id root{
+            raw_root};
+
+        std::size_t dependency_count = 0;
+
+        if (!sources.dependencies(
+                root,
+                dependency_count) ||
+            dependency_count >
+                static_cast<std::size_t>(
+                    (std::numeric_limits<
+                        std::uint32_t>::max)()) -
+                    semantic_dependency_count) {
+
+            output.reset();
+            return source_save_result::
+                invalid_state;
+        }
+
+        for (std::size_t index = 0;
+             index < dependency_count;
+             ++index) {
+
+            source_dependency_ref lineage;
+            source_dependency_ref dense;
+
+            if (!sources.dependency(
+                    root,
+                    index,
+                    lineage) ||
+                !remap_dependency(
+                    lineage,
+                    dense)) {
+
+                output.reset();
+                return source_save_result::
+                    invalid_state;
+            }
+
+            const auto inserted =
+                insert_dependency(
+                    dense);
+
+            if (inserted !=
+                source_save_result::success) {
+
+                output.reset();
+                return inserted;
+            }
+        }
+
+        semantic_dependency_count +=
+            static_cast<std::uint32_t>(
+                dependency_count);
+
+        std::size_t initialization_count = 0;
+
+        if (!sources.initialization_targets(
+                root,
+                initialization_count) ||
+            initialization_count >
+                static_cast<std::size_t>(
+                    (std::numeric_limits<
+                        std::uint32_t>::max)()) -
+                    initialization_target_count) {
+
+            output.reset();
+            return source_save_result::
+                invalid_state;
+        }
+
+        for (std::size_t index = 0;
+             index < initialization_count;
+             ++index) {
+
+            object_endpoint lineage;
+            object_endpoint dense;
+
+            if (!sources.initialization_target(
+                    root,
+                    index,
+                    lineage) ||
+                !projection.remap(
+                    lineage,
+                    dense)) {
+
+                output.reset();
+                return source_save_result::
+                    invalid_state;
+            }
+        }
+
+        initialization_target_count +=
+            static_cast<std::uint32_t>(
+                initialization_count);
+    }
+
+    output.semantic_dependency_count =
+        semantic_dependency_count;
+
+    output.semantic_reverse_index_count =
+        static_cast<std::uint32_t>(
+            unique_dependencies.size());
+
+    output.initialization_target_count =
+        initialization_target_count;
+
+    if ((output.semantic_dependency_count == 0) !=
+            (output.semantic_reverse_index_count == 0) ||
+        (output.semantic_reverse_index_count != 0 &&
+         (!std::has_single_bit(
+              output.semantic_reverse_index_count) ||
+          unique_dependency_count == 0 ||
+          unique_dependency_count >
+              output.semantic_reverse_index_count / 2))) {
+
+        output.reset();
+        return source_save_result::
+            invalid_state;
+    }
+
+    std::size_t semantic_root_ranges_size = 0;
+    std::size_t semantic_dependencies_size = 0;
+    std::size_t semantic_reverse_index_size = 0;
+    std::size_t semantic_dependent_roots_size = 0;
+    std::size_t initialization_root_ranges_size = 0;
+    std::size_t initialization_targets_size = 0;
+
+    if (!multiply_size(
+            file_count,
+            8,
+            semantic_root_ranges_size) ||
+        !multiply_size(
+            output.semantic_dependency_count,
+            4,
+            semantic_dependencies_size) ||
+        !multiply_size(
+            output.semantic_reverse_index_count,
+            12,
+            semantic_reverse_index_size) ||
+        !multiply_size(
+            output.semantic_dependency_count,
+            4,
+            semantic_dependent_roots_size) ||
+        !multiply_size(
+            file_count,
+            8,
+            initialization_root_ranges_size) ||
+        !multiply_size(
+            output.initialization_target_count,
+            8,
+            initialization_targets_size)) {
+
+        output.reset();
+        return source_save_result::failed;
+    }
+
+    output.semantic_root_ranges_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            semantic_root_ranges_size)) {
+
+        output.reset();
+        return source_save_result::failed;
+    }
+
+    output.semantic_dependencies_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            semantic_dependencies_size)) {
+
+        output.reset();
+        return source_save_result::failed;
+    }
+
+    output.semantic_reverse_index_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            semantic_reverse_index_size)) {
+
+        output.reset();
+        return source_save_result::failed;
+    }
+
+    output.semantic_dependent_roots_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            semantic_dependent_roots_size)) {
+
+        output.reset();
+        return source_save_result::failed;
+    }
+
+    output.initialization_root_ranges_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            initialization_root_ranges_size)) {
+
+        output.reset();
+        return source_save_result::failed;
+    }
+
+    output.initialization_targets_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            initialization_targets_size)) {
+
+        output.reset();
+        return source_save_result::failed;
+    }
+
+    output.checksum_offset =
+        cursor;
+
+    if (!add_size(
+            cursor,
+            checksum_size)) {
+
+        output.reset();
+
+        return source_save_result::failed;
+    }
+
+    output.size_value = cursor;
+    output.file_count = file_count;
+    output.path_bytes = path_bytes;
+    output.path_index_count = path_index_count;
+    output.forward_count = forward_count;
+    output.reverse_count = reverse_count;
+    output.file_index_count =
+        file_index_count;
+    output.directory_index_count =
+        directory_index_count;
+
+    return source_save_result::success;
+}
+
+
+source_save_result encode_build_source_save_image(
+    const file_context& files,
+    const identity_space& identities,
+    const graph_delta& G,
+    const graph_dense_projection& projection,
+    const source_map_overlay_view& sources,
+    const source_save_layout& layout,
+    std::span<std::byte> output) noexcept {
+
+    if (!sources.valid() ||
+        !G.baseline_bound() ||
+        !projection.prepared_for(G) ||
+        identities.size() == 0 ||
+        layout.type_count !=
+            projection.type_count() ||
+        layout.object_count !=
+            projection.object_count() ||
+        layout.link_count !=
+            projection.link_count()) {
+
+        return source_save_result::invalid_state;
+    }
+
+    if (layout.size_value == 0 ||
+        output.size() !=
+            layout.size_value ||
+        !files.dependency_topology_finalized() ||
+        files.size() !=
+            layout.file_count ||
+        layout.records_offset !=
+            header_size ||
+        layout.checksum_offset >
+            output.size() ||
+        output.size() -
+            layout.checksum_offset !=
+                checksum_size ||
+        layout.path_index_count == 0 ||
+        layout.path_index_offset >
+            output.size() ||
+        static_cast<std::size_t>(
+            layout.path_index_count) >
+            (output.size() -
+                layout.path_index_offset) /
+                    path_index_record_size ||
+        layout.file_index_references.size() !=
+            layout.file_index_count ||
+        layout.file_index_files.size() !=
+            layout.file_index_count ||
+        layout.directory_index_references.size() !=
+            layout.directory_index_count ||
+        layout.directory_index_flags.size() !=
+            layout.directory_index_count) {
+
+        return source_save_result::
+            invalid_state;
+    }
+
+    std::size_t header_cursor = 0;
+
+    if (!write_bytes(output, header_cursor, magic.data(), magic.size()) ||
+        !write_u32(output, header_cursor, format_version) ||
+        !write_u32(output, header_cursor, layout.file_count) ||
+        !write_u32(output, header_cursor, layout.path_bytes) ||
+        !write_u32(output, header_cursor, layout.forward_count) ||
+        !write_u32(output, header_cursor, layout.reverse_count) ||
+        !write_u32(output, header_cursor, static_cast<std::uint32_t>(layout.checkpoint.backend)) ||
+        !write_u32(output, header_cursor, layout.file_index_count) ||
+        !write_u32(output, header_cursor, layout.directory_index_count) ||
+        !write_u32(output, header_cursor, layout.path_index_count) ||
+        !write_u64(output, header_cursor, layout.checkpoint.volume_serial) ||
+        !write_u64(output, header_cursor, layout.checkpoint.journal_id) ||
+        !write_u64(output, header_cursor, static_cast<std::uint64_t>(layout.checkpoint.next_usn)) ||
+        !write_u32(output, header_cursor, layout.type_count) ||
+        !write_u32(output, header_cursor, layout.object_count) ||
+        !write_u32(output, header_cursor, layout.link_count) ||
+        !write_u32(output, header_cursor, layout.semantic_dependency_count) ||
+        !write_u32(output, header_cursor, layout.semantic_reverse_index_count) ||
+        !write_u32(output, header_cursor, layout.initialization_target_count) ||
+        !write_u32(output, header_cursor, 0) ||
+        header_cursor != header_size) {
+
+        return source_save_result::failed;
+    }
+
+    const auto path_index_size =
+        static_cast<std::size_t>(
+            layout.path_index_count) *
+        path_index_record_size;
+
+    std::fill(
+        output.begin() +
+            static_cast<std::ptrdiff_t>(
+                layout.path_index_offset),
+        output.begin() +
+            static_cast<std::ptrdiff_t>(
+                layout.path_index_offset +
+                path_index_size),
+        std::byte{0});
+
+    std::size_t record_cursor =
+        layout.records_offset;
+
+    std::size_t path_cursor = 0;
+
+    std::uint32_t dependency_offset = 0;
+    std::uint32_t dependent_offset = 0;
+
+    for (std::uint32_t value = 1;
+         value <= layout.file_count;
+         ++value) {
+
+        const file_id file{value};
+
+        const auto* physical =
+            files.physical(
+                file);
+
+        if (physical == nullptr ||
+            !physical->present()) {
+
+            return source_save_result::
+                invalid_state;
+        }
+
+        const auto dependencies =
+            files.dependencies(
+                file);
+
+        const auto dependents =
+            files.dependents(
+                file);
+
+        if (dependencies.size() >
+                static_cast<std::size_t>(
+                    (std::numeric_limits<
+                        std::uint32_t>::max)()) -
+                    dependency_offset ||
+            dependents.size() >
+                static_cast<std::size_t>(
+                    (std::numeric_limits<
+                        std::uint32_t>::max)()) -
+                    dependent_offset ||
+            path_cursor >
+                layout.path_bytes) {
+
+            return source_save_result::
+                invalid_state;
+        }
+
+        const auto remaining_path_bytes =
+            static_cast<std::size_t>(
+                layout.path_bytes) -
+            path_cursor;
+
+        std::size_t path_size = 0;
+
+        auto* path_target =
+            reinterpret_cast<char*>(
+                output.data() +
+                layout.paths_offset +
+                path_cursor);
+
+        const auto path_view =
+            files.path(file);
+
+        if (filesystem_path_to_utf8(
+                path_view,
+                std::span<char>{
+                    path_target,
+                    remaining_path_bytes},
+                path_size) !=
+                    filesystem_path_result::
+                        success ||
+            path_size == 0 ||
+            path_size >
+                remaining_path_bytes ||
+            path_size >
+                static_cast<std::size_t>(
+                    (std::numeric_limits<
+                        std::uint32_t>::max)())) {
+
+            return source_save_result::
+                invalid_state;
+        }
+
+        try {
+            filesystem_path_key path_key;
+
+            if (make_filesystem_path_key(
+                    std::filesystem::path{
+                        path_view.begin(),
+                        path_view.end()},
+                    path_key) !=
+                    filesystem_path_result::success ||
+                !insert_path_identity(
+                    output,
+                    layout.path_index_offset,
+                    layout.path_index_count,
+                    persisted_path_fingerprint(
+                        path_key),
+                    file)) {
+
+                return source_save_result::
+                    invalid_state;
+            }
+        }
+        catch (...) {
+            return source_save_result::failed;
+        }
+
+        std::uint32_t flags =
+            current_member_flag |
+            physical_present_flag;
+
+        const auto file_reference =
+            physical->has_change_token() &&
+                physical->change_token
+            ? physical->change_token.
+                file_reference
+            : 0;
+
+        if (file_reference != 0) {
+            flags |=
+                file_reference_flag;
+        }
+
+        if (!write_u32(
+                output,
+                record_cursor,
+                static_cast<std::uint32_t>(
+                    path_cursor)) ||
+            !write_u32(
+                output,
+                record_cursor,
+                static_cast<std::uint32_t>(
+                    path_size)) ||
+            !write_u32(
+                output,
+                record_cursor,
+                static_cast<std::uint32_t>(
+                    files.kind(file))) ||
+            !write_u32(
+                output,
+                record_cursor,
+                flags) ||
+            !write_bytes(
+                output,
+                record_cursor,
+                physical->content_hash.
+                    bytes.data(),
+                physical->content_hash.
+                    bytes.size()) ||
+            !write_u64(
+                output,
+                record_cursor,
+                file_reference) ||
+            !write_u32(
+                output,
+                record_cursor,
+                dependency_offset) ||
+            !write_u32(
+                output,
+                record_cursor,
+                static_cast<std::uint32_t>(
+                    dependencies.size())) ||
+            !write_u32(
+                output,
+                record_cursor,
+                dependent_offset) ||
+            !write_u32(
+                output,
+                record_cursor,
+                static_cast<std::uint32_t>(
+                    dependents.size()))) {
+
+            return source_save_result::failed;
+        }
+
+        path_cursor +=
+            path_size;
+
+        dependency_offset +=
+            static_cast<std::uint32_t>(
+                dependencies.size());
+
+        dependent_offset +=
+            static_cast<std::uint32_t>(
+                dependents.size());
+    }
+
+    if (record_cursor !=
+            layout.paths_offset ||
+        path_cursor !=
+            layout.path_bytes ||
+        dependency_offset !=
+            layout.forward_count ||
+        dependent_offset !=
+            layout.reverse_count) {
+
+        return source_save_result::
+            invalid_state;
+    }
+
+    std::size_t forward_cursor =
+        layout.forward_offset;
+
+    std::uint32_t forward_written = 0;
+
+    for (std::uint32_t value = 1;
+         value <= layout.file_count;
+         ++value) {
+
+        for (const auto target :
+             files.dependencies(
+                 file_id{value})) {
+
+            if (!target ||
+                target.value() >
+                    layout.file_count ||
+                !write_u32(
+                    output,
+                    forward_cursor,
+                    target.value())) {
+
+                return source_save_result::
+                    invalid_state;
+            }
+
+            ++forward_written;
+        }
+    }
+
+    if (forward_cursor !=
+            layout.reverse_offset ||
+        forward_written !=
+            layout.forward_count) {
+
+        return source_save_result::
+            invalid_state;
+    }
+
+    std::size_t reverse_cursor =
+        layout.reverse_offset;
+
+    std::uint32_t reverse_written = 0;
+
+    for (std::uint32_t value = 1;
+         value <= layout.file_count;
+         ++value) {
+
+        for (const auto source :
+             files.dependents(
+                 file_id{value})) {
+
+            if (!source ||
+                source.value() >
+                    layout.file_count ||
+                !write_u32(
+                    output,
+                    reverse_cursor,
+                    source.value())) {
+
+                return source_save_result::
+                    invalid_state;
+            }
+
+            ++reverse_written;
+        }
+    }
+
+    if (reverse_cursor !=
+            layout.file_index_offset ||
+        reverse_written !=
+            layout.reverse_count) {
+
+        return source_save_result::
+            invalid_state;
+    }
+
+    std::size_t file_index_cursor =
+        layout.file_index_offset;
+
+    for (std::size_t index = 0;
+         index <
+            layout.file_index_references.size();
+         ++index) {
+
+        if (!write_u64(
+                output,
+                file_index_cursor,
+                layout.file_index_references[
+                    index]) ||
+            !write_u32(
+                output,
+                file_index_cursor,
+                layout.file_index_files[
+                    index].value())) {
+
+            return source_save_result::failed;
+        }
+    }
+
+    if (file_index_cursor !=
+        layout.directory_index_offset) {
+
+        return source_save_result::failed;
+    }
+
+    std::size_t directory_index_cursor =
+        layout.directory_index_offset;
+
+    for (std::size_t index = 0;
+         index <
+            layout.directory_index_references.size();
+         ++index) {
+
+        if (!write_u64(
+                output,
+                directory_index_cursor,
+                layout.directory_index_references[
+                    index]) ||
+            !write_u32(
+                output,
+                directory_index_cursor,
+                layout.directory_index_flags[
+                    index])) {
+
+            return source_save_result::failed;
+        }
+    }
+
+    if (directory_index_cursor != layout.presence_offset) {
+
+        return source_save_result::failed;
+    }
+
+    std::fill(
+        output.begin() +
+            static_cast<std::ptrdiff_t>(
+                layout.presence_offset),
+        output.begin() +
+            static_cast<std::ptrdiff_t>(
+                layout.checksum_offset),
+        std::byte{0});
+
+    const auto type_presence_offset =
+        layout.presence_offset;
+
+    const auto object_presence_offset =
+        type_presence_offset +
+        static_cast<std::size_t>(
+            layout.type_count) * 8;
+
+    const auto link_presence_offset =
+        object_presence_offset +
+        static_cast<std::size_t>(
+            layout.object_count) * 4;
+
+    if (link_presence_offset +
+            static_cast<std::size_t>(
+                layout.link_count) * 4 !=
+        layout.semantic_root_ranges_offset) {
+
+        return source_save_result::
+            invalid_state;
+    }
+
+    const auto increment_at =
+        [&](std::size_t offset) noexcept {
+
+            std::size_t read_cursor =
+                offset;
+
+            std::uint32_t value = 0;
+
+            if (!read_u32(
+                    output,
+                    read_cursor,
+                    value) ||
+                value ==
+                    (std::numeric_limits<
+                        std::uint32_t>::max)()) {
+
+                return false;
+            }
+
+            std::size_t write_cursor =
+                offset;
+
+            return write_u32(
+                output,
+                write_cursor,
+                value + 1);
+        };
+
+    for (std::uint32_t raw_root = 1;
+         raw_root <= layout.file_count;
+         ++raw_root) {
+
+        const file_id root{
+            raw_root};
+
+        std::size_t contribution_count = 0;
+
+        if (!sources.contributions(
+                root,
+                contribution_count)) {
+
+            return source_save_result::
+                invalid_state;
+        }
+
+        for (std::size_t index = 0;
+             index < contribution_count;
+             ++index) {
+
+            source_contribution_record
+                contribution;
+
+            if (!sources.contribution(
+                    root,
+                    index,
+                    contribution) ||
+                !contribution.file ||
+                contribution.file.value() >
+                    layout.file_count ||
+                !contribution.data) {
+
+                return source_save_result::
+                    invalid_state;
+            }
+
+            const auto data =
+                contribution.data;
+
+            if (data.kind() ==
+                    source_data_kind::
+                        type_declaration ||
+                data.kind() ==
+                    source_data_kind::
+                        type_definition) {
+
+                const auto identity =
+                    identities.at_slot(
+                        data.slot());
+
+                const auto lineage =
+                    identity &&
+                        identity.kind() ==
+                            identity_kind::type
+                    ? G.find_type(
+                        identity)
+                    : type_handle{};
+
+                const auto dense =
+                    projection.remap(
+                        lineage);
+
+                type_entry entry;
+
+                if (!lineage ||
+                    !dense ||
+                    dense.value() >
+                        layout.type_count ||
+                    !G.type(
+                        lineage,
+                        entry) ||
+                    (data.kind() ==
+                         source_data_kind::
+                             type_definition &&
+                     !entry.defined())) {
+
+                    return source_save_result::
+                        invalid_state;
+                }
+
+                const auto offset =
+                    type_presence_offset +
+                    static_cast<std::size_t>(
+                        dense.value() - 1) *
+                        8;
+
+                if (!increment_at(
+                        offset) ||
+                    (data.kind() ==
+                         source_data_kind::
+                             type_definition &&
+                     !increment_at(
+                         offset + 4))) {
+
+                    return source_save_result::
+                        failed;
+                }
+
+                continue;
+            }
+
+            if (data.kind() ==
+                source_data_kind::object) {
+
+                const auto identity =
+                    identities.at_slot(
+                        data.slot());
+
+                const auto lineage =
+                    identity &&
+                        identity.kind() ==
+                            identity_kind::object
+                    ? G.find_object(
+                        identity)
+                    : object_handle{};
+
+                const auto dense =
+                    projection.remap(
+                        lineage);
+
+                object_entry entry;
+
+                if (!lineage ||
+                    !dense ||
+                    dense.value() >
+                        layout.object_count ||
+                    !G.object(
+                        lineage,
+                        entry) ||
+                    !increment_at(
+                        object_presence_offset +
+                        static_cast<std::size_t>(
+                            dense.value() - 1) *
+                            4)) {
+
+                    return source_save_result::
+                        invalid_state;
+                }
+
+                continue;
+            }
+
+            if (data.kind() !=
+                source_data_kind::link) {
+
+                return source_save_result::
+                    invalid_state;
+            }
+
+            const auto lineage =
+                G.link_at(
+                    static_cast<std::size_t>(
+                        data.slot() - 1));
+
+            const auto dense =
+                projection.remap(
+                    lineage);
+
+            if (!lineage ||
+                !dense ||
+                dense.value() >
+                    layout.link_count ||
+                !increment_at(
+                    link_presence_offset +
+                    static_cast<std::size_t>(
+                        dense.value() - 1) *
+                        4)) {
+
+                return source_save_result::
+                    invalid_state;
+            }
+        }
+    }
+
+    const auto remap_dependency =
+        [&](source_dependency_ref dependency,
+            source_dependency_ref& result) noexcept {
+
+            result = {};
+
+            if (!dependency) {
+                return false;
+            }
+
+            if (dependency.kind() ==
+                source_dependency_kind::type) {
+
+                result =
+                    source_dependency_ref::type(
+                        projection.remap(
+                            G.type_at(
+                                static_cast<std::size_t>(
+                                    dependency.slot() -
+                                    1))));
+
+                return static_cast<bool>(
+                    result);
+            }
+
+            if (dependency.kind() ==
+                source_dependency_kind::object) {
+
+                result =
+                    source_dependency_ref::object(
+                        projection.remap(
+                            G.object_at(
+                                static_cast<std::size_t>(
+                                    dependency.slot() -
+                                    1))));
+
+                return static_cast<bool>(
+                    result);
+            }
+
+            return false;
+        };
+
+    const auto reverse_slot =
+        [&](source_dependency_ref dependency,
+            bool create,
+            std::size_t& position) noexcept {
+
+            position =
+                layout.semantic_reverse_index_count;
+
+            if (!dependency ||
+                layout.semantic_reverse_index_count == 0) {
+
+                return false;
+            }
+
+            const auto mask =
+                static_cast<std::size_t>(
+                    layout.semantic_reverse_index_count -
+                    1);
+
+            auto candidate =
+                static_cast<std::size_t>(
+                    source_dependency_hash(
+                        dependency)) &
+                mask;
+
+            for (std::size_t probe = 0;
+                 probe <
+                    layout.semantic_reverse_index_count;
+                 ++probe) {
+
+                const auto offset =
+                    layout.semantic_reverse_index_offset +
+                    candidate * 12;
+
+                std::size_t cursor =
+                    offset;
+
+                std::uint32_t raw = 0;
+
+                if (!read_u32(
+                        output,
+                        cursor,
+                        raw)) {
+
+                    return false;
+                }
+
+                if (raw == 0) {
+                    if (!create) {
+                        return false;
+                    }
+
+                    cursor =
+                        offset;
+
+                    if (!write_u32(
+                            output,
+                            cursor,
+                            dependency.raw()) ||
+                        !write_u32(
+                            output,
+                            cursor,
+                            0) ||
+                        !write_u32(
+                            output,
+                            cursor,
+                            0)) {
+
+                        return false;
+                    }
+
+                    position =
+                        candidate;
+
+                    return true;
+                }
+
+                const auto existing =
+                    source_dependency_ref::
+                        from_raw(
+                            raw);
+
+                if (!existing) {
+                    return false;
+                }
+
+                if (existing ==
+                    dependency) {
+
+                    position =
+                        candidate;
+
+                    return true;
+                }
+
+                candidate =
+                    (candidate + 1) &
+                    mask;
+            }
+
+            return false;
+        };
+
+    std::uint32_t dependency_cursor = 0;
+
+    const auto encode_dependency_domain =
+        [&](file_kind domain)
+        -> source_save_result {
+
+            for (std::uint32_t raw_root = 1;
+                 raw_root <=
+                    layout.file_count;
+                 ++raw_root) {
+
+                const file_id root{
+                    raw_root};
+
+                if (files.kind(root) !=
+                    domain) {
+
+                    continue;
+                }
+
+                std::size_t dependency_count = 0;
+
+                if (!sources.dependencies(
+                        root,
+                        dependency_count) ||
+                    dependency_count >
+                        static_cast<std::size_t>(
+                            layout.semantic_dependency_count -
+                            dependency_cursor)) {
+
+                    return source_save_result::
+                        invalid_state;
+                }
+
+                if (dependency_count != 0) {
+                    std::size_t range_cursor =
+                        layout.semantic_root_ranges_offset +
+                        static_cast<std::size_t>(
+                            raw_root - 1) * 8;
+
+                    if (!write_u32(
+                            output,
+                            range_cursor,
+                            dependency_cursor) ||
+                        !write_u32(
+                            output,
+                            range_cursor,
+                            static_cast<std::uint32_t>(
+                                dependency_count))) {
+
+                        return source_save_result::
+                            failed;
+                    }
+                }
+
+                for (std::size_t index = 0;
+                     index < dependency_count;
+                     ++index) {
+
+                    source_dependency_ref lineage;
+                    source_dependency_ref dense;
+
+                    if (!sources.dependency(
+                            root,
+                            index,
+                            lineage) ||
+                        !remap_dependency(
+                            lineage,
+                            dense)) {
+
+                        return source_save_result::
+                            invalid_state;
+                    }
+
+                    std::size_t write_cursor =
+                        layout.semantic_dependencies_offset +
+                        static_cast<std::size_t>(
+                            dependency_cursor) * 4;
+
+                    if (!write_u32(
+                            output,
+                            write_cursor,
+                            dense.raw())) {
+
+                        return source_save_result::
+                            failed;
+                    }
+
+                    std::size_t position = 0;
+
+                    if (!reverse_slot(
+                            dense,
+                            true,
+                            position)) {
+
+                        return source_save_result::
+                            invalid_state;
+                    }
+
+                    std::size_t count_cursor =
+                        layout.semantic_reverse_index_offset +
+                        position * 12 + 8;
+
+                    std::uint32_t count_value = 0;
+
+                    if (!read_u32(
+                            output,
+                            count_cursor,
+                            count_value) ||
+                        count_value ==
+                            (std::numeric_limits<
+                                std::uint32_t>::max)()) {
+
+                        return source_save_result::
+                            invalid_state;
+                    }
+
+                    count_cursor =
+                        layout.semantic_reverse_index_offset +
+                        position * 12 + 8;
+
+                    if (!write_u32(
+                            output,
+                            count_cursor,
+                            count_value + 1)) {
+
+                        return source_save_result::
+                            failed;
+                    }
+
+                    ++dependency_cursor;
+                }
+            }
+
+            return source_save_result::success;
+        };
+
+    for (const auto domain :
+         {
+             file_kind::header,
+             file_kind::source,
+         }) {
+
+        const auto encoded =
+            encode_dependency_domain(
+                domain);
+
+        if (encoded !=
+            source_save_result::success) {
+
+            return encoded;
+        }
+    }
+
+    if (dependency_cursor !=
+        layout.semantic_dependency_count) {
+
+        return source_save_result::
+            invalid_state;
+    }
+
+    std::uint32_t dependent_cursor = 0;
+
+    std::vector<std::uint32_t>
+        reverse_next;
+
+    try {
+        reverse_next.resize(
+            layout.semantic_reverse_index_count);
+    }
+    catch (...) {
+        return source_save_result::failed;
+    }
+
+    for (std::size_t position = 0;
+         position <
+            layout.semantic_reverse_index_count;
+         ++position) {
+
+        const auto offset =
+            layout.semantic_reverse_index_offset +
+            position * 12;
+
+        std::size_t cursor =
+            offset;
+
+        std::uint32_t raw = 0;
+        std::uint32_t begin = 0;
+        std::uint32_t count_value = 0;
+
+        if (!read_u32(
+                output,
+                cursor,
+                raw) ||
+            !read_u32(
+                output,
+                cursor,
+                begin) ||
+            !read_u32(
+                output,
+                cursor,
+                count_value)) {
+
+            return source_save_result::failed;
+        }
+
+        if (raw == 0) {
+            if (begin != 0 ||
+                count_value != 0) {
+
+                return source_save_result::
+                    invalid_state;
+            }
+
+            continue;
+        }
+
+        if (count_value >
+            (std::numeric_limits<
+                std::uint32_t>::max)() -
+                dependent_cursor) {
+
+            return source_save_result::failed;
+        }
+
+        cursor =
+            offset + 4;
+
+        if (!write_u32(
+                output,
+                cursor,
+                dependent_cursor)) {
+
+            return source_save_result::failed;
+        }
+
+        reverse_next[position] =
+            dependent_cursor;
+
+        dependent_cursor +=
+            count_value;
+    }
+
+    if (dependent_cursor !=
+        layout.semantic_dependency_count) {
+
+        return source_save_result::
+            invalid_state;
+    }
+
+    for (std::uint32_t raw_root = 1;
+         raw_root <=
+            layout.file_count;
+         ++raw_root) {
+
+        const file_id root{
+            raw_root};
+
+        std::size_t dependency_count = 0;
+
+        if (!sources.dependencies(
+                root,
+                dependency_count)) {
+
+            return source_save_result::
+                invalid_state;
+        }
+
+        for (std::size_t index = 0;
+             index < dependency_count;
+             ++index) {
+
+            source_dependency_ref lineage;
+            source_dependency_ref dense;
+
+            if (!sources.dependency(
+                    root,
+                    index,
+                    lineage) ||
+                !remap_dependency(
+                    lineage,
+                    dense)) {
+
+                return source_save_result::
+                    invalid_state;
+            }
+
+            std::size_t position = 0;
+
+            if (!reverse_slot(
+                    dense,
+                    false,
+                    position)) {
+
+                return source_save_result::
+                    invalid_state;
+            }
+
+            const auto offset =
+                layout.semantic_reverse_index_offset +
+                position * 12;
+
+            std::size_t range_cursor =
+                offset + 4;
+
+            std::uint32_t begin = 0;
+            std::uint32_t count_value = 0;
+
+            if (!read_u32(
+                    output,
+                    range_cursor,
+                    begin) ||
+                !read_u32(
+                    output,
+                    range_cursor,
+                    count_value)) {
+
+                return source_save_result::failed;
+            }
+
+            auto& next =
+                reverse_next[
+                    position];
+
+            if (next < begin ||
+                next >=
+                    static_cast<std::uint64_t>(
+                        begin) +
+                        count_value) {
+
+                return source_save_result::
+                    invalid_state;
+            }
+
+            std::size_t root_cursor =
+                layout.semantic_dependent_roots_offset +
+                static_cast<std::size_t>(
+                    next) * 4;
+
+            if (!write_u32(
+                    output,
+                    root_cursor,
+                    raw_root)) {
+
+                return source_save_result::failed;
+            }
+
+            ++next;
+        }
+    }
+
+    for (std::size_t position = 0;
+         position <
+            layout.semantic_reverse_index_count;
+         ++position) {
+
+        const auto offset =
+            layout.semantic_reverse_index_offset +
+            position * 12;
+
+        std::size_t cursor =
+            offset;
+
+        std::uint32_t raw = 0;
+        std::uint32_t begin = 0;
+        std::uint32_t count_value = 0;
+
+        if (!read_u32(
+                output,
+                cursor,
+                raw) ||
+            !read_u32(
+                output,
+                cursor,
+                begin) ||
+            !read_u32(
+                output,
+                cursor,
+                count_value)) {
+
+            return source_save_result::failed;
+        }
+
+        if (raw != 0 &&
+            reverse_next[position] !=
+                static_cast<std::uint64_t>(
+                    begin) +
+                    count_value) {
+
+            return source_save_result::
+                invalid_state;
+        }
+    }
+
+    std::uint32_t initialization_cursor = 0;
+
+    const auto encode_initialization_domain =
+        [&](file_kind domain)
+        -> source_save_result {
+
+            for (std::uint32_t raw_root = 1;
+                 raw_root <=
+                    layout.file_count;
+                 ++raw_root) {
+
+                const file_id root{
+                    raw_root};
+
+                if (files.kind(root) !=
+                    domain) {
+
+                    continue;
+                }
+
+                std::size_t target_count = 0;
+
+                if (!sources.initialization_targets(
+                        root,
+                        target_count) ||
+                    target_count >
+                        static_cast<std::size_t>(
+                            layout.initialization_target_count -
+                            initialization_cursor)) {
+
+                    return source_save_result::
+                        invalid_state;
+                }
+
+                if (target_count != 0) {
+                    std::size_t range_cursor =
+                        layout.initialization_root_ranges_offset +
+                        static_cast<std::size_t>(
+                            raw_root - 1) * 8;
+
+                    if (!write_u32(
+                            output,
+                            range_cursor,
+                            initialization_cursor) ||
+                        !write_u32(
+                            output,
+                            range_cursor,
+                            static_cast<std::uint32_t>(
+                                target_count))) {
+
+                        return source_save_result::
+                            failed;
+                    }
+                }
+
+                for (std::size_t index = 0;
+                     index < target_count;
+                     ++index) {
+
+                    object_endpoint lineage;
+                    object_endpoint dense;
+
+                    if (!sources.initialization_target(
+                            root,
+                            index,
+                            lineage) ||
+                        !projection.remap(
+                            lineage,
+                            dense)) {
+
+                        return source_save_result::
+                            invalid_state;
+                    }
+
+                    std::size_t target_cursor =
+                        layout.initialization_targets_offset +
+                        static_cast<std::size_t>(
+                            initialization_cursor) * 8;
+
+                    if (!write_u32(
+                            output,
+                            target_cursor,
+                            dense.object.value()) ||
+                        !write_u32(
+                            output,
+                            target_cursor,
+                            dense.member.value())) {
+
+                        return source_save_result::
+                            failed;
+                    }
+
+                    ++initialization_cursor;
+                }
+            }
+
+            return source_save_result::success;
+        };
+
+    for (const auto domain :
+         {
+             file_kind::header,
+             file_kind::source,
+         }) {
+
+        const auto encoded =
+            encode_initialization_domain(
+                domain);
+
+        if (encoded !=
+            source_save_result::success) {
+
+            return encoded;
+        }
+    }
+
+    if (initialization_cursor !=
+        layout.initialization_target_count) {
+
+        return source_save_result::
+            invalid_state;
+    }
+
+    const auto digest =
+        checksum(
+            output.first(
+                layout.checksum_offset));
+
+    std::size_t checksum_cursor =
+        layout.checksum_offset;
+
+    if (!write_bytes(
+            output,
+            checksum_cursor,
+            digest.bytes.data(),
+            digest.bytes.size()) ||
+        checksum_cursor !=
+            output.size()) {
+
+        return source_save_result::failed;
+    }
+
+    return source_save_result::success;
+}
+
 
 source_save_result prepare_source_save_layout(const file_context &files,
                                               const source_map &sources,

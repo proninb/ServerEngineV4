@@ -19,6 +19,10 @@
 
 namespace cw::server {
 
+class graph_delta;
+class graph_dense_projection;
+class source_map_overlay_view;
+
 enum class source_save_result : std::uint8_t {
     success,
     invalid_state,
@@ -139,6 +143,24 @@ private:
                                                        const source_map &,
                                                        const source_save_layout &,
                                                        std::span<std::byte>) noexcept;
+
+    friend source_save_result prepare_build_source_save_layout(
+        const file_context&,
+        const identity_space&,
+        const graph_delta&,
+        const graph_dense_projection&,
+        const source_map_overlay_view&,
+        const source_save_build_options&,
+        source_save_layout&) noexcept;
+
+    friend source_save_result encode_build_source_save_image(
+        const file_context&,
+        const identity_space&,
+        const graph_delta&,
+        const graph_dense_projection&,
+        const source_map_overlay_view&,
+        const source_save_layout&,
+        std::span<std::byte>) noexcept;
 };
 
 struct source_save_file_view final {
@@ -394,6 +416,28 @@ prepare_source_save_layout(const file_context &files,
     std::vector<file_id>& roots) noexcept;
 
 class compiled_project_view;
+
+// BUILD v6 adapter. Physical File Context state uses the same format contract
+// as REBUILD; only semantic sidecars are projected from sparse overlays.
+[[nodiscard]] source_save_result
+prepare_build_source_save_layout(
+    const file_context& files,
+    const identity_space& identities,
+    const graph_delta& G,
+    const graph_dense_projection& projection,
+    const source_map_overlay_view& sources,
+    const source_save_build_options& options,
+    source_save_layout& output) noexcept;
+
+[[nodiscard]] source_save_result
+encode_build_source_save_image(
+    const file_context& files,
+    const identity_space& identities,
+    const graph_delta& G,
+    const graph_dense_projection& projection,
+    const source_map_overlay_view& sources,
+    const source_save_layout& layout,
+    std::span<std::byte> output) noexcept;
 
 // Read-only BUILD candidate over OLD persisted provenance plus sparse replay.
 // Replayed roots replace OLD root state completely; invalidated roots without a

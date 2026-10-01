@@ -662,6 +662,66 @@ void test_direct_source_save(
                     compiled_project_image_result::
                         success,
             "unchanged sparse BUILD encodes byte-identical audited compiled.bin directly");
+
+        source_save_layout
+            sparse_source_layout;
+
+        std::vector<std::byte>
+            sparse_source_bytes;
+
+        source_save_view
+            sparse_source;
+
+        const auto source_prepared =
+            prepare_build_source_save_layout(
+                files,
+                identities,
+                changes,
+                projection,
+                source_candidate,
+                source_save_build_options{},
+                sparse_source_layout);
+
+        if (source_prepared ==
+            source_save_result::success) {
+
+            sparse_source_bytes.assign(
+                sparse_source_layout.size(),
+                std::byte{0xa5});
+        }
+
+        tests.expect(
+            source_prepared ==
+                    source_save_result::success &&
+            sparse_source_layout.size() ==
+                layout.size() &&
+            encode_build_source_save_image(
+                files,
+                identities,
+                changes,
+                projection,
+                source_candidate,
+                sparse_source_layout,
+                sparse_source_bytes) ==
+                    source_save_result::success &&
+            sparse_source_bytes.size() ==
+                writable.bytes().size() &&
+            std::equal(
+                sparse_source_bytes.begin(),
+                sparse_source_bytes.end(),
+                writable.bytes().begin(),
+                writable.bytes().end()) &&
+            validate_source_save_image(
+                sparse_source_bytes) ==
+                    source_save_result::success &&
+            sparse_source.bind(
+                sparse_source_bytes) ==
+                    source_save_result::success &&
+            verify_source_save_presence(
+                sparse_source,
+                sparse_compiled) ==
+                    source_save_result::success,
+            "unchanged sparse BUILD encodes byte-identical audited source.bin v6 directly");
     }
 
     {
