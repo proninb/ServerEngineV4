@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -26,6 +27,39 @@
 
 namespace cw::server {
 namespace {
+
+using build_clock = std::chrono::steady_clock;
+
+[[nodiscard]] std::uint64_t elapsed_ns(
+    build_clock::time_point begin,
+    build_clock::time_point end) noexcept {
+
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            end - begin).count());
+}
+
+class build_telemetry_scope final {
+public:
+    explicit build_telemetry_scope(
+        project_build_telemetry* value) noexcept
+        : telemetry(value),
+          begin(build_clock::now()) {
+    }
+
+    ~build_telemetry_scope() {
+        if (telemetry != nullptr) {
+            telemetry->total_ns =
+                elapsed_ns(
+                    begin,
+                    build_clock::now());
+        }
+    }
+
+private:
+    project_build_telemetry* telemetry = nullptr;
+    build_clock::time_point begin;
+};
 
 struct build_candidate_paths final {
     std::filesystem::path compiled;
@@ -1142,9 +1176,18 @@ server_status build_project(
     const server_settings_configuration& settings,
     operation_id operation,
     diagnostic_collection& diagnostics,
-    std::unique_ptr<project>& output) {
+    std::unique_ptr<project>& output,
+    project_build_telemetry* telemetry) {
 
     output.reset();
+
+    if (telemetry != nullptr) {
+        *telemetry = {};
+    }
+
+    build_telemetry_scope
+        telemetry_scope{
+            telemetry};
 
     build_context context{
         settings};
@@ -1173,6 +1216,10 @@ server_status build_project(
 
     if (source_opened ==
         read_only_file_mapping_result::not_found) {
+
+        if (telemetry != nullptr) {
+            telemetry->rebuild_fallback = true;
+        }
 
         return rebuild_project(
             project_path,
@@ -1422,6 +1469,18 @@ server_status build_project(
             semantic_changed,
             &classification);
 
+    if (telemetry != nullptr &&
+        succeeded(classified)) {
+
+        telemetry->candidate_files =
+            static_cast<std::uint64_t>(
+                candidates.size());
+
+        telemetry->changed_files =
+            static_cast<std::uint64_t>(
+                semantic_changed.size());
+    }
+
     if (!succeeded(classified)) {
         diagnostics.emit(
             diagnostic(
@@ -1449,6 +1508,14 @@ server_status build_project(
             affected,
             &affected_metrics);
 
+    if (telemetry != nullptr &&
+        succeeded(collected)) {
+
+        telemetry->affected_files =
+            static_cast<std::uint64_t>(
+                affected.size());
+    }
+
     if (!succeeded(collected)) {
         diagnostics.emit(
             diagnostic(
@@ -1470,6 +1537,14 @@ server_status build_project(
             context.source,
             affected,
             affected_semantic_roots);
+
+    if (telemetry != nullptr &&
+        succeeded(roots_collected)) {
+
+        telemetry->affected_roots =
+            static_cast<std::uint64_t>(
+                affected_semantic_roots.size());
+    }
 
     if (!succeeded(roots_collected)) {
         diagnostics.emit(
@@ -1696,16 +1771,32 @@ server_status build_project(
         // Exact no-change BUILD: REBUILD already produced this G and the
         // current inputs are byte-identical. No Graph reconstruction, Parser,
         // database.bin mapping, or graph_delta publication is necessary.
-        return create_resident_project(
-            project_path,
-            settings,
-            operation,
-            diagnostics,
-            std::move(
-                context.compiled_mapping),
-            context.compiled,
-            output);
+        const auto runtime_begin =
+            build_clock::now();
+
+        const auto status =
+            create_resident_project(
+                project_path,
+                settings,
+                operation,
+                diagnostics,
+                std::move(
+                    context.compiled_mapping),
+                context.compiled,
+                output);
+
+        if (telemetry != nullptr) {
+            telemetry->runtime_publication_ns =
+                elapsed_ns(
+                    runtime_begin,
+                    build_clock::now());
+        }
+
+        return status;
     }
+
+    const auto sparse_reconstruction_begin =
+        build_clock::now();
 
     if (!assign_parse_roots.empty()) {
         const auto materialized =
@@ -1873,6 +1964,39 @@ server_status build_project(
             semantic_invalidated_roots,
             semantic_invalidation_plan,
             &semantic_invalidation_metrics);
+
+    if (telemetry != nullptr &&
+        succeeded(
+            semantic_invalidation_collected)) {
+
+        telemetry->invalidated_roots =
+            static_cast<std::uint64_t>(
+                semantic_invalidated_roots.size());
+
+        telemetry->replay_roots =
+            static_cast<std::uint64_t>(
+                semantic_replay_roots.size());
+
+        telemetry->retire_types =
+            static_cast<std::uint64_t>(
+                semantic_invalidation_plan.
+                    retire_types.size());
+
+        telemetry->clear_type_definitions =
+            static_cast<std::uint64_t>(
+                semantic_invalidation_plan.
+                    clear_type_definitions.size());
+
+        telemetry->retire_objects =
+            static_cast<std::uint64_t>(
+                semantic_invalidation_plan.
+                    retire_objects.size());
+
+        telemetry->retire_links =
+            static_cast<std::uint64_t>(
+                semantic_invalidation_plan.
+                    retire_links.size());
+    }
 
     if (!succeeded(
             semantic_invalidation_collected)) {
@@ -2328,9 +2452,56 @@ server_status build_project(
         return assign_candidate_bound;
     }
 
+    if (telemetry != nullptr) {
+        telemetry->sparse_reconstruction_ns =
+            elapsed_ns(
+                sparse_reconstruction_begin,
+                build_clock::now());
+
+        telemetry->graph_type_patches =
+            static_cast<std::uint64_t>(
+                context.graph_changes.
+                    type_patch_count());
+
+        telemetry->graph_appended_types =
+            static_cast<std::uint64_t>(
+                context.graph_changes.
+                    appended_type_count());
+
+        telemetry->graph_object_patches =
+            static_cast<std::uint64_t>(
+                context.graph_changes.
+                    object_patch_count());
+
+        telemetry->graph_appended_objects =
+            static_cast<std::uint64_t>(
+                context.graph_changes.
+                    appended_object_count());
+
+        telemetry->graph_link_patches =
+            static_cast<std::uint64_t>(
+                context.graph_changes.
+                    link_patch_count());
+
+        telemetry->graph_appended_links =
+            static_cast<std::uint64_t>(
+                context.graph_changes.
+                    appended_link_count());
+    }
+
+    const auto dense_projection_begin =
+        build_clock::now();
+
     const auto graph_candidate_prepared =
         context.graph_candidate.prepare(
             context.graph_changes);
+
+    if (telemetry != nullptr) {
+        telemetry->dense_projection_ns =
+            elapsed_ns(
+                dense_projection_begin,
+                build_clock::now());
+    }
 
     if (!succeeded(
             graph_candidate_prepared)) {
@@ -2354,6 +2525,9 @@ server_status build_project(
 
         return graph_candidate_prepared;
     }
+
+    const auto artifact_materialization_begin =
+        build_clock::now();
 
     compiled_project_layout
         compiled_candidate_layout;
@@ -3011,6 +3185,16 @@ server_status build_project(
         }
     }
 
+    if (telemetry != nullptr) {
+        telemetry->artifact_materialization_ns =
+            elapsed_ns(
+                artifact_materialization_begin,
+                build_clock::now());
+    }
+
+    const auto runtime_publication_begin =
+        build_clock::now();
+
     const auto resident_created =
         create_resident_project(
             project_path,
@@ -3022,6 +3206,13 @@ server_status build_project(
             resident_compiled,
             output);
 
+    if (telemetry != nullptr) {
+        telemetry->runtime_publication_ns =
+            elapsed_ns(
+                runtime_publication_begin,
+                build_clock::now());
+    }
+
     if (!succeeded(
             resident_created)) {
 
@@ -3029,12 +3220,22 @@ server_status build_project(
         return resident_created;
     }
 
+    const auto promotion_begin =
+        build_clock::now();
+
     const auto promoted =
         promote_build_artifacts(
             layout,
             candidate_paths,
             database_candidate_required,
             manifest_candidate_required);
+
+    if (telemetry != nullptr) {
+        telemetry->promotion_ns =
+            elapsed_ns(
+                promotion_begin,
+                build_clock::now());
+    }
 
     if (promoted !=
         build_artifact_promotion_result::

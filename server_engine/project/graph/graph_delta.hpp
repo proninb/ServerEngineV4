@@ -364,6 +364,30 @@ public:
             endpoint_path_steps.size();
     }
 
+    [[nodiscard]] std::size_t type_patch_count() const noexcept {
+        return type_patches.size();
+    }
+
+    [[nodiscard]] std::size_t appended_type_count() const noexcept {
+        return types.size();
+    }
+
+    [[nodiscard]] std::size_t object_patch_count() const noexcept {
+        return object_patches.size();
+    }
+
+    [[nodiscard]] std::size_t appended_object_count() const noexcept {
+        return objects.size();
+    }
+
+    [[nodiscard]] std::size_t link_patch_count() const noexcept {
+        return link_patches.size();
+    }
+
+    [[nodiscard]] std::size_t appended_link_count() const noexcept {
+        return links.size();
+    }
+
     // Dense construction spans. In BUILD baseline mode these expose only the
     // append arena; final sparse persistence uses logical access instead.
     [[nodiscard]] std::span<const type_entry>

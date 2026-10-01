@@ -301,6 +301,8 @@ int main(
         std::chrono::steady_clock::now();
 
     cw::server::server_status status;
+    cw::server::project_build_telemetry
+        build_telemetry;
 
     if (mode ==
         benchmark_mode::publish) {
@@ -320,7 +322,8 @@ int main(
                 settings,
                 cw::server::operation_id{1},
                 diagnostics,
-                project);
+                project,
+                &build_telemetry);
     }
     else if (mode == benchmark_mode::rebuild) {
         status = cw::server::rebuild_project(
@@ -445,8 +448,66 @@ int main(
         << ",strings="
         << compiled.string_count()
         << ",identities="
-        << compiled.identity_count()
-        << '\n';
+        << compiled.identity_count();
+
+    if (mode == benchmark_mode::build) {
+        const auto ns_ms =
+            [](std::uint64_t value) noexcept {
+                return static_cast<double>(
+                    value) /
+                    1'000'000.0;
+            };
+
+        std::cout
+            << ",build_total_ms="
+            << ns_ms(build_telemetry.total_ns)
+            << ",sparse_ms="
+            << ns_ms(build_telemetry.sparse_reconstruction_ns)
+            << ",dense_projection_ms="
+            << ns_ms(build_telemetry.dense_projection_ns)
+            << ",artifact_materialization_ms="
+            << ns_ms(build_telemetry.artifact_materialization_ns)
+            << ",runtime_publication_ms="
+            << ns_ms(build_telemetry.runtime_publication_ns)
+            << ",promotion_ms="
+            << ns_ms(build_telemetry.promotion_ns)
+            << ",candidate_files="
+            << build_telemetry.candidate_files
+            << ",changed_files="
+            << build_telemetry.changed_files
+            << ",affected_files="
+            << build_telemetry.affected_files
+            << ",affected_roots="
+            << build_telemetry.affected_roots
+            << ",invalidated_roots="
+            << build_telemetry.invalidated_roots
+            << ",replay_roots="
+            << build_telemetry.replay_roots
+            << ",retire_types="
+            << build_telemetry.retire_types
+            << ",clear_type_definitions="
+            << build_telemetry.clear_type_definitions
+            << ",retire_objects="
+            << build_telemetry.retire_objects
+            << ",retire_links="
+            << build_telemetry.retire_links
+            << ",graph_type_patches="
+            << build_telemetry.graph_type_patches
+            << ",graph_appended_types="
+            << build_telemetry.graph_appended_types
+            << ",graph_object_patches="
+            << build_telemetry.graph_object_patches
+            << ",graph_appended_objects="
+            << build_telemetry.graph_appended_objects
+            << ",graph_link_patches="
+            << build_telemetry.graph_link_patches
+            << ",graph_appended_links="
+            << build_telemetry.graph_appended_links
+            << ",rebuild_fallback="
+            << (build_telemetry.rebuild_fallback ? 1 : 0);
+    }
+
+    std::cout << '\n';
 
     return 0;
 }
