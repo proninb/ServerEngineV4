@@ -1,5 +1,39 @@
 # PUBLISH performance review
 
+<!-- GRAPH_IDENTITY_APPEND_TARGET_BEGIN -->
+## Identity-driven sparse persistence target (2026-10-01)
+
+The next performance architecture is documented in
+[`GRAPH_IDENTITY_APPEND_ARCHITECTURE.md`](GRAPH_IDENTITY_APPEND_ARCHITECTURE.md).
+
+Current sparse semantic BUILD already limits changed/affected semantic work, but
+the path after `graph_delta` still performs dense projection and complete artifact
+materialization. The target removes that total-Project scaling in stages:
+
+```text
+semantic references
+    physical handle WHERE -> identity_ref WHO
+
+normal BUILD
+    append replacement payload
+    patch direct current-location/index state
+
+persistence
+    changed/affected payload only
+
+REBUILD
+    full compaction
+```
+
+`history_count` is not semantic history. Any such accounting represents stale
+physical storage retained until REBUILD.
+
+The performance gate for a one-entity independent change is that semantic replay,
+Graph writes, and durable artifact writes scale with the changed/affected set,
+not total Graph size. Runtime construction must likewise ignore stale physical
+BUILD storage, while FIXED_DIRECT execution remains direct native references.
+<!-- GRAPH_IDENTITY_APPEND_TARGET_END -->
+
 ## Mixed-workload runtime plan growth (2026-09-26)
 
 The current mixed fixture has 10,001 types, 170,001 members, 20,000 objects,

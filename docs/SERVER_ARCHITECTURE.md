@@ -1,5 +1,29 @@
 # Server Architecture V4
 
+<!-- GRAPH_IDENTITY_APPEND_TARGET_BEGIN -->
+## Target Graph identity / Runtime boundary
+
+The next Graph/BUILD architecture is frozen in
+[`GRAPH_IDENTITY_APPEND_ARCHITECTURE.md`](GRAPH_IDENTITY_APPEND_ARCHITECTURE.md).
+
+```text
+semantic G
+    identity_ref / WHO
+        -> direct current-location resolution
+        -> Runtime ABI/layout construction
+        -> FIXED_DIRECT native objects/references
+```
+
+Graph handles remain physical/current WHERE values. They are not semantic
+identity and are not required to survive normal-BUILD relocation.
+
+Normal BUILD is targeted to append changed semantic payload and patch current
+indexes; REBUILD remains the compaction boundary. Runtime construction must
+eventually traverse current semantic state only and must not scale with stale
+physical payload retained by BUILD. This does not change the Runtime-cycle
+contract: native C++ references remain direct and lookup-free.
+<!-- GRAPH_IDENTITY_APPEND_TARGET_END -->
+
 ## Physical source tree
 
 Visual Studio must mirror the physical file-system hierarchy exactly.

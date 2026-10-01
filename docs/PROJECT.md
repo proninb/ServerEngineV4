@@ -1,5 +1,45 @@
 # Project Architecture
 
+<!-- GRAPH_IDENTITY_APPEND_TARGET_BEGIN -->
+## Target identity-driven G and sparse BUILD
+
+The frozen target direction is documented in
+[`GRAPH_IDENTITY_APPEND_ARCHITECTURE.md`](GRAPH_IDENTITY_APPEND_ARCHITECTURE.md).
+
+The central contract is:
+
+```text
+identity_ref = semantic WHO
+Graph handle = current physical WHERE
+```
+
+Normal BUILD must not require semantic identity to remain at one physical Graph
+slot. Persisted semantic relationships are migrated toward `identity_ref`, while
+the direct `identity_ref.slot() -> current Graph location` index resolves the
+current physical record.
+
+The target normal BUILD path is:
+
+```text
+changed identity
+    -> append replacement semantic payload
+    -> patch current-location/index state
+    -> old physical payload becomes stale storage
+```
+
+Stale storage is not semantic version history. REBUILD is the compaction
+boundary. Normal BUILD must eventually avoid both whole-G dense remapping and
+whole-artifact materialization for an independent sparse change.
+
+Runtime construction resolves semantic identities to current Graph locations
+once while deriving ABI layout and FIXED_DIRECT addresses. Runtime cycle
+execution remains native/direct and performs no identity, name, or hash lookup.
+
+The migration is intentionally staged. Until the corresponding code slice is
+implemented, the current `type_ref::named`, base, object-endpoint, and
+object-binding representations remain the authoritative implemented format.
+<!-- GRAPH_IDENTITY_APPEND_TARGET_END -->
+
 ## Purpose
 
 Project lifecycle is mode-oriented:
