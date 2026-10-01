@@ -4043,6 +4043,82 @@ void test_runtime_query(
             value) ==
             runtime_query_result::unsupported_type,
         "GET_VALUE rejects aggregate leaf");
+
+#if defined(_WIN32)
+    const server_abi_configuration abi32{
+        abi_target::windows_x86,
+        8,
+    };
+
+    runtime_layout layout32;
+
+    if (!tests.expect(
+            prepare_runtime_layout(
+                view,
+                abi32,
+                layout32) ==
+                runtime_layout_result::success,
+            "prepare windows-x86 Runtime query layout")) {
+
+        return;
+    }
+
+    std::vector<std::byte> runtime32(
+        static_cast<std::size_t>(
+            layout32.size()),
+        std::byte{0xcc});
+
+    constexpr std::uint64_t
+        target_base32 =
+            0x10000000ull;
+
+    if (!tests.expect(
+            materialize_fixed_direct(
+                view,
+                layout32,
+                abi32,
+                target_base32,
+                runtime32) ==
+                    fixed_direct_materialization_result::
+                        success,
+            "materialize windows-x86 Runtime query image")) {
+
+        return;
+    }
+
+    runtime_binding_index bindings32;
+
+    if (!tests.expect(
+            layout32.release_bindings(
+                bindings32,
+                target_base32),
+            "publish windows-x86 Runtime query bindings")) {
+
+        return;
+    }
+
+    runtime_value direct32;
+    runtime_value reference32;
+
+    tests.expect(
+        get_runtime_value(
+            view,
+            bindings32,
+            runtime32,
+            "demo::left.value",
+            direct32) ==
+                runtime_query_result::success &&
+        direct32.bits == 42 &&
+        get_runtime_value(
+            view,
+            bindings32,
+            runtime32,
+            "demo::right.peer",
+            reference32) ==
+                runtime_query_result::success &&
+        reference32.bits == 42,
+        "GET_VALUE decodes windows-x86 reference slots with target ABI width");
+#endif
 }
 
 

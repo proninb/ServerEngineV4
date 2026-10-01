@@ -1,4 +1,5 @@
 #include "tcp_endpoint.hpp"
+#include "tcp_send.hpp"
 
 #include "../connection/communication_connection.hpp"
 #include "../protocol/json_protocol.hpp"
@@ -17,8 +18,6 @@
 #include <vector>
 
 #ifdef _WIN32
-#define NOMINMAX
-#include <WinSock2.h>
 #include <WS2tcpip.h>
 #else
 #include <arpa/inet.h>
@@ -35,7 +34,7 @@ namespace {
 
 #ifdef _WIN32
 
-using native_socket = SOCKET;
+using native_socket = tcp_native_socket;
 using poll_descriptor = WSAPOLLFD;
 
 inline constexpr native_socket invalid_socket_value =
@@ -68,24 +67,6 @@ void close_socket(native_socket value) noexcept {
                &enabled) == 0;
 }
 
-[[nodiscard]] bool configure_send_socket(
-    native_socket) noexcept {
-
-    return true;
-}
-
-[[nodiscard]] int socket_send(
-    native_socket value,
-    const char* data,
-    int size) noexcept {
-
-    return send(
-        value,
-        data,
-        size,
-        0);
-}
-
 [[nodiscard]] int poll_sockets(
     poll_descriptor* descriptors,
     unsigned long count,
@@ -99,7 +80,7 @@ void close_socket(native_socket value) noexcept {
 
 #else
 
-using native_socket = int;
+using native_socket = tcp_native_socket;
 using poll_descriptor = pollfd;
 
 inline constexpr native_socket invalid_socket_value =
@@ -136,45 +117,6 @@ void close_socket(native_socket value) noexcept {
             value,
             F_SETFL,
             flags | O_NONBLOCK) == 0;
-}
-
-[[nodiscard]] bool configure_send_socket(
-    native_socket value) noexcept {
-
-#if defined(SO_NOSIGPIPE)
-    const int enabled = 1;
-
-    return setsockopt(
-               value,
-               SOL_SOCKET,
-               SO_NOSIGPIPE,
-               &enabled,
-               sizeof(enabled)) == 0;
-#else
-    static_cast<void>(value);
-    return true;
-#endif
-}
-
-[[nodiscard]] int socket_send(
-    native_socket value,
-    const char* data,
-    int size) noexcept {
-
-#if defined(MSG_NOSIGNAL)
-    constexpr int flags =
-        MSG_NOSIGNAL;
-#else
-    constexpr int flags = 0;
-#endif
-
-    return static_cast<int>(
-        ::send(
-            value,
-            data,
-            static_cast<std::size_t>(
-                size),
-            flags));
 }
 
 [[nodiscard]] int poll_sockets(
@@ -394,7 +336,7 @@ struct socket_owner final {
         return false;
     }
 
-    if (!configure_send_socket(
+    if (!configure_tcp_send_socket(
             send_socket.value) ||
         !set_nonblocking(
             receive_socket.value) ||
@@ -610,7 +552,7 @@ private:
         const char value = 1;
 
         static_cast<void>(
-            socket_send(
+            tcp_send_no_signal(
                 wake_sender.value,
                 &value,
                 1));
@@ -792,7 +734,7 @@ private:
                 return;
             }
 
-            if (!configure_send_socket(
+            if (!configure_tcp_send_socket(
                     accepted.value) ||
                 !set_nonblocking(
                     accepted.value) ||
@@ -1209,7 +1151,7 @@ private:
                 value.send_offset;
 
             const auto sent =
-                socket_send(
+                tcp_send_no_signal(
                     value.socket.value,
                     value.send_buffer.data() +
                         value.send_offset,

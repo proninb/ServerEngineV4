@@ -74,5 +74,119 @@ int main() {
         return 6;
     }
 
+    request_queue bounded{
+        request_queue_limits{
+            1,
+            1024u * 1024u,
+        }};
+
+    server_request_message first;
+    first.request.kind =
+        server_request_kind::get_state;
+
+    if (bounded.try_push(
+            communication_control_message{
+                std::move(first)}) !=
+            request_queue_push_result::
+                accepted) {
+
+        return 7;
+    }
+
+    server_request_message second;
+    second.request.kind =
+        server_request_kind::get_state;
+
+    if (bounded.try_push(
+            communication_control_message{
+                std::move(second)}) !=
+            request_queue_push_result::
+                overloaded) {
+
+        return 8;
+    }
+
+    communication_control_message bounded_output;
+
+    if (!bounded.wait_pop(
+            bounded_output)) {
+
+        return 9;
+    }
+
+    server_request_message after_pop;
+    after_pop.request.kind =
+        server_request_kind::get_state;
+
+    if (bounded.try_push(
+            communication_control_message{
+                std::move(after_pop)}) !=
+            request_queue_push_result::
+                accepted) {
+
+        return 10;
+    }
+
+    connection_close_control_message close;
+
+    if (bounded.try_push(
+            communication_control_message{
+                std::move(close)}) !=
+            request_queue_push_result::
+                accepted) {
+
+        return 11;
+    }
+
+    if (!bounded.wait_pop(
+            bounded_output) ||
+        !bounded.wait_pop(
+            bounded_output) ||
+        !std::holds_alternative<
+            connection_close_control_message>(
+                bounded_output)) {
+
+        return 12;
+    }
+
+    request_queue byte_bounded{
+        request_queue_limits{
+            8,
+            sizeof(
+                communication_control_message) +
+                8,
+        }};
+
+    server_request_message large;
+    large.request.kind =
+        server_request_kind::get_value;
+    large.request.name.assign(
+        128,
+        'x');
+
+    if (byte_bounded.try_push(
+            communication_control_message{
+                std::move(large)}) !=
+            request_queue_push_result::
+                overloaded) {
+
+        return 13;
+    }
+
+    byte_bounded.stop_accepting_and_discard();
+
+    server_request_message stopped;
+    stopped.request.kind =
+        server_request_kind::get_state;
+
+    if (byte_bounded.try_push(
+            communication_control_message{
+                std::move(stopped)}) !=
+            request_queue_push_result::
+                stopped) {
+
+        return 14;
+    }
+
     return 0;
 }

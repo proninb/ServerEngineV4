@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.25)
+cmake_minimum_required(VERSION 3.25)
 
 project(ServerEngineV4
     VERSION 4.0.0
@@ -632,6 +632,55 @@ if(BUILD_TESTING)
     endif()
 
     add_test(NAME communication_control COMMAND ServerEngineV4CommunicationControlTests)
+
+    add_executable(ServerEngineV4CommunicationRegressionTests
+        tests/communication_regression_tests.cpp
+        server_engine/communication/request_queue.cpp
+        server_engine/communication/communication.cpp
+        server_engine/communication/session/client_session.cpp
+        server_engine/communication/connection/outbound_channel.cpp
+        server_engine/communication/connection/subscription_registration.cpp
+        server_engine/communication/connection/communication_connection.cpp
+        server_engine/communication/protocol/json_protocol.cpp
+        server_engine/communication/tcp/tcp_endpoint.cpp
+        server_engine/communication/console/server_console.cpp
+        server_engine/filesystem_path.cpp
+        server_engine/json/json_parser.cpp
+        server_engine/diagnostics/diagnostic_collection.cpp
+        server_engine/diagnostics/diagnostic_formatter.cpp
+        server_engine/diagnostics/diagnostic_source_cache.cpp
+    )
+
+    if(WIN32)
+        target_sources(ServerEngineV4CommunicationRegressionTests PRIVATE
+            server_engine/communication/console/console_input_windows.cpp
+        )
+        target_link_libraries(ServerEngineV4CommunicationRegressionTests PRIVATE
+            ws2_32
+        )
+    else()
+        target_sources(ServerEngineV4CommunicationRegressionTests PRIVATE
+            server_engine/communication/console/console_input_posix.cpp
+        )
+        target_link_libraries(ServerEngineV4CommunicationRegressionTests PRIVATE
+            Threads::Threads
+        )
+    endif()
+
+    target_include_directories(ServerEngineV4CommunicationRegressionTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    if(MSVC)
+        target_compile_options(ServerEngineV4CommunicationRegressionTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4CommunicationRegressionTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(
+        NAME communication_regressions
+        COMMAND ServerEngineV4CommunicationRegressionTests
+    )
 
     add_executable(ServerEngineV4TcpJsonProtocolTests
         tests/tcp_json_protocol_tests.cpp
