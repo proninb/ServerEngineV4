@@ -772,9 +772,18 @@ private:
                     invalid_input;
             }
 
+            const auto base_handle =
+                project.find_type(
+                    base_record_value.type);
+
+            if (!base_handle) {
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
             const auto materialized =
                 canonical_record(
-                    base_record_value.type,
+                    base_handle,
                     base +
                         static_cast<std::size_t>(
                             offset));
@@ -1493,9 +1502,18 @@ private:
                     invalid_input;
             }
 
+            const auto base_handle =
+                project.find_type(
+                    base_record_value.type);
+
+            if (!base_handle) {
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
             const auto materialized =
                 normal_record(
-                    base_record_value.type,
+                    base_handle,
                     base +
                         static_cast<std::size_t>(
                             offset),

@@ -262,13 +262,21 @@ struct resolved_member final {
             return member_search_result::invalid;
         }
 
+        const auto base_handle =
+            project.find_type(
+                base.type);
+
+        if (!base_handle) {
+            return member_search_result::invalid;
+        }
+
         resolved_member candidate;
 
         const auto found =
             find_member_recursive(
                 project,
                 bindings,
-                base.type,
+                base_handle,
                 name,
                 depth + 1,
                 candidate);
@@ -865,8 +873,7 @@ read_runtime_system_value(
 
         if (!qualified_identity_name(
                 project,
-                project.identity(
-                    base.type),
+                base.type,
                 base_name,
                 identity_scratch)) {
 

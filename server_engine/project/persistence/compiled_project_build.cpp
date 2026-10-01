@@ -1223,11 +1223,20 @@ encode_build_compiled_project_image(
                     invalid_state;
             }
 
-            const auto dense_base_type =
-                projection.remap(
+            const auto base_lineage =
+                G.find_type(
                     base_value.type);
 
-            if (!dense_base_type) {
+            const auto dense_base_type =
+                projection.remap(
+                    base_lineage);
+
+            if (!base_value.type ||
+                base_value.type.kind() !=
+                    identity_kind::type ||
+                !base_lineage ||
+                !dense_base_type) {
+
                 return compiled_project_image_result::
                     invalid_state;
             }
@@ -1240,7 +1249,7 @@ encode_build_compiled_project_image(
 
             build_write_u32(
                 record,
-                dense_base_type.value());
+                base_value.type.value());
 
             record[4] =
                 static_cast<std::byte>(

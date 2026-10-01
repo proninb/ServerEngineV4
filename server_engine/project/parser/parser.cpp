@@ -2646,7 +2646,7 @@ private:
 
             try {
                 bases.push_back({
-                    base,
+                    base_identity,
                     base_access,
                     0,
                     0,
@@ -2715,10 +2715,16 @@ private:
         bool constructor_seen = false;
         bool declares_virtual = false;
 
+        const auto base_handle =
+            !bases.empty()
+            ? G.find_type(
+                bases.front().type)
+            : type_handle{};
+
         const bool base_polymorphic =
-            !bases.empty() &&
+            base_handle &&
             record_polymorphic(
-                bases.front().type);
+                base_handle);
 
         const auto contextual =
             [&](std::string_view value) noexcept {

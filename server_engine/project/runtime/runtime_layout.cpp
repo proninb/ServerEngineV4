@@ -645,9 +645,18 @@ private:
                 if (!project.base_at(
                         base_begin +
                             local,
-                        base) ||
-                    !base.type ||
-                    base.type.value() >
+                        base)) {
+
+                    return runtime_layout_result::
+                        invalid_input;
+                }
+
+                const auto base_handle =
+                    project.find_type(
+                        base.type);
+
+                if (!base_handle ||
+                    base_handle.value() >
                         output.type_slots.size()) {
 
                     return runtime_layout_result::
@@ -661,7 +670,7 @@ private:
 
                 auto& mark =
                     base_marks[
-                        base.type.value() - 1];
+                        base_handle.value() - 1];
 
                 if (mark == base_mark) {
                     return runtime_layout_result::
@@ -712,8 +721,12 @@ private:
                     unsupported_type;
             }
 
-            if (!base.type ||
-                base.type.value() >
+            const auto base_handle =
+                project.find_type(
+                    base.type);
+
+            if (!base_handle ||
+                base_handle.value() >
                     output.type_slots.size()) {
 
                 return runtime_layout_result::
@@ -724,7 +737,7 @@ private:
 
             const auto resolved =
                 resolve_record(
-                    base.type,
+                    base_handle,
                     base_layout);
 
             if (resolved !=
@@ -733,11 +746,10 @@ private:
                 return resolved;
             }
 
-            if (!base.type ||
-                base.type.value() >
+            if (base_handle.value() >
                     output.type_slots.size() ||
                 output.type_slots[
-                    base.type.value() - 1].
+                    base_handle.value() - 1].
                         empty_record) {
 
                 return runtime_layout_result::
@@ -762,7 +774,7 @@ private:
             type_entry base_type;
 
             if (!project.type(
-                    base.type,
+                    base_handle,
                     base_type) ||
                 !base_type.defined() ||
                 base_type.kind !=
@@ -913,11 +925,20 @@ private:
                         unsupported_type;
                 }
 
+                const auto base_handle =
+                    project.find_type(
+                        base.type);
+
+                if (!base_handle) {
+                    return runtime_layout_result::
+                        invalid_input;
+                }
+
                 runtime_value_layout base_layout;
 
                 const auto resolved =
                     resolve_record(
-                        base.type,
+                        base_handle,
                         base_layout);
 
                 if (resolved !=
@@ -988,10 +1009,17 @@ private:
                     unsupported_type;
             }
 
+            const auto primary_handle =
+                project.find_type(
+                    primary.type);
+
             const auto primary_resolved =
-                resolve_record(
-                    primary.type,
-                    primary_layout);
+                primary_handle
+                ? resolve_record(
+                    primary_handle,
+                    primary_layout)
+                : runtime_layout_result::
+                    invalid_input;
 
             if (primary_resolved !=
                     runtime_layout_result::success ||
@@ -1029,9 +1057,19 @@ private:
                 if (!project.base_at(
                         base_begin +
                             local,
-                        base) ||
+                        base)) {
+
+                    return runtime_layout_result::
+                        invalid_input;
+                }
+
+                const auto base_handle =
+                    project.find_type(
+                        base.type);
+
+                if (!base_handle ||
                     !project.type(
-                        base.type,
+                        base_handle,
                         base_type) ||
                     !base_type.defined()) {
 
@@ -1064,9 +1102,19 @@ private:
                 if (!project.base_at(
                         base_begin +
                             local,
-                        base) ||
+                        base)) {
+
+                    return runtime_layout_result::
+                        invalid_input;
+                }
+
+                const auto base_handle =
+                    project.find_type(
+                        base.type);
+
+                if (!base_handle ||
                     !project.type(
-                        base.type,
+                        base_handle,
                         base_type) ||
                     !base_type.defined()) {
 

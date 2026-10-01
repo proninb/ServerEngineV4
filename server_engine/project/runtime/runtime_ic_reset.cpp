@@ -244,13 +244,21 @@ find_binary_member_recursive(
             return binary_member_search_result::invalid;
         }
 
+        const auto base_handle =
+            project.find_type(
+                base.type);
+
+        if (!base_handle) {
+            return binary_member_search_result::invalid;
+        }
+
         binary_resolved_member candidate;
 
         const auto found =
             find_binary_member_recursive(
                 project,
                 bindings,
-                base.type,
+                base_handle,
                 name,
                 depth + 1,
                 candidate);

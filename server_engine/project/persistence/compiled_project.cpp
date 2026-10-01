@@ -1893,7 +1893,7 @@ bool compiled_project_view::base_at(
             base_record_size;
 
     output.type =
-        type_from_raw(
+        identity_from_raw(
             read_u32(record));
 
     output.access =
@@ -1911,6 +1911,10 @@ bool compiled_project_view::base_at(
 
     return
         output.type &&
+        output.type.kind() ==
+            identity_kind::type &&
+        find_type(
+            output.type) &&
         valid_member_access(
             output.access) &&
         (output.flags &
@@ -3837,16 +3841,22 @@ compiled_project_view::verify_contents() const noexcept {
                     static_cast<std::size_t>(
                         global),
                     base) ||
-                base.type == handle) {
+                base.type ==
+                    identity_value) {
 
                 return compiled_project_image_result::
                     invalid_image;
             }
 
+            const auto base_handle =
+                find_type(
+                    base.type);
+
             type_entry base_type;
 
-            if (!type(
-                    base.type,
+            if (!base_handle ||
+                !type(
+                    base_handle,
                     base_type) ||
                 !base_type.defined() ||
                 base_type.kind !=
@@ -3860,7 +3870,7 @@ compiled_project_view::verify_contents() const noexcept {
 
             const auto base_slot =
                 static_cast<std::size_t>(
-                    base.type.value() - 1);
+                    base_handle.value() - 1);
 
             if (direct_base_seen[
                     base_slot] ==
@@ -4092,9 +4102,18 @@ compiled_project_view::verify_contents() const noexcept {
 
             ++frame.next;
 
+            const auto base_handle =
+                find_type(
+                    base.type);
+
+            if (!base_handle) {
+                return compiled_project_image_result::
+                    invalid_image;
+            }
+
             const auto base_slot =
                 static_cast<std::size_t>(
-                    base.type.value() - 1);
+                    base_handle.value() - 1);
 
             if (inheritance_state[
                     base_slot] == 1) {
@@ -4113,7 +4132,7 @@ compiled_project_view::verify_contents() const noexcept {
                 base_slot] = 1;
 
             inheritance_stack.push_back({
-                base.type,
+                base_handle,
                 0,
             });
         }
@@ -6202,8 +6221,14 @@ encode_compiled_project_image(const string_table &strings,
             const auto& value =
                 base_entries[index];
 
-            if (!G.contains(
-                    value.type) ||
+            const auto base_type =
+                G.find_type(
+                    value.type);
+
+            if (!value.type ||
+                value.type.kind() !=
+                    identity_kind::type ||
+                !base_type ||
                 !valid_member_access(
                     value.access) ||
                 (value.flags &

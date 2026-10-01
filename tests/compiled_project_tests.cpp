@@ -243,7 +243,7 @@ void test_class_abi_persistence(
     const std::array<base_record, 1>
         b_bases{{
             {
-                a,
+                a_identity,
                 graph_member_access::public_access,
                 0,
                 0,
@@ -366,7 +366,8 @@ void test_class_abi_persistence(
         view.base_at(
             persisted_b.bases.begin,
             persisted_base) &&
-        persisted_base.type == a &&
+        persisted_base.type ==
+            a_identity &&
         persisted_base.access ==
             graph_member_access::
                 public_access &&
@@ -2087,7 +2088,7 @@ void test_class_abi_multiple_base_persistence(
     const std::array<base_record, 1>
         b_bases{{
             {
-                a,
+                a_identity,
                 graph_member_access::public_access,
                 0,
                 0,
@@ -2110,7 +2111,7 @@ void test_class_abi_multiple_base_persistence(
     const std::array<base_record, 1>
         c_bases{{
             {
-                b,
+                b_identity,
                 graph_member_access::public_access,
                 0,
                 0,
@@ -2133,13 +2134,13 @@ void test_class_abi_multiple_base_persistence(
     const std::array<base_record, 2>
         d_bases{{
             {
-                a,
+                a_identity,
                 graph_member_access::public_access,
                 0,
                 0,
             },
             {
-                b,
+                b_identity,
                 graph_member_access::protected_access,
                 0,
                 0,
@@ -2220,8 +2221,8 @@ void test_class_abi_multiple_base_persistence(
                     persisted_d.bases.begin) +
                     1,
                 d_base1) &&
-            d_base0.type == a &&
-            d_base1.type == b,
+            d_base0.type == a_identity &&
+            d_base1.type == b_identity,
             "compiled G preserves ordered 0..N direct bases")) {
 
         return;
@@ -2244,7 +2245,7 @@ void test_class_abi_multiple_base_persistence(
             offsetof(
                 base_record,
                 type),
-        c.value());
+        c_identity.value());
 
     rewrite_section_crc(
         cyclic,
@@ -2275,7 +2276,7 @@ void test_class_abi_multiple_base_persistence(
             offsetof(
                 base_record,
                 type),
-        a.value());
+        a_identity.value());
 
     rewrite_section_crc(
         duplicate,
@@ -8702,19 +8703,19 @@ void test_windows_class_abi_runtime(
 
     const std::array<base_record, 3> d_bases{{
         {
-            a,
+            fixture.G.identity(a),
             graph_member_access::public_access,
             0,
             0,
         },
         {
-            b,
+            fixture.G.identity(b),
             graph_member_access::public_access,
             0,
             0,
         },
         {
-            c,
+            fixture.G.identity(c),
             graph_member_access::public_access,
             0,
             0,
@@ -8775,7 +8776,8 @@ void test_windows_class_abi_runtime(
 
     const std::array<base_record, 1> reference_bases{{
         {
-            reference_base,
+            fixture.G.identity(
+                reference_base),
             graph_member_access::public_access,
             0,
             0,
@@ -8826,7 +8828,8 @@ void test_windows_class_abi_runtime(
 
     const std::array<base_record, 1> own_vfptr_bases{{
         {
-            own_vfptr_base,
+            fixture.G.identity(
+                own_vfptr_base),
             graph_member_access::public_access,
             0,
             0,
@@ -9253,7 +9256,8 @@ void test_windows_class_abi_runtime(
                 offsetof(
                     base_record,
                     type),
-            a.value());
+            fixture.G.identity(
+                a).value());
 
         rewrite_section_crc(
             duplicate,
@@ -9290,7 +9294,8 @@ void test_windows_class_abi_runtime(
                 offsetof(
                     base_record,
                     type),
-            d.value());
+            fixture.G.identity(
+                d).value());
 
         rewrite_section_crc(
             cyclic,
@@ -9436,7 +9441,7 @@ void test_windows_class_abi_runtime(
 
     const std::array<base_record, 1> empty_bases{{
         {
-            empty_base,
+            empty_identity,
             graph_member_access::public_access,
             0,
             0,
@@ -10074,7 +10079,7 @@ void test_build_lineage_overlays(
     const std::array<base_record, 1>
         replacement_bases{{
             {
-                build_base,
+                build_base_identity,
                 graph_member_access::public_access,
                 0,
                 0,
@@ -10114,7 +10119,7 @@ void test_build_lineage_overlays(
             0,
             inherited_base) &&
         inherited_base.type ==
-            build_base &&
+            build_base_identity &&
         inherited_base.access ==
             graph_member_access::public_access,
         "BUILD graph_delta preserves sparse base and inherited polymorphism");

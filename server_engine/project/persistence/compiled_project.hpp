@@ -27,7 +27,7 @@ class graph_delta;
 class graph_dense_projection;
 class source_map_overlay_view;
 
-inline constexpr std::uint32_t compiled_project_format_version = 13;
+inline constexpr std::uint32_t compiled_project_format_version = 14;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;

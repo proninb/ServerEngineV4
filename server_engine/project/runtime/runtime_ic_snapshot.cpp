@@ -346,10 +346,19 @@ walk_record(
                 invalid_runtime;
         }
 
+        const auto base_handle =
+            state.project.find_type(
+                base.type);
+
+        if (!base_handle) {
+            return runtime_ic_snapshot_result::
+                invalid_runtime;
+        }
+
         const auto result =
             walk_record(
                 state,
-                base.type,
+                base_handle,
                 location,
                 true,
                 depth + 1);
@@ -1018,10 +1027,19 @@ native_walk_record(
             return runtime_ic_snapshot_result::invalid_runtime;
         }
 
+        const auto base_handle =
+            state.project.find_type(
+                base.type);
+
+        if (!base_handle) {
+            return runtime_ic_snapshot_result::
+                invalid_runtime;
+        }
+
         const auto result =
             native_walk_record(
                 state,
-                base.type,
+                base_handle,
                 location,
                 true,
                 depth + 1);

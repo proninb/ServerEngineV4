@@ -228,7 +228,7 @@ inline constexpr std::uint8_t graph_base_flag_mask =
     graph_base_virtual;
 
 struct base_record final {
-    type_handle type{};
+    identity_ref type{};
     graph_member_access access =
         graph_member_access::public_access;
     std::uint8_t flags = 0;

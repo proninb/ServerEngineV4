@@ -454,6 +454,16 @@ server_status graph::define_record(
         return server_status::project_configuration_invalid;
     }
 
+    const auto type_identity =
+        identity(type);
+
+    if (!type_identity ||
+        type_identity.kind() !=
+            identity_kind::type) {
+
+        return server_status::project_configuration_invalid;
+    }
+
     bool polymorphic_value =
         declares_virtual;
 
@@ -464,11 +474,18 @@ server_status graph::define_record(
         const auto& base =
             bases_value[index];
 
+        const auto base_handle =
+            find_type(
+                base.type);
+
         const auto* base_entry =
-            find(base.type);
+            find(base_handle);
 
         if (!base.type ||
-            base.type == type ||
+            base.type.kind() !=
+                identity_kind::type ||
+            base.type == type_identity ||
+            !base_handle ||
             base_entry == nullptr ||
             !base_entry->defined() ||
             base_entry->kind !=

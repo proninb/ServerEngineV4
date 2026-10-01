@@ -1724,6 +1724,18 @@ server_status graph_delta::define_record(
             project_configuration_invalid;
     }
 
+    const auto type_identity =
+        identity(
+            type_value);
+
+    if (!type_identity ||
+        type_identity.kind() !=
+            identity_kind::type) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
     bool polymorphic_value =
         declares_virtual;
 
@@ -1734,13 +1746,20 @@ server_status graph_delta::define_record(
         const auto& base_value =
             bases_value[index];
 
+        const auto base_handle =
+            find_type(
+                base_value.type);
+
         type_entry base_type;
 
         if (!base_value.type ||
+            base_value.type.kind() !=
+                identity_kind::type ||
             base_value.type ==
-                type_value ||
+                type_identity ||
+            !base_handle ||
             !type(
-                base_value.type,
+                base_handle,
                 base_type) ||
             !base_type.defined() ||
             base_type.kind !=
@@ -5567,12 +5586,18 @@ server_status graph_dense_projection::prepare(
 
             base_record base;
 
-            if (!graph.base(
+            const auto base_type =
+                graph.base(
                     lineage,
                     local,
-                    base) ||
+                    base)
+                ? graph.find_type(
+                    base.type)
+                : type_handle{};
+
+            if (!base_type ||
                 !remap(
-                    base.type)) {
+                    base_type)) {
 
                 reset();
                 return server_status::
