@@ -18,6 +18,8 @@
 
 namespace cw::server {
 
+class compiled_project_view;
+
 struct assign_record final {
     std::uint32_t source_offset = 0;
     std::uint32_t source_length = 0;
@@ -93,6 +95,57 @@ private:
     std::vector<assign_record> entries;
     std::vector<file_id> files;
     std::vector<char> bytes;
+
+};
+
+// BUILD-only ordered Assign candidate. OLD records remain mmap-backed;
+// selected file_id groups are replaced by a sparse assign_table.
+class assign_overlay_view final {
+public:
+    using visitor_function =
+        server_status (*)(
+            void* context,
+            file_id file,
+            std::string_view source,
+            std::string_view target) noexcept;
+
+    [[nodiscard]] server_status bind(
+        const compiled_project_view& baseline,
+        const assign_table& replacements,
+        std::span<const file_id> replaced_files) noexcept;
+
+    void reset() noexcept;
+
+    [[nodiscard]] bool valid() const noexcept {
+        return baseline != nullptr &&
+            replacements != nullptr;
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept {
+        return record_count;
+    }
+
+    [[nodiscard]] std::size_t byte_size() const noexcept {
+        return bytes_count;
+    }
+
+    [[nodiscard]] std::size_t replaced_file_count() const noexcept {
+        return replaced.size();
+    }
+
+    [[nodiscard]] server_status visit(
+        void* context,
+        visitor_function visitor) const noexcept;
+
+private:
+    [[nodiscard]] bool replaced_file(
+        file_id file) const noexcept;
+
+    const compiled_project_view* baseline = nullptr;
+    const assign_table* replacements = nullptr;
+    std::vector<file_id> replaced;
+    std::size_t record_count = 0;
+    std::size_t bytes_count = 0;
 };
 
 }

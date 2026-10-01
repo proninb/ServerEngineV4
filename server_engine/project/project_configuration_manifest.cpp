@@ -294,7 +294,8 @@ public:
         project_configuration_manifest& output,
         file_context* files,
         preprocessor_configuration& preprocessor,
-        std::vector<file_id>* semantic_roots)
+        std::vector<file_id>* semantic_roots,
+        std::vector<file_id>* assign_roots)
         : root_project_path(
               root_project_path),
           operation(operation),
@@ -302,7 +303,8 @@ public:
           output(output),
           files(files),
           preprocessor(preprocessor),
-          semantic_roots(semantic_roots) {
+          semantic_roots(semantic_roots),
+          assign_roots(assign_roots) {
 
         visited.reserve(32);
         active.reserve(16);
@@ -316,6 +318,10 @@ public:
 
         if (semantic_roots != nullptr) {
             semantic_roots->clear();
+        }
+
+        if (assign_roots != nullptr) {
+            assign_roots->clear();
         }
 
         const auto root_result =
@@ -357,6 +363,10 @@ public:
                 semantic_roots->clear();
             }
 
+            if (assign_roots != nullptr) {
+                assign_roots->clear();
+            }
+
             return status;
         }
 
@@ -384,12 +394,32 @@ public:
                         semantic_roots->end()),
                     semantic_roots->end());
             }
+
+            if (assign_roots != nullptr) {
+                std::sort(
+                    assign_roots->begin(),
+                    assign_roots->end(),
+                    [](file_id left, file_id right) noexcept {
+                        return left.value() <
+                            right.value();
+                    });
+
+                assign_roots->erase(
+                    std::unique(
+                        assign_roots->begin(),
+                        assign_roots->end()),
+                    assign_roots->end());
+            }
         }
         catch (...) {
             output = {};
 
             if (semantic_roots != nullptr) {
                 semantic_roots->clear();
+            }
+
+            if (assign_roots != nullptr) {
+                assign_roots->clear();
             }
 
             return server_status::io_error;
@@ -829,6 +859,19 @@ private:
                         return server_status::io_error;
                     }
                 }
+
+                if (assign_roots != nullptr &&
+                    dependency.kind ==
+                        file_kind::assign) {
+
+                    try {
+                        assign_roots->push_back(
+                            child_file);
+                    }
+                    catch (...) {
+                        return server_status::io_error;
+                    }
+                }
             }
 
             if (dependency.kind !=
@@ -976,6 +1019,7 @@ private:
     file_context* files = nullptr;
     preprocessor_configuration& preprocessor;
     std::vector<file_id>* semantic_roots = nullptr;
+    std::vector<file_id>* assign_roots = nullptr;
     std::unordered_set<filesystem_path_key, filesystem_path_key_hash> visited;
     std::unordered_set<filesystem_path_key, filesystem_path_key_hash> active;
     std::unordered_set<filesystem_path_key, filesystem_path_key_hash> unique_inputs;
@@ -1016,6 +1060,7 @@ server_status compose_project_configuration_manifest(
         output,
         nullptr,
         preprocessor,
+        nullptr,
         nullptr};
 
     return composer.compose();
@@ -1028,7 +1073,8 @@ server_status compose_project_configuration(
     project_configuration_manifest& manifest,
     file_context& files,
     preprocessor_configuration& preprocessor,
-    std::vector<file_id>* semantic_roots) {
+    std::vector<file_id>* semantic_roots,
+    std::vector<file_id>* assign_roots) {
 
     manifest_composer composer{
         root_project_path,
@@ -1037,7 +1083,8 @@ server_status compose_project_configuration(
         manifest,
         &files,
         preprocessor,
-        semantic_roots};
+        semantic_roots,
+        assign_roots};
 
     return composer.compose();
 }

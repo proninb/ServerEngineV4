@@ -3127,6 +3127,189 @@ void test_object_initialization_persistence_runtime(
 }
 
 
+void test_assign_overlay(
+    test_state& tests) {
+
+    compiled_fixture fixture;
+
+    if (!build_fixture(
+            tests,
+            fixture)) {
+
+        return;
+    }
+
+    compiled_test_image image;
+
+    if (!tests.expect(
+            build_test_compiled_image(
+                fixture,
+                image) ==
+                compiled_project_image_result::
+                    success,
+            "prepare Assign overlay baseline")) {
+
+        return;
+    }
+
+    compiled_project_view baseline;
+
+    if (!tests.expect(
+            baseline.bind(
+                image.bytes) ==
+                    compiled_project_image_result::
+                        success &&
+            baseline.assign_count() == 4,
+            "bind Assign overlay baseline")) {
+
+        return;
+    }
+
+    struct collected_assigns final {
+        std::vector<file_id> files;
+        std::vector<std::string> sources;
+        std::vector<std::string> targets;
+    };
+
+    const auto visitor =
+        [](void* context,
+           file_id file,
+           std::string_view source,
+           std::string_view target) noexcept
+        -> server_status {
+
+            auto& output =
+                *static_cast<
+                    collected_assigns*>(
+                        context);
+
+            try {
+                output.files.push_back(
+                    file);
+
+                output.sources.emplace_back(
+                    source);
+
+                output.targets.emplace_back(
+                    target);
+
+                return server_status::success;
+            }
+            catch (...) {
+                return server_status::io_error;
+            }
+        };
+
+    {
+        assign_table replacements;
+
+        tests.expect(
+            succeeded(
+                replacements.add(
+                    file_id{5},
+                    "replacement.source",
+                    "replacement.target")),
+            "prepare replacement Assign group");
+
+        const std::array<file_id, 1>
+            replaced{file_id{5}};
+
+        assign_overlay_view overlay;
+        collected_assigns values;
+
+        tests.expect(
+            succeeded(
+                overlay.bind(
+                    baseline,
+                    replacements,
+                    replaced)) &&
+            overlay.size() == 1 &&
+            overlay.byte_size() ==
+                std::string_view{
+                    "replacement.source"}.size() +
+                std::string_view{
+                    "replacement.target"}.size() &&
+            succeeded(
+                overlay.visit(
+                    &values,
+                    visitor)) &&
+            values.files.size() == 1 &&
+            values.files[0] ==
+                file_id{5} &&
+            values.sources[0] ==
+                "replacement.source" &&
+            values.targets[0] ==
+                "replacement.target",
+            "changed Assign file atomically replaces all OLD records");
+    }
+
+    {
+        assign_table replacements;
+
+        const std::array<file_id, 1>
+            replaced{file_id{5}};
+
+        assign_overlay_view overlay;
+        collected_assigns values;
+
+        tests.expect(
+            succeeded(
+                overlay.bind(
+                    baseline,
+                    replacements,
+                    replaced)) &&
+            overlay.size() == 0 &&
+            overlay.byte_size() == 0 &&
+            succeeded(
+                overlay.visit(
+                    &values,
+                    visitor)) &&
+            values.files.empty(),
+            "removed or empty Assign file removes OLD group");
+    }
+
+    {
+        assign_table replacements;
+
+        tests.expect(
+            succeeded(
+                replacements.add(
+                    file_id{6},
+                    "new.source",
+                    "new.target")),
+            "prepare appended Assign group");
+
+        const std::array<file_id, 1>
+            replaced{file_id{6}};
+
+        assign_overlay_view overlay;
+        collected_assigns values;
+
+        tests.expect(
+            succeeded(
+                overlay.bind(
+                    baseline,
+                    replacements,
+                    replaced)) &&
+            overlay.size() == 5 &&
+            succeeded(
+                overlay.visit(
+                    &values,
+                    visitor)) &&
+            values.files.size() == 5 &&
+            values.files[0] ==
+                file_id{5} &&
+            values.files[3] ==
+                file_id{5} &&
+            values.files[4] ==
+                file_id{6} &&
+            values.sources[4] ==
+                "new.source",
+            "unaffected mmap Assign groups stay ordered before appended replacement group");
+    }
+}
+
+
 void test_graph_dense_projection(
     test_state& tests) {
 
@@ -10198,6 +10381,9 @@ int main() {
         test_source_map_provenance(tests, fixture);
 
         test_object_initialization_persistence_runtime(
+            tests);
+
+        test_assign_overlay(
             tests);
 
         test_graph_dense_projection(

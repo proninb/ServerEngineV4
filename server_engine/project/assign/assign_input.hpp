@@ -12,6 +12,7 @@
 #include "../../server_status.hpp"
 
 #include <cstdint>
+#include <span>
 #include <string_view>
 
 namespace cw::server {
@@ -26,8 +27,18 @@ struct assign_parse_failure final {
 [[nodiscard]] server_status materialize_assign_inputs(
     file_context& files) noexcept;
 
+[[nodiscard]] server_status materialize_assign_inputs(
+    file_context& files,
+    std::span<const file_id> selected) noexcept;
+
 [[nodiscard]] server_status parse_assign_inputs(
     const file_context& files,
+    assign_table& output,
+    assign_parse_failure* failure = nullptr) noexcept;
+
+[[nodiscard]] server_status parse_assign_inputs(
+    const file_context& files,
+    std::span<const file_id> selected,
     assign_table& output,
     assign_parse_failure* failure = nullptr) noexcept;
 

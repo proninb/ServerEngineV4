@@ -63,6 +63,8 @@ public:
     graph_delta graph_changes;
     source_map_delta source_changes;
     source_map_overlay_view source_candidate;
+    assign_table assign_changes;
+    assign_overlay_view assign_candidate;
 
     preprocessor_configuration preprocessor;
 };

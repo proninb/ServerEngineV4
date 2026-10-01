@@ -6,6 +6,7 @@
 #include "runtime/project_runtime.hpp"
 #include "project_configuration_loader.hpp"
 #include "construction/execution_lanes.hpp"
+#include "assign/assign_input.hpp"
 #include "frontend/source_discovery.hpp"
 #include "parser/parser.hpp"
 #include "project_configuration_manifest_store.hpp"
@@ -330,10 +331,16 @@ void append_file_id_difference(
     }
 }
 
+enum class configuration_root_selection : std::uint8_t {
+    semantic,
+    assign,
+};
+
 [[nodiscard]] server_status collect_persisted_configuration_roots(
     const std::filesystem::path& root_project_path,
     const project_configuration_manifest& manifest,
     const source_save_view& source,
+    configuration_root_selection selection,
     std::vector<file_id>& roots) noexcept {
 
     roots.clear();
@@ -456,11 +463,18 @@ void append_file_id_difference(
                         project_artifact_invalid;
                 }
 
-                if (dependency_state.kind ==
-                        file_kind::header ||
-                    dependency_state.kind ==
-                        file_kind::source) {
+                const auto selected =
+                    selection ==
+                        configuration_root_selection::
+                            semantic
+                    ? dependency_state.kind ==
+                            file_kind::header ||
+                      dependency_state.kind ==
+                            file_kind::source
+                    : dependency_state.kind ==
+                        file_kind::assign;
 
+                if (selected) {
                     roots.push_back(
                         dependency);
                 }
@@ -813,6 +827,12 @@ server_status build_project(
     std::vector<file_id>
         current_configuration_roots;
 
+    std::vector<file_id>
+        old_assign_roots;
+
+    std::vector<file_id>
+        current_assign_roots;
+
     bool configuration_identity_changed = false;
     bool preprocessor_changed = false;
     bool preprocessor_loaded = false;
@@ -830,7 +850,8 @@ server_status build_project(
                 context.manifest,
                 context.files,
                 context.preprocessor,
-                &current_configuration_roots);
+                &current_configuration_roots,
+                &current_assign_roots);
 
         if (!succeeded(composed)) {
             return composed;
@@ -848,6 +869,8 @@ server_status build_project(
                     project_path,
                     committed_manifest,
                     context.source,
+                    configuration_root_selection::
+                        semantic,
                     old_configuration_roots);
 
             if (!succeeded(
@@ -863,6 +886,31 @@ server_status build_project(
                         .build());
 
                 return old_roots_collected;
+            }
+
+            const auto old_assign_collected =
+                collect_persisted_configuration_roots(
+                    project_path,
+                    committed_manifest,
+                    context.source,
+                    configuration_root_selection::
+                        assign,
+                    old_assign_roots);
+
+            if (!succeeded(
+                    old_assign_collected)) {
+
+                diagnostics.emit(
+                    diagnostic(
+                        diagnostics::
+                            project_source_save_invalid,
+                        operation)
+                        .file(layout.source_save)
+                        .detail(
+                            "Committed Project composition could not recover OLD Assign roots from SourceSave")
+                        .build());
+
+                return old_assign_collected;
             }
 
             preprocessor_changed =
@@ -1059,6 +1107,69 @@ server_status build_project(
         return server_status::io_error;
     }
 
+    std::vector<file_id>
+        assign_replacement_roots;
+
+    std::vector<file_id>
+        assign_parse_roots;
+
+    try {
+        for (const auto file :
+             semantic_changed) {
+
+            if (context.files.kind(file) ==
+                file_kind::assign) {
+
+                assign_replacement_roots.push_back(
+                    file);
+            }
+        }
+
+        if (configuration_identity_changed) {
+            append_file_id_difference(
+                old_assign_roots,
+                current_assign_roots,
+                assign_replacement_roots);
+
+            append_file_id_difference(
+                current_assign_roots,
+                old_assign_roots,
+                assign_replacement_roots);
+        }
+
+        normalize_file_ids(
+            assign_replacement_roots);
+
+        for (const auto root :
+             assign_replacement_roots) {
+
+            const auto current =
+                configuration_identity_changed
+                ? contains_file_id(
+                    current_assign_roots,
+                    root)
+                : true;
+
+            if (!current) {
+                continue;
+            }
+
+            if (!context.files.contains(root) ||
+                context.files.kind(root) !=
+                    file_kind::assign) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            assign_parse_roots.push_back(
+                root);
+        }
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+
     if (!semantic_replay_roots.empty() &&
         !preprocessor_loaded) {
 
@@ -1127,6 +1238,68 @@ server_status build_project(
                 context.compiled_mapping),
             context.compiled,
             output);
+    }
+
+    if (!assign_parse_roots.empty()) {
+        const auto materialized =
+            materialize_assign_inputs(
+                context.files,
+                assign_parse_roots);
+
+        if (!succeeded(materialized)) {
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::
+                        project_assign_invalid,
+                    operation)
+                    .detail(
+                        "BUILD could not materialize selected Assign replacement inputs")
+                    .build());
+
+            return materialized;
+        }
+
+        assign_parse_failure
+            assign_failure;
+
+        const auto parsed =
+            parse_assign_inputs(
+                context.files,
+                assign_parse_roots,
+                context.assign_changes,
+                &assign_failure);
+
+        if (!succeeded(parsed)) {
+            if (assign_failure.file) {
+                const source_range range{
+                    assign_failure.offset,
+                    assign_failure.length,
+                };
+
+                const auto emitted =
+                    emit_build_source_diagnostic(
+                        context.files,
+                        assign_failure.file,
+                        range,
+                        diagnostics::
+                            project_assign_invalid,
+                        assign_failure.detail.empty()
+                            ? std::string_view{
+                                "Assign input is invalid"}
+                            : assign_failure.detail,
+                        operation,
+                        diagnostics);
+
+                if (!succeeded(emitted)) {
+                    return emitted;
+                }
+            }
+
+            return parsed;
+        }
+    }
+    else {
+        context.assign_changes.clear();
     }
 
     const auto graph_bound =
@@ -1624,6 +1797,35 @@ server_status build_project(
         return source_candidate_bound;
     }
 
+    const auto assign_candidate_bound =
+        context.assign_candidate.bind(
+            context.compiled,
+            context.assign_changes,
+            assign_replacement_roots);
+
+    if (!succeeded(
+            assign_candidate_bound)) {
+
+        diagnostics.emit(
+            diagnostic(
+                assign_candidate_bound ==
+                        server_status::io_error
+                    ? diagnostics::
+                        project_build_incomplete
+                    : diagnostics::
+                        project_compiled_invalid,
+                operation)
+                .file(layout.compiled)
+                .detail(
+                    assign_candidate_bound ==
+                            server_status::io_error
+                        ? "BUILD could not allocate sparse Assign candidate state"
+                        : "Persisted Assign records and sparse replacements could not form one ordered BUILD candidate")
+                .build());
+
+        return assign_candidate_bound;
+    }
+
     std::string detail;
 
     try {
@@ -1794,13 +1996,25 @@ server_status build_project(
             std::to_string(
                 context.source_candidate.
                     added_root_count()) +
+            ", assign_replacement_roots=" +
+            std::to_string(
+                assign_replacement_roots.size()) +
+            ", assign_reparsed_roots=" +
+            std::to_string(
+                assign_parse_roots.size()) +
+            ", assign_candidate_records=" +
+            std::to_string(
+                context.assign_candidate.size()) +
+            ", assign_candidate_bytes=" +
+            std::to_string(
+                context.assign_candidate.byte_size()) +
             ", baseline_strings=" +
             std::to_string(
                 context.compiled.string_count()) +
             ", baseline_identities=" +
             std::to_string(
                 context.compiled.identity_count()) +
-            "; sparse semantic replay and OLD+replay Source Map overlay completed; final G/artifact publication is not implemented yet";
+            "; sparse semantic/Assign candidates completed; direct final artifact construction is not implemented yet";
     }
     catch (...) {
         return server_status::io_error;

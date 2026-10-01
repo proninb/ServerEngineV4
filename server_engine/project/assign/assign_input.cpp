@@ -47,6 +47,87 @@ public:
         : files(files) {
     }
 
+    [[nodiscard]] server_status run(
+        std::span<const file_id> selected) noexcept {
+
+        lane_capacity =
+            execution_lane_capacity();
+
+        if (lane_capacity == 0) {
+            return server_status::io_error;
+        }
+
+        lanes.reset(
+            new (std::nothrow)
+                assign_lane_state[
+                    lane_capacity]);
+
+        if (!lanes) {
+            return server_status::io_error;
+        }
+
+        std::size_t pending = 0;
+        file_id previous;
+
+        for (const auto file :
+             selected) {
+
+            if (!file ||
+                !files.contains(file) ||
+                files.kind(file) !=
+                    file_kind::assign ||
+                (previous &&
+                 file.value() <=
+                    previous.value())) {
+
+                return server_status::
+                    project_configuration_invalid;
+            }
+
+            previous =
+                file;
+
+            if (files.content_available(
+                    file)) {
+
+                continue;
+            }
+
+            auto& lane =
+                lanes[pending];
+
+            lane = {};
+
+            const auto prepared =
+                files.prepare_acquire(
+                    file,
+                    lane.job);
+
+            if (!succeeded(prepared)) {
+                return prepared;
+            }
+
+            ++pending;
+
+            if (pending != lane_capacity) {
+                continue;
+            }
+
+            const auto flushed =
+                flush(pending);
+
+            if (!succeeded(flushed)) {
+                return flushed;
+            }
+
+            pending = 0;
+        }
+
+        return pending == 0
+            ? server_status::success
+            : flush(pending);
+    }
+
     [[nodiscard]] server_status run() noexcept {
 
         lane_capacity =
@@ -410,6 +491,71 @@ server_status materialize_assign_inputs(
         files};
 
     return materializer.run();
+}
+
+server_status materialize_assign_inputs(
+    file_context& files,
+    std::span<const file_id> selected) noexcept {
+
+    assign_input_materializer materializer{
+        files};
+
+    return materializer.run(
+        selected);
+}
+
+server_status parse_assign_inputs(
+    const file_context& files,
+    std::span<const file_id> selected,
+    assign_table& output,
+    assign_parse_failure* failure) noexcept {
+
+    if (failure != nullptr) {
+        *failure = {};
+    }
+
+    output.clear();
+
+    file_id previous;
+
+    for (const auto file :
+         selected) {
+
+        if (!file ||
+            !files.contains(file) ||
+            files.kind(file) !=
+                file_kind::assign ||
+            (previous &&
+             file.value() <=
+                previous.value())) {
+
+            return server_status::
+                project_configuration_invalid;
+        }
+
+        previous =
+            file;
+
+        if (!files.content_available(
+                file)) {
+
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        const auto parsed =
+            parse_assign_file(
+                file,
+                files.content(file),
+                output,
+                failure);
+
+        if (!succeeded(parsed)) {
+            return parsed;
+        }
+    }
+
+    return server_status::success;
 }
 
 server_status parse_assign_inputs(

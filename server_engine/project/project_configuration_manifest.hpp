@@ -100,7 +100,8 @@ enum class project_configuration_manifest_verification : std::uint8_t {
     project_configuration_manifest& manifest,
     file_context& files,
     preprocessor_configuration& preprocessor,
-    std::vector<file_id>* semantic_roots = nullptr);
+    std::vector<file_id>* semantic_roots = nullptr,
+    std::vector<file_id>* assign_roots = nullptr);
 
 [[nodiscard]] server_status verify_project_configuration_manifest(
     const std::filesystem::path& root_project_path,
