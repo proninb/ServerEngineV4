@@ -184,11 +184,12 @@ Members are not duplicated in Source Map. A contributed type definition resolves
 to its members through G.
 
 File dependency topology and semantic source provenance are separate contracts.
-Parser/Semantic also records root-local semantic dependencies on lineage-stable
-type/object handles. Those dependency observations never enter the physical file
-DAG and are not part of the LOAD/runtime compiled semantic image. REBUILD derives
-their reverse root adjacency and persists it only in `source.bin` as BUILD
-acceleration state.
+Parser/Semantic also records root-local semantic dependencies as `identity_ref`
+values. A dependency describes semantic WHO and is therefore independent of
+Graph-local `type_handle` / `object_handle` placement. Those observations never
+enter the physical file DAG and are not part of the LOAD/runtime compiled semantic
+image. REBUILD derives their reverse root adjacency and persists it only in
+`source.bin` as BUILD acceleration state.
 
 
 ## One-G construction model

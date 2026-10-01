@@ -598,7 +598,7 @@ private:
 
         const auto dependency =
             sources.add_dependency(
-                object);
+                G.identity(object));
 
         if (!succeeded(dependency)) {
             return dependency;
@@ -1086,7 +1086,7 @@ private:
 
             const auto dependency =
                 sources.add_dependency(
-                    handle);
+                    identity);
 
             if (!succeeded(dependency)) {
                 return dependency;
@@ -2587,7 +2587,7 @@ private:
 
             const auto dependency =
                 sources.add_dependency(
-                    base);
+                    base_identity);
 
             if (!succeeded(dependency)) {
                 return dependency;
@@ -3512,7 +3512,7 @@ private:
 
         auto dependency =
             sources.add_dependency(
-                object);
+                object_identity);
 
         if (!succeeded(dependency)) {
             return dependency;
@@ -3682,7 +3682,7 @@ private:
 
                 dependency =
                     sources.add_dependency(
-                        record);
+                        G.identity(record));
 
                 if (!succeeded(dependency)) {
                     return dependency;

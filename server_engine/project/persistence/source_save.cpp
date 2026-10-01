@@ -42,10 +42,10 @@ constexpr std::array<std::byte, 8> magic{
     std::byte{'C'},
     std::byte{'0'},
     std::byte{'0'},
-    std::byte{'6'},
+    std::byte{'7'},
 };
 
-constexpr std::uint32_t format_version = 6;
+constexpr std::uint32_t format_version = 7;
 
 constexpr std::uint32_t current_member_flag =
     source_save_current_member_flag;
@@ -2670,7 +2670,7 @@ source_save_result prepare_build_source_save_layout(
     std::uint32_t semantic_dependency_count = 0;
     std::uint32_t initialization_target_count = 0;
 
-    const auto remap_dependency =
+    const auto persist_dependency =
         [&](source_dependency_ref dependency,
             source_dependency_ref& result) noexcept {
 
@@ -2680,47 +2680,39 @@ source_save_result prepare_build_source_save_layout(
                 return false;
             }
 
+            const auto identity =
+                identities.at_slot(
+                    dependency.slot());
+
+            if (!identity ||
+                identity.value() !=
+                    dependency.raw()) {
+
+                return false;
+            }
+
             if (dependency.kind() ==
                 source_dependency_kind::type) {
 
-                const auto lineage =
-                    G.type_at(
-                        static_cast<std::size_t>(
-                            dependency.slot() - 1));
+                if (!G.find_type(identity)) {
+                    return false;
+                }
+            }
+            else if (dependency.kind() ==
+                     source_dependency_kind::object) {
 
-                const auto dense =
-                    projection.remap(
-                        lineage);
-
-                result =
-                    source_dependency_ref::type(
-                        dense);
-
-                return static_cast<bool>(
-                    result);
+                if (!G.find_object(identity)) {
+                    return false;
+                }
+            }
+            else {
+                return false;
             }
 
-            if (dependency.kind() ==
-                source_dependency_kind::object) {
-
-                const auto lineage =
-                    G.object_at(
-                        static_cast<std::size_t>(
-                            dependency.slot() - 1));
-
-                const auto dense =
-                    projection.remap(
-                        lineage);
-
-                result =
-                    source_dependency_ref::object(
-                        dense);
-
-                return static_cast<bool>(
-                    result);
-            }
-
-            return false;
+            // identity_ref is already persistence-native semantic WHO.
+            // Graph-local handles must never remap this dependency.
+            result = dependency;
+            return true;
         };
 
     const auto insert_dependency =
@@ -2887,7 +2879,7 @@ source_save_result prepare_build_source_save_layout(
                     root,
                     index,
                     lineage) ||
-                !remap_dependency(
+                !persist_dependency(
                     lineage,
                     dense)) {
 
@@ -3777,7 +3769,7 @@ source_save_result encode_build_source_save_image(
         }
     }
 
-    const auto remap_dependency =
+    const auto persist_dependency =
         [&](source_dependency_ref dependency,
             source_dependency_ref& result) noexcept {
 
@@ -3787,37 +3779,39 @@ source_save_result encode_build_source_save_image(
                 return false;
             }
 
+            const auto identity =
+                identities.at_slot(
+                    dependency.slot());
+
+            if (!identity ||
+                identity.value() !=
+                    dependency.raw()) {
+
+                return false;
+            }
+
             if (dependency.kind() ==
                 source_dependency_kind::type) {
 
-                result =
-                    source_dependency_ref::type(
-                        projection.remap(
-                            G.type_at(
-                                static_cast<std::size_t>(
-                                    dependency.slot() -
-                                    1))));
+                if (!G.find_type(identity)) {
+                    return false;
+                }
+            }
+            else if (dependency.kind() ==
+                     source_dependency_kind::object) {
 
-                return static_cast<bool>(
-                    result);
+                if (!G.find_object(identity)) {
+                    return false;
+                }
+            }
+            else {
+                return false;
             }
 
-            if (dependency.kind() ==
-                source_dependency_kind::object) {
-
-                result =
-                    source_dependency_ref::object(
-                        projection.remap(
-                            G.object_at(
-                                static_cast<std::size_t>(
-                                    dependency.slot() -
-                                    1))));
-
-                return static_cast<bool>(
-                    result);
-            }
-
-            return false;
+            // identity_ref is already persistence-native semantic WHO.
+            // Graph-local handles must never remap this dependency.
+            result = dependency;
+            return true;
         };
 
     const auto reverse_slot =
@@ -3989,7 +3983,7 @@ source_save_result encode_build_source_save_image(
                             root,
                             index,
                             lineage) ||
-                        !remap_dependency(
+                        !persist_dependency(
                             lineage,
                             dense)) {
 
@@ -4202,7 +4196,7 @@ source_save_result encode_build_source_save_image(
                     root,
                     index,
                     lineage) ||
-                !remap_dependency(
+                !persist_dependency(
                     lineage,
                     dense)) {
 
@@ -5330,41 +5324,9 @@ source_save_result validate_source_save_image(
                             output.roots.begin;
             };
 
-        const auto target_valid =
-            [&](source_dependency_ref dependency)
-            noexcept {
-
-                if (dependency.kind() ==
-                    source_dependency_kind::type) {
-
-                    const auto slot =
-                        static_cast<std::size_t>(
-                            dependency.slot());
-
-                    return slot != 0 &&
-                        slot <=
-                            view.type_presence_count() &&
-                        view.type_presence(
-                            slot - 1).
-                                declarations != 0;
-                }
-
-                if (dependency.kind() ==
-                    source_dependency_kind::object) {
-
-                    const auto slot =
-                        static_cast<std::size_t>(
-                            dependency.slot());
-
-                    return slot != 0 &&
-                        slot <=
-                            view.object_presence_count() &&
-                        view.object_presence(
-                            slot - 1) != 0;
-                }
-
-                return false;
-            };
+        // source.bin v7 stores semantic dependencies as identity_ref raw
+        // values. Their live Graph target is a cross-artifact property and is
+        // verified against compiled.bin by verify_source_save_presence().
 
         const auto find_reverse_slot =
             [&](source_dependency_ref dependency,
@@ -5520,9 +5482,7 @@ source_save_result validate_source_save_image(
                     source_dependency_ref::from_raw(
                         raw_dependency);
 
-                if (!dependency ||
-                    !target_valid(
-                        dependency)) {
+                if (!dependency) {
 
                     return source_save_result::
                         invalid_image;
@@ -5625,10 +5585,8 @@ source_save_result validate_source_save_image(
 
             ++occupied_reverse_slots;
 
-            if (!target_valid(
-                    slot.dependency) ||
-                semantic_reverse_cursor[position] !=
-                    slot.roots.count) {
+            if (semantic_reverse_cursor[position] !=
+                slot.roots.count) {
 
                 return source_save_result::
                     invalid_image;
@@ -7947,7 +7905,7 @@ server_status collect_source_save_semantic_dependency_closure(
 
                     const auto dependency =
                         source_dependency_ref::object(
-                            object);
+                            identity);
 
                     std::size_t dependent_count = 0;
 
@@ -8032,7 +7990,7 @@ server_status collect_source_save_semantic_dependency_closure(
 
                 const auto dependency =
                     source_dependency_ref::type(
-                        type);
+                        identity);
 
                 std::size_t dependent_count = 0;
 
@@ -8777,6 +8735,59 @@ source_save_result verify_source_save_presence(const source_save_view &source,
                     if (c.data.kind() == source_data_kind::type_definition &&
                         !increment(types[handle.value() - 1].definitions))
                         return source_save_result::invalid_image;
+                }
+            }
+
+            const auto dependency_count =
+                source.semantic_dependency_count(
+                    file_id{i + 1});
+
+            for (std::size_t j = 0;
+                 j < dependency_count;
+                 ++j) {
+
+                source_dependency_ref dependency;
+
+                if (!source.semantic_dependency(
+                        file_id{i + 1},
+                        j,
+                        dependency)) {
+
+                    return source_save_result::
+                        invalid_image;
+                }
+
+                const auto identity =
+                    compiled.identity_at_slot(
+                        dependency.slot());
+
+                if (!identity ||
+                    identity.value() !=
+                        dependency.raw()) {
+
+                    return source_save_result::
+                        invalid_image;
+                }
+
+                if (dependency.kind() ==
+                    source_dependency_kind::type) {
+
+                    if (!compiled.find_type(identity)) {
+                        return source_save_result::
+                            invalid_image;
+                    }
+                }
+                else if (dependency.kind() ==
+                         source_dependency_kind::object) {
+
+                    if (!compiled.find_object(identity)) {
+                        return source_save_result::
+                            invalid_image;
+                    }
+                }
+                else {
+                    return source_save_result::
+                        invalid_image;
                 }
             }
         }

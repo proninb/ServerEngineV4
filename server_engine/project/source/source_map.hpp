@@ -145,35 +145,34 @@ private:
 static_assert(sizeof(source_data_ref) == 4);
 
 enum class source_dependency_kind : std::uint8_t {
-    type = 1,
-    object = 2,
+    type = static_cast<std::uint8_t>(
+        identity_kind::type),
+    object = static_cast<std::uint8_t>(
+        identity_kind::object),
 };
 
-// BUILD-lineage reference to a semantic entity consumed by one semantic root.
+// Persisted semantic dependency. The encoded value is the exact identity_ref:
+// semantic WHO survives Graph-local handle changes without BUILD remapping.
 class source_dependency_ref final {
 public:
     constexpr source_dependency_ref() noexcept = default;
 
     [[nodiscard]] static constexpr source_dependency_ref type(
-        type_handle value) noexcept {
+        identity_ref value) noexcept {
 
         return value &&
-            value.value() <= slot_mask
+            value.kind() == identity_kind::type
             ? source_dependency_ref{
-                (static_cast<std::uint32_t>(
-                     source_dependency_kind::type) << kind_shift) |
                 value.value()}
             : source_dependency_ref{};
     }
 
     [[nodiscard]] static constexpr source_dependency_ref object(
-        object_handle value) noexcept {
+        identity_ref value) noexcept {
 
         return value &&
-            value.value() <= slot_mask
+            value.kind() == identity_kind::object
             ? source_dependency_ref{
-                (static_cast<std::uint32_t>(
-                     source_dependency_kind::object) << kind_shift) |
                 value.value()}
             : source_dependency_ref{};
     }
@@ -336,10 +335,7 @@ public:
         source_data_ref data) noexcept;
 
     [[nodiscard]] server_status add_dependency(
-        type_handle type) noexcept;
-
-    [[nodiscard]] server_status add_dependency(
-        object_handle object) noexcept;
+        identity_ref identity) noexcept;
 
     [[nodiscard]] server_status add_initialization(
         object_endpoint target) noexcept;
@@ -429,10 +425,7 @@ public:
         source_data_ref data) noexcept;
 
     [[nodiscard]] server_status add_dependency(
-        type_handle type) noexcept;
-
-    [[nodiscard]] server_status add_dependency(
-        object_handle object) noexcept;
+        identity_ref identity) noexcept;
 
     // BUILD-only producer provenance. G keeps only canonical final
     // initialization state; this preserves the exact targets produced by each

@@ -144,15 +144,15 @@ void test_root_ownership_and_file_projection(test_state &tests) {
         !tests.expect(succeeded(map.add(file_id{2}, object)), "root 1 object") ||
         !tests.expect(succeeded(map.add_initialization(source)), "root 1 initialization target") ||
         !tests.expect(succeeded(map.add_initialization(source)), "root 1 duplicate initialization target") ||
-        !tests.expect(succeeded(map.add_dependency(type)), "root 1 type dependency") ||
-        !tests.expect(succeeded(map.add_dependency(type)), "root 1 duplicate type dependency") ||
+        !tests.expect(succeeded(map.add_dependency(type_identity)), "root 1 type dependency") ||
+        !tests.expect(succeeded(map.add_dependency(type_identity)), "root 1 duplicate type dependency") ||
         !tests.expect(succeeded(map.end_root()), "end root 1") ||
         !tests.expect(succeeded(map.begin_root(file_id{2})), "begin root 2") ||
         !tests.expect(succeeded(map.add(file_id{3}, definition)),
                       "root 2 same physical definition") ||
         !tests.expect(succeeded(map.add(file_id{3}, link)), "root 2 link") ||
-        !tests.expect(succeeded(map.add_dependency(type)), "root 2 type dependency") ||
-        !tests.expect(succeeded(map.add_dependency(obj)), "root 2 object dependency") ||
+        !tests.expect(succeeded(map.add_dependency(type_identity)), "root 2 type dependency") ||
+        !tests.expect(succeeded(map.add_dependency(object_identity)), "root 2 object dependency") ||
         !tests.expect(succeeded(map.end_root()), "end root 2") ||
         !tests.expect(succeeded(map.finalize(3, identities, G)), "finalize")) {
 
@@ -239,17 +239,27 @@ void test_root_ownership_and_file_projection(test_state &tests) {
     const auto type_dependents =
         map.dependents(
             source_dependency_ref::type(
-                type));
+                type_identity));
 
     const auto object_dependents =
         map.dependents(
             source_dependency_ref::object(
-                obj));
+                object_identity));
+
+    tests.expect(
+        source_dependency_ref::type(
+            type_identity).raw() ==
+                type_identity.value() &&
+        source_dependency_ref::object(
+            object_identity).raw() ==
+                object_identity.value(),
+        "semantic dependency persists exact identity_ref value");
 
     tests.expect(
         root1_dependencies.size() == 1 &&
         root1_dependencies[0] ==
-            source_dependency_ref::type(type) &&
+            source_dependency_ref::type(
+                type_identity) &&
         root2_dependencies.size() == 2 &&
         type_dependents.size() == 2 &&
         type_dependents[0] == file_id{1} &&

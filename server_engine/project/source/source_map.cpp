@@ -301,19 +301,31 @@ server_status source_map_delta::add(
 }
 
 server_status source_map_delta::add_dependency(
-    type_handle type) noexcept {
+    identity_ref identity) noexcept {
 
-    return add_dependency(
-        source_dependency_ref::type(
-            type));
-}
+    if (!identity) {
+        return server_status::
+            project_configuration_invalid;
+    }
 
-server_status source_map_delta::add_dependency(
-    object_handle object) noexcept {
+    if (identity.kind() ==
+        identity_kind::type) {
 
-    return add_dependency(
-        source_dependency_ref::object(
-            object));
+        return add_dependency(
+            source_dependency_ref::type(
+                identity));
+    }
+
+    if (identity.kind() ==
+        identity_kind::object) {
+
+        return add_dependency(
+            source_dependency_ref::object(
+                identity));
+    }
+
+    return server_status::
+        project_configuration_invalid;
 }
 
 server_status source_map_delta::add_dependency(
@@ -766,19 +778,31 @@ server_status source_map::add(
 }
 
 server_status source_map::add_dependency(
-    type_handle type) noexcept {
+    identity_ref identity) noexcept {
 
-    return add_dependency(
-        source_dependency_ref::type(
-            type));
-}
+    if (!identity) {
+        return server_status::
+            project_configuration_invalid;
+    }
 
-server_status source_map::add_dependency(
-    object_handle object) noexcept {
+    if (identity.kind() ==
+        identity_kind::type) {
 
-    return add_dependency(
-        source_dependency_ref::object(
-            object));
+        return add_dependency(
+            source_dependency_ref::type(
+                identity));
+    }
+
+    if (identity.kind() ==
+        identity_kind::object) {
+
+        return add_dependency(
+            source_dependency_ref::object(
+                identity));
+    }
+
+    return server_status::
+        project_configuration_invalid;
 }
 
 server_status source_map::add_dependency(
@@ -1138,24 +1162,22 @@ server_status source_map::finalize(
         for (const auto dependency :
              dependencies) {
 
-            bool target_valid = false;
+            const auto identity =
+                identities.at_slot(
+                    dependency.slot());
 
-            if (dependency.kind() ==
-                source_dependency_kind::type) {
-
-                target_valid =
-                    G.contains(
-                        type_handle{
-                            dependency.slot()});
-            }
-            else if (dependency.kind() ==
-                source_dependency_kind::object) {
-
-                target_valid =
-                    G.contains(
-                        object_handle{
-                            dependency.slot()});
-            }
+            const bool target_valid =
+                identity &&
+                identity.value() ==
+                    dependency.raw() &&
+                ((dependency.kind() ==
+                      source_dependency_kind::type &&
+                  static_cast<bool>(
+                      G.find_type(identity))) ||
+                 (dependency.kind() ==
+                      source_dependency_kind::object &&
+                  static_cast<bool>(
+                      G.find_object(identity))));
 
             auto* slot =
                 target_valid

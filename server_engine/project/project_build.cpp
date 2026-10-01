@@ -2614,7 +2614,7 @@ server_status build_project(
                 operation)
                 .file(layout.source_save)
                 .detail(
-                    "BUILD could not prepare the final source.bin v6 candidate layout")
+                    "BUILD could not prepare the final source.bin v7 candidate layout")
                 .build());
 
         return source_candidate_prepared ==

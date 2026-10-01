@@ -393,10 +393,10 @@ void test_direct_source_save(
                         source)) &&
                 succeeded(
                     sources.add_dependency(
-                        type)) &&
+                        identity)) &&
                 succeeded(
                     sources.add_dependency(
-                        object)) &&
+                        object_identity)) &&
                 succeeded(sources.end_root()),
             "source-save Header root ownership and endpoint object dependency");
     }
@@ -471,11 +471,11 @@ void test_direct_source_save(
 
     const auto type_dependency =
         source_dependency_ref::type(
-            type);
+            identity);
 
     const auto object_dependency =
         source_dependency_ref::object(
-            object);
+            object_identity);
 
     tests.expect(
         writable_view.semantic_dependency_count(first) == 2 &&
