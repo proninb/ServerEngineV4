@@ -4554,6 +4554,377 @@ server_status graph_delta::visit_initializations(
             project_artifact_invalid;
 }
 
+
+server_status graph_delta::visit_type_changes(
+    void* context,
+    type_change_visitor visitor) const noexcept {
+
+    if (baseline == nullptr ||
+        visitor == nullptr ||
+        type_identities.size() !=
+            types.size() ||
+        type_live.size() !=
+            types.size()) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    for (const auto& patch :
+         type_patches) {
+
+        if (patch.slot == 0 ||
+            patch.slot >
+                baseline_type_count) {
+
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        const type_handle handle{
+            patch.slot};
+
+        const auto identity =
+            baseline->type_identity_raw(
+                handle);
+
+        if (!identity ||
+            identity.kind() !=
+                identity_kind::type) {
+
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        const graph_delta_type_change change{
+            handle,
+            identity,
+            patch.value,
+            graph_delta_change_kind::patch,
+            patch.live,
+        };
+
+        const auto visited =
+            visitor(
+                context,
+                change);
+
+        if (!succeeded(visited)) {
+            return visited;
+        }
+    }
+
+    for (std::size_t index = 0;
+         index <
+            types.size();
+         ++index) {
+
+        const auto slot =
+            baseline_type_count +
+            index + 1;
+
+        if (slot >
+            type_handle::maximum_slot) {
+
+            return server_status::io_error;
+        }
+
+        const auto identity =
+            type_identities[index];
+
+        if (!identity ||
+            identity.kind() !=
+                identity_kind::type) {
+
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        const graph_delta_type_change change{
+            type_handle{
+                static_cast<std::uint32_t>(
+                    slot)},
+            identity,
+            types[index],
+            graph_delta_change_kind::append,
+            type_live[index] != 0,
+        };
+
+        const auto visited =
+            visitor(
+                context,
+                change);
+
+        if (!succeeded(visited)) {
+            return visited;
+        }
+    }
+
+    return server_status::success;
+}
+
+server_status graph_delta::visit_object_changes(
+    void* context,
+    object_change_visitor visitor) const noexcept {
+
+    if (baseline == nullptr ||
+        visitor == nullptr ||
+        object_identities.size() !=
+            objects.size() ||
+        object_live.size() !=
+            objects.size()) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    for (const auto& patch :
+         object_patches) {
+
+        if (patch.slot == 0 ||
+            patch.slot >
+                baseline_object_count) {
+
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        const object_handle handle{
+            patch.slot};
+
+        const auto identity =
+            baseline->object_identity_raw(
+                handle);
+
+        if (!identity ||
+            identity.kind() !=
+                identity_kind::object) {
+
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        const graph_delta_object_change change{
+            handle,
+            identity,
+            patch.value,
+            patch.construction,
+            graph_delta_change_kind::patch,
+            patch.live,
+        };
+
+        const auto visited =
+            visitor(
+                context,
+                change);
+
+        if (!succeeded(visited)) {
+            return visited;
+        }
+    }
+
+    for (std::size_t index = 0;
+         index <
+            objects.size();
+         ++index) {
+
+        const auto slot =
+            baseline_object_count +
+            index + 1;
+
+        if (slot >
+            object_handle::maximum_slot) {
+
+            return server_status::io_error;
+        }
+
+        const auto identity =
+            object_identities[index];
+
+        if (!identity ||
+            identity.kind() !=
+                identity_kind::object) {
+
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        const auto& value =
+            objects[index];
+
+        construction_value construction;
+
+        if (value.non_default_initializer()) {
+            const auto construction_slot =
+                static_cast<std::size_t>(
+                    value.construction_slot());
+
+            if (construction_slot <=
+                    baseline_object_construction_count ||
+                construction_slot >
+                    baseline_object_construction_count +
+                        object_construction.size()) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            construction =
+                object_construction[
+                    construction_slot -
+                    baseline_object_construction_count -
+                    1];
+        }
+        else if (value.construction_slot() != 0) {
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        const graph_delta_object_change change{
+            object_handle{
+                static_cast<std::uint32_t>(
+                    slot)},
+            identity,
+            value,
+            construction,
+            graph_delta_change_kind::append,
+            object_live[index] != 0,
+        };
+
+        const auto visited =
+            visitor(
+                context,
+                change);
+
+        if (!succeeded(visited)) {
+            return visited;
+        }
+    }
+
+    return server_status::success;
+}
+
+server_status graph_delta::visit_link_changes(
+    void* context,
+    link_change_visitor visitor) const noexcept {
+
+    if (baseline == nullptr ||
+        visitor == nullptr ||
+        link_live.size() !=
+            links.size()) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    for (const auto& patch :
+         link_patches) {
+
+        if (patch.slot == 0 ||
+            patch.slot >
+                baseline_link_count) {
+
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        const graph_delta_link_change change{
+            link_handle{
+                patch.slot},
+            patch.value,
+            graph_delta_change_kind::patch,
+            patch.live,
+        };
+
+        const auto visited =
+            visitor(
+                context,
+                change);
+
+        if (!succeeded(visited)) {
+            return visited;
+        }
+    }
+
+    for (std::size_t index = 0;
+         index <
+            links.size();
+         ++index) {
+
+        const auto slot =
+            baseline_link_count +
+            index + 1;
+
+        if (slot >
+            link_handle::maximum_slot) {
+
+            return server_status::io_error;
+        }
+
+        const graph_delta_link_change change{
+            link_handle{
+                static_cast<std::uint32_t>(
+                    slot)},
+            links[index],
+            graph_delta_change_kind::append,
+            link_live[index] != 0,
+        };
+
+        const auto visited =
+            visitor(
+                context,
+                change);
+
+        if (!succeeded(visited)) {
+            return visited;
+        }
+    }
+
+    return server_status::success;
+}
+
+server_status graph_delta::visit_initialization_changes(
+    void* context,
+    initialization_change_visitor visitor) const noexcept {
+
+    if (baseline == nullptr ||
+        visitor == nullptr) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    for (const auto& patch :
+         initialization_patches) {
+
+        object_initialization_record baseline_value;
+
+        const bool baseline_present =
+            baseline->initialization(
+                patch.value.target,
+                baseline_value);
+
+        const graph_delta_initialization_change change{
+            patch.value,
+            baseline_present
+                ? graph_delta_change_kind::patch
+                : graph_delta_change_kind::append,
+            patch.live,
+        };
+
+        const auto visited =
+            visitor(
+                context,
+                change);
+
+        if (!succeeded(visited)) {
+            return visited;
+        }
+    }
+
+    return server_status::success;
+}
+
 server_status graph_delta::add_initialization(
     object_endpoint target,
     construction_value value,

@@ -3801,6 +3801,38 @@ void test_graph_delta_initialization_overlay(
                 11),
         "graph_delta reads unchanged initialization from compiled mmap");
 
+    std::vector<
+        graph_delta_initialization_change>
+        initialization_changes;
+
+    const auto collect_initialization_change =
+        [](void* context,
+           const graph_delta_initialization_change& change) noexcept
+        -> server_status {
+
+            try {
+                static_cast<
+                    std::vector<
+                        graph_delta_initialization_change>*>(
+                            context)->push_back(
+                                change);
+
+                return server_status::success;
+            }
+            catch (...) {
+                return server_status::io_error;
+            }
+        };
+
+    tests.expect(
+        succeeded(
+            delta.visit_initialization_changes(
+                &initialization_changes,
+                collect_initialization_change)) &&
+        initialization_changes.empty() &&
+        delta.initialization_change_count() == 0,
+        "sparse initialization write set ignores unchanged mmap baseline");
+
     replaced = false;
 
     tests.expect(
@@ -3837,6 +3869,21 @@ void test_graph_delta_initialization_overlay(
                 baseline_target)) &&
         delta.initialization_count() == 0,
         "graph_delta initialization invalidation is idempotent for shared producers");
+
+    initialization_changes.clear();
+
+    tests.expect(
+        succeeded(
+            delta.visit_initialization_changes(
+                &initialization_changes,
+                collect_initialization_change)) &&
+        initialization_changes.size() == 1 &&
+        initialization_changes[0].kind ==
+            graph_delta_change_kind::patch &&
+        initialization_changes[0].value.target ==
+            baseline_target &&
+        !initialization_changes[0].live,
+        "sparse initialization write set carries baseline invalidation");
 
     replaced = true;
 
@@ -3889,6 +3936,24 @@ void test_graph_delta_initialization_overlay(
                     signed_integer,
                 44),
         "graph_delta appends new canonical initialization without baseline scan");
+
+    initialization_changes.clear();
+
+    tests.expect(
+        succeeded(
+            delta.visit_initialization_changes(
+                &initialization_changes,
+                collect_initialization_change)) &&
+        initialization_changes.size() == 2 &&
+        initialization_changes[0].kind ==
+            graph_delta_change_kind::patch &&
+        initialization_changes[0].live &&
+        initialization_changes[1].kind ==
+            graph_delta_change_kind::append &&
+        initialization_changes[1].live &&
+        initialization_changes[1].value.target ==
+            appended_target,
+        "sparse initialization write set separates baseline patch from append");
 
     replaced = false;
 
@@ -10077,6 +10142,48 @@ void test_build_lineage_overlays(
                 99),
         "graph_delta type replacement preserves top-level WHERE");
 
+    std::vector<graph_delta_type_change>
+        type_changes;
+
+    const auto collect_type_change =
+        [](void* context,
+           const graph_delta_type_change& change) noexcept
+        -> server_status {
+
+            try {
+                static_cast<
+                    std::vector<
+                        graph_delta_type_change>*>(
+                            context)->push_back(
+                                change);
+
+                return server_status::success;
+            }
+            catch (...) {
+                return server_status::io_error;
+            }
+        };
+
+    tests.expect(
+        succeeded(
+            G.visit_type_changes(
+                &type_changes,
+                collect_type_change)) &&
+        type_changes.size() == 1 &&
+        type_changes[0].kind ==
+            graph_delta_change_kind::patch &&
+        type_changes[0].handle ==
+            fixture.type &&
+        type_changes[0].identity ==
+            fixture.type_identity &&
+        type_changes[0].live &&
+        type_changes[0].value.members.count ==
+            replacement_members.size() &&
+        G.appended_type_count() == 0 &&
+        G.member_entries().size() ==
+            replacement_members.size(),
+        "sparse type write set excludes unchanged baseline types");
+
     string_id build_base_name;
     identity_ref build_base_identity;
     type_handle build_base;
@@ -10185,6 +10292,44 @@ void test_build_lineage_overlays(
         return;
     }
 
+    std::vector<graph_delta_object_change>
+        object_changes;
+
+    const auto collect_object_change =
+        [](void* context,
+           const graph_delta_object_change& change) noexcept
+        -> server_status {
+
+            try {
+                static_cast<
+                    std::vector<
+                        graph_delta_object_change>*>(
+                            context)->push_back(
+                                change);
+
+                return server_status::success;
+            }
+            catch (...) {
+                return server_status::io_error;
+            }
+        };
+
+    tests.expect(
+        succeeded(
+            G.visit_object_changes(
+                &object_changes,
+                collect_object_change)) &&
+        object_changes.size() == 1 &&
+        object_changes[0].kind ==
+            graph_delta_change_kind::patch &&
+        object_changes[0].handle ==
+            fixture.scalar &&
+        object_changes[0].identity ==
+            fixture.scalar_identity &&
+        !object_changes[0].live &&
+        G.appended_object_count() == 0,
+        "sparse object write set carries retirement at the same WHERE");
+
     object_handle restored_scalar;
 
     if (!tests.expect(
@@ -10227,6 +10372,25 @@ void test_build_lineage_overlays(
                 9),
         "BUILD graph_delta patches scalar object construction without baseline copy");
 
+    object_changes.clear();
+
+    tests.expect(
+        succeeded(
+            G.visit_object_changes(
+                &object_changes,
+                collect_object_change)) &&
+        object_changes.size() == 1 &&
+        object_changes[0].handle ==
+            fixture.scalar &&
+        object_changes[0].live &&
+        object_changes[0].construction ==
+            construction_value::constant(
+                construction_kind::
+                    unsigned_integer,
+                9) &&
+        G.object_construction_entries().size() == 1,
+        "sparse object write set reactivates the same WHERE with appended construction");
+
     const auto old_live_links =
         G.live_link_count();
 
@@ -10252,6 +10416,42 @@ void test_build_lineage_overlays(
         return;
     }
 
+    std::vector<graph_delta_link_change>
+        link_changes;
+
+    const auto collect_link_change =
+        [](void* context,
+           const graph_delta_link_change& change) noexcept
+        -> server_status {
+
+            try {
+                static_cast<
+                    std::vector<
+                        graph_delta_link_change>*>(
+                            context)->push_back(
+                                change);
+
+                return server_status::success;
+            }
+            catch (...) {
+                return server_status::io_error;
+            }
+        };
+
+    tests.expect(
+        succeeded(
+            G.visit_link_changes(
+                &link_changes,
+                collect_link_change)) &&
+        link_changes.size() == 1 &&
+        link_changes[0].kind ==
+            graph_delta_change_kind::patch &&
+        link_changes[0].handle ==
+            fixture.link &&
+        !link_changes[0].live &&
+        G.appended_link_count() == 0,
+        "sparse link write set carries retirement at the same WHERE");
+
     link_handle restored_link;
 
     const link_record old_link =
@@ -10272,6 +10472,21 @@ void test_build_lineage_overlays(
         G.stale_link_count() ==
             old_stale_links,
         "BUILD graph_delta reactivates link in the same WHERE");
+
+    link_changes.clear();
+
+    tests.expect(
+        succeeded(
+            G.visit_link_changes(
+                &link_changes,
+                collect_link_change)) &&
+        link_changes.size() == 1 &&
+        link_changes[0].handle ==
+            fixture.link &&
+        link_changes[0].live &&
+        link_changes[0].value ==
+            old_link,
+        "sparse link write set reactivates the same WHERE without append");
 
     object_handle appended_object;
 

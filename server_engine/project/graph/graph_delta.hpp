@@ -20,6 +20,45 @@ namespace cw::server {
 
 class compiled_project_view;
 
+enum class graph_delta_change_kind : std::uint8_t {
+    patch = 1,
+    append = 2,
+};
+
+struct graph_delta_type_change final {
+    type_handle handle{};
+    identity_ref identity{};
+    type_entry value{};
+    graph_delta_change_kind kind =
+        graph_delta_change_kind::patch;
+    bool live = false;
+};
+
+struct graph_delta_object_change final {
+    object_handle handle{};
+    identity_ref identity{};
+    object_entry value{};
+    construction_value construction{};
+    graph_delta_change_kind kind =
+        graph_delta_change_kind::patch;
+    bool live = false;
+};
+
+struct graph_delta_link_change final {
+    link_handle handle{};
+    link_record value{};
+    graph_delta_change_kind kind =
+        graph_delta_change_kind::patch;
+    bool live = false;
+};
+
+struct graph_delta_initialization_change final {
+    object_initialization_record value{};
+    graph_delta_change_kind kind =
+        graph_delta_change_kind::patch;
+    bool live = false;
+};
+
 class graph_delta final {
 public:
     graph_delta() = default;
@@ -297,6 +336,44 @@ public:
         void* context,
         initialization_visitor visitor) const noexcept;
 
+    // O(changed) persistence boundary. These visitors enumerate only BUILD
+    // patches and appends; unchanged mmap baseline payload is never visited.
+    using type_change_visitor =
+        server_status (*)(
+            void* context,
+            const graph_delta_type_change& change) noexcept;
+
+    using object_change_visitor =
+        server_status (*)(
+            void* context,
+            const graph_delta_object_change& change) noexcept;
+
+    using link_change_visitor =
+        server_status (*)(
+            void* context,
+            const graph_delta_link_change& change) noexcept;
+
+    using initialization_change_visitor =
+        server_status (*)(
+            void* context,
+            const graph_delta_initialization_change& change) noexcept;
+
+    [[nodiscard]] server_status visit_type_changes(
+        void* context,
+        type_change_visitor visitor) const noexcept;
+
+    [[nodiscard]] server_status visit_object_changes(
+        void* context,
+        object_change_visitor visitor) const noexcept;
+
+    [[nodiscard]] server_status visit_link_changes(
+        void* context,
+        link_change_visitor visitor) const noexcept;
+
+    [[nodiscard]] server_status visit_initialization_changes(
+        void* context,
+        initialization_change_visitor visitor) const noexcept;
+
     [[nodiscard]] bool intrinsic(
         type_ref type,
         intrinsic_type& output) const noexcept;
@@ -407,8 +484,12 @@ public:
         return links.size();
     }
 
-    // Dense construction spans. In BUILD baseline mode these expose only the
-    // append arena; final sparse persistence uses logical access instead.
+    [[nodiscard]] std::size_t initialization_change_count() const noexcept {
+        return initialization_patches.size();
+    }
+
+    // Append arenas are already the physical sparse persistence payload.
+    // Unchanged baseline ranges remain in the mapped compiled.bin.
     [[nodiscard]] std::span<const type_entry>
     type_entries() const noexcept {
         return types;
