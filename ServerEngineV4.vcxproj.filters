@@ -300,6 +300,9 @@
     <ClCompile Include="server_engine\project\persistence\compiled_project.cpp">
       <Filter>server_engine\project\persistence</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\project\persistence\compiled_project_graph_write.cpp">
+      <Filter>server_engine\project\persistence</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\project\persistence\compiled_project_build.cpp">
       <Filter>server_engine\project\persistence</Filter>
     </ClCompile>

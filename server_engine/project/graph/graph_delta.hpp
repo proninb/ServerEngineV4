@@ -418,6 +418,11 @@ public:
             objects.size();
     }
 
+    [[nodiscard]] std::size_t object_construction_count() const noexcept {
+        return baseline_object_construction_count +
+            object_construction.size();
+    }
+
     [[nodiscard]] std::size_t live_object_count() const noexcept {
         return live_object_count_value;
     }

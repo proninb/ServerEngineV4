@@ -1,4 +1,5 @@
 #include "project/persistence/compiled_project.hpp"
+#include "project/persistence/compiled_project_build.hpp"
 #include "project/persistence/crc64_ecma.hpp"
 #include "project/runtime/fixed_direct_materializer.hpp"
 #include "project/runtime/runtime_layout.hpp"
@@ -10628,8 +10629,10 @@ void test_build_lineage_overlays(
         link_changes[0].handle ==
             fixture.link &&
         link_changes[0].live &&
-        link_changes[0].value ==
-            old_link,
+        link_changes[0].value.source ==
+            old_link.source &&
+        link_changes[0].value.target ==
+            old_link.target,
         "sparse link write set reactivates the same WHERE without append");
 
     object_handle appended_object;
@@ -10681,6 +10684,91 @@ void test_build_lineage_overlays(
         appended_link.value() ==
             baseline.link_count() + 1,
         "BUILD graph_delta appends link after baseline slots");
+
+    compiled_project_graph_write_plan
+        graph_write_plan;
+
+    if (!tests.expect(
+            prepare_compiled_project_graph_write_plan(
+                G,
+                graph_write_plan) ==
+                compiled_project_image_result::success,
+            "prepare sparse compiled Graph write plan")) {
+
+        return;
+    }
+
+    const auto expected_graph_payload_bytes =
+        G.type_patch_count() *
+            sizeof(type_entry) +
+        G.object_patch_count() *
+            sizeof(object_entry) +
+        G.link_patch_count() *
+            sizeof(link_record) +
+        G.initialization_change_count() *
+            sizeof(object_initialization_record) +
+        G.type_entries().size() *
+            (sizeof(type_entry) +
+             sizeof(identity_ref)) +
+        G.member_entries().size() *
+            (sizeof(member_record) +
+             sizeof(construction_value)) +
+        G.base_entries().size() *
+            sizeof(base_record) +
+        G.object_entries().size() *
+            (sizeof(object_entry) +
+             sizeof(identity_ref)) +
+        G.object_construction_entries().size() *
+            sizeof(construction_value) +
+        G.link_entries().size() *
+            sizeof(link_record) +
+        G.derived_type_entries().size() *
+            sizeof(derived_type_record) +
+        G.endpoint_path_entries().size() *
+            sizeof(endpoint_path_record) +
+        G.endpoint_path_step_entries().size() *
+            sizeof(endpoint_path_step);
+
+    tests.expect(
+        graph_write_plan.type_patch_count ==
+            G.type_patch_count() &&
+        graph_write_plan.object_patch_count ==
+            G.object_patch_count() &&
+        graph_write_plan.link_patch_count ==
+            G.link_patch_count() &&
+        graph_write_plan.initialization_change_count ==
+            G.initialization_change_count() &&
+        graph_write_plan.appended_types.first_slot ==
+            baseline.type_slot_count() + 1 &&
+        graph_write_plan.appended_types.count ==
+            G.type_entries().size() &&
+        graph_write_plan.appended_members.begin ==
+            baseline.member_count() &&
+        graph_write_plan.appended_members.count ==
+            G.member_entries().size() &&
+        graph_write_plan.appended_bases.begin ==
+            baseline.base_count() &&
+        graph_write_plan.appended_bases.count ==
+            G.base_entries().size() &&
+        graph_write_plan.appended_objects.first_slot ==
+            baseline.object_slot_count() + 1 &&
+        graph_write_plan.appended_objects.count ==
+            G.object_entries().size() &&
+        graph_write_plan.appended_object_construction.first_slot ==
+            baseline.object_construction_count() + 1 &&
+        graph_write_plan.appended_object_construction.count ==
+            G.object_construction_entries().size() &&
+        graph_write_plan.appended_links.first_slot ==
+            baseline.link_slot_count() + 1 &&
+        graph_write_plan.appended_links.count ==
+            G.link_entries().size() &&
+        graph_write_plan.appended_derived_types.first_slot ==
+            baseline.derived_type_count() + 1 &&
+        graph_write_plan.appended_derived_types.count ==
+            G.derived_type_entries().size() &&
+        graph_write_plan.graph_payload_bytes ==
+            expected_graph_payload_bytes,
+        "sparse compiled Graph plan preserves physical baseline+append numbering");
 
     compiled_project_layout merged_layout;
 
