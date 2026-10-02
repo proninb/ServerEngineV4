@@ -641,6 +641,7 @@ void write_u64(
 
     case compiled_project_section::assign_bytes:
     case compiled_project_section::source_paths:
+    case compiled_project_section::graph_append_bytes:
         return 1;
     case compiled_project_section::source_contributions:
     case compiled_project_section::source_roots:
@@ -3371,31 +3372,9 @@ compiled_project_view::verify_contents() const noexcept {
     if (source_result != compiled_project_image_result::success)
         return source_result;
 
-    for (const auto& value : sections) {
-        std::uint64_t byte_count = 0;
-
-        if (!multiply_u64(
-                value.count,
-                value.record_size,
-                byte_count) ||
-            byte_count >
-                (std::numeric_limits<std::size_t>::max)()) {
-
-            return compiled_project_image_result::
-                invalid_image;
-        }
-
-        if (persistence_crc64(
-                std::span<const std::byte>{
-                    value.data,
-                    static_cast<std::size_t>(
-                        byte_count)}) !=
-            value.crc64) {
-
-            return compiled_project_image_result::
-                invalid_image;
-        }
-    }
+    // Payload correctness is established by the semantic/structural audit
+    // below. Normal BUILD mutates only changed records and the append tail, so
+    // compiled.bin does not require an O(total payload) checksum pass.
 
     const auto reference_binding_compatible =
         [this](
@@ -5473,6 +5452,11 @@ compiled_project_layout::prepare_counts(
                 index_record_size,
                 initialization_target_index_count,
             },
+            {
+                compiled_project_section::graph_append_bytes,
+                1,
+                0,
+            },
         }};
 
     std::uint64_t cursor =
@@ -7282,40 +7266,8 @@ encode_compiled_project_image(const string_table &strings,
         return compiled_project_image_result::invalid_state;
 
     // Per-section CRC belongs to this encoding, not to the layout.
-    std::array<
-        std::uint64_t,
-        compiled_project_directory_count>
-        section_crc{};
-
-    for (std::size_t index = 0;
-         index < layout.size();
-         ++index) {
-
-        const auto& value =
-            layout[index];
-
-        std::uint64_t byte_count = 0;
-
-        if (!multiply_u64(
-                value.count,
-                value.record_size,
-                byte_count) ||
-            byte_count >
-                (std::numeric_limits<std::size_t>::max)()) {
-
-            return compiled_project_image_result::
-                failed;
-        }
-
-        section_crc[index] =
-            persistence_crc64(
-                std::span<const std::byte>{
-                    base +
-                        static_cast<std::size_t>(
-                            value.offset),
-                    static_cast<std::size_t>(
-                        byte_count)});
-    }
+    // Section payload CRCs are intentionally not generated. Sparse BUILD
+    // must never rescan unchanged Graph payload solely to update a checksum.
 
     std::memcpy(
         base,
@@ -7410,7 +7362,7 @@ encode_compiled_project_image(const string_table &strings,
 
         write_u64(
             entry + 24,
-            section_crc[index]);
+            0);
     }
 
     write_u64(

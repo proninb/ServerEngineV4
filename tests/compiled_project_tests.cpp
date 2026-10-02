@@ -1901,6 +1901,24 @@ void write_u64(
             entry + 8));
 }
 
+[[nodiscard]] std::uint64_t section_count(
+    const std::vector<std::byte>& image,
+    compiled_project_section section) noexcept {
+
+    const auto index =
+        section_directory_index(
+            section);
+
+    const auto* entry =
+        image.data() +
+        directory_offset +
+        index *
+            compiled_project_directory_entry_size;
+
+    return read_u64(
+        entry + 16);
+}
+
 void rewrite_header_crc(
     std::vector<std::byte>& image) noexcept {
 
@@ -9873,6 +9891,54 @@ void test_runtime_layout_tail_alignment(
         "Runtime total size is aligned after the System prefix");
 }
 
+void test_graph_append_tail_boundary(
+    test_state& tests,
+    const compiled_test_image& image) {
+
+    const auto tail =
+        compiled_project_section::
+            graph_append_bytes;
+
+    bool section_crc_zero = true;
+
+    for (std::size_t index = 0;
+         index <
+            compiled_project_directory_count;
+         ++index) {
+
+        const auto* entry =
+            image.bytes.data() +
+            directory_offset +
+            index *
+                compiled_project_directory_entry_size;
+
+        if (read_u64(
+                entry + 24) != 0) {
+
+            section_crc_zero = false;
+            break;
+        }
+    }
+
+    compiled_project_view view;
+
+    tests.expect(
+        section_count(
+            image.bytes,
+            tail) == 0 &&
+        section_offset(
+            image.bytes,
+            tail) ==
+            image.bytes.size() &&
+        section_crc_zero &&
+        view.bind(
+            image.bytes) ==
+                compiled_project_image_result::success &&
+        view.graph_append_byte_size() == 0,
+        "compact compiled G ends at one empty grow-only Graph tail");
+}
+
+
 void test_hot_cold_boundary(
     test_state& tests,
     const compiled_test_image& image) {
@@ -9896,7 +9962,7 @@ void test_hot_cold_boundary(
                     corrupted.data(),
                     corrupted.size()}) ==
                 compiled_project_image_result::success,
-            "bind does not scan section payload CRC")) {
+            "bind remains structural after payload byte change")) {
 
         return;
     }
@@ -11057,6 +11123,10 @@ int main() {
             "deterministic compiled image");
 
         test_persisted_sources(tests, first);
+
+        test_graph_append_tail_boundary(
+            tests,
+            first);
 
         test_round_trip(
             tests,

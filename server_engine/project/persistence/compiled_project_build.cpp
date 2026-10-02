@@ -2859,32 +2859,8 @@ encode_build_compiled_project_image(
         }
     }
 
-    std::array<
-        std::uint64_t,
-        compiled_project_directory_count>
-        section_crc{};
-
-    for (std::size_t index = 0;
-         index <
-            compiled_project_directory_count;
-         ++index) {
-
-        const auto& section =
-            layout[index];
-
-        const auto byte_count =
-            section.count *
-            section.record_size;
-
-        section_crc[index] =
-            persistence_crc64(
-                std::span<const std::byte>{
-                    base +
-                        static_cast<std::size_t>(
-                            section.offset),
-                    static_cast<std::size_t>(
-                        byte_count)});
-    }
+    // No whole-section payload checksum pass. Normal BUILD is being moved
+    // to changed-record writes and must remain independent of Project size.
 
     std::memcpy(
         base,
@@ -2986,7 +2962,7 @@ encode_build_compiled_project_image(
 
         build_write_u64(
             record + 24,
-            section_crc[index]);
+            0);
     }
 
     build_write_u64(
