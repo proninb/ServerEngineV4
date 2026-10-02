@@ -17,6 +17,9 @@ constexpr std::size_t sparse_header_link_count_offset = 80;
 constexpr std::size_t sparse_header_crc_offset = 248;
 
 constexpr std::uint32_t sparse_type_record_size = 20;
+constexpr std::uint32_t sparse_member_record_size = 12;
+constexpr std::uint32_t sparse_construction_record_size = 16;
+constexpr std::uint32_t sparse_base_record_size = 8;
 constexpr std::uint32_t sparse_object_record_size = 8;
 constexpr std::uint32_t sparse_link_record_size = 16;
 constexpr std::uint32_t sparse_graph_identity_record_size = 4;
@@ -282,6 +285,72 @@ void sparse_encode_type(
         value.flags);
 }
 
+void sparse_encode_member(
+    std::byte* target,
+    const member_record& value) noexcept {
+
+    sparse_write_u32(
+        target,
+        value.name.value());
+
+    sparse_write_u32(
+        target + 4,
+        value.type.value());
+
+    target[8] =
+        static_cast<std::byte>(
+            static_cast<std::uint8_t>(
+                value.access));
+
+    target[9] = std::byte{0};
+    target[10] = std::byte{0};
+    target[11] = std::byte{0};
+}
+
+void sparse_encode_construction(
+    std::byte* target,
+    const construction_value& value) noexcept {
+
+    sparse_write_u32(
+        target,
+        value.low);
+
+    sparse_write_u32(
+        target + 4,
+        value.high);
+
+    sparse_write_u32(
+        target + 8,
+        value.operand);
+
+    sparse_write_u32(
+        target + 12,
+        static_cast<std::uint32_t>(
+            value.kind));
+}
+
+void sparse_encode_base(
+    std::byte* target,
+    const base_record& value) noexcept {
+
+    sparse_write_u32(
+        target,
+        value.type.value());
+
+    target[4] =
+        static_cast<std::byte>(
+            static_cast<std::uint8_t>(
+                value.access));
+
+    target[5] =
+        static_cast<std::byte>(
+            value.flags);
+
+    sparse_write_u16(
+        target + 6,
+        0);
+}
+
 void sparse_encode_object(
     std::byte* target,
     const object_entry& value) noexcept {
@@ -318,13 +387,21 @@ void sparse_encode_link(
 
 struct sparse_fixed_write_context final {
     std::span<std::byte> image;
+    const graph_delta* graph = nullptr;
     sparse_section types;
     sparse_section type_identities;
+    sparse_section members;
+    sparse_section member_construction;
+    sparse_section bases;
     sparse_section objects;
     sparse_section object_identities;
+    sparse_section object_construction;
     sparse_section links;
     sparse_section graph_identity;
     sparse_section link_target_index;
+    std::size_t reused_members = 0;
+    std::size_t reused_bases = 0;
+    std::size_t reused_object_construction = 0;
 };
 
 [[nodiscard]] bool sparse_find_link_index_slot(
@@ -452,11 +529,176 @@ struct sparse_fixed_write_context final {
             change.identity.slot()) * 4;
 
     if (change.live) {
+        type_entry persisted =
+            change.value;
+
+        const auto* old_record =
+            context.types.data +
+            physical *
+                sparse_type_record_size;
+
+        const graph_range old_members{
+            sparse_read_u32(
+                old_record),
+            sparse_read_u32(
+                old_record + 4),
+        };
+
+        const graph_range old_bases{
+            sparse_read_u32(
+                old_record + 8),
+            sparse_read_u32(
+                old_record + 12),
+        };
+
+        const auto member_append =
+            context.graph->member_entries();
+
+        const auto construction_append =
+            context.graph->
+                member_construction_entries();
+
+        if (change.value.members.count != 0 &&
+            change.value.members.begin >=
+                context.members.count) {
+
+            const auto source_begin =
+                static_cast<std::size_t>(
+                    change.value.members.begin -
+                    context.members.count);
+
+            const auto count =
+                static_cast<std::size_t>(
+                    change.value.members.count);
+
+            if (old_members.count !=
+                    change.value.members.count ||
+                old_members.begin >
+                    context.members.count ||
+                count >
+                    context.members.count -
+                        old_members.begin ||
+                source_begin >
+                    member_append.size() ||
+                count >
+                    member_append.size() -
+                        source_begin ||
+                source_begin >
+                    construction_append.size() ||
+                count >
+                    construction_append.size() -
+                        source_begin) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            for (std::size_t index = 0;
+                 index < count;
+                 ++index) {
+
+                const auto old_logical =
+                    static_cast<std::size_t>(
+                        old_members.begin) +
+                    index;
+
+                const auto* old_member =
+                    context.members.data +
+                    old_logical *
+                        sparse_member_record_size;
+
+                const auto& replacement =
+                    member_append[
+                        source_begin + index];
+
+                if (sparse_read_u32(
+                        old_member) !=
+                    replacement.name.value()) {
+
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                sparse_encode_member(
+                    context.members.data +
+                    old_logical *
+                        sparse_member_record_size,
+                    replacement);
+
+                sparse_encode_construction(
+                    context.member_construction.data +
+                    old_logical *
+                        sparse_construction_record_size,
+                    construction_append[
+                        source_begin + index]);
+            }
+
+            persisted.members =
+                old_members;
+
+            context.reused_members +=
+                count;
+        }
+
+        const auto base_append =
+            context.graph->base_entries();
+
+        if (change.value.bases.count != 0 &&
+            change.value.bases.begin >=
+                context.bases.count) {
+
+            const auto source_begin =
+                static_cast<std::size_t>(
+                    change.value.bases.begin -
+                    context.bases.count);
+
+            const auto count =
+                static_cast<std::size_t>(
+                    change.value.bases.count);
+
+            if (old_bases.count !=
+                    change.value.bases.count ||
+                old_bases.begin >
+                    context.bases.count ||
+                count >
+                    context.bases.count -
+                        old_bases.begin ||
+                source_begin >
+                    base_append.size() ||
+                count >
+                    base_append.size() -
+                        source_begin) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            for (std::size_t index = 0;
+                 index < count;
+                 ++index) {
+
+                sparse_encode_base(
+                    context.bases.data +
+                    (static_cast<std::size_t>(
+                         old_bases.begin) +
+                     index) *
+                        sparse_base_record_size,
+                    base_append[
+                        source_begin + index]);
+            }
+
+            persisted.bases =
+                old_bases;
+
+            context.reused_bases +=
+                count;
+        }
+
         sparse_encode_type(
             context.types.data +
             physical *
                 sparse_type_record_size,
-            change.value);
+            persisted);
 
         sparse_write_u32(
             location,
@@ -520,11 +762,77 @@ struct sparse_fixed_write_context final {
             change.identity.slot()) * 4;
 
     if (change.live) {
+        object_entry persisted =
+            change.value;
+
+        const auto* old_record =
+            context.objects.data +
+            physical *
+                sparse_object_record_size;
+
+        const auto old_state =
+            sparse_read_u32(
+                old_record + 4);
+
+        const auto old_construction_slot =
+            old_state &
+            graph_object_construction_slot_mask;
+
+        const auto new_construction_slot =
+            change.value.construction_slot();
+
+        if (change.value.
+                non_default_initializer() &&
+            new_construction_slot >
+                context.object_construction.count) {
+
+            const auto construction_append =
+                context.graph->
+                    object_construction_entries();
+
+            const auto source_index =
+                static_cast<std::size_t>(
+                    new_construction_slot -
+                    context.object_construction.count -
+                    1);
+
+            if ((old_state &
+                    graph_object_non_default_initializer) ==
+                    0 ||
+                old_construction_slot == 0 ||
+                old_construction_slot >
+                    context.object_construction.count ||
+                source_index >=
+                    construction_append.size() ||
+                construction_append[
+                    source_index] !=
+                    change.construction) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            sparse_encode_construction(
+                context.object_construction.data +
+                static_cast<std::size_t>(
+                    old_construction_slot - 1) *
+                    sparse_construction_record_size,
+                change.construction);
+
+            persisted.state =
+                (change.value.state &
+                    ~graph_object_construction_slot_mask) |
+                old_construction_slot;
+
+            ++context.
+                reused_object_construction;
+        }
+
         sparse_encode_object(
             context.objects.data +
             physical *
                 sparse_object_record_size,
-            change.value);
+            persisted);
 
         sparse_write_u32(
             location,
@@ -921,10 +1229,7 @@ apply_compiled_project_graph_fixed_writes(
 
     if (plan.initialization_change_count != 0 ||
         plan.appended_types.count != 0 ||
-        plan.appended_members.count != 0 ||
-        plan.appended_bases.count != 0 ||
         plan.appended_objects.count != 0 ||
-        plan.appended_object_construction.count != 0 ||
         plan.appended_links.count != 0 ||
         plan.appended_derived_types.count != 0 ||
         plan.appended_endpoint_paths.count != 0 ||
@@ -936,6 +1241,7 @@ apply_compiled_project_graph_fixed_writes(
 
     sparse_fixed_write_context context{
         image,
+        &G,
     };
 
     if (!sparse_section_at(
@@ -951,6 +1257,22 @@ apply_compiled_project_graph_fixed_writes(
             context.type_identities) ||
         !sparse_section_at(
             image,
+            compiled_project_section::members,
+            sparse_member_record_size,
+            context.members) ||
+        !sparse_section_at(
+            image,
+            compiled_project_section::
+                member_construction,
+            sparse_construction_record_size,
+            context.member_construction) ||
+        !sparse_section_at(
+            image,
+            compiled_project_section::bases,
+            sparse_base_record_size,
+            context.bases) ||
+        !sparse_section_at(
+            image,
             compiled_project_section::objects,
             sparse_object_record_size,
             context.objects) ||
@@ -960,6 +1282,12 @@ apply_compiled_project_graph_fixed_writes(
                 object_identities,
             4,
             context.object_identities) ||
+        !sparse_section_at(
+            image,
+            compiled_project_section::
+                object_construction,
+            sparse_construction_record_size,
+            context.object_construction) ||
         !sparse_section_at(
             image,
             compiled_project_section::links,
@@ -994,6 +1322,19 @@ apply_compiled_project_graph_fixed_writes(
             G.visit_link_changes(
                 &context,
                 sparse_write_link_change))) {
+
+        return compiled_project_image_result::
+            invalid_state;
+    }
+
+    if (context.reused_members !=
+            G.member_entries().size() ||
+        context.reused_members !=
+            G.member_construction_entries().size() ||
+        context.reused_bases !=
+            G.base_entries().size() ||
+        context.reused_object_construction !=
+            G.object_construction_entries().size()) {
 
         return compiled_project_image_result::
             invalid_state;

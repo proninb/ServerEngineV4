@@ -10174,6 +10174,239 @@ void test_sparse_fixed_graph_writes(
 }
 
 
+
+void test_sparse_in_place_payload_reuse(
+    test_state& tests,
+    const compiled_fixture& fixture,
+    const compiled_test_image& baseline_image) {
+
+    {
+        auto image =
+            baseline_image.bytes;
+
+        compiled_project_view baseline;
+        type_entry baseline_type;
+
+        if (!tests.expect(
+                baseline.bind(
+                    image) ==
+                    compiled_project_image_result::success &&
+                baseline.type(
+                    fixture.type,
+                    baseline_type),
+                "bind sparse same-shape type update baseline")) {
+
+            return;
+        }
+
+        const std::array<member_record, 2>
+            members{{
+                {
+                    fixture.value_name,
+                    fixture.integer_type,
+                    graph_member_access::
+                        protected_access,
+                },
+                {
+                    fixture.peer_name,
+                    fixture.reference_type,
+                    graph_member_access::
+                        private_access,
+                },
+            }};
+
+        const std::array<construction_value, 2>
+            construction{{
+                construction_value::constant(
+                    construction_kind::
+                        signed_integer,
+                    43),
+                construction_value{},
+            }};
+
+        graph_delta delta;
+
+        if (!tests.expect(
+                succeeded(
+                    delta.bind_baseline(
+                        baseline)) &&
+                succeeded(
+                    delta.clear_definition(
+                        fixture.type)) &&
+                succeeded(
+                    delta.define_record(
+                        fixture.type,
+                        graph_record_kind::
+                            struct_type,
+                        members,
+                        construction)) &&
+                delta.member_entries().size() ==
+                    members.size() &&
+                delta.base_entries().empty(),
+                "prepare same-shape type replacement")) {
+
+            return;
+        }
+
+        const auto old_size =
+            image.size();
+
+        if (!tests.expect(
+                apply_compiled_project_graph_fixed_writes(
+                    delta,
+                    image) ==
+                    compiled_project_image_result::
+                        success &&
+                image.size() ==
+                    old_size,
+                "patch same-shape type payload in place")) {
+
+            return;
+        }
+
+        compiled_project_view current;
+        type_entry current_type;
+        member_record current_member;
+        construction_value current_construction;
+
+        tests.expect(
+            current.bind(
+                image) ==
+                    compiled_project_image_result::success &&
+            current.type(
+                fixture.type,
+                current_type) &&
+            current_type.members.begin ==
+                baseline_type.members.begin &&
+            current_type.members.count ==
+                baseline_type.members.count &&
+            current.member(
+                fixture.type,
+                fixture.value_member,
+                current_member) &&
+            current_member.name ==
+                fixture.value_name &&
+            current_member.access ==
+                graph_member_access::
+                    protected_access &&
+            current.construction(
+                fixture.type,
+                fixture.value_member,
+                current_construction) &&
+            current_construction ==
+                construction_value::constant(
+                    construction_kind::
+                        signed_integer,
+                    43) &&
+            current.member_count() ==
+                baseline.member_count() &&
+            current.graph_append_byte_size() ==
+                baseline.graph_append_byte_size(),
+            "same-shape type update keeps member WHERE and file size");
+    }
+
+    {
+        auto image =
+            baseline_image.bytes;
+
+        compiled_project_view baseline;
+        object_entry baseline_scalar;
+
+        if (!tests.expect(
+                baseline.bind(
+                    image) ==
+                    compiled_project_image_result::success &&
+                baseline.object(
+                    fixture.scalar,
+                    baseline_scalar) &&
+                baseline_scalar.
+                    non_default_initializer(),
+                "bind sparse construction update baseline")) {
+
+            return;
+        }
+
+        const auto old_construction_slot =
+            baseline_scalar.
+                construction_slot();
+
+        graph_delta delta;
+        object_handle restored;
+
+        if (!tests.expect(
+                succeeded(
+                    delta.bind_baseline(
+                        baseline)) &&
+                succeeded(
+                    delta.retire(
+                        fixture.scalar)) &&
+                succeeded(
+                    delta.add_object(
+                        fixture.scalar_identity,
+                        fixture.integer_type,
+                        restored,
+                        graph_object_non_default_initializer,
+                        construction_value::constant(
+                            construction_kind::
+                                unsigned_integer,
+                            9))) &&
+                restored ==
+                    fixture.scalar &&
+                delta.object_construction_entries().
+                    size() == 1,
+                "prepare existing object construction replacement")) {
+
+            return;
+        }
+
+        const auto old_size =
+            image.size();
+        const auto old_construction_count =
+            baseline.object_construction_count();
+
+        if (!tests.expect(
+                apply_compiled_project_graph_fixed_writes(
+                    delta,
+                    image) ==
+                    compiled_project_image_result::
+                        success &&
+                image.size() ==
+                    old_size,
+                "patch existing object construction in place")) {
+
+            return;
+        }
+
+        compiled_project_view current;
+        object_entry current_scalar;
+        construction_value current_initial;
+
+        tests.expect(
+            current.bind(
+                image) ==
+                    compiled_project_image_result::success &&
+            current.object(
+                fixture.scalar,
+                current_scalar) &&
+            current_scalar.construction_slot() ==
+                old_construction_slot &&
+            current.object_construction_count() ==
+                old_construction_count &&
+            current.construction(
+                fixture.scalar,
+                current_initial) &&
+            current_initial ==
+                construction_value::constant(
+                    construction_kind::
+                        unsigned_integer,
+                    9) &&
+            current.graph_append_byte_size() ==
+                baseline.graph_append_byte_size(),
+            "existing construction UPDATE reuses same WHERE without append");
+    }
+}
+
+
 void test_graph_append_tail_boundary(
     test_state& tests,
     const compiled_test_image& image) {
@@ -11412,6 +11645,11 @@ int main() {
             first);
 
         test_sparse_fixed_graph_writes(
+            tests,
+            fixture,
+            first);
+
+        test_sparse_in_place_payload_reuse(
             tests,
             fixture,
             first);
