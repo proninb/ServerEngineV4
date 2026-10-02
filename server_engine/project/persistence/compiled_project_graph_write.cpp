@@ -1,8 +1,604 @@
 #include "compiled_project_build.hpp"
+#include "crc64_ecma.hpp"
 
+#include <array>
+#include <cstring>
 #include <limits>
 
 namespace cw::server {
+namespace {
+
+constexpr std::size_t sparse_directory_offset =
+    compiled_project_header_size;
+
+constexpr std::size_t sparse_header_type_count_offset = 64;
+constexpr std::size_t sparse_header_object_count_offset = 72;
+constexpr std::size_t sparse_header_link_count_offset = 80;
+constexpr std::size_t sparse_header_crc_offset = 248;
+
+constexpr std::uint32_t sparse_type_record_size = 20;
+constexpr std::uint32_t sparse_object_record_size = 8;
+constexpr std::uint32_t sparse_link_record_size = 16;
+constexpr std::uint32_t sparse_graph_identity_record_size = 4;
+constexpr std::uint32_t sparse_index_record_size = 8;
+
+constexpr std::uint32_t sparse_location_inactive_kind = 3u;
+constexpr std::uint32_t sparse_link_inactive_flag = 0x80000000u;
+constexpr std::uint32_t sparse_link_state_mask = 0xc0000000u;
+
+[[nodiscard]] constexpr std::size_t sparse_section_index(
+    compiled_project_section kind) noexcept {
+
+    return static_cast<std::size_t>(
+        static_cast<std::uint32_t>(
+            kind) - 1);
+}
+
+[[nodiscard]] std::uint32_t sparse_read_u32(
+    const std::byte* source) noexcept {
+
+    std::uint32_t value = 0;
+
+    for (std::uint32_t index = 0;
+         index < 4;
+         ++index) {
+
+        value |=
+            static_cast<std::uint32_t>(
+                std::to_integer<std::uint8_t>(
+                    source[index]))
+            << (index * 8);
+    }
+
+    return value;
+}
+
+[[nodiscard]] std::uint64_t sparse_read_u64(
+    const std::byte* source) noexcept {
+
+    std::uint64_t value = 0;
+
+    for (std::uint32_t index = 0;
+         index < 8;
+         ++index) {
+
+        value |=
+            static_cast<std::uint64_t>(
+                std::to_integer<std::uint8_t>(
+                    source[index]))
+            << (index * 8);
+    }
+
+    return value;
+}
+
+void sparse_write_u16(
+    std::byte* target,
+    std::uint16_t value) noexcept {
+
+    target[0] =
+        static_cast<std::byte>(
+            value & 0xffu);
+
+    target[1] =
+        static_cast<std::byte>(
+            (value >> 8) & 0xffu);
+}
+
+void sparse_write_u32(
+    std::byte* target,
+    std::uint32_t value) noexcept {
+
+    for (std::uint32_t index = 0;
+         index < 4;
+         ++index) {
+
+        target[index] =
+            static_cast<std::byte>(
+                (value >> (index * 8)) &
+                0xffu);
+    }
+}
+
+void sparse_write_u64(
+    std::byte* target,
+    std::uint64_t value) noexcept {
+
+    for (std::uint32_t index = 0;
+         index < 8;
+         ++index) {
+
+        target[index] =
+            static_cast<std::byte>(
+                (value >> (index * 8)) &
+                0xffu);
+    }
+}
+
+[[nodiscard]] constexpr std::uint64_t sparse_mix64(
+    std::uint64_t value) noexcept {
+
+    value ^= value >> 30;
+    value *= 0xbf58476d1ce4e5b9ULL;
+    value ^= value >> 27;
+    value *= 0x94d049bb133111ebULL;
+    value ^= value >> 31;
+
+    return value;
+}
+
+[[nodiscard]] std::uint64_t sparse_link_target_hash(
+    object_endpoint target) noexcept {
+
+    const auto key =
+        (static_cast<std::uint64_t>(
+             target.object.value()) << 32) |
+        (static_cast<std::uint64_t>(
+             target.member.value()) +
+         1);
+
+    return sparse_mix64(key);
+}
+
+[[nodiscard]] std::uint32_t sparse_fingerprint(
+    std::uint64_t hash) noexcept {
+
+    auto value =
+        static_cast<std::uint32_t>(
+            hash ^ (hash >> 32));
+
+    return value == 0
+        ? 1
+        : value;
+}
+
+struct sparse_section final {
+    std::byte* data = nullptr;
+    std::uint64_t count = 0;
+    std::uint32_t record_size = 0;
+};
+
+[[nodiscard]] bool sparse_section_at(
+    std::span<std::byte> image,
+    compiled_project_section kind,
+    std::uint32_t expected_record_size,
+    sparse_section& output) noexcept {
+
+    output = {};
+
+    const auto index =
+        sparse_section_index(kind);
+
+    if (index >=
+        compiled_project_directory_count) {
+
+        return false;
+    }
+
+    const auto* entry =
+        image.data() +
+        sparse_directory_offset +
+        index *
+            compiled_project_directory_entry_size;
+
+    if (sparse_read_u32(entry) !=
+            static_cast<std::uint32_t>(
+                kind) ||
+        sparse_read_u32(
+            entry + 4) !=
+            expected_record_size) {
+
+        return false;
+    }
+
+    const auto offset =
+        sparse_read_u64(
+            entry + 8);
+
+    const auto count =
+        sparse_read_u64(
+            entry + 16);
+
+    if (count != 0 &&
+        expected_record_size >
+            (std::numeric_limits<
+                std::uint64_t>::max)() /
+                count) {
+
+        return false;
+    }
+
+    const auto byte_count =
+        count *
+        expected_record_size;
+
+    if (offset >
+            image.size() ||
+        byte_count >
+            image.size() -
+                static_cast<std::size_t>(
+                    offset)) {
+
+        return false;
+    }
+
+    output = {
+        image.data() +
+            static_cast<std::size_t>(
+                offset),
+        count,
+        expected_record_size,
+    };
+
+    return true;
+}
+
+[[nodiscard]] std::uint32_t sparse_graph_location(
+    std::uint32_t kind,
+    std::uint32_t slot) noexcept {
+
+    return kind != 0 &&
+        kind <=
+            sparse_location_inactive_kind &&
+        slot != 0 &&
+        slot <=
+            type_ref::maximum_payload
+        ? (kind << 30) | slot
+        : 0;
+}
+
+void sparse_encode_type(
+    std::byte* target,
+    const type_entry& value) noexcept {
+
+    sparse_write_u32(
+        target,
+        value.members.begin);
+
+    sparse_write_u32(
+        target + 4,
+        value.members.count);
+
+    sparse_write_u32(
+        target + 8,
+        value.bases.begin);
+
+    sparse_write_u32(
+        target + 12,
+        value.bases.count);
+
+    target[16] =
+        static_cast<std::byte>(
+            static_cast<std::uint8_t>(
+                value.kind));
+
+    target[17] =
+        static_cast<std::byte>(
+            static_cast<std::uint8_t>(
+                value.record_kind));
+
+    sparse_write_u16(
+        target + 18,
+        value.flags);
+}
+
+void sparse_encode_object(
+    std::byte* target,
+    const object_entry& value) noexcept {
+
+    sparse_write_u32(
+        target,
+        value.type.value());
+
+    sparse_write_u32(
+        target + 4,
+        value.state);
+}
+
+void sparse_encode_link(
+    std::byte* target,
+    const link_record& value) noexcept {
+
+    sparse_write_u32(
+        target,
+        value.source.object.value());
+
+    sparse_write_u32(
+        target + 4,
+        value.source.member.value());
+
+    sparse_write_u32(
+        target + 8,
+        value.target.object.value());
+
+    sparse_write_u32(
+        target + 12,
+        value.target.member.value());
+}
+
+struct sparse_fixed_write_context final {
+    std::span<std::byte> image;
+    sparse_section types;
+    sparse_section type_identities;
+    sparse_section objects;
+    sparse_section object_identities;
+    sparse_section links;
+    sparse_section graph_identity;
+    sparse_section link_target_index;
+};
+
+[[nodiscard]] bool sparse_find_link_index_slot(
+    sparse_fixed_write_context& context,
+    object_endpoint target,
+    link_handle handle,
+    std::byte*& output) noexcept {
+
+    output = nullptr;
+
+    const auto count =
+        context.link_target_index.count;
+
+    if (count == 0 ||
+        (count &
+            (count - 1)) != 0) {
+
+        return false;
+    }
+
+    const auto hash =
+        sparse_link_target_hash(
+            target);
+
+    const auto fingerprint =
+        sparse_fingerprint(
+            hash);
+
+    const auto mask =
+        count - 1;
+
+    auto position =
+        hash &
+        mask;
+
+    for (std::uint64_t probe = 0;
+         probe < count;
+         ++probe) {
+
+        auto* slot =
+            context.link_target_index.data +
+            static_cast<std::size_t>(
+                position) *
+                sparse_index_record_size;
+
+        const auto raw =
+            sparse_read_u32(
+                slot + 4);
+
+        if (raw == 0) {
+            return false;
+        }
+
+        if (sparse_read_u32(slot) ==
+                fingerprint &&
+            (raw &
+                link_handle::maximum_slot) ==
+                handle.value()) {
+
+            const auto state =
+                raw &
+                sparse_link_state_mask;
+
+            if (state != 0 &&
+                state !=
+                    sparse_link_inactive_flag) {
+
+                return false;
+            }
+
+            output = slot;
+            return true;
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return false;
+}
+
+[[nodiscard]] server_status sparse_write_type_change(
+    void* opaque,
+    const graph_delta_type_change& change) noexcept {
+
+    auto& context =
+        *static_cast<
+            sparse_fixed_write_context*>(
+                opaque);
+
+    if (change.kind !=
+            graph_delta_change_kind::patch ||
+        !change.handle ||
+        change.handle.value() >
+            context.types.count ||
+        change.handle.value() >
+            context.type_identities.count ||
+        !change.identity ||
+        change.identity.kind() !=
+            identity_kind::type ||
+        change.identity.slot() >=
+            context.graph_identity.count) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    const auto physical =
+        static_cast<std::size_t>(
+            change.handle.value() - 1);
+
+    if (sparse_read_u32(
+            context.type_identities.data +
+            physical * 4) !=
+        change.identity.value()) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    auto* location =
+        context.graph_identity.data +
+        static_cast<std::size_t>(
+            change.identity.slot()) * 4;
+
+    if (change.live) {
+        sparse_encode_type(
+            context.types.data +
+            physical *
+                sparse_type_record_size,
+            change.value);
+
+        sparse_write_u32(
+            location,
+            sparse_graph_location(
+                1,
+                change.handle.value()));
+    }
+    else {
+        sparse_write_u32(
+            location,
+            sparse_graph_location(
+                sparse_location_inactive_kind,
+                change.handle.value()));
+    }
+
+    return server_status::success;
+}
+
+[[nodiscard]] server_status sparse_write_object_change(
+    void* opaque,
+    const graph_delta_object_change& change) noexcept {
+
+    auto& context =
+        *static_cast<
+            sparse_fixed_write_context*>(
+                opaque);
+
+    if (change.kind !=
+            graph_delta_change_kind::patch ||
+        !change.handle ||
+        change.handle.value() >
+            context.objects.count ||
+        change.handle.value() >
+            context.object_identities.count ||
+        !change.identity ||
+        change.identity.kind() !=
+            identity_kind::object ||
+        change.identity.slot() >=
+            context.graph_identity.count) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    const auto physical =
+        static_cast<std::size_t>(
+            change.handle.value() - 1);
+
+    if (sparse_read_u32(
+            context.object_identities.data +
+            physical * 4) !=
+        change.identity.value()) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    auto* location =
+        context.graph_identity.data +
+        static_cast<std::size_t>(
+            change.identity.slot()) * 4;
+
+    if (change.live) {
+        sparse_encode_object(
+            context.objects.data +
+            physical *
+                sparse_object_record_size,
+            change.value);
+
+        sparse_write_u32(
+            location,
+            sparse_graph_location(
+                2,
+                change.handle.value()));
+    }
+    else {
+        sparse_write_u32(
+            location,
+            sparse_graph_location(
+                sparse_location_inactive_kind,
+                change.handle.value()));
+    }
+
+    return server_status::success;
+}
+
+[[nodiscard]] server_status sparse_write_link_change(
+    void* opaque,
+    const graph_delta_link_change& change) noexcept {
+
+    auto& context =
+        *static_cast<
+            sparse_fixed_write_context*>(
+                opaque);
+
+    if (change.kind !=
+            graph_delta_change_kind::patch ||
+        !change.handle ||
+        change.handle.value() >
+            context.links.count) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    std::byte* index_slot = nullptr;
+
+    if (!sparse_find_link_index_slot(
+            context,
+            change.value.target,
+            change.handle,
+            index_slot) ||
+        index_slot == nullptr) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    if (change.live) {
+        sparse_encode_link(
+            context.links.data +
+            static_cast<std::size_t>(
+                change.handle.value() - 1) *
+                sparse_link_record_size,
+            change.value);
+
+        sparse_write_u32(
+            index_slot + 4,
+            change.handle.value());
+    }
+    else {
+        sparse_write_u32(
+            index_slot + 4,
+            sparse_link_inactive_flag |
+                change.handle.value());
+    }
+
+    return server_status::success;
+}
+
+}
+
 
 compiled_project_image_result
 prepare_compiled_project_graph_write_plan(
@@ -290,6 +886,159 @@ prepare_compiled_project_graph_write_plan(
 
     return compiled_project_image_result::
         success;
+}
+
+
+compiled_project_image_result
+apply_compiled_project_graph_fixed_writes(
+    const graph_delta& G,
+    std::span<std::byte> image) noexcept {
+
+    compiled_project_view validation;
+
+    if (validation.bind(
+            image) !=
+        compiled_project_image_result::
+            success) {
+
+        return compiled_project_image_result::
+            invalid_image;
+    }
+
+    compiled_project_graph_write_plan plan;
+
+    const auto prepared =
+        prepare_compiled_project_graph_write_plan(
+            G,
+            plan);
+
+    if (prepared !=
+        compiled_project_image_result::
+            success) {
+
+        return prepared;
+    }
+
+    if (plan.initialization_change_count != 0 ||
+        plan.appended_types.count != 0 ||
+        plan.appended_members.count != 0 ||
+        plan.appended_bases.count != 0 ||
+        plan.appended_objects.count != 0 ||
+        plan.appended_object_construction.count != 0 ||
+        plan.appended_links.count != 0 ||
+        plan.appended_derived_types.count != 0 ||
+        plan.appended_endpoint_paths.count != 0 ||
+        plan.appended_endpoint_path_steps.count != 0) {
+
+        return compiled_project_image_result::
+            invalid_state;
+    }
+
+    sparse_fixed_write_context context{
+        image,
+    };
+
+    if (!sparse_section_at(
+            image,
+            compiled_project_section::types,
+            sparse_type_record_size,
+            context.types) ||
+        !sparse_section_at(
+            image,
+            compiled_project_section::
+                type_identities,
+            4,
+            context.type_identities) ||
+        !sparse_section_at(
+            image,
+            compiled_project_section::objects,
+            sparse_object_record_size,
+            context.objects) ||
+        !sparse_section_at(
+            image,
+            compiled_project_section::
+                object_identities,
+            4,
+            context.object_identities) ||
+        !sparse_section_at(
+            image,
+            compiled_project_section::links,
+            sparse_link_record_size,
+            context.links) ||
+        !sparse_section_at(
+            image,
+            compiled_project_section::
+                graph_identity_index,
+            sparse_graph_identity_record_size,
+            context.graph_identity) ||
+        !sparse_section_at(
+            image,
+            compiled_project_section::
+                link_target_index,
+            sparse_index_record_size,
+            context.link_target_index)) {
+
+        return compiled_project_image_result::
+            invalid_image;
+    }
+
+    if (!succeeded(
+            G.visit_type_changes(
+                &context,
+                sparse_write_type_change)) ||
+        !succeeded(
+            G.visit_object_changes(
+                &context,
+                sparse_write_object_change)) ||
+        !succeeded(
+            G.visit_link_changes(
+                &context,
+                sparse_write_link_change))) {
+
+        return compiled_project_image_result::
+            invalid_state;
+    }
+
+    sparse_write_u64(
+        image.data() +
+            sparse_header_type_count_offset,
+        G.live_type_count());
+
+    sparse_write_u64(
+        image.data() +
+            sparse_header_object_count_offset,
+        G.live_object_count());
+
+    sparse_write_u64(
+        image.data() +
+            sparse_header_link_count_offset,
+        G.live_link_count());
+
+    std::array<
+        std::byte,
+        compiled_project_header_size>
+        header{};
+
+    std::memcpy(
+        header.data(),
+        image.data(),
+        header.size());
+
+    sparse_write_u64(
+        header.data() +
+            sparse_header_crc_offset,
+        0);
+
+    sparse_write_u64(
+        image.data() +
+            sparse_header_crc_offset,
+        persistence_crc64(
+            header));
+
+    compiled_project_view rebound;
+
+    return rebound.bind(
+        image);
 }
 
 }

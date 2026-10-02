@@ -9891,6 +9891,289 @@ void test_runtime_layout_tail_alignment(
         "Runtime total size is aligned after the System prefix");
 }
 
+void test_sparse_fixed_graph_writes(
+    test_state& tests,
+    const compiled_fixture& fixture,
+    const compiled_test_image& baseline_image) {
+
+    {
+        auto image =
+            baseline_image.bytes;
+
+        compiled_project_view baseline;
+
+        if (!tests.expect(
+                baseline.bind(
+                    image) ==
+                    compiled_project_image_result::success,
+                "bind sparse fixed type retirement baseline")) {
+
+            return;
+        }
+
+        graph_delta delta;
+
+        if (!tests.expect(
+                succeeded(
+                    delta.bind(
+                        baseline)) &&
+                succeeded(
+                    delta.retire(
+                        fixture.type)) &&
+                apply_compiled_project_graph_fixed_writes(
+                    delta,
+                    image) ==
+                    compiled_project_image_result::success,
+                "persist sparse fixed type retirement")) {
+
+            return;
+        }
+
+        compiled_project_view retired;
+        type_entry raw;
+
+        tests.expect(
+            retired.bind(
+                image) ==
+                compiled_project_image_result::success &&
+            retired.type_slot_count() ==
+                baseline.type_slot_count() &&
+            retired.live_type_count() + 1 ==
+                baseline.live_type_count() &&
+            !retired.type_slot_live(
+                fixture.type) &&
+            !retired.find_type(
+                fixture.type_identity) &&
+            retired.find_type_lineage(
+                fixture.type_identity) ==
+                fixture.type &&
+            retired.type_raw(
+                fixture.type,
+                raw),
+            "retired type keeps assigned WHERE without live semantic lookup");
+    }
+
+    {
+        auto image =
+            baseline_image.bytes;
+
+        compiled_project_view baseline;
+
+        if (!tests.expect(
+                baseline.bind(
+                    image) ==
+                    compiled_project_image_result::success,
+                "bind sparse fixed object retirement baseline")) {
+
+            return;
+        }
+
+        graph_delta delta;
+
+        if (!tests.expect(
+                succeeded(
+                    delta.bind(
+                        baseline)) &&
+                succeeded(
+                    delta.retire(
+                        fixture.left)) &&
+                apply_compiled_project_graph_fixed_writes(
+                    delta,
+                    image) ==
+                    compiled_project_image_result::success,
+                "persist sparse fixed object retirement")) {
+
+            return;
+        }
+
+        compiled_project_view retired;
+        object_entry raw;
+
+        if (!tests.expect(
+                retired.bind(
+                    image) ==
+                    compiled_project_image_result::success &&
+                retired.object_slot_count() ==
+                    baseline.object_slot_count() &&
+                retired.live_object_count() + 1 ==
+                    baseline.live_object_count() &&
+                !retired.object_slot_live(
+                    fixture.left) &&
+                !retired.find_object(
+                    fixture.left_identity) &&
+                retired.find_object_lineage(
+                    fixture.left_identity) ==
+                    fixture.left &&
+                retired.object_raw(
+                    fixture.left,
+                    raw),
+                "retired object keeps assigned WHERE without live semantic lookup")) {
+
+            return;
+        }
+
+        graph_delta reactivate;
+
+        object_handle restored;
+
+        if (!tests.expect(
+                succeeded(
+                    reactivate.bind(
+                        retired)) &&
+                succeeded(
+                    reactivate.add_object(
+                        fixture.left_identity,
+                        fixture.named_type,
+                        restored)) &&
+                restored ==
+                    fixture.left &&
+                apply_compiled_project_graph_fixed_writes(
+                    reactivate,
+                    image) ==
+                    compiled_project_image_result::success,
+                "reactivate object at persisted assigned WHERE")) {
+
+            return;
+        }
+
+        compiled_project_view current;
+
+        tests.expect(
+            current.bind(
+                image) ==
+                    compiled_project_image_result::success &&
+            current.object_slot_live(
+                fixture.left) &&
+            current.find_object(
+                fixture.left_identity) ==
+                fixture.left &&
+            current.find_object_lineage(
+                fixture.left_identity) ==
+                fixture.left &&
+            current.live_object_count() ==
+                baseline.live_object_count(),
+            "object reactivation restores same current WHERE");
+    }
+
+    {
+        auto image =
+            baseline_image.bytes;
+
+        compiled_project_view baseline;
+
+        if (!tests.expect(
+                baseline.bind(
+                    image) ==
+                    compiled_project_image_result::success,
+                "bind sparse fixed link retirement baseline")) {
+
+            return;
+        }
+
+        link_record original;
+
+        if (!tests.expect(
+                baseline.link(
+                    fixture.link,
+                    original),
+                "read sparse fixed link retirement baseline")) {
+
+            return;
+        }
+
+        graph_delta delta;
+
+        if (!tests.expect(
+                succeeded(
+                    delta.bind(
+                        baseline)) &&
+                succeeded(
+                    delta.retire(
+                        fixture.link)) &&
+                apply_compiled_project_graph_fixed_writes(
+                    delta,
+                    image) ==
+                    compiled_project_image_result::success,
+                "persist sparse fixed link retirement")) {
+
+            return;
+        }
+
+        compiled_project_view retired;
+        link_record raw;
+
+        if (!tests.expect(
+                retired.bind(
+                    image) ==
+                    compiled_project_image_result::success &&
+                retired.link_slot_count() ==
+                    baseline.link_slot_count() &&
+                retired.live_link_count() + 1 ==
+                    baseline.live_link_count() &&
+                !retired.link_slot_live(
+                    fixture.link) &&
+                !retired.find_link_target(
+                    original.target) &&
+                retired.find_link_target_lineage(
+                    original.target) ==
+                    fixture.link &&
+                retired.link_raw(
+                    fixture.link,
+                    raw) &&
+                raw.source ==
+                    original.source &&
+                raw.target ==
+                    original.target,
+                "retired link keeps target lineage and same WHERE")) {
+
+            return;
+        }
+
+        graph_delta reactivate;
+
+        link_handle restored;
+
+        if (!tests.expect(
+                succeeded(
+                    reactivate.bind(
+                        retired)) &&
+                succeeded(
+                    reactivate.add_link(
+                        original.source,
+                        original.target,
+                        restored)) &&
+                restored ==
+                    fixture.link &&
+                apply_compiled_project_graph_fixed_writes(
+                    reactivate,
+                    image) ==
+                    compiled_project_image_result::success,
+                "reactivate link at persisted assigned WHERE")) {
+
+            return;
+        }
+
+        compiled_project_view current;
+
+        tests.expect(
+            current.bind(
+                image) ==
+                    compiled_project_image_result::success &&
+            current.link_slot_live(
+                fixture.link) &&
+            current.find_link_target(
+                original.target) ==
+                fixture.link &&
+            current.find_link_target_lineage(
+                original.target) ==
+                fixture.link &&
+            current.live_link_count() ==
+                baseline.live_link_count(),
+            "link reactivation restores same current WHERE");
+    }
+}
+
+
 void test_graph_append_tail_boundary(
     test_state& tests,
     const compiled_test_image& image) {
@@ -11126,6 +11409,11 @@ int main() {
 
         test_graph_append_tail_boundary(
             tests,
+            first);
+
+        test_sparse_fixed_graph_writes(
+            tests,
+            fixture,
             first);
 
         test_round_trip(

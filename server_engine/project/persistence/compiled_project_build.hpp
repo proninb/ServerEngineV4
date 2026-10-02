@@ -67,6 +67,14 @@ prepare_compiled_project_graph_write_plan(
     const graph_delta& G,
     compiled_project_graph_write_plan& output) noexcept;
 
+// Applies only existing top-level type/object/link patches to one writable
+// compiled.bin image. It never scans or rewrites unchanged Graph payload.
+// Append arenas are intentionally rejected by this stage.
+[[nodiscard]] compiled_project_image_result
+apply_compiled_project_graph_fixed_writes(
+    const graph_delta& G,
+    std::span<std::byte> image) noexcept;
+
 [[nodiscard]] compiled_project_image_result
 prepare_build_compiled_project_layout(
     const string_table& strings,

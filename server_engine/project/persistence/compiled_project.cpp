@@ -67,6 +67,10 @@ constexpr std::uint32_t endpoint_path_step_record_size = 16;
 constexpr std::uint32_t graph_identity_record_size = 4;
 constexpr std::uint32_t assign_record_size = 16;
 
+constexpr std::uint32_t graph_location_inactive_kind = 3u;
+constexpr std::uint32_t link_target_inactive_flag = 0x80000000u;
+constexpr std::uint32_t link_target_state_mask = 0xc0000000u;
+
 [[nodiscard]] constexpr std::size_t section_index(
     compiled_project_section kind) noexcept {
 
@@ -749,6 +753,9 @@ void compiled_project_view::reset() noexcept {
     type_count_value = 0;
     object_count_value = 0;
     link_count_value = 0;
+    live_type_count_value = 0;
+    live_object_count_value = 0;
+    live_link_count_value = 0;
     assign_count_value = 0;
 }
 
@@ -1246,10 +1253,10 @@ compiled_project_view::bind(
             identity_count ||
         identity_index.count !=
             expected_identity_index_count ||
-        types.count !=
-            type_count ||
+        type_count >
+            types.count ||
         type_identities.count !=
-            type_count ||
+            types.count ||
         bases.count >
             (std::numeric_limits<std::uint32_t>::max)() ||
         members.count !=
@@ -1258,14 +1265,14 @@ compiled_project_view::bind(
             expected_member_index_count ||
         derived_index.count !=
             expected_derived_index_count ||
-        objects.count !=
-            object_count ||
+        object_count >
+            objects.count ||
         object_identities.count !=
-            object_count ||
+            objects.count ||
         object_construction.count >
             graph_object_construction_slot_mask ||
-        links.count !=
-            link_count ||
+        link_count >
+            links.count ||
         link_target_index.count !=
             expected_link_target_index_count ||
         object_initialization_target_index.count !=
@@ -1315,13 +1322,25 @@ compiled_project_view::bind(
 
     type_count_value =
         static_cast<std::size_t>(
-            type_count);
+            types.count);
 
     object_count_value =
         static_cast<std::size_t>(
-            object_count);
+            objects.count);
 
     link_count_value =
+        static_cast<std::size_t>(
+            links.count);
+
+    live_type_count_value =
+        static_cast<std::size_t>(
+            type_count);
+
+    live_object_count_value =
+        static_cast<std::size_t>(
+            object_count);
+
+    live_link_count_value =
         static_cast<std::size_t>(
             link_count);
 
@@ -1782,15 +1801,62 @@ identity_ref compiled_project_view::find_identity(
 type_handle compiled_project_view::type_at(
     std::size_t index) const noexcept {
 
-    return index <
-        type_count_value
-        ? type_handle{
-            static_cast<std::uint32_t>(
-                index + 1)}
+    if (index >=
+        type_count_value) {
+
+        return {};
+    }
+
+    const type_handle handle{
+        static_cast<std::uint32_t>(
+            index + 1)};
+
+    return type_slot_live(
+        handle)
+        ? handle
         : type_handle{};
 }
 
-bool compiled_project_view::type(
+bool compiled_project_view::type_slot_live(
+    type_handle handle) const noexcept {
+
+    if (!handle ||
+        handle.value() >
+            type_count_value) {
+
+        return false;
+    }
+
+    const auto identity_value =
+        identity(handle);
+
+    if (!identity_value ||
+        identity_value.kind() !=
+            identity_kind::type) {
+
+        return false;
+    }
+
+    const auto& values =
+        section(
+            compiled_project_section::
+                graph_identity_index);
+
+    const auto location =
+        read_u32(
+            values.data +
+            static_cast<std::size_t>(
+                identity_value.slot()) *
+                graph_identity_record_size);
+
+    return graph_location_kind(
+               location) == 1 &&
+        graph_location_slot(
+            location) ==
+            handle.value();
+}
+
+bool compiled_project_view::type_raw(
     type_handle handle,
     type_entry& output) const noexcept {
 
@@ -1844,6 +1910,17 @@ bool compiled_project_view::type(
             record + 18);
 
     return true;
+}
+
+bool compiled_project_view::type(
+    type_handle handle,
+    type_entry& output) const noexcept {
+
+    return type_slot_live(
+               handle) &&
+        type_raw(
+            handle,
+            output);
 }
 
 identity_ref compiled_project_view::identity(
@@ -1928,6 +2005,8 @@ type_handle compiled_project_view::find_type(
 
     if (!identity_valid(
             identity_value) ||
+        identity_value.kind() !=
+            identity_kind::type ||
         identity_value.slot() >
             identity_count_value) {
 
@@ -1939,14 +2018,12 @@ type_handle compiled_project_view::find_type(
             compiled_project_section::
                 graph_identity_index);
 
-    const auto* record =
-        values.data +
-        static_cast<std::size_t>(
-            identity_value.slot()) *
-            graph_identity_record_size;
-
     const auto location =
-        read_u32(record);
+        read_u32(
+            values.data +
+            static_cast<std::size_t>(
+                identity_value.slot()) *
+                graph_identity_record_size);
 
     if (graph_location_kind(
             location) != 1) {
@@ -1954,9 +2031,64 @@ type_handle compiled_project_view::find_type(
         return {};
     }
 
-    return type_from_raw(
-        graph_location_slot(
-            location));
+    const auto handle =
+        type_from_raw(
+            graph_location_slot(
+                location));
+
+    return handle &&
+        identity(handle) ==
+            identity_value
+        ? handle
+        : type_handle{};
+}
+
+type_handle compiled_project_view::find_type_lineage(
+    identity_ref identity_value) const noexcept {
+
+    if (!identity_valid(
+            identity_value) ||
+        identity_value.kind() !=
+            identity_kind::type ||
+        identity_value.slot() >
+            identity_count_value) {
+
+        return {};
+    }
+
+    const auto& values =
+        section(
+            compiled_project_section::
+                graph_identity_index);
+
+    const auto location =
+        read_u32(
+            values.data +
+            static_cast<std::size_t>(
+                identity_value.slot()) *
+                graph_identity_record_size);
+
+    const auto kind =
+        graph_location_kind(
+            location);
+
+    if (kind != 1 &&
+        kind !=
+            graph_location_inactive_kind) {
+
+        return {};
+    }
+
+    const auto handle =
+        type_from_raw(
+            graph_location_slot(
+                location));
+
+    return handle &&
+        identity(handle) ==
+            identity_value
+        ? handle
+        : type_handle{};
 }
 
 bool compiled_project_view::member(
@@ -2438,15 +2570,62 @@ type_ref compiled_project_view::find_derived(
 object_handle compiled_project_view::object_at(
     std::size_t index) const noexcept {
 
-    return index <
-        object_count_value
-        ? object_handle{
-            static_cast<std::uint32_t>(
-                index + 1)}
+    if (index >=
+        object_count_value) {
+
+        return {};
+    }
+
+    const object_handle handle{
+        static_cast<std::uint32_t>(
+            index + 1)};
+
+    return object_slot_live(
+        handle)
+        ? handle
         : object_handle{};
 }
 
-bool compiled_project_view::object(
+bool compiled_project_view::object_slot_live(
+    object_handle handle) const noexcept {
+
+    if (!handle ||
+        handle.value() >
+            object_count_value) {
+
+        return false;
+    }
+
+    const auto identity_value =
+        identity(handle);
+
+    if (!identity_value ||
+        identity_value.kind() !=
+            identity_kind::object) {
+
+        return false;
+    }
+
+    const auto& values =
+        section(
+            compiled_project_section::
+                graph_identity_index);
+
+    const auto location =
+        read_u32(
+            values.data +
+            static_cast<std::size_t>(
+                identity_value.slot()) *
+                graph_identity_record_size);
+
+    return graph_location_kind(
+               location) == 2 &&
+        graph_location_slot(
+            location) ==
+            handle.value();
+}
+
+bool compiled_project_view::object_raw(
     object_handle handle,
     object_entry& output) const noexcept {
 
@@ -2482,6 +2661,17 @@ bool compiled_project_view::object(
         output.type);
 }
 
+bool compiled_project_view::object(
+    object_handle handle,
+    object_entry& output) const noexcept {
+
+    return object_slot_live(
+               handle) &&
+        object_raw(
+            handle,
+            output);
+}
+
 identity_ref compiled_project_view::identity(
     object_handle handle) const noexcept {
 
@@ -2512,6 +2702,8 @@ object_handle compiled_project_view::find_object(
 
     if (!identity_valid(
             identity_value) ||
+        identity_value.kind() !=
+            identity_kind::object ||
         identity_value.slot() >
             identity_count_value) {
 
@@ -2523,14 +2715,12 @@ object_handle compiled_project_view::find_object(
             compiled_project_section::
                 graph_identity_index);
 
-    const auto* record =
-        values.data +
-        static_cast<std::size_t>(
-            identity_value.slot()) *
-            graph_identity_record_size;
-
     const auto location =
-        read_u32(record);
+        read_u32(
+            values.data +
+            static_cast<std::size_t>(
+                identity_value.slot()) *
+                graph_identity_record_size);
 
     if (graph_location_kind(
             location) != 2) {
@@ -2538,9 +2728,64 @@ object_handle compiled_project_view::find_object(
         return {};
     }
 
-    return object_from_raw(
-        graph_location_slot(
-            location));
+    const auto handle =
+        object_from_raw(
+            graph_location_slot(
+                location));
+
+    return handle &&
+        identity(handle) ==
+            identity_value
+        ? handle
+        : object_handle{};
+}
+
+object_handle compiled_project_view::find_object_lineage(
+    identity_ref identity_value) const noexcept {
+
+    if (!identity_valid(
+            identity_value) ||
+        identity_value.kind() !=
+            identity_kind::object ||
+        identity_value.slot() >
+            identity_count_value) {
+
+        return {};
+    }
+
+    const auto& values =
+        section(
+            compiled_project_section::
+                graph_identity_index);
+
+    const auto location =
+        read_u32(
+            values.data +
+            static_cast<std::size_t>(
+                identity_value.slot()) *
+                graph_identity_record_size);
+
+    const auto kind =
+        graph_location_kind(
+            location);
+
+    if (kind != 2 &&
+        kind !=
+            graph_location_inactive_kind) {
+
+        return {};
+    }
+
+    const auto handle =
+        object_from_raw(
+            graph_location_slot(
+                location));
+
+    return handle &&
+        identity(handle) ==
+            identity_value
+        ? handle
+        : object_handle{};
 }
 
 bool compiled_project_view::construction(
@@ -2837,15 +3082,24 @@ compiled_project_view::find_endpoint_path(
 link_handle compiled_project_view::link_at(
     std::size_t index) const noexcept {
 
-    return index <
-        link_count_value
-        ? link_from_raw(
+    if (index >=
+        link_count_value) {
+
+        return {};
+    }
+
+    const auto handle =
+        link_from_raw(
             static_cast<std::uint32_t>(
-                index + 1))
+                index + 1));
+
+    return link_slot_live(
+        handle)
+        ? handle
         : link_handle{};
 }
 
-bool compiled_project_view::link(
+bool compiled_project_view::link_raw(
     link_handle handle,
     link_record& output) const noexcept {
 
@@ -2889,12 +3143,12 @@ bool compiled_project_view::link(
     if (!source_object ||
         source_object.kind() !=
             identity_kind::object ||
-        !find_object(
+        !find_object_lineage(
             source_object) ||
         !target_object ||
         target_object.kind() !=
             identity_kind::object ||
-        !find_object(
+        !find_object_lineage(
             target_object)) {
 
         return false;
@@ -2956,6 +3210,92 @@ bool compiled_project_view::link(
     }
 
     return true;
+}
+
+bool compiled_project_view::link_slot_live(
+    link_handle handle) const noexcept {
+
+    link_record value;
+
+    if (!link_raw(
+            handle,
+            value)) {
+
+        return false;
+    }
+
+    const auto& index =
+        section(
+            compiled_project_section::
+                link_target_index);
+
+    if (index.count == 0 ||
+        (index.count &
+            (index.count - 1)) != 0) {
+
+        return false;
+    }
+
+    const auto hash =
+        link_target_hash(
+            value.target);
+
+    const auto fingerprint =
+        identity_fingerprint(
+            hash);
+
+    const auto mask =
+        index.count - 1;
+
+    auto position =
+        hash &
+        mask;
+
+    for (std::uint64_t probe = 0;
+         probe < index.count;
+         ++probe) {
+
+        const auto* slot =
+            index.data +
+            static_cast<std::size_t>(
+                position) *
+                index_record_size;
+
+        const auto raw =
+            read_u32(
+                slot + 4);
+
+        if (raw == 0) {
+            return false;
+        }
+
+        if (read_u32(slot) ==
+                fingerprint &&
+            (raw &
+                link_handle::maximum_slot) ==
+                handle.value()) {
+
+            return (raw &
+                link_target_state_mask) == 0;
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return false;
+}
+
+bool compiled_project_view::link(
+    link_handle handle,
+    link_record& output) const noexcept {
+
+    return link_slot_live(
+               handle) &&
+        link_raw(
+            handle,
+            output);
 }
 
 
@@ -3203,13 +3543,116 @@ link_handle compiled_project_view::find_link_target(
         if (read_u32(slot) ==
             fingerprint) {
 
+            if ((raw &
+                    link_target_state_mask) != 0) {
+
+                return {};
+            }
+
             const auto candidate =
-                link_from_raw(raw);
+                link_from_raw(
+                    raw &
+                    link_handle::maximum_slot);
 
             link_record record;
 
             if (candidate &&
-                link(
+                link_raw(
+                    candidate,
+                    record) &&
+                record.target == target) {
+
+                return candidate;
+            }
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return {};
+}
+
+link_handle compiled_project_view::find_link_target_lineage(
+    object_endpoint target) const noexcept {
+
+    if (!target.object ||
+        target.object.kind() !=
+            identity_kind::object ||
+        !find_object_lineage(
+            target.object) ||
+        !target.member) {
+
+        return {};
+    }
+
+    const auto& index =
+        section(
+            compiled_project_section::
+                link_target_index);
+
+    if (index.count == 0 ||
+        (index.count &
+            (index.count - 1)) != 0) {
+
+        return {};
+    }
+
+    const auto hash =
+        link_target_hash(target);
+
+    const auto fingerprint =
+        identity_fingerprint(hash);
+
+    const auto mask =
+        index.count - 1;
+
+    auto position =
+        hash &
+        mask;
+
+    for (std::uint64_t probe = 0;
+         probe < index.count;
+         ++probe) {
+
+        const auto* slot =
+            index.data +
+            static_cast<std::size_t>(
+                position) *
+                index_record_size;
+
+        const auto raw =
+            read_u32(
+                slot + 4);
+
+        if (raw == 0) {
+            return {};
+        }
+
+        if (read_u32(slot) ==
+            fingerprint) {
+
+            const auto state =
+                raw &
+                link_target_state_mask;
+
+            if (state != 0 &&
+                state !=
+                    link_target_inactive_flag) {
+
+                return {};
+            }
+
+            const auto candidate =
+                link_from_raw(
+                    raw &
+                    link_handle::maximum_slot);
+
+            link_record record;
+
+            if (candidate &&
+                link_raw(
                     candidate,
                     record) &&
                 record.target == target) {
