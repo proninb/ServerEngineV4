@@ -17,11 +17,7 @@ semantic G
 Graph handles remain physical/current WHERE values. They are not semantic
 identity and are not required to survive normal-BUILD relocation.
 
-Normal BUILD is targeted to append changed semantic payload and patch current
-indexes; REBUILD remains the compaction boundary. Runtime construction must
-eventually traverse current semantic state only and must not scale with stale
-physical payload retained by BUILD. This does not change the Runtime-cycle
-contract: native C++ references remain direct and lookup-free.
+Normal BUILD is targeted to apply each valid Parser/Semantic result directly to final writable `compiled.bin` and patch assigned physical storage/current indexes in place. There is no generic EOF append area and no whole-Project candidate semantic image. REBUILD remains the fresh compact-image boundary. Runtime-cycle native C++ references remain direct and lookup-free.
 <!-- GRAPH_IDENTITY_APPEND_TARGET_END -->
 
 ## Physical source tree

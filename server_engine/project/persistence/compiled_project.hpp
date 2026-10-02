@@ -27,12 +27,12 @@ class graph_delta;
 class graph_dense_projection;
 class source_map_overlay_view;
 
-inline constexpr std::uint32_t compiled_project_format_version = 16;
+inline constexpr std::uint32_t compiled_project_format_version = 17;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;
 
-inline constexpr std::size_t compiled_project_directory_count = 33;
+inline constexpr std::size_t compiled_project_directory_count = 32;
 
 inline constexpr std::size_t
 compiled_project_directory_entry_size = 32;
@@ -78,10 +78,6 @@ enum class compiled_project_section : std::uint32_t {
     member_name_index = 30,
     object_initializations = 31,
     object_initialization_target_index = 32,
-
-    // BUILD-only physical growth area of the final G. REBUILD leaves this
-    // section empty. Sparse BUILD may grow only this last section.
-    graph_append_bytes = 33,
 };
 
 enum class compiled_project_image_result : std::uint8_t {
@@ -281,13 +277,6 @@ public:
             section(
                 compiled_project_section::
                     object_initializations).count);
-    }
-
-    [[nodiscard]] std::size_t graph_append_byte_size() const noexcept {
-        return static_cast<std::size_t>(
-            section(
-                compiled_project_section::
-                    graph_append_bytes).count);
     }
 
     [[nodiscard]] std::size_t assign_count() const noexcept {

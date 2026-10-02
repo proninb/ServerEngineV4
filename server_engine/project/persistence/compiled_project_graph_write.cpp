@@ -11,15 +11,9 @@ namespace {
 constexpr std::size_t sparse_directory_offset =
     compiled_project_header_size;
 
-constexpr std::size_t sparse_directory_bytes =
-    compiled_project_directory_count *
-    compiled_project_directory_entry_size;
-
-constexpr std::size_t sparse_header_file_size_offset = 40;
 constexpr std::size_t sparse_header_type_count_offset = 64;
 constexpr std::size_t sparse_header_object_count_offset = 72;
 constexpr std::size_t sparse_header_link_count_offset = 80;
-constexpr std::size_t sparse_header_directory_crc_offset = 240;
 constexpr std::size_t sparse_header_crc_offset = 248;
 
 constexpr std::uint32_t sparse_type_record_size = 20;
@@ -405,64 +399,10 @@ struct sparse_fixed_write_context final {
     sparse_section links;
     sparse_section graph_identity;
     sparse_section link_target_index;
-    sparse_section graph_append;
     std::size_t reused_members = 0;
     std::size_t reused_bases = 0;
     std::size_t reused_object_construction = 0;
-    std::size_t grown_object_construction = 0;
-    std::size_t tail_cursor = 0;
-    bool allow_growth = false;
 };
-
-[[nodiscard]] std::byte*
-sparse_object_construction_record(
-    sparse_fixed_write_context& context,
-    std::uint32_t locator) noexcept {
-
-    if (locator == 0) {
-        return nullptr;
-    }
-
-    if (locator <=
-        context.object_construction.count) {
-
-        return context.object_construction.data +
-            static_cast<std::size_t>(
-                locator - 1) *
-                sparse_construction_record_size;
-    }
-
-    const auto tail_unit =
-        static_cast<std::uint64_t>(
-            locator) -
-        context.object_construction.count -
-        1;
-
-    if (tail_unit >
-        (std::numeric_limits<
-            std::uint64_t>::max)() /
-            sparse_construction_record_size) {
-
-        return nullptr;
-    }
-
-    const auto tail_offset =
-        tail_unit *
-        sparse_construction_record_size;
-
-    if (tail_offset >
-            context.graph_append.count ||
-        sparse_construction_record_size >
-            context.graph_append.count -
-                tail_offset) {
-
-        return nullptr;
-    }
-
-    return context.graph_append.data +
-        static_cast<std::size_t>(
-            tail_offset);
-}
 
 [[nodiscard]] bool sparse_find_link_index_slot(
     sparse_fixed_write_context& context,
@@ -822,138 +762,66 @@ sparse_object_construction_record(
             change.identity.slot()) * 4;
 
     if (change.live) {
-        object_entry persisted =
-            change.value;
+        if (physical >=
+            context.object_construction.count) {
 
-        const auto* old_record =
-            context.objects.data +
-            physical *
-                sparse_object_record_size;
+            return server_status::project_artifact_invalid;
+        }
 
-        const auto old_state =
-            sparse_read_u32(
-                old_record + 4);
-
-        const auto old_construction_slot =
-            old_state &
-            graph_object_construction_slot_mask;
+        object_entry persisted = change.value;
 
         const auto new_construction_slot =
             change.value.construction_slot();
 
-        if (change.value.
-                non_default_initializer() &&
-            new_construction_slot >
+        if (change.value.non_default_initializer()) {
+            if (new_construction_slot >
                 context.object_construction.count) {
 
-            const auto construction_append =
-                context.graph->
-                    object_construction_entries();
+                const auto construction_append =
+                    context.graph->object_construction_entries();
 
-            const auto source_index =
-                static_cast<std::size_t>(
-                    new_construction_slot -
-                    context.object_construction.count -
-                    1);
+                const auto source_index =
+                    static_cast<std::size_t>(
+                        new_construction_slot -
+                        context.object_construction.count - 1);
 
-            if (source_index >=
-                    construction_append.size() ||
-                construction_append[
-                    source_index] !=
-                    change.construction) {
+                if (source_index >= construction_append.size() ||
+                    construction_append[source_index] !=
+                        change.construction) {
 
-                return server_status::
-                    project_artifact_invalid;
-            }
-
-            std::uint32_t persisted_locator = 0;
-
-            if ((old_state &
-                    graph_object_non_default_initializer) !=
-                0) {
-
-                auto* existing =
-                    sparse_object_construction_record(
-                        context,
-                        old_construction_slot);
-
-                if (existing == nullptr) {
-                    return server_status::
-                        project_artifact_invalid;
+                    return server_status::project_artifact_invalid;
                 }
 
-                sparse_encode_construction(
-                    existing,
-                    change.construction);
-
-                persisted_locator =
-                    old_construction_slot;
-
-                ++context.
-                    reused_object_construction;
+                ++context.reused_object_construction;
             }
-            else {
-                if (!context.allow_growth ||
-                    (context.tail_cursor &
-                        (sparse_construction_record_size -
-                         1)) != 0 ||
-                    context.tail_cursor >
-                        context.graph_append.count ||
-                    sparse_construction_record_size >
-                        context.graph_append.count -
-                            context.tail_cursor) {
 
-                    return server_status::
-                        project_artifact_invalid;
-                }
-
-                const auto locator =
-                    static_cast<std::uint64_t>(
-                        context.object_construction.count) +
-                    1 +
-                    context.tail_cursor /
-                        sparse_construction_record_size;
-
-                if (locator == 0 ||
-                    locator >
-                        graph_object_construction_slot_mask) {
-
-                    return server_status::io_error;
-                }
-
-                sparse_encode_construction(
-                    context.graph_append.data +
-                        context.tail_cursor,
-                    change.construction);
-
-                persisted_locator =
-                    static_cast<std::uint32_t>(
-                        locator);
-
-                context.tail_cursor +=
-                    sparse_construction_record_size;
-
-                ++context.
-                    grown_object_construction;
-            }
+            sparse_encode_construction(
+                context.object_construction.data +
+                physical * sparse_construction_record_size,
+                change.construction);
 
             persisted.state =
-                (change.value.state &
-                    ~graph_object_construction_slot_mask) |
-                persisted_locator;
+                (change.value.state & graph_object_flag_mask) |
+                change.handle.value();
+        }
+        else {
+            sparse_encode_construction(
+                context.object_construction.data +
+                physical * sparse_construction_record_size,
+                construction_value{});
+
+            persisted.state =
+                change.value.state & graph_object_flag_mask;
         }
 
         sparse_encode_object(
             context.objects.data +
-            physical *
-                sparse_object_record_size,
+            physical * sparse_object_record_size,
             persisted);
 
         sparse_write_u32(
             location,
-            sparse_graph_location(
-                2,
-                change.handle.value()));
+            sparse_graph_location(2, change.handle.value()));
     }
     else {
         sparse_write_u32(
@@ -1312,90 +1180,10 @@ prepare_compiled_project_graph_write_plan(
 }
 
 
-namespace {
-
-struct sparse_growth_context final {
-    const compiled_project_view* baseline = nullptr;
-    const graph_delta* graph = nullptr;
-    std::size_t compact_construction_count = 0;
-    std::size_t accounted = 0;
-    std::size_t growth_count = 0;
-};
-
-[[nodiscard]] server_status
-sparse_measure_object_growth(
-    void* opaque,
-    const graph_delta_object_change& change) noexcept {
-
-    auto& context =
-        *static_cast<
-            sparse_growth_context*>(
-                opaque);
-
-    if (change.kind !=
-            graph_delta_change_kind::patch ||
-        !change.handle) {
-
-        return server_status::
-            project_artifact_invalid;
-    }
-
-    if (!change.live ||
-        !change.value.
-            non_default_initializer() ||
-        change.value.construction_slot() <=
-            context.compact_construction_count) {
-
-        return server_status::success;
-    }
-
-    const auto source_index =
-        static_cast<std::size_t>(
-            change.value.construction_slot() -
-            context.compact_construction_count -
-            1);
-
-    const auto append =
-        context.graph->
-            object_construction_entries();
-
-    if (source_index >=
-            append.size() ||
-        append[source_index] !=
-            change.construction) {
-
-        return server_status::
-            project_artifact_invalid;
-    }
-
-    object_entry previous;
-
-    if (!context.baseline->
-            object_raw(
-                change.handle,
-                previous)) {
-
-        return server_status::
-            project_artifact_invalid;
-    }
-
-    ++context.accounted;
-
-    if (!previous.
-            non_default_initializer()) {
-
-        ++context.growth_count;
-    }
-
-    return server_status::success;
-}
-
-[[nodiscard]] compiled_project_image_result
-apply_sparse_graph_writes(
+compiled_project_image_result
+apply_compiled_project_graph_fixed_writes(
     const graph_delta& G,
-    std::span<std::byte> image,
-    bool allow_growth,
-    std::size_t old_tail_count) noexcept {
+    std::span<std::byte> image) noexcept {
 
     compiled_project_view validation;
 
@@ -1499,43 +1287,10 @@ apply_sparse_graph_writes(
             compiled_project_section::
                 link_target_index,
             sparse_index_record_size,
-            context.link_target_index) ||
-        !sparse_section_at(
-            image,
-            compiled_project_section::
-                graph_append_bytes,
-            1,
-            context.graph_append)) {
+            context.link_target_index)) {
 
         return compiled_project_image_result::
             invalid_image;
-    }
-
-    if (old_tail_count >
-        context.graph_append.count) {
-
-        return compiled_project_image_result::
-            invalid_state;
-    }
-
-    context.allow_growth =
-        allow_growth;
-
-    context.tail_cursor =
-        old_tail_count;
-
-    if (allow_growth) {
-        if (context.tail_cursor >
-            (std::numeric_limits<
-                std::size_t>::max)() - 15) {
-
-            return compiled_project_image_result::
-                failed;
-        }
-
-        context.tail_cursor =
-            (context.tail_cursor + 15) &
-            ~std::size_t{15};
     }
 
     if (!succeeded(
@@ -1561,14 +1316,8 @@ apply_sparse_graph_writes(
             G.member_construction_entries().size() ||
         context.reused_bases !=
             G.base_entries().size() ||
-        context.reused_object_construction +
-                context.grown_object_construction !=
-            G.object_construction_entries().size() ||
-        (!allow_growth &&
-         context.grown_object_construction != 0) ||
-        (allow_growth &&
-         context.tail_cursor !=
-            context.graph_append.count)) {
+        context.reused_object_construction !=
+            G.object_construction_entries().size()) {
 
         return compiled_project_image_result::
             invalid_state;
@@ -1614,320 +1363,6 @@ apply_sparse_graph_writes(
 
     return rebound.bind(
         image);
-}
-
-}
-
-
-compiled_project_image_result
-apply_compiled_project_graph_fixed_writes(
-    const graph_delta& G,
-    std::span<std::byte> image) noexcept {
-
-    compiled_project_view baseline;
-
-    if (baseline.bind(
-            image) !=
-        compiled_project_image_result::
-            success) {
-
-        return compiled_project_image_result::
-            invalid_image;
-    }
-
-    return apply_sparse_graph_writes(
-        G,
-        image,
-        false,
-        baseline.graph_append_byte_size());
-}
-
-
-compiled_project_image_result
-prepare_compiled_project_graph_growth(
-    const graph_delta& G,
-    const compiled_project_view& baseline,
-    std::size_t& additional_bytes) noexcept {
-
-    additional_bytes = 0;
-
-    compiled_project_graph_write_plan plan;
-
-    const auto prepared =
-        prepare_compiled_project_graph_write_plan(
-            G,
-            plan);
-
-    if (prepared !=
-        compiled_project_image_result::
-            success) {
-
-        return prepared;
-    }
-
-    // This slice grows only object construction. Other genuine growth remains
-    // fail-closed until its direct EOF representation is added.
-    if (plan.initialization_change_count != 0 ||
-        plan.appended_types.count != 0 ||
-        plan.appended_members.count != 0 ||
-        plan.appended_bases.count != 0 ||
-        plan.appended_objects.count != 0 ||
-        plan.appended_links.count != 0 ||
-        plan.appended_derived_types.count != 0 ||
-        plan.appended_endpoint_paths.count != 0 ||
-        plan.appended_endpoint_path_steps.count != 0) {
-
-        return compiled_project_image_result::
-            invalid_state;
-    }
-
-    sparse_growth_context context{
-        &baseline,
-        &G,
-        baseline.object_construction_count(),
-    };
-
-    if (!succeeded(
-            G.visit_object_changes(
-                &context,
-                sparse_measure_object_growth)) ||
-        context.accounted !=
-            G.object_construction_entries().
-                size()) {
-
-        return compiled_project_image_result::
-            invalid_state;
-    }
-
-    if (context.growth_count == 0) {
-        return compiled_project_image_result::
-            success;
-    }
-
-    const auto old_tail =
-        baseline.graph_append_byte_size();
-
-    if (old_tail >
-        (std::numeric_limits<
-            std::size_t>::max)() - 15) {
-
-        return compiled_project_image_result::
-            failed;
-    }
-
-    const auto aligned_tail =
-        (old_tail + 15) &
-        ~std::size_t{15};
-
-    if (context.growth_count >
-        ((std::numeric_limits<
-              std::size_t>::max)() -
-         aligned_tail) /
-            sparse_construction_record_size) {
-
-        return compiled_project_image_result::
-            failed;
-    }
-
-    const auto final_tail =
-        aligned_tail +
-        context.growth_count *
-            sparse_construction_record_size;
-
-    const auto last_unit =
-        (final_tail -
-         sparse_construction_record_size) /
-        sparse_construction_record_size;
-
-    if (baseline.object_construction_count() >
-            graph_object_construction_slot_mask ||
-        last_unit >
-            graph_object_construction_slot_mask ||
-        baseline.object_construction_count() +
-                1 +
-                last_unit >
-            graph_object_construction_slot_mask) {
-
-        return compiled_project_image_result::
-            failed;
-    }
-
-    additional_bytes =
-        final_tail -
-        old_tail;
-
-    return compiled_project_image_result::
-        success;
-}
-
-
-compiled_project_image_result
-apply_compiled_project_graph_writes(
-    const graph_delta& G,
-    std::span<std::byte> image,
-    std::size_t previous_size) noexcept {
-
-    if (previous_size >
-        image.size()) {
-
-        return compiled_project_image_result::
-            invalid_state;
-    }
-
-    compiled_project_view baseline;
-
-    if (baseline.bind(
-            image.first(
-                previous_size)) !=
-        compiled_project_image_result::
-            success) {
-
-        return compiled_project_image_result::
-            invalid_image;
-    }
-
-    std::size_t growth = 0;
-
-    const auto prepared =
-        prepare_compiled_project_graph_growth(
-            G,
-            baseline,
-            growth);
-
-    if (prepared !=
-        compiled_project_image_result::
-            success) {
-
-        return prepared;
-    }
-
-    if (growth == 0) {
-        return image.size() ==
-                previous_size
-            ? apply_compiled_project_graph_fixed_writes(
-                G,
-                image)
-            : compiled_project_image_result::
-                invalid_state;
-    }
-
-    if (growth >
-            (std::numeric_limits<
-                std::size_t>::max)() -
-                previous_size ||
-        image.size() !=
-            previous_size +
-                growth) {
-
-        return compiled_project_image_result::
-            invalid_state;
-    }
-
-    const auto tail_index =
-        sparse_section_index(
-            compiled_project_section::
-                graph_append_bytes);
-
-    auto* tail_entry =
-        image.data() +
-        sparse_directory_offset +
-        tail_index *
-            compiled_project_directory_entry_size;
-
-    if (sparse_read_u32(
-            tail_entry) !=
-            static_cast<std::uint32_t>(
-                compiled_project_section::
-                    graph_append_bytes) ||
-        sparse_read_u32(
-            tail_entry + 4) != 1) {
-
-        return compiled_project_image_result::
-            invalid_image;
-    }
-
-    const auto tail_offset =
-        sparse_read_u64(
-            tail_entry + 8);
-
-    const auto old_tail_count =
-        sparse_read_u64(
-            tail_entry + 16);
-
-    if (old_tail_count !=
-            baseline.graph_append_byte_size() ||
-        tail_offset >
-            previous_size ||
-        old_tail_count >
-            previous_size -
-                static_cast<std::size_t>(
-                    tail_offset) ||
-        tail_offset +
-                old_tail_count !=
-            previous_size) {
-
-        return compiled_project_image_result::
-            invalid_image;
-    }
-
-    std::fill(
-        image.begin() +
-            static_cast<std::ptrdiff_t>(
-                previous_size),
-        image.end(),
-        std::byte{0});
-
-    const auto new_tail_count =
-        old_tail_count +
-        growth;
-
-    sparse_write_u64(
-        tail_entry + 16,
-        new_tail_count);
-
-    sparse_write_u64(
-        image.data() +
-            sparse_header_file_size_offset,
-        image.size());
-
-    const auto directory =
-        image.subspan(
-            sparse_directory_offset,
-            sparse_directory_bytes);
-
-    sparse_write_u64(
-        image.data() +
-            sparse_header_directory_crc_offset,
-        persistence_crc64(
-            directory));
-
-    std::array<
-        std::byte,
-        compiled_project_header_size>
-        header{};
-
-    std::memcpy(
-        header.data(),
-        image.data(),
-        header.size());
-
-    sparse_write_u64(
-        header.data() +
-            sparse_header_crc_offset,
-        0);
-
-    sparse_write_u64(
-        image.data() +
-            sparse_header_crc_offset,
-        persistence_crc64(
-            header));
-
-    return apply_sparse_graph_writes(
-        G,
-        image,
-        true,
-        static_cast<std::size_t>(
-            old_tail_count));
 }
 
 }

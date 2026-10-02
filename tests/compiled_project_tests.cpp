@@ -10299,9 +10299,7 @@ void test_sparse_in_place_payload_reuse(
                         signed_integer,
                     43) &&
             current.member_count() ==
-                baseline.member_count() &&
-            current.graph_append_byte_size() ==
-                baseline.graph_append_byte_size(),
+                baseline.member_count(),
             "same-shape type update keeps member WHERE and file size");
     }
 
@@ -10399,43 +10397,32 @@ void test_sparse_in_place_payload_reuse(
                 construction_value::constant(
                     construction_kind::
                         unsigned_integer,
-                    9) &&
-            current.graph_append_byte_size() ==
-                baseline.graph_append_byte_size(),
+                    9),
             "existing construction UPDATE reuses same WHERE without append");
     }
 }
 
 
-
-void test_sparse_object_construction_growth(
+void test_sparse_object_construction_slot_activation(
     test_state& tests,
     const compiled_fixture& fixture,
     const compiled_test_image& baseline_image) {
 
-    auto image =
-        baseline_image.bytes;
+    auto image = baseline_image.bytes;
 
     compiled_project_view baseline;
     object_entry baseline_object;
     construction_value baseline_initial;
 
     if (!tests.expect(
-            baseline.bind(
-                image) ==
-                compiled_project_image_result::success &&
-            baseline.object(
-                fixture.left,
-                baseline_object) &&
-            !baseline_object.
-                non_default_initializer() &&
-            baseline.construction(
-                fixture.left,
-                baseline_initial) &&
-            baseline_initial ==
-                construction_value{},
-            "bind object without explicit construction")) {
-
+            baseline.bind(image) == compiled_project_image_result::success &&
+            baseline.object_construction_count() == baseline.object_slot_count() &&
+            baseline.object(fixture.left, baseline_object) &&
+            !baseline_object.non_default_initializer() &&
+            baseline_object.construction_slot() == 0 &&
+            baseline.construction(fixture.left, baseline_initial) &&
+            baseline_initial == construction_value{},
+            "REBUILD reserves one construction cell per object WHERE")) {
         return;
     }
 
@@ -10443,66 +10430,27 @@ void test_sparse_object_construction_growth(
     object_handle restored;
 
     if (!tests.expect(
-            succeeded(
-                delta.bind_baseline(
-                    baseline)) &&
-            succeeded(
-                delta.retire(
-                    fixture.left)) &&
-            succeeded(
-                delta.add_object(
-                    fixture.left_identity,
-                    fixture.named_type,
-                    restored,
-                    graph_object_non_default_initializer,
-                    construction_value{})) &&
-            restored ==
-                fixture.left &&
-            delta.object_construction_entries().
-                size() == 1,
-            "prepare genuinely new object construction")) {
-
+            succeeded(delta.bind_baseline(baseline)) &&
+            succeeded(delta.retire(fixture.left)) &&
+            succeeded(delta.add_object(
+                fixture.left_identity,
+                fixture.named_type,
+                restored,
+                graph_object_non_default_initializer,
+                construction_value{})) &&
+            restored == fixture.left &&
+            delta.object_construction_entries().size() == 1,
+            "prepare object initializer activation")) {
         return;
     }
 
-    std::size_t growth = 0;
+    const auto old_size = image.size();
 
     if (!tests.expect(
-            prepare_compiled_project_graph_growth(
-                delta,
-                baseline,
-                growth) ==
+            apply_compiled_project_graph_fixed_writes(delta, image) ==
                 compiled_project_image_result::success &&
-            growth ==
-                sizeof(construction_value),
-            "measure one EOF construction record")) {
-
-        return;
-    }
-
-    const auto old_size =
-        image.size();
-
-    try {
-        image.resize(
-            old_size +
-            growth);
-    }
-    catch (...) {
-        tests.expect(
-            false,
-            "grow compiled image for one construction record");
-        return;
-    }
-
-    if (!tests.expect(
-            apply_compiled_project_graph_writes(
-                delta,
-                image,
-                old_size) ==
-                compiled_project_image_result::success,
-            "append one object construction to Graph tail")) {
-
+            image.size() == old_size,
+            "activate construction_slot without growing compiled.bin")) {
         return;
     }
 
@@ -10511,78 +10459,35 @@ void test_sparse_object_construction_growth(
     construction_value current_initial;
 
     if (!tests.expect(
-            current.bind(
-                image) ==
-                compiled_project_image_result::success &&
-            current.verify_contents() ==
-                compiled_project_image_result::success &&
-            current.find_object(
-                fixture.left_identity) ==
-                fixture.left &&
-            current.object(
-                fixture.left,
-                current_object) &&
-            current_object.
-                non_default_initializer() &&
-            current_object.construction_slot() >
-                current.object_construction_count() &&
-            current.construction(
-                fixture.left,
-                current_initial) &&
-            current_initial ==
-                construction_value{} &&
-            current.graph_append_byte_size() ==
-                sizeof(construction_value) &&
-            image.size() ==
-                old_size +
-                sizeof(construction_value),
-            "LOAD resolves direct object construction in EOF tail")) {
-
+            current.bind(image) == compiled_project_image_result::success &&
+            current.verify_contents() == compiled_project_image_result::success &&
+            current.object(fixture.left, current_object) &&
+            current_object.non_default_initializer() &&
+            current_object.construction_slot() == fixture.left.value() &&
+            current.construction(fixture.left, current_initial) &&
+            current_initial == construction_value{} &&
+            current.object_construction_count() == current.object_slot_count() &&
+            image.size() == old_size,
+            "construction_slot directly activates object-owned persisted cell")) {
         return;
     }
-
-    const auto tail_locator =
-        current_object.construction_slot();
 
     graph_delta second;
     object_handle second_restored;
 
     if (!tests.expect(
-            succeeded(
-                second.bind_baseline(
-                    current)) &&
-            succeeded(
-                second.retire(
-                    fixture.left)) &&
-            succeeded(
-                second.add_object(
-                    fixture.left_identity,
-                    fixture.named_type,
-                    second_restored,
-                    graph_object_non_default_initializer,
-                    construction_value{})) &&
-            second_restored ==
-                fixture.left,
-            "prepare update of existing tail construction")) {
-
-        return;
-    }
-
-    std::size_t second_growth = 0;
-
-    if (!tests.expect(
-            prepare_compiled_project_graph_growth(
-                second,
-                current,
-                second_growth) ==
-                compiled_project_image_result::success &&
-            second_growth == 0 &&
-            apply_compiled_project_graph_fixed_writes(
-                second,
-                image) ==
+            succeeded(second.bind_baseline(current)) &&
+            succeeded(second.retire(fixture.left)) &&
+            succeeded(second.add_object(
+                fixture.left_identity,
+                fixture.named_type,
+                second_restored,
+                graph_object_non_default_initializer,
+                construction_value{})) &&
+            second_restored == fixture.left &&
+            apply_compiled_project_graph_fixed_writes(second, image) ==
                 compiled_project_image_result::success,
-            "existing tail construction patches without growth")) {
-
+            "second BUILD patches the same construction cell")) {
         return;
     }
 
@@ -10590,71 +10495,12 @@ void test_sparse_object_construction_growth(
     object_entry final_object;
 
     tests.expect(
-        final_view.bind(
-            image) ==
-                compiled_project_image_result::success &&
-        final_view.verify_contents() ==
-            compiled_project_image_result::success &&
-        final_view.object(
-            fixture.left,
-            final_object) &&
-        !final_object.internal_static() &&
-        final_object.construction_slot() ==
-            tail_locator &&
-        final_view.graph_append_byte_size() ==
-            sizeof(construction_value) &&
-        image.size() ==
-            old_size +
-            sizeof(construction_value),
-        "second BUILD reuses tail construction WHERE");
-}
-
-
-void test_graph_append_tail_boundary(
-    test_state& tests,
-    const compiled_test_image& image) {
-
-    const auto tail =
-        compiled_project_section::
-            graph_append_bytes;
-
-    bool section_crc_zero = true;
-
-    for (std::size_t index = 0;
-         index <
-            compiled_project_directory_count;
-         ++index) {
-
-        const auto* entry =
-            image.bytes.data() +
-            directory_offset +
-            index *
-                compiled_project_directory_entry_size;
-
-        if (read_u64(
-                entry + 24) != 0) {
-
-            section_crc_zero = false;
-            break;
-        }
-    }
-
-    compiled_project_view view;
-
-    tests.expect(
-        section_count(
-            image.bytes,
-            tail) == 0 &&
-        section_offset(
-            image.bytes,
-            tail) ==
-            image.bytes.size() &&
-        section_crc_zero &&
-        view.bind(
-            image.bytes) ==
-                compiled_project_image_result::success &&
-        view.graph_append_byte_size() == 0,
-        "compact compiled G ends at one empty grow-only Graph tail");
+        final_view.bind(image) == compiled_project_image_result::success &&
+        final_view.verify_contents() == compiled_project_image_result::success &&
+        final_view.object(fixture.left, final_object) &&
+        final_object.construction_slot() == fixture.left.value() &&
+        image.size() == old_size,
+        "repeated initializer update keeps object WHERE and construction WHERE");
 }
 
 
@@ -11843,10 +11689,6 @@ int main() {
 
         test_persisted_sources(tests, first);
 
-        test_graph_append_tail_boundary(
-            tests,
-            first);
-
         test_sparse_fixed_graph_writes(
             tests,
             fixture,
@@ -11857,7 +11699,7 @@ int main() {
             fixture,
             first);
 
-        test_sparse_object_construction_growth(
+        test_sparse_object_construction_slot_activation(
             tests,
             fixture,
             first);

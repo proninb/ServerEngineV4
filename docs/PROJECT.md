@@ -21,15 +21,13 @@ current physical record.
 The target normal BUILD path is:
 
 ```text
-changed identity
-    -> append replacement semantic payload
-    -> patch current-location/index state
-    -> old physical payload becomes stale storage
+changed/affected semantic root
+    -> Parser/Semantic emits a valid semantic result
+    -> immediately patch assigned physical records in compiled.bin RW mmap
+    -> continue to the next affected result
 ```
 
-Stale storage is not semantic version history. REBUILD is the compaction
-boundary. Normal BUILD must eventually avoid both whole-G dense remapping and
-whole-artifact materialization for an independent sparse change.
+An UPDATE reuses assigned physical storage; it does not create a replacement persisted record merely because semantic replay occurred. `compiled.bin` is not cloned into a candidate image. There is no generic EOF/`graph_append_bytes` storage area. REBUILD remains the fresh compact-image boundary.
 
 Runtime construction resolves semantic identities to current Graph locations
 once while deriving ABI layout and FIXED_DIRECT addresses. Runtime cycle
@@ -135,8 +133,7 @@ by LOAD/resident Project publication. `project.manifest`, `source.bin`, and
 final immutable state, the four direct-mmap persistence branches are scheduled
 in parallel. Failure of a BUILD-acceleration branch does not invalidate the new
 G; it is reported as a warning and becomes a problem for the next BUILD. BUILD
-has a different failure contract: a failed BUILD preserves the previously
-persisted BUILD state.
+has a different persistence model: it is not a whole-Project transaction. Already applied valid semantic results are not rolled back when a later semantic result fails.
 
 ## Lifecycle
 
@@ -171,9 +168,7 @@ If source/configuration files have changed, the previously compiled final G no
 longer represents the current Project. BUILD therefore never keeps an old
 resident Project published while constructing a new one.
 
-A failed BUILD discards only its temporary operation state. Persisted BUILD
-artifacts remain available for a later BUILD, but no resident Project is
-published and the Server remains `UNLOADED`.
+A failed BUILD discards temporary operation state and does not publish a resident Project. Semantic results already validated and applied to writable `compiled.bin` are not rolled back; the failing semantic result is not applied. BUILD acceleration state must correspond to the applied lineage or be invalidated for the next BUILD. The Server remains `UNLOADED`.
 
 LOAD, PUBLISH, BUILD, and REBUILD never substitute for each other.
 
@@ -267,6 +262,7 @@ BUILD
     persisted BUILD state
     + current inputs
         -> reuse unchanged construction work where useful
+        -> each valid semantic result patches final compiled.bin directly
         -> G
 
 REBUILD
@@ -1297,9 +1293,7 @@ required.
 
 BUILD and REBUILD intentionally have different persisted-failure contracts.
 
-BUILD continues an existing lineage. A failed BUILD publishes no resident
-Project, leaves the Server `UNLOADED`, and preserves the previously persisted
-BUILD state for a later BUILD attempt.
+BUILD continues an existing lineage and mutates that lineage directly. A failed BUILD publishes no resident Project and leaves the Server `UNLOADED`, but it does not roll back semantic records already validated and written before the failure.
 
 REBUILD starts a fresh lineage. Before construction it removes:
 
@@ -1372,11 +1366,9 @@ OLD/CURRENT Project-composition semantic-root delta, and physical affected-root
 selection are implemented. Project composition does not finalize File Context
 topology early: current Project edges remain staged so later Header include
 replacement can extend the same sparse topology before the single finalization.
-Selected-root Parser/Semantic reconstruction and final G construction are not
-implemented yet.
-The physical mechanism used by a successful BUILD to persist its new state is
-intentionally not frozen yet; it must satisfy the separate BUILD failure
-contract that preserves the previously persisted BUILD state.
+Selected-root Parser/Semantic reconstruction and direct per-result `compiled.bin` mutation remain implementation work.
+
+The persistence mechanism is now fixed: Parser/Semantic result validity is the write boundary, and each valid result may patch final RW-mapped `compiled.bin` immediately. There is no whole-Project candidate/rollback publication barrier.
 
 ## LOAD Implementation Boundary
 
@@ -1926,9 +1918,7 @@ its operation-local mappings and removes the artifact set again. If the
 filesystem refuses required cleanup deletion, REBUILD reports
 `project.rebuild_cleanup_failed`, returns `io_error`, and remains `UNLOADED`.
 
-BUILD continues an existing lineage. A failed BUILD discards only its temporary
-operation state, preserves the previously persisted BUILD state, publishes no
-resident Project, and leaves the Server `UNLOADED`.
+BUILD continues an existing lineage. A failed BUILD discards temporary operation state, does not roll back already-applied valid semantic records, publishes no resident Project, and leaves the Server `UNLOADED`.
 
 Runtime/SHM publication is Phase 2 and is separate from this Phase-1 persistence
 contract.

@@ -67,30 +67,13 @@ prepare_compiled_project_graph_write_plan(
     const graph_delta& G,
     compiled_project_graph_write_plan& output) noexcept;
 
-// Applies Graph changes that reuse already assigned physical storage.
-// Existing member/base/construction records are patched in place; genuine
-// physical growth is rejected by this entry point.
+// Applies only existing top-level type/object/link patches to one writable
+// compiled.bin image. It never scans or rewrites unchanged Graph payload.
+// Append arenas are intentionally rejected by this stage.
 [[nodiscard]] compiled_project_image_result
 apply_compiled_project_graph_fixed_writes(
     const graph_delta& G,
     std::span<std::byte> image) noexcept;
-
-// Computes only the extra EOF bytes required for new object-construction
-// records. Existing construction records contribute zero growth.
-[[nodiscard]] compiled_project_image_result
-prepare_compiled_project_graph_growth(
-    const graph_delta& G,
-    const compiled_project_view& baseline,
-    std::size_t& additional_bytes) noexcept;
-
-// Applies the same sparse patches plus the prepared EOF growth. image must
-// already be resized; previous_size is the exact committed image size before
-// growth. This slice appends only object-construction records.
-[[nodiscard]] compiled_project_image_result
-apply_compiled_project_graph_writes(
-    const graph_delta& G,
-    std::span<std::byte> image,
-    std::size_t previous_size) noexcept;
 
 [[nodiscard]] compiled_project_image_result
 prepare_build_compiled_project_layout(

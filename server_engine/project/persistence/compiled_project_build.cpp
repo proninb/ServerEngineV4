@@ -522,7 +522,7 @@ prepare_build_compiled_project_layout(
             static_cast<std::uint64_t>(
                 projection.object_count()),
             static_cast<std::uint64_t>(
-                projection.object_construction_count()),
+                projection.object_count()),
             static_cast<std::uint64_t>(
                 projection.link_count()),
             static_cast<std::uint64_t>(
@@ -631,7 +631,7 @@ encode_build_compiled_project_image(
         count(
             compiled_project_section::
                 object_construction) !=
-            projection.object_construction_count() ||
+            projection.object_count() ||
         count(
             compiled_project_section::
                 links) !=
@@ -1583,7 +1583,6 @@ encode_build_compiled_project_image(
                     object_construction);
 
         std::uint32_t dense_cursor = 0;
-        std::uint32_t construction_cursor = 0;
 
         for (std::size_t lineage_index = 0;
              lineage_index <
@@ -1648,52 +1647,34 @@ encode_build_compiled_project_image(
                 if (!valid_construction(
                         dense_initial) ||
                     dense_initial.kind ==
-                        construction_kind::
-                            member_binding ||
+                        construction_kind::member_binding ||
                     dense_initial.kind ==
-                        construction_kind::
-                            object_binding ||
-                    construction_cursor >=
+                        construction_kind::object_binding ||
+                    dense.value() >
                         graph_object_construction_slot_mask) {
 
-                    return compiled_project_image_result::
-                        invalid_state;
+                    return compiled_project_image_result::invalid_state;
                 }
-
-                ++construction_cursor;
 
                 state |=
                     graph_object_non_default_initializer |
-                    construction_cursor;
+                    dense.value();
 
                 auto* initial_record =
                     construction_out +
                     static_cast<std::size_t>(
-                        construction_cursor - 1) *
+                        dense.value() - 1) *
                         build_construction_record_size;
 
-                build_write_u32(
-                    initial_record,
-                    dense_initial.low);
-
-                build_write_u32(
-                    initial_record + 4,
-                    dense_initial.high);
-
-                build_write_u32(
-                    initial_record + 8,
-                    dense_initial.operand);
-
+                build_write_u32(initial_record, dense_initial.low);
+                build_write_u32(initial_record + 4, dense_initial.high);
+                build_write_u32(initial_record + 8, dense_initial.operand);
                 build_write_u32(
                     initial_record + 12,
-                    static_cast<std::uint32_t>(
-                        dense_initial.kind));
+                    static_cast<std::uint32_t>(dense_initial.kind));
             }
-            else if (dense_initial !=
-                     construction_value{}) {
-
-                return compiled_project_image_result::
-                    invalid_state;
+            else if (dense_initial != construction_value{}) {
+                return compiled_project_image_result::invalid_state;
             }
 
             auto* record =
@@ -1740,9 +1721,7 @@ encode_build_compiled_project_image(
         }
 
         if (dense_cursor !=
-                projection.object_count() ||
-            construction_cursor !=
-                projection.object_construction_count()) {
+                projection.object_count()) {
 
             return compiled_project_image_result::
                 invalid_state;

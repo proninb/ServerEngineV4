@@ -15,18 +15,20 @@ semantic references
     physical handle WHERE -> identity_ref WHO
 
 normal BUILD
-    append replacement payload
-    patch direct current-location/index state
+    valid semantic result
+    -> patch assigned physical storage directly
+    -> patch direct current-location/index state
 
 persistence
+    direct final compiled.bin RW mmap
     changed/affected payload only
+    no whole-file clone
 
 REBUILD
     full compaction
 ```
 
-`history_count` is not semantic history. Any such accounting represents stale
-physical storage retained until REBUILD.
+An ordinary semantic UPDATE is not persisted as another historical record. Assigned physical storage is overwritten directly. No generic EOF BUILD area is part of the target format.
 
 The performance gate for a one-entity independent change is that semantic replay,
 Graph writes, and durable artifact writes scale with the changed/affected set,

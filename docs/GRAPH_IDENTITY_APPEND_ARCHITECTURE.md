@@ -1,4 +1,4 @@
-# Graph Identity and Append-Only BUILD Architecture
+# Graph Identity and Direct mmap BUILD Architecture
 
 Status: **Target architecture decision**  
 Repository baseline: `proninb/ServerEngineV4`  
@@ -167,22 +167,33 @@ semantic target endpoint -> current link_handle
 
 When object endpoints become identity based, changing an object's physical location does not require rewriting all links that name that object.
 
-## Stable top-level WHERE + append-only owned payload
+## Stable top-level WHERE + direct physical patching
 
-Normal BUILD must not compact the whole Graph solely because one current entity changed.
+Normal BUILD must not compact or rewrite the whole Graph solely because one current semantic result changed.
 
 For an existing semantic entity `A`:
 
 ```text
 identity_ref(A)
     -> same top-level WHERE
-    -> patch fixed type/object/link record in place
-    -> append replacement variable payload owned by A when required
+    -> overwrite affected physical records in compiled.bin RW mmap
 ```
 
-Examples of append-only owned payload include members, bases, construction records,
-endpoint-path payload, and provenance/contribution ranges. Replaced old ranges become
-stale storage until REBUILD.
+A semantic UPDATE does not allocate a replacement persisted record merely because Parser/Semantic replayed `A`.
+
+Optional object construction uses object-owned persisted storage:
+
+```text
+REBUILD object A without explicit initializer
+    object[A].construction_slot = 0
+    object_construction[A.WHERE] = reserved physical cell
+
+later BUILD: A = 5
+    write 5 into object_construction[A.WHERE]
+    object[A].construction_slot = A.WHERE
+```
+
+There is no generic `graph_append_bytes` section, EOF journal, correction block, extent chain, or semantic history log.
 
 It is not:
 
@@ -234,10 +245,7 @@ stale_count = physical_count - current_live_count
 Ordinary UPDATE does not increase this top-level stale count because the existing
 WHERE is reused. DELETE can make a top-level slot inactive.
 
-Variable owned arenas are different: replacing a type definition or construction
-may leave stale members/bases/construction/provenance ranges even while the
-top-level slot remains current. Compaction policy therefore needs arena-specific
-stale-byte/range accounting in addition to top-level stale counts.
+Existing owned physical records are patched in place whenever their storage is already assigned. In particular, changing or activating an object initializer does not create stale construction storage. Structural changes that genuinely require new section-owned storage are a separate allocation problem and must not be modeled as one new record for every UPDATE.
 
 No version chain is required.
 
@@ -252,13 +260,14 @@ persisted compiled/source/database state
     -> detect changed physical inputs
     -> affected physical closure
     -> affected semantic closure by identity_ref
-    -> replay changed/affected semantic roots
-    -> patch existing top-level WHERE or append only genuinely new WHERE
-    -> append replacement owned variable payload
-    -> patch only affected liveness/index state
-    -> persist changed/affected artifact payload
-    -> publish
+    -> Parser/Semantic produces one valid semantic result
+    -> immediately patch that result into final compiled.bin RW mmap
+    -> continue with the next affected semantic result
 ```
+
+There is no project-wide semantic-completion barrier before `compiled.bin` mutation and no candidate G publication transaction. Parser/Semantic is the validity boundary for the semantic result it emits.
+
+The mandatory Header -> Source ordering barrier still exists because Source semantics consume the completed Header Type domain. That language/visibility barrier is not a persistence barrier.
 
 The target complexity is:
 
@@ -315,11 +324,9 @@ current query indexes
 Source Map / Assign and other final Project data
 ```
 
-Normal BUILD may leave stale physical payload behind in the durable representation until REBUILD compacts it.
+Normal BUILD opens the final `compiled.bin` writable and patches mapped bytes directly. It does not clone/copy the complete artifact and does not build a second candidate semantic image.
 
-Stale payload must be unreachable from the current semantic indexes.
-
-The storage mechanism for efficient candidate publication must avoid rewriting the complete artifact for an independent sparse change. The logical append/current architecture and the sparse physical persistence mechanism are separate implementation steps.
+Already assigned physical storage is reused. REBUILD remains the fresh full-construction boundary for a new compact image.
 
 ## source.bin
 
@@ -345,9 +352,10 @@ Removal order:
 
 ```text
 1. migrate persisted semantic references from WHERE to WHO
-2. keep existing top-level WHERE stable; append replacement owned payload
-3. persist sparse patches/appends/liveness changes
-4. remove graph_dense_projection from normal BUILD
+2. keep existing top-level WHERE stable
+3. patch existing owned physical storage directly
+4. apply each valid semantic result to compiled.bin RW mmap
+5. remove graph_dense_projection from normal BUILD
 ```
 
 `graph_dense_projection` must not be removed before all semantic references that depend on physical relocation are audited.
@@ -376,12 +384,12 @@ However persisted G still contains multiple WHERE-to-WHERE semantic references, 
 Target V4 keeps the good V3 separation but completes it:
 
 ```text
-semantic relationships -> WHO
-physical placement -> WHERE
-normal BUILD existing entity -> patch same top-level WHERE
-normal BUILD new entity      -> append new WHERE
-replacement owned payload    -> append
-REBUILD                      -> compaction / WHERE may change
+semantic relationships       -> WHO
+physical placement           -> WHERE
+normal BUILD existing entity -> patch same WHERE/storage
+object initializer 0 -> set  -> activate object-owned construction cell
+normal BUILD new entity      -> allocate new owner storage
+REBUILD                      -> fresh compact image / WHERE may change
 ```
 
 Stable WHERE between REBUILDs is only a physical optimization. It never becomes
@@ -512,26 +520,28 @@ to `identity_ref`.
 
 Update link/initialization indexes so their semantic keys do not depend on object physical relocation.
 
-### GRAPH-APPEND-01
+### GRAPH-PATCH-01
 
 Keep an existing top-level type/object/link WHERE stable between REBUILDs:
 
 ```text
-UPDATE existing -> patch same WHERE
+UPDATE existing -> patch same WHERE/storage
 DELETE          -> same WHERE, live = false
 RE-ADD same WHO -> reactivate same WHERE
-NEW WHO         -> append new WHERE
+NEW WHO         -> allocate a new WHERE
 
-replacement owned variable payload -> append
+object construction:
+    no initializer -> construction_slot = 0
+    initializer    -> construction_slot = object WHERE
 ```
 
-No semantic version chain and no `handle == identity` contract.
+No semantic version chain, no `handle == identity` contract, and no generic EOF append area.
 
-### GRAPH-APPEND-02
+### GRAPH-PATCH-02
 
-Make `compiled.bin` and BUILD-only artifact publication physically sparse so an independent change does not require encoding/writing all unchanged payload.
+Apply valid sparse semantic results directly to the final writable `compiled.bin` mapping. Do not clone the artifact and do not wait for a project-wide semantic completion barrier.
 
-### GRAPH-APPEND-03
+### GRAPH-PATCH-03
 
 Remove `graph_dense_projection` from normal BUILD.
 
@@ -559,3 +569,6 @@ Only after current-only construction is correct and benchmarked, evaluate affect
 10. Sparse semantic BUILD is not considered complete while durable publication still requires O(total G) materialization.
 11. Runtime construction must never iterate stale physical payload merely because BUILD retained it for storage efficiency.
 12. Do not reintroduce V3 historical-handle/tombstone lineage as V4's primary semantic identity mechanism.
+13. A semantic UPDATE must not allocate a new persisted record when assigned physical storage can be overwritten.
+14. `compiled.bin` BUILD mutation is direct RW mmap; no full-file clone/candidate image is required.
+15. There is no generic EOF/`graph_append_bytes` BUILD storage contract.

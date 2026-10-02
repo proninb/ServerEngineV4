@@ -1,4 +1,4 @@
-# ServerEngineV4 — Graph Identity / Append BUILD handoff
+# ServerEngineV4 — Graph Identity / Direct mmap BUILD handoff
 
 Repository: `proninb/ServerEngineV4`  
 Branch: `work/ic-catalog`  
@@ -19,9 +19,15 @@ performance, normal BUILD keeps an already assigned top-level WHERE stable.
 Normal BUILD target:
 
 ```text
+Parser/Semantic valid result
+    -> immediately patch final compiled.bin RW mmap
+
 UPDATE existing
-    -> patch same top-level WHERE
-    -> append replacement owned variable payload when required
+    -> patch same WHERE / assigned storage
+
+object initializer absent -> present
+    -> write object-owned construction cell
+    -> construction_slot = object WHERE
 
 DELETE
     -> same WHERE, live = false
@@ -30,8 +36,10 @@ RE-ADD same WHO
     -> reactivate same WHERE
 
 NEW WHO
-    -> append one new WHERE
+    -> allocate one new WHERE
 ```
+
+No generic EOF/`graph_append_bytes` area and no project-wide semantic completion barrier precede mapped-file mutation.
 
 There is no semantic version chain (`A v1/A v2/A v3`) and no
 `handle == identity` contract.
@@ -72,9 +80,9 @@ GRAPH-IDENTITY-REF-01C
 Then:
 
 ```text
-GRAPH-APPEND-01 stable top-level WHERE / append owned payload
-GRAPH-APPEND-02 sparse persistence
-GRAPH-APPEND-03 remove normal-BUILD graph_dense_projection
+GRAPH-PATCH-01 stable top-level WHERE / reuse assigned storage
+GRAPH-PATCH-02 direct semantic-result -> compiled.bin RW mmap
+GRAPH-PATCH-03 remove normal-BUILD graph_dense_projection
 RUNTIME-CURRENT-01 current-only Runtime construction
 ```
 

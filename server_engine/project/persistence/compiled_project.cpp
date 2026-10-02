@@ -645,7 +645,6 @@ void write_u64(
 
     case compiled_project_section::assign_bytes:
     case compiled_project_section::source_paths:
-    case compiled_project_section::graph_append_bytes:
         return 1;
     case compiled_project_section::source_contributions:
     case compiled_project_section::source_roots:
@@ -1268,6 +1267,8 @@ compiled_project_view::bind(
         object_count >
             objects.count ||
         object_identities.count !=
+            objects.count ||
+        object_construction.count !=
             objects.count ||
         object_construction.count >
             graph_object_construction_slot_mask ||
@@ -2815,57 +2816,17 @@ bool compiled_project_view::construction(
             compiled_project_section::
                 object_construction);
 
-    if (slot == 0) {
+    if (slot == 0 ||
+        slot > values.count) {
+
         return false;
     }
 
-    const std::byte* record = nullptr;
-
-    if (slot <= values.count) {
-        record =
-            values.data +
-            static_cast<std::size_t>(
-                slot - 1) *
-                construction_record_size;
-    }
-    else {
-        const auto tail_unit =
-            static_cast<std::uint64_t>(
-                slot) -
-            values.count -
-            1;
-
-        if (tail_unit >
-            (std::numeric_limits<
-                std::uint64_t>::max)() /
-                construction_record_size) {
-
-            return false;
-        }
-
-        const auto tail_offset =
-            tail_unit *
+    const auto* record =
+        values.data +
+        static_cast<std::size_t>(
+            slot - 1) *
             construction_record_size;
-
-        const auto& tail =
-            section(
-                compiled_project_section::
-                    graph_append_bytes);
-
-        if (tail_offset >
-                tail.count ||
-            construction_record_size >
-                tail.count -
-                    tail_offset) {
-
-            return false;
-        }
-
-        record =
-            tail.data +
-            static_cast<std::size_t>(
-                tail_offset);
-    }
 
     output.low =
         read_u32(record);
@@ -4787,7 +4748,8 @@ compiled_project_view::verify_contents() const noexcept {
         }
 
         if (value.non_default_initializer()) {
-            if (value.construction_slot() == 0 ||
+            if (value.construction_slot() !=
+                    handle.value() ||
                 !construction_compatible(
                     *this,
                     value.type,
@@ -5914,11 +5876,6 @@ compiled_project_layout::prepare_counts(
                 index_record_size,
                 initialization_target_index_count,
             },
-            {
-                compiled_project_section::graph_append_bytes,
-                1,
-                0,
-            },
         }};
 
     std::uint64_t cursor =
@@ -6054,8 +6011,7 @@ prepare_compiled_project_layout(
             static_cast<std::uint64_t>(
                 G.object_count()),
             static_cast<std::uint64_t>(
-                G.object_construction_entries().
-                    size()),
+                G.object_count()),
             static_cast<std::uint64_t>(
                 G.link_count()),
             static_cast<std::uint64_t>(
@@ -6320,7 +6276,7 @@ encode_compiled_project_image(const string_table &strings,
         count(
             compiled_project_section::
                 object_construction) !=
-            G.object_construction_entries().size() ||
+            G.object_count() ||
         link_count !=
             G.link_count() ||
         initialization_count !=
@@ -7138,9 +7094,20 @@ encode_compiled_project_image(const string_table &strings,
                 record,
                 value.type.value());
 
+            std::uint32_t persisted_state =
+                value.state &
+                graph_object_internal_static;
+
+            if (value.non_default_initializer()) {
+                persisted_state |=
+                    graph_object_non_default_initializer |
+                    static_cast<std::uint32_t>(
+                        index + 1);
+            }
+
             write_u32(
                 record + 4,
-                value.state);
+                persisted_state);
 
             write_u32(
                 identities_out +
@@ -7174,47 +7141,54 @@ encode_compiled_project_image(const string_table &strings,
                 compiled_project_section::
                     object_construction);
 
-        const auto construction =
-            G.object_construction_entries();
+        const auto objects =
+            G.object_entries();
 
         for (std::size_t index = 0;
-             index < construction.size();
+             index < objects.size();
              ++index) {
 
-            const auto& initial =
-                construction[index];
+            const auto handle =
+                G.object_at(index);
 
-            if (!valid_construction(initial) ||
-                initial.kind ==
-                    construction_kind::member_binding ||
-                initial.kind ==
-                    construction_kind::object_binding) {
+            construction_value initial;
+
+            if (!handle ||
+                !G.construction(
+                    handle,
+                    initial)) {
 
                 return compiled_project_image_result::
                     invalid_state;
             }
 
+            if (!objects[index].
+                    non_default_initializer()) {
+
+                if (initial != construction_value{}) {
+                    return compiled_project_image_result::invalid_state;
+                }
+
+                continue;
+            }
+
+            if (!valid_construction(initial) ||
+                initial.kind == construction_kind::member_binding ||
+                initial.kind == construction_kind::object_binding) {
+
+                return compiled_project_image_result::invalid_state;
+            }
+
             auto* record =
                 values +
-                index *
-                    construction_record_size;
+                index * construction_record_size;
 
-            write_u32(
-                record,
-                initial.low);
-
-            write_u32(
-                record + 4,
-                initial.high);
-
-            write_u32(
-                record + 8,
-                initial.operand);
-
+            write_u32(record, initial.low);
+            write_u32(record + 4, initial.high);
+            write_u32(record + 8, initial.operand);
             write_u32(
                 record + 12,
-                static_cast<std::uint32_t>(
-                    initial.kind));
+                static_cast<std::uint32_t>(initial.kind));
         }
     }
 
