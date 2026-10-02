@@ -14,6 +14,7 @@
 #else
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -280,6 +281,262 @@ writable_file_mapping::create(
         static_cast<std::byte*>(
             view);
     length = size;
+
+    return writable_file_mapping_result::
+        success;
+#endif
+}
+
+writable_file_mapping_result
+writable_file_mapping::open_existing(
+    const std::filesystem::path& path,
+    std::size_t minimum_size) noexcept {
+
+    reset();
+
+    if (path.empty()) {
+        return writable_file_mapping_result::
+            failed;
+    }
+
+#if defined(_WIN32)
+    if (minimum_size >
+        static_cast<std::size_t>(
+            (std::numeric_limits<LONGLONG>::max)())) {
+
+        return writable_file_mapping_result::
+            failed;
+    }
+
+    const auto file =
+        CreateFileW(
+            path.c_str(),
+            GENERIC_READ |
+                GENERIC_WRITE,
+            FILE_SHARE_READ |
+                FILE_SHARE_WRITE |
+                FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL |
+                FILE_FLAG_RANDOM_ACCESS,
+            nullptr);
+
+    if (file ==
+        INVALID_HANDLE_VALUE) {
+
+        return writable_file_mapping_result::
+            failed;
+    }
+
+    LARGE_INTEGER current{};
+
+    if (GetFileSizeEx(
+            file,
+            &current) == 0 ||
+        current.QuadPart <= 0) {
+
+        CloseHandle(file);
+        return writable_file_mapping_result::
+            failed;
+    }
+
+    const auto current_size =
+        static_cast<std::size_t>(
+            current.QuadPart);
+
+    const auto target_size =
+        minimum_size >
+            current_size
+        ? minimum_size
+        : current_size;
+
+    bool extended = false;
+
+    if (target_size >
+        current_size) {
+
+        LARGE_INTEGER end{};
+        end.QuadPart =
+            static_cast<LONGLONG>(
+                target_size);
+
+        if (SetFilePointerEx(
+                file,
+                end,
+                nullptr,
+                FILE_BEGIN) == 0 ||
+            SetEndOfFile(
+                file) == 0) {
+
+            CloseHandle(file);
+            return writable_file_mapping_result::
+                failed;
+        }
+
+        extended = true;
+    }
+
+    const auto rollback_extension =
+        [&]() noexcept {
+
+            if (!extended) {
+                return;
+            }
+
+            LARGE_INTEGER end{};
+            end.QuadPart =
+                static_cast<LONGLONG>(
+                    current_size);
+
+            if (SetFilePointerEx(
+                    file,
+                    end,
+                    nullptr,
+                    FILE_BEGIN) != 0) {
+
+                (void)SetEndOfFile(
+                    file);
+            }
+        };
+
+    const auto mapping =
+        CreateFileMappingW(
+            file,
+            nullptr,
+            PAGE_READWRITE,
+            0,
+            0,
+            nullptr);
+
+    if (mapping == nullptr) {
+        rollback_extension();
+        CloseHandle(file);
+
+        return writable_file_mapping_result::
+            failed;
+    }
+
+    const auto view =
+        MapViewOfFile(
+            mapping,
+            FILE_MAP_READ |
+                FILE_MAP_WRITE,
+            0,
+            0,
+            0);
+
+    if (view == nullptr) {
+        CloseHandle(mapping);
+        rollback_extension();
+        CloseHandle(file);
+
+        return writable_file_mapping_result::
+            failed;
+    }
+
+    file_handle =
+        reinterpret_cast<std::intptr_t>(
+            file);
+
+    mapping_handle =
+        reinterpret_cast<std::intptr_t>(
+            mapping);
+
+    address =
+        static_cast<std::byte*>(
+            view);
+
+    length = target_size;
+
+    return writable_file_mapping_result::
+        success;
+#else
+    if (minimum_size >
+        static_cast<std::size_t>(
+            (std::numeric_limits<off_t>::max)())) {
+
+        return writable_file_mapping_result::
+            failed;
+    }
+
+    const auto file =
+        ::open(
+            path.c_str(),
+            O_RDWR |
+                O_CLOEXEC);
+
+    if (file < 0) {
+        return writable_file_mapping_result::
+            failed;
+    }
+
+    struct stat state{};
+
+    if (fstat(
+            file,
+            &state) != 0 ||
+        state.st_size <= 0) {
+
+        close(file);
+        return writable_file_mapping_result::
+            failed;
+    }
+
+    const auto current_size =
+        static_cast<std::size_t>(
+            state.st_size);
+
+    const auto target_size =
+        minimum_size >
+            current_size
+        ? minimum_size
+        : current_size;
+
+    const bool extended =
+        target_size >
+        current_size;
+
+    if (extended &&
+        ftruncate(
+            file,
+            static_cast<off_t>(
+                target_size)) != 0) {
+
+        close(file);
+        return writable_file_mapping_result::
+            failed;
+    }
+
+    const auto view =
+        mmap(
+            nullptr,
+            target_size,
+            PROT_READ |
+                PROT_WRITE,
+            MAP_SHARED,
+            file,
+            0);
+
+    if (view == MAP_FAILED) {
+        if (extended) {
+            (void)ftruncate(
+                file,
+                static_cast<off_t>(
+                    current_size));
+        }
+
+        close(file);
+        return writable_file_mapping_result::
+            failed;
+    }
+
+    file_handle = file;
+    mapping_handle = 0;
+    address =
+        static_cast<std::byte*>(
+            view);
+    length = target_size;
 
     return writable_file_mapping_result::
         success;

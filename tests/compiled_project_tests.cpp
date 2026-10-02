@@ -2886,6 +2886,150 @@ void test_direct_mmap_encoding(
 
 
 
+void test_writable_mapping_grow_existing(
+    test_state& tests) {
+
+    const auto path =
+        std::filesystem::temp_directory_path() /
+        "server_engine_v4_grow_existing_mapping_test.bin";
+
+    std::error_code error;
+    (void)std::filesystem::remove(
+        path,
+        error);
+
+    writable_file_mapping writable;
+
+    if (!tests.expect(
+            writable.create(
+                path,
+                64) ==
+                writable_file_mapping_result::success,
+            "create grow-existing mapping baseline")) {
+
+        return;
+    }
+
+    for (auto& value :
+         writable.bytes()) {
+
+        value = std::byte{0x5a};
+    }
+
+    if (!tests.expect(
+            writable.flush() ==
+                writable_file_mapping_result::success,
+            "flush grow-existing mapping baseline")) {
+
+        writable.reset();
+        error.clear();
+        (void)std::filesystem::remove(
+            path,
+            error);
+        return;
+    }
+
+    writable.reset();
+
+    if (!tests.expect(
+            writable.open_existing(
+                path,
+                128) ==
+                writable_file_mapping_result::success &&
+            writable.size() == 128,
+            "grow existing mapping without truncating baseline")) {
+
+        error.clear();
+        (void)std::filesystem::remove(
+            path,
+            error);
+        return;
+    }
+
+    bool baseline_preserved = true;
+
+    for (std::size_t index = 0;
+         index < 64;
+         ++index) {
+
+        if (writable.bytes()[index] !=
+            std::byte{0x5a}) {
+
+            baseline_preserved = false;
+            break;
+        }
+    }
+
+    tests.expect(
+        baseline_preserved,
+        "grow existing mapping preserves old bytes");
+
+    for (std::size_t index = 64;
+         index < 128;
+         ++index) {
+
+        writable.bytes()[index] =
+            std::byte{0xa5};
+    }
+
+    tests.expect(
+        writable.flush() ==
+            writable_file_mapping_result::success,
+        "flush appended grow-existing tail");
+
+    writable.reset();
+
+    if (!tests.expect(
+            writable.open_existing(
+                path,
+                32) ==
+                writable_file_mapping_result::success &&
+            writable.size() == 128,
+            "smaller minimum does not shrink existing mapping")) {
+
+        error.clear();
+        (void)std::filesystem::remove(
+            path,
+            error);
+        return;
+    }
+
+    bool all_preserved = true;
+
+    for (std::size_t index = 0;
+         index < 128;
+         ++index) {
+
+        const auto expected =
+            index < 64
+            ? std::byte{0x5a}
+            : std::byte{0xa5};
+
+        if (writable.bytes()[index] !=
+            expected) {
+
+            all_preserved = false;
+            break;
+        }
+    }
+
+    tests.expect(
+        all_preserved,
+        "reopened grow-existing mapping preserves baseline and tail");
+
+    writable.reset();
+
+    error.clear();
+    (void)std::filesystem::remove(
+        path,
+        error);
+
+    tests.expect(
+        !error,
+        "remove grow-existing mapping test file");
+}
+
+
 void test_object_initialization_persistence_runtime(
     test_state& tests) {
 
@@ -10904,6 +11048,9 @@ int main() {
         test_direct_mmap_encoding(
             tests,
             fixture);
+
+        test_writable_mapping_grow_existing(
+            tests);
 
         test_structural_corruption(
             tests,

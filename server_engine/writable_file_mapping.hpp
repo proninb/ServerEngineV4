@@ -41,6 +41,13 @@ public:
         const std::filesystem::path& path,
         std::size_t size) noexcept;
 
+    // Opens one existing artifact without truncating it. The file is extended
+    // only when minimum_size is larger than its current size; existing bytes
+    // are preserved exactly. Sparse BUILD uses this for append-only tails.
+    [[nodiscard]] writable_file_mapping_result open_existing(
+        const std::filesystem::path& path,
+        std::size_t minimum_size = 0) noexcept;
+
     [[nodiscard]] writable_file_mapping_result flush() noexcept;
 
     void reset() noexcept;
