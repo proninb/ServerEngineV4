@@ -9915,7 +9915,7 @@ void test_sparse_fixed_graph_writes(
 
         if (!tests.expect(
                 succeeded(
-                    delta.bind(
+                    delta.bind_baseline(
                         baseline)) &&
                 succeeded(
                     delta.retire(
@@ -9972,7 +9972,7 @@ void test_sparse_fixed_graph_writes(
 
         if (!tests.expect(
                 succeeded(
-                    delta.bind(
+                    delta.bind_baseline(
                         baseline)) &&
                 succeeded(
                     delta.retire(
@@ -10018,7 +10018,7 @@ void test_sparse_fixed_graph_writes(
 
         if (!tests.expect(
                 succeeded(
-                    reactivate.bind(
+                    reactivate.bind_baseline(
                         retired)) &&
                 succeeded(
                     reactivate.add_object(
@@ -10085,7 +10085,7 @@ void test_sparse_fixed_graph_writes(
 
         if (!tests.expect(
                 succeeded(
-                    delta.bind(
+                    delta.bind_baseline(
                         baseline)) &&
                 succeeded(
                     delta.retire(
@@ -10135,7 +10135,7 @@ void test_sparse_fixed_graph_writes(
 
         if (!tests.expect(
                 succeeded(
-                    reactivate.bind(
+                    reactivate.bind_baseline(
                         retired)) &&
                 succeeded(
                     reactivate.add_link(
