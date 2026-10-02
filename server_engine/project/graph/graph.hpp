@@ -318,7 +318,7 @@ static_assert(sizeof(object_entry) == 8);
 static_assert(std::is_trivially_copyable_v<object_entry>);
 
 struct object_endpoint final {
-    object_handle object{};
+    identity_ref object{};
     endpoint_ref member{};
 
     friend constexpr bool operator==(

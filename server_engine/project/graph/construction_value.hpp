@@ -66,13 +66,13 @@ struct construction_value final {
     }
 
     [[nodiscard]] static constexpr construction_value object_binding(
-        std::uint32_t object) noexcept {
+        std::uint32_t object_identity) noexcept {
 
-        return object != 0
+        return object_identity != 0
             ? construction_value{
                 0,
                 0,
-                object,
+                object_identity,
                 construction_kind::object_binding,
             }
             : construction_value{

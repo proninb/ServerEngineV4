@@ -342,29 +342,29 @@ bool source_save_view::initialization_target(
             bytes,
             offset,
             raw_member) ||
-        raw_object == 0 ||
-        raw_object >
-            object_handle::maximum_slot ||
-        raw_object >
-            object_count) {
+        raw_object == 0) {
 
         return false;
     }
+
+    const auto object =
+        identity_ref::from_raw(
+            raw_object);
 
     const auto member =
         endpoint_ref::from_raw(
             raw_member);
 
-    if (!member ||
-        object_presence(
-            raw_object - 1) == 0) {
+    if (!object ||
+        object.kind() !=
+            identity_kind::object ||
+        !member) {
 
         return false;
     }
 
     output.object =
-        std::bit_cast<object_handle>(
-            raw_object);
+        object;
 
     output.member =
         member;

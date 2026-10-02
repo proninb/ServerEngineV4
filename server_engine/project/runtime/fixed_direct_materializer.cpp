@@ -2211,16 +2211,21 @@ private:
                 invalid_input;
         }
 
+        const auto object_handle_value =
+            project.find_object(
+                endpoint.object);
+
         object_entry object;
         std::uint64_t object_offset = 0;
 
         endpoint_path_record path;
 
-        if (!project.object(
-                endpoint.object,
+        if (!object_handle_value ||
+            !project.object(
+                object_handle_value,
                 object) ||
             !layout.object_offset(
-                endpoint.object,
+                object_handle_value,
                 object_offset) ||
             !project.endpoint_path(
                 endpoint.member.path(),
@@ -2438,7 +2443,7 @@ private:
             next = {
                 final_record,
                 final_record_base,
-                endpoint.object,
+                object_handle_value,
                 final_local,
                 current_address,
             };
@@ -2485,15 +2490,22 @@ private:
         has_next = false;
         output = 0;
 
+        const auto object_handle_value =
+            project.find_object(
+                endpoint.object);
+
         object_entry object;
         std::uint64_t object_offset = 0;
 
         if (!endpoint.object ||
+            endpoint.object.kind() !=
+                identity_kind::object ||
+            !object_handle_value ||
             !project.object(
-                endpoint.object,
+                object_handle_value,
                 object) ||
             !layout.object_offset(
-                endpoint.object,
+                object_handle_value,
                 object_offset)) {
 
             return fixed_direct_materialization_result::
@@ -2541,7 +2553,7 @@ private:
                 next = {
                     record_type_value,
                     base,
-                    endpoint.object,
+                    object_handle_value,
                     local,
                     member_address,
                 };
@@ -2618,7 +2630,7 @@ private:
             next = {
                 record_type_value,
                 base,
-                endpoint.object,
+                object_handle_value,
                 local,
                 member_address,
             };
@@ -2765,21 +2777,21 @@ private:
         }
 
         case construction_kind::object_binding: {
-            if (construction.operand == 0) {
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
+            const auto object_identity =
+                identity_ref::from_raw(
+                    construction.operand);
 
             const auto object =
-                project.object_at(
-                    construction.operand - 1);
+                project.find_object(
+                    object_identity);
 
             object_entry source;
             std::uint64_t source_offset = 0;
 
-            if (!object ||
-                object.value() !=
-                    construction.operand ||
+            if (!object_identity ||
+                object_identity.kind() !=
+                    identity_kind::object ||
+                !object ||
                 !project.object(
                     object,
                     source) ||
@@ -3074,21 +3086,21 @@ private:
         }
 
         case construction_kind::object_binding: {
-            if (construction.operand == 0) {
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
+            const auto object_identity =
+                identity_ref::from_raw(
+                    construction.operand);
 
             const auto object =
-                project.object_at(
-                    construction.operand - 1);
+                project.find_object(
+                    object_identity);
 
             object_entry source;
             std::uint64_t source_offset = 0;
 
-            if (!object ||
-                object.value() !=
-                    construction.operand ||
+            if (!object_identity ||
+                object_identity.kind() !=
+                    identity_kind::object ||
+                !object ||
                 !project.object(
                     object,
                     source) ||
@@ -3851,12 +3863,19 @@ private:
 
         output = {};
 
+        const auto object_handle_value =
+            project.find_object(
+                endpoint.object);
+
         object_entry object;
 
         if (!endpoint.object ||
+            endpoint.object.kind() !=
+                identity_kind::object ||
             !endpoint.member ||
+            !object_handle_value ||
             !project.object(
-                endpoint.object,
+                object_handle_value,
                 object)) {
 
             return false;

@@ -561,12 +561,23 @@ server_status graph::define_record(
         if (construction.kind ==
             construction_kind::object_binding) {
 
+            const auto object_identity =
+                identity_ref::from_raw(
+                    construction.operand);
+
+            const auto object_handle_value =
+                find_object(
+                    object_identity);
+
             const auto* object =
                 find(
-                    object_handle{
-                        construction.operand});
+                    object_handle_value);
 
-            if (object == nullptr ||
+            if (!object_identity ||
+                object_identity.kind() !=
+                    identity_kind::object ||
+                !object_handle_value ||
+                object == nullptr ||
                 !object->internal_static() ||
                 !reference_binding_compatible(
                     definition[index].type,
@@ -2331,10 +2342,19 @@ bool graph::endpoint_type(
 
     output = {};
 
-    const auto* object =
-        find(endpoint.object);
+    const auto object_handle_value =
+        find_object(
+            endpoint.object);
 
-    if (object == nullptr ||
+    const auto* object =
+        find(
+            object_handle_value);
+
+    if (!endpoint.object ||
+        endpoint.object.kind() !=
+            identity_kind::object ||
+        !object_handle_value ||
+        object == nullptr ||
         !endpoint.member) {
 
         return false;

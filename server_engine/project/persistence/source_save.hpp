@@ -417,7 +417,7 @@ prepare_source_save_layout(const file_context &files,
 
 class compiled_project_view;
 
-// BUILD v7 adapter. Physical File Context state uses the same format contract
+// BUILD v8 adapter. Physical File Context state uses the same format contract
 // as REBUILD. Semantic dependencies persist identity_ref directly; other
 // BUILD-only sidecars are projected from sparse overlays.
 [[nodiscard]] source_save_result

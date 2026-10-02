@@ -626,12 +626,12 @@ void test_endpoint_path_persistence(
             succeeded(
                 fixture.G.add_link(
                     {
-                        a,
+                        a_identity,
                         endpoint_ref::from_path(
                             path),
                     },
                     {
-                        b,
+                        b_identity,
                         input,
                     },
                     link)),
@@ -690,12 +690,12 @@ void test_endpoint_path_persistence(
             link,
             persisted_link) &&
         persisted_link.source.object ==
-            a &&
+            a_identity &&
         persisted_link.source.member.is_path() &&
         persisted_link.source.member.path() ==
             path &&
         persisted_link.target.object ==
-            b &&
+            b_identity &&
         persisted_link.target.member.direct_member() ==
             input &&
         view.endpoint_path(
@@ -767,7 +767,7 @@ void test_endpoint_path_persistence(
     }
 
     const object_endpoint path_initialization_target{
-        a,
+        a_identity,
         endpoint_ref::from_path(
             baseline_path),
     };
@@ -1147,7 +1147,8 @@ void test_graph_reference_invariants(
     const std::array<construction_value, 1>
         bad_object_construction{{
             construction_value::object_binding(
-                static_integer.value()),
+                G.identity(
+                    static_integer).value()),
         }};
 
     tests.expect(
@@ -1290,11 +1291,11 @@ tests.expect(
         succeeded(
             G.add_link(
                 {
-                    left,
+                    G.identity(left),
                     value,
                 },
                 {
-                    right,
+                    G.identity(right),
                     input,
                 },
                 valid)) &&
@@ -1398,13 +1399,13 @@ tests.expect(
     succeeded(
         G.add_link(
             {
-                bound_left,
+                G.identity(bound_left),
                 G.find_member(
                     bound_type,
                     value_name),
             },
             {
-                bound_right,
+                G.identity(bound_right),
                 G.find_member(
                     bound_type,
                     input_name),
@@ -1421,11 +1422,11 @@ tests.expect(
     tests.expect(
         G.add_link(
             {
-                left,
+                G.identity(left),
                 value,
             },
             {
-                right,
+                G.identity(right),
                 value,
             },
             invalid_target) ==
@@ -1440,11 +1441,11 @@ tests.expect(
     tests.expect(
         G.add_link(
             {
-                left,
+                G.identity(left),
                 real,
             },
             {
-                left,
+                G.identity(left),
                 input,
             },
             invalid_source) ==
@@ -1655,11 +1656,11 @@ tests.expect(
             tests,
             fixture.G.add_link(
                 {
-                    fixture.left,
+                    fixture.left_identity,
                     fixture.value_member,
                 },
                 {
-                    fixture.right,
+                    fixture.right_identity,
                     fixture.peer_member,
                 },
                 fixture.link),
@@ -2903,7 +2904,7 @@ void test_object_initialization_persistence_runtime(
             succeeded(
                 fixture.G.add_initialization(
                     {
-                        fixture.left,
+                        fixture.left_identity,
                         endpoint_ref{
                             fixture.value_member},
                     },
@@ -2922,7 +2923,7 @@ void test_object_initialization_persistence_runtime(
             succeeded(
                 fixture.G.add_initialization(
                     {
-                        fixture.left,
+                        fixture.left_identity,
                         endpoint_ref{
                             fixture.value_member},
                     },
@@ -2967,7 +2968,7 @@ void test_object_initialization_persistence_runtime(
     object_initialization_record persisted;
 
     const object_endpoint target{
-        fixture.left,
+        fixture.left_identity,
         endpoint_ref{
             fixture.value_member},
     };
@@ -3573,12 +3574,12 @@ void test_graph_dense_projection(
             succeeded(
                 G.add_link(
                     {
-                        a,
+                        a_identity,
                         endpoint_ref{
                             value_member},
                     },
                     {
-                        b,
+                        b_identity,
                         endpoint_ref{
                             input_member},
                     },
@@ -3586,12 +3587,12 @@ void test_graph_dense_projection(
             succeeded(
                 G.add_link(
                     {
-                        c,
+                        c_identity,
                         endpoint_ref{
                             value_member},
                     },
                     {
-                        a,
+                        a_identity,
                         endpoint_ref{
                             input_member},
                     },
@@ -3607,7 +3608,7 @@ void test_graph_dense_projection(
             succeeded(
                 G.add_initialization(
                     {
-                        c,
+                        c_identity,
                         endpoint_ref{
                             value_member},
                     },
@@ -3692,12 +3693,13 @@ void test_graph_dense_projection(
     tests.expect(
         projection.remap(
             {
-                c,
+                c_identity,
                 endpoint_ref{
                     value_member},
             },
             remapped_endpoint) &&
-        remapped_endpoint.object.value() == 2 &&
+        remapped_endpoint.object ==
+            c_identity &&
         remapped_endpoint.member ==
             endpoint_ref{
                 value_member},
@@ -3709,13 +3711,14 @@ void test_graph_dense_projection(
         projection.remap(
             construction_value::
                 object_binding(
-                    c.value()),
+                    c_identity.value()),
             remapped_binding) &&
         remapped_binding.kind ==
             construction_kind::
                 object_binding &&
-        remapped_binding.operand == 2,
-        "dense projection remaps object-binding construction operands");
+        remapped_binding.operand ==
+            c_identity.value(),
+        "dense projection preserves object-binding semantic identity");
 }
 
 
@@ -3732,7 +3735,7 @@ void test_graph_delta_initialization_overlay(
     }
 
     const object_endpoint baseline_target{
-        fixture.left,
+        fixture.left_identity,
         endpoint_ref{
             fixture.value_member},
     };
@@ -3859,7 +3862,7 @@ void test_graph_delta_initialization_overlay(
         "replay after tombstone restores target without false duplicate warning");
 
     const object_endpoint appended_target{
-        fixture.right,
+        fixture.right_identity,
         endpoint_ref{
             fixture.value_member},
     };
@@ -6069,11 +6072,11 @@ void test_fixed_direct_arrays(
             succeeded(
                 fixture.G.add_link(
                     {
-                        a,
+                        fixture.G.identity(a),
                         out,
                     },
                     {
-                        b,
+                        fixture.G.identity(b),
                         in,
                     },
                     link)),
@@ -6544,12 +6547,14 @@ void test_fixed_direct_subobject_links(
             succeeded(
                 fixture.G.add_link(
                     {
-                        source,
+                        fixture.G.identity(
+                            source),
                         endpoint_ref::from_path(
                             source_path),
                     },
                     {
-                        objects,
+                        fixture.G.identity(
+                            objects),
                         endpoint_ref::from_path(
                             target_path),
                     },
@@ -7113,11 +7118,13 @@ void test_fixed_direct_materializer(
             succeeded(
                 G.add_link(
                     {
-                        source_object,
+                        G.identity(
+                            source_object),
                         a_out,
                     },
                     {
-                        linked_object,
+                        G.identity(
+                            linked_object),
                         a_in,
                     },
                     link)),
@@ -8042,22 +8049,26 @@ void test_fixed_direct_link_prebind(
                 succeeded(
                     value.G.add_link(
                         {
-                            value.b,
+                            value.G.identity(
+                                value.b),
                             value.in,
                         },
                         {
-                            value.a,
+                            value.G.identity(
+                                value.a),
                             value.in,
                         },
                         first)) &&
                 succeeded(
                     value.G.add_link(
                         {
-                            value.c,
+                            value.G.identity(
+                                value.c),
                             value.out,
                         },
                         {
-                            value.b,
+                            value.G.identity(
+                                value.b),
                             value.in,
                         },
                         second)),
@@ -8192,22 +8203,26 @@ void test_fixed_direct_link_prebind(
                 succeeded(
                     value.G.add_link(
                         {
-                            value.b,
+                            value.G.identity(
+                                value.b),
                             value.in,
                         },
                         {
-                            value.a,
+                            value.G.identity(
+                                value.a),
                             value.in,
                         },
                         first)) &&
                 succeeded(
                     value.G.add_link(
                         {
-                            value.a,
+                            value.G.identity(
+                                value.a),
                             value.in,
                         },
                         {
-                            value.b,
+                            value.G.identity(
+                                value.b),
                             value.in,
                         },
                         second)),
@@ -8270,22 +8285,26 @@ void test_fixed_direct_link_prebind(
                 succeeded(
                     value.G.add_link(
                         {
-                            value.c,
+                            value.G.identity(
+                                value.c),
                             value.out,
                         },
                         {
-                            value.a,
+                            value.G.identity(
+                                value.a),
                             value.in,
                         },
                         first)) &&
                 succeeded(
                     value.G.add_link(
                         {
-                            value.c,
+                            value.G.identity(
+                                value.c),
                             value.out,
                         },
                         {
-                            value.b,
+                            value.G.identity(
+                                value.b),
                             value.in,
                         },
                         second)),
@@ -10249,11 +10268,11 @@ void test_build_lineage_overlays(
         succeeded(
             G.add_link(
                 {
-                    fixture.left,
+                    fixture.left_identity,
                     fixture.value_member,
                 },
                 {
-                    appended_object,
+                    appended_identity,
                     fixture.peer_member,
                 },
                 appended_link)) &&

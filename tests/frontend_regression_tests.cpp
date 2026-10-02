@@ -1064,7 +1064,7 @@ void test_sparse_semantic_replay_order(
         member &&
         G.initialization(
             {
-                object,
+                G.identity(object),
                 endpoint_ref{member},
             },
             initialization) &&
@@ -1510,9 +1510,11 @@ void test_header_static_constructor_binding(
         b_initial->kind ==
             construction_kind::object_binding &&
         a_initial->operand ==
-            first_static.value() &&
+            G.identity(
+                first_static).value() &&
         b_initial->operand ==
-            second_static.value(),
+            G.identity(
+                second_static).value(),
         "constructor reference binds to root-local Header static object");
 
     const auto static_name =
@@ -1626,7 +1628,8 @@ void test_source_value_initialization(
         a &&
         param &&
         initializations.size() == 1 &&
-        initializations[0].target.object == a &&
+        initializations[0].target.object ==
+            G.identity(a) &&
         initializations[0].target.member ==
             endpoint_ref{param} &&
         initializations[0].value.kind ==
@@ -1830,7 +1833,7 @@ void test_source_value_initialization_last_wins(
     const bool has_init =
         G.initialization(
             {
-                object,
+                object_identity,
                 endpoint_ref{member},
             },
             init);
@@ -1872,11 +1875,11 @@ void test_source_value_initialization_last_wins(
         second_initializations.size() == 1 &&
         first_initializations[0] ==
             object_endpoint{
-                object,
+                object_identity,
                 endpoint_ref{member}} &&
         second_initializations[0] ==
             object_endpoint{
-                object,
+                object_identity,
                 endpoint_ref{member}},
         "BUILD provenance keeps every root that produces the canonical init target");
 

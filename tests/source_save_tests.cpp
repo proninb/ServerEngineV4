@@ -329,13 +329,13 @@ void test_direct_source_save(
         "presence header-static object fixture");
 
     const object_endpoint source{
-        object,
+        object_identity,
         G.find_member(
             type,
             value_name)};
 
     const object_endpoint target{
-        object,
+        object_identity,
         G.find_member(
             type,
             input_name)};
@@ -1186,7 +1186,7 @@ void test_direct_source_save(
                 writable.bytes().begin(),
                 writable.bytes().end());
 
-        // Persisted object_handle becomes zero.
+        // Persisted semantic object identity becomes invalid.
         corrupted[
             initialization_targets_offset] =
                 std::byte{0};

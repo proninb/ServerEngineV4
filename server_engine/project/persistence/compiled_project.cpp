@@ -2869,7 +2869,7 @@ bool compiled_project_view::link(
             link_record_size;
 
     const auto source_object =
-        object_from_raw(
+        identity_from_raw(
             read_u32(record));
 
     const auto source_endpoint =
@@ -2877,7 +2877,7 @@ bool compiled_project_view::link(
             record + 4);
 
     const auto target_object =
-        object_from_raw(
+        identity_from_raw(
             read_u32(
                 record + 8));
 
@@ -2886,7 +2886,15 @@ bool compiled_project_view::link(
             record + 12);
 
     if (!source_object ||
-        !target_object) {
+        source_object.kind() !=
+            identity_kind::object ||
+        !find_object(
+            source_object) ||
+        !target_object ||
+        target_object.kind() !=
+            identity_kind::object ||
+        !find_object(
+            target_object)) {
 
         return false;
     }
@@ -2973,7 +2981,7 @@ bool compiled_project_view::initialization_at(
             object_initialization_record_size;
 
     const auto object =
-        object_from_raw(
+        identity_from_raw(
             read_u32(record));
 
     const auto endpoint =
@@ -2982,6 +2990,10 @@ bool compiled_project_view::initialization_at(
                 record + 4));
 
     if (!object ||
+        object.kind() !=
+            identity_kind::object ||
+        !find_object(
+            object) ||
         !endpoint) {
 
         return false;
@@ -3032,9 +3044,11 @@ std::size_t compiled_project_view::initialization_position(
     object_endpoint target) const noexcept {
 
     if (!target.object ||
-        !target.member ||
-        target.object.value() >
-            object_count_value) {
+        target.object.kind() !=
+            identity_kind::object ||
+        !find_object(
+            target.object) ||
+        !target.member) {
 
         return 0;
     }
@@ -3133,9 +3147,11 @@ link_handle compiled_project_view::find_link_target(
     object_endpoint target) const noexcept {
 
     if (!target.object ||
-        !target.member ||
-        target.object.value() >
-            object_count_value) {
+        target.object.kind() !=
+            identity_kind::object ||
+        !find_object(
+            target.object) ||
+        !target.member) {
 
         return {};
     }
@@ -3217,12 +3233,18 @@ link_handle compiled_project_view::find_link_target(
         return {};
     }
 
-    return find_link_target({
-        object,
-        endpoint_ref{
-            member_from_raw(
-                local_member)},
-    });
+    const auto object_identity =
+        identity(
+            object);
+
+    return object_identity
+        ? find_link_target({
+            object_identity,
+            endpoint_ref{
+                member_from_raw(
+                    local_member)},
+        })
+        : link_handle{};
 }
 
 bool compiled_project_view::assign(
@@ -3993,11 +4015,22 @@ compiled_project_view::verify_contents() const noexcept {
             if (construction_value_value.kind ==
                 construction_kind::object_binding) {
 
+                const auto bound_identity =
+                    identity_from_raw(
+                        construction_value_value.operand);
+
+                const auto bound_handle =
+                    find_object(
+                        bound_identity);
+
                 object_entry bound;
 
-                if (!object(
-                        object_from_raw(
-                            construction_value_value.operand),
+                if (!bound_identity ||
+                    bound_identity.kind() !=
+                        identity_kind::object ||
+                    !bound_handle ||
+                    !object(
+                        bound_handle,
                         bound) ||
                     !bound.internal_static() ||
                     !reference_binding_compatible(
@@ -4713,10 +4746,18 @@ compiled_project_view::verify_contents() const noexcept {
 
                 output = {};
 
+                const auto object_handle_value =
+                    find_object(
+                        endpoint.object);
+
                 object_entry object_value;
 
-                if (!object(
-                        endpoint.object,
+                if (!endpoint.object ||
+                    endpoint.object.kind() !=
+                        identity_kind::object ||
+                    !object_handle_value ||
+                    !object(
+                        object_handle_value,
                         object_value) ||
                     !endpoint.member) {
 
@@ -4971,10 +5012,18 @@ compiled_project_view::verify_contents() const noexcept {
 
                 output = {};
 
+                const auto object_handle_value =
+                    find_object(
+                        endpoint.object);
+
                 object_entry object_value;
 
-                if (!object(
-                        endpoint.object,
+                if (!endpoint.object ||
+                    endpoint.object.kind() !=
+                        identity_kind::object ||
+                    !object_handle_value ||
+                    !object(
+                        object_handle_value,
                         object_value) ||
                     !endpoint.member) {
 
@@ -6998,7 +7047,8 @@ encode_compiled_project_image(const string_table &strings,
         }
     }
 
-    // Links preserve handles exactly and publish one persisted target index.
+    // Links preserve semantic endpoint identities and publish one persisted
+    // target index; link_handle remains the dense physical link locator.
     {
         auto* values =
             section_data(

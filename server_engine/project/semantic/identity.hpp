@@ -32,6 +32,16 @@ class identity_ref final {
 public:
     constexpr identity_ref() noexcept = default;
 
+    [[nodiscard]] static constexpr identity_ref from_raw(
+        std::uint32_t value) noexcept {
+
+        const identity_ref result{value};
+
+        return result.valid()
+            ? result
+            : identity_ref{};
+    }
+
     [[nodiscard]] constexpr std::uint32_t value() const noexcept {
         return packed;
     }

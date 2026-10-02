@@ -42,10 +42,10 @@ constexpr std::array<std::byte, 8> magic{
     std::byte{'C'},
     std::byte{'0'},
     std::byte{'0'},
-    std::byte{'7'},
+    std::byte{'8'},
 };
 
-constexpr std::uint32_t format_version = 7;
+constexpr std::uint32_t format_version = 8;
 
 constexpr std::uint32_t current_member_flag =
     source_save_current_member_flag;
@@ -5324,7 +5324,7 @@ source_save_result validate_source_save_image(
                             output.roots.begin;
             };
 
-        // source.bin v7 stores semantic dependencies as identity_ref raw
+        // source.bin v8 stores semantic dependencies as identity_ref raw
         // values. Their live Graph target is a cross-artifact property and is
         // verified against compiled.bin by verify_source_save_presence().
 
@@ -8735,6 +8735,32 @@ source_save_result verify_source_save_presence(const source_save_view &source,
                     if (c.data.kind() == source_data_kind::type_definition &&
                         !increment(types[handle.value() - 1].definitions))
                         return source_save_result::invalid_image;
+                }
+            }
+
+            const auto initialization_count =
+                source.initialization_target_count(
+                    file_id{i + 1});
+
+            for (std::size_t j = 0;
+                 j < initialization_count;
+                 ++j) {
+
+                object_endpoint target;
+                object_initialization_record initialization;
+
+                if (!source.initialization_target(
+                        file_id{i + 1},
+                        j,
+                        target) ||
+                    !compiled.initialization(
+                        target,
+                        initialization) ||
+                    initialization.target !=
+                        target) {
+
+                    return source_save_result::
+                        invalid_image;
                 }
             }
 

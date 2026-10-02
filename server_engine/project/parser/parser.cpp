@@ -596,9 +596,23 @@ private:
                 location);
         }
 
+        const auto object_identity =
+            G.identity(
+                object);
+
+        if (!object_identity ||
+            object_identity.kind() !=
+                identity_kind::object) {
+
+            return fail_at(
+                parser_failure_kind::semantic,
+                "Reference binding object has no semantic identity",
+                location);
+        }
+
         const auto dependency =
             sources.add_dependency(
-                G.identity(object));
+                object_identity);
 
         if (!succeeded(dependency)) {
             return dependency;
@@ -606,7 +620,7 @@ private:
 
         output =
             construction_value::object_binding(
-                object.value());
+                object_identity.value());
 
         return server_status::success;
     }
@@ -3965,7 +3979,7 @@ private:
             }
 
             output.endpoint = {
-                object,
+                object_identity,
                 direct_member,
             };
 
@@ -3996,7 +4010,7 @@ private:
         }
 
         output.endpoint = {
-            object,
+            object_identity,
             endpoint_ref::from_path(
                 path),
         };
@@ -4171,10 +4185,11 @@ private:
         }
 
         const auto object_identity =
-            G.identity(
-                target.endpoint.object);
+            target.endpoint.object;
 
-        if (!object_identity) {
+        if (!object_identity ||
+            object_identity.kind() !=
+                identity_kind::object) {
             return fail_at(
                 parser_failure_kind::semantic,
                 "Source value initialization object has no semantic identity",

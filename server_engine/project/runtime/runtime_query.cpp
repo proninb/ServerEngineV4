@@ -997,17 +997,23 @@ read_runtime_system_value(
 
     output.clear();
 
+    const auto object_handle_value =
+        project.find_object(
+            endpoint.object);
+
     object_entry object;
 
     if (!endpoint.object ||
+        endpoint.object.kind() !=
+            identity_kind::object ||
         !endpoint.member ||
+        !object_handle_value ||
         !project.object(
-            endpoint.object,
+            object_handle_value,
             object) ||
         !qualified_identity_name(
             project,
-            project.identity(
-                endpoint.object),
+            endpoint.object,
             output,
             identity_scratch)) {
 
@@ -1783,6 +1789,16 @@ runtime_query_result get_runtime_link(
             const auto selected =
                 handles[group];
 
+            const auto selected_identity =
+                project.identity(
+                    selected);
+
+            if (!selected_identity) {
+                output = {};
+                return runtime_query_result::
+                    invalid_runtime;
+            }
+
             auto& result =
                 output.objects[group];
 
@@ -1805,8 +1821,10 @@ runtime_query_result get_runtime_link(
                         invalid_runtime;
                 }
 
-                if (link.source.object != selected &&
-                    link.target.object != selected) {
+                if (link.source.object !=
+                        selected_identity &&
+                    link.target.object !=
+                        selected_identity) {
 
                     continue;
                 }

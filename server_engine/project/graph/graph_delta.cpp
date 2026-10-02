@@ -1843,11 +1843,22 @@ server_status graph_delta::define_record(
             construction_kind::
                 object_binding) {
 
+            const auto object_identity =
+                identity_ref::from_raw(
+                    construction.operand);
+
+            const auto object_handle_value =
+                find_object(
+                    object_identity);
+
             object_entry object_value;
 
-            if (!object(
-                    object_handle{
-                        construction.operand},
+            if (!object_identity ||
+                object_identity.kind() !=
+                    identity_kind::object ||
+                !object_handle_value ||
+                !object(
+                    object_handle_value,
                     object_value) ||
                 !object_value.
                     internal_static() ||
@@ -4314,10 +4325,18 @@ bool graph_delta::endpoint_type(
 
     output = {};
 
+    const auto object_handle_value =
+        find_object(
+            endpoint.object);
+
     object_entry object_value;
 
-    if (!object(
-            endpoint.object,
+    if (!endpoint.object ||
+        endpoint.object.kind() !=
+            identity_kind::object ||
+        !object_handle_value ||
+        !object(
+            object_handle_value,
             object_value) ||
         !endpoint.member) {
 
@@ -5146,11 +5165,18 @@ bool graph_dense_projection::remap(
 
     output = {};
 
-    const auto object =
-        remap(
-            value.object);
+    const auto lineage =
+        source != nullptr
+        ? source->find_object(
+            value.object)
+        : object_handle{};
 
-    if (!object ||
+    if (!value.object ||
+        value.object.kind() !=
+            identity_kind::object ||
+        !lineage ||
+        !remap(
+            lineage) ||
         !value.member) {
 
         return false;
@@ -5174,7 +5200,7 @@ bool graph_dense_projection::remap(
     }
 
     output = {
-        object,
+        value.object,
         member,
     };
 
@@ -5197,23 +5223,25 @@ bool graph_dense_projection::remap(
         construction_kind::
             object_binding) {
 
-        if (value.operand == 0 ||
-            value.operand >=
-                object_slots.size()) {
+        const auto object_identity =
+            identity_ref::from_raw(
+                value.operand);
+
+        const auto lineage =
+            source != nullptr
+            ? source->find_object(
+                object_identity)
+            : object_handle{};
+
+        if (!object_identity ||
+            object_identity.kind() !=
+                identity_kind::object ||
+            !lineage ||
+            !remap(
+                lineage)) {
 
             return false;
         }
-
-        const auto object =
-            object_slots[
-                value.operand];
-
-        if (object == 0) {
-            return false;
-        }
-
-        value.operand =
-            object;
     }
 
     output =

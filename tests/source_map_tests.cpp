@@ -112,13 +112,13 @@ void test_root_ownership_and_file_projection(test_state &tests) {
     link_handle edge;
 
     const object_endpoint source{
-        obj,
+        object_identity,
         G.find_member(
             type,
             value_name)};
 
     const object_endpoint target{
-        obj,
+        object_identity,
         G.find_member(
             type,
             input_name)};

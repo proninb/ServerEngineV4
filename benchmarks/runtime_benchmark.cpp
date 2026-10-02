@@ -556,11 +556,12 @@ peak_working_set_bytes() noexcept {
             if (!succeeded(
                     G.add_link(
                         {
-                            previous,
+                            G.identity(
+                                previous),
                             output_member,
                         },
                         {
-                            object,
+                            object_identity,
                             input_member,
                         },
                         link))) {
@@ -788,11 +789,11 @@ peak_working_set_bytes() noexcept {
         if (!succeeded(
                 G.add_link(
                     {
-                        first_object,
+                        first_identity,
                         output_member,
                     },
                     {
-                        second_object,
+                        second_identity,
                         input_member,
                     },
                     link))) {
@@ -1260,12 +1261,12 @@ peak_working_set_bytes() noexcept {
         if (!succeeded(
                 G.add_link(
                     {
-                        source_object,
+                        source_object_identity,
                         endpoint_ref::from_path(
                             source_path),
                     },
                     {
-                        target_object,
+                        target_object_identity,
                         endpoint_ref::from_path(
                             target_path),
                     },
