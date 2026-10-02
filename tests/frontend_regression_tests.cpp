@@ -1245,13 +1245,13 @@ void test_class_abi_semantics(
 
     tests.expect(
         b_bases.size() == 1 &&
-        b_bases[0].type == a &&
+        b_bases[0].type == G.identity(a) &&
         b_bases[0].access ==
             graph_member_access::
                 public_access &&
         !b_bases[0].virtual_base() &&
         c_bases.size() == 1 &&
-        c_bases[0].type == a,
+        c_bases[0].type == G.identity(a),
         "single non-virtual base relation retained directly by type_entry");
 
     const temporary_source virtual_base{

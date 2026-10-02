@@ -2,8 +2,10 @@
  * BUILD-local sparse semantic Graph delta.
  *
  * Unchanged state stays in the immutable compiled_project_view mmap baseline.
- * Only changed/retired/replayed OLD slots and appended semantic state are
- * materialized. graph_delta is BUILD operation state, never resident G.
+ * Existing top-level type/object/link WHERE is stable between REBUILDs:
+ * updates patch that slot, deletions mark it inactive, and only new semantic
+ * owners append top-level slots. Replacement owned payload remains append-only.
+ * graph_delta is BUILD operation state, never resident G.
  */
 #pragma once
 
@@ -307,8 +309,9 @@ public:
         type_ref type,
         derived_type_record& output) const noexcept;
 
-    // Count is physical Graph storage. Normal BUILD may leave stale
-    // replacement payload behind; REBUILD is the compaction boundary.
+    // Count is physical top-level storage. UPDATE preserves an existing
+    // WHERE; DELETE may leave an inactive slot; REBUILD is the compaction
+    // boundary.
     [[nodiscard]] std::size_t type_count() const noexcept {
         return baseline_type_count +
             types.size();
@@ -473,8 +476,6 @@ private:
         object = 2,
     };
 
-    static constexpr std::uint32_t no_current_location = 1;
-
     struct derived_index_slot final {
         std::uint32_t fingerprint = 0;
         type_ref type{};
@@ -500,10 +501,6 @@ private:
             std::uint32_t key) const noexcept;
 
         [[nodiscard]] server_status insert(
-            std::uint32_t key,
-            std::uint32_t value) noexcept;
-
-        [[nodiscard]] server_status assign(
             std::uint32_t key,
             std::uint32_t value) noexcept;
 
@@ -567,21 +564,18 @@ private:
     [[nodiscard]] server_status ensure_identity_slot(
         identity_ref identity) noexcept;
 
-    [[nodiscard]] server_status set_identity_location(
+    [[nodiscard]] server_status publish_identity_location(
         identity_ref identity,
         location_kind kind,
         std::uint32_t slot) noexcept;
 
-    [[nodiscard]] server_status clear_identity_location(
-        identity_ref identity) noexcept;
-
-    [[nodiscard]] std::uint32_t current_location(
+    [[nodiscard]] std::uint32_t lineage_location(
         identity_ref identity) const noexcept;
 
-    [[nodiscard]] type_handle current_type(
+    [[nodiscard]] type_handle lineage_type(
         identity_ref identity) const noexcept;
 
-    [[nodiscard]] object_handle current_object(
+    [[nodiscard]] object_handle lineage_object(
         identity_ref identity) const noexcept;
 
     [[nodiscard]] const type_patch* find_type_patch(
@@ -668,16 +662,15 @@ private:
     [[nodiscard]] server_status ensure_link_target_index_capacity(
         std::size_t additional) noexcept;
 
-    [[nodiscard]] bool set_link_target_index(
+    void insert_link_target_index(
         std::vector<link_target_index_slot>& target,
         std::uint64_t key,
         link_handle link) const noexcept;
 
-    [[nodiscard]] bool find_local_link_target(
-        object_endpoint target,
-        link_handle& output) const noexcept;
+    [[nodiscard]] link_handle find_local_link_target(
+        object_endpoint target) const noexcept;
 
-    [[nodiscard]] link_handle current_link_target(
+    [[nodiscard]] link_handle lineage_link_target(
         object_endpoint target) const noexcept;
 
     [[nodiscard]] const initialization_patch*

@@ -56,29 +56,39 @@ Normal BUILD preserves an existing `identity_ref`. New semantic identities appen
 
 ### WHERE
 
-`type_handle`, `object_handle`, and `link_handle` identify physical/current locations inside one Graph representation.
+`type_handle`, `object_handle`, and `link_handle` identify physical locations inside one Graph representation.
 
 They answer:
 
 ```text
-Where is the current physical record?
+Where is this physical record?
 ```
 
-They are not semantic identity and must not be required to survive physical relocation during normal BUILD.
+They are not semantic identity. REBUILD may relocate them.
 
-### Current-location map
+For performance, normal BUILD deliberately preserves an already assigned top-level
+type/object/link WHERE. Updating an existing semantic entity patches that slot;
+only a new semantic owner appends a new top-level slot.
 
-Type/object current location is a direct array indexed by semantic identity:
+### Identity-location map
+
+Type/object physical assignment is a direct array indexed by semantic identity:
 
 ```text
-current_location[identity_ref.slot()]
-    -> current type/object physical location
-    -> 0 when no current live entity exists
+identity_location[identity_ref.slot()]
+    -> assigned type/object physical slot
+    -> 0 only when no slot has been assigned in this BUILD lineage
 ```
 
-This is the existing `identity_ref -> Graph location` concept already present in V4 `graph::identity_locations` and persisted `graph_identity_index`.
+Semantic existence is determined by slot liveness. A deleted entity may therefore
+retain its physical assignment while being invisible to normal semantic queries;
+replay of the same WHO can reactivate the same WHERE.
 
-The target keeps this direct-index property. It does not replace it with textual lookup, sorting, or a hash lookup.
+This is the existing `identity_ref -> Graph location` concept already present in V4
+`graph::identity_locations` and persisted `graph_identity_index`.
+
+The target keeps this direct-index property. It does not replace it with textual
+lookup, sorting, or a hash lookup.
 
 ## Persistent semantic references
 
@@ -157,19 +167,22 @@ semantic target endpoint -> current link_handle
 
 When object endpoints become identity based, changing an object's physical location does not require rewriting all links that name that object.
 
-## Append-only BUILD payload
+## Stable top-level WHERE + append-only owned payload
 
 Normal BUILD must not compact the whole Graph solely because one current entity changed.
 
-For a changed semantic entity `A`:
+For an existing semantic entity `A`:
 
 ```text
 identity_ref(A)
-    -> append replacement A-owned payload
-    -> update current_location[A.slot]
+    -> same top-level WHERE
+    -> patch fixed type/object/link record in place
+    -> append replacement variable payload owned by A when required
 ```
 
-The old physical payload becomes stale storage.
+Examples of append-only owned payload include members, bases, construction records,
+endpoint-path payload, and provenance/contribution ranges. Replaced old ranges become
+stale storage until REBUILD.
 
 It is not:
 
@@ -179,26 +192,25 @@ A v2
 A v3
 ```
 
-There is only one semantic `A`:
-
-```text
-identity_ref(A) -> current payload
-```
-
-Old physical bytes are storage garbage retained until a compaction boundary.
+There is only one semantic `A`. Stable WHERE between REBUILDs is a physical
+performance policy, not semantic identity.
 
 For deletion:
 
 ```text
-current_location[A.slot] = 0
+identity_location[A.slot] -> same assigned WHERE
+slot live = false
 ```
+
+Normal semantic lookup therefore returns no current A, while replay can reactivate
+the same WHERE without allocating another top-level slot.
 
 For addition:
 
 ```text
 new identity_ref(E)
-    -> append E payload
-    -> current_location[E.slot] = new location
+    -> append one new top-level WHERE
+    -> identity_location[E.slot] = new WHERE
 ```
 
 ## Stale/history accounting
@@ -213,13 +225,19 @@ stale physical storage
 
 Preferred terminology in implementation/docs is `stale_count` when practical.
 
-For a physical arena:
+For top-level type/object/link slots:
 
 ```text
 stale_count = physical_count - current_live_count
 ```
 
-A count alone is not enough for compaction policy because one stale type may own many stale members/bases/construction records. Compaction policy should also be able to account for stale bytes or arena-specific stale payload.
+Ordinary UPDATE does not increase this top-level stale count because the existing
+WHERE is reused. DELETE can make a top-level slot inactive.
+
+Variable owned arenas are different: replacing a type definition or construction
+may leave stale members/bases/construction/provenance ranges even while the
+top-level slot remains current. Compaction policy therefore needs arena-specific
+stale-byte/range accounting in addition to top-level stale counts.
 
 No version chain is required.
 
@@ -235,8 +253,9 @@ persisted compiled/source/database state
     -> affected physical closure
     -> affected semantic closure by identity_ref
     -> replay changed/affected semantic roots
-    -> append replacement semantic payload
-    -> patch direct current-location/index state
+    -> patch existing top-level WHERE or append only genuinely new WHERE
+    -> append replacement owned variable payload
+    -> patch only affected liveness/index state
     -> persist changed/affected artifact payload
     -> publish
 ```
@@ -289,7 +308,8 @@ Target `compiled.bin` semantics:
 
 ```text
 semantic identity space
-current identity -> location index
+identity -> assigned physical location
+top-level slot liveness
 semantic payload storage
 current query indexes
 Source Map / Assign and other final Project data
@@ -325,8 +345,8 @@ Removal order:
 
 ```text
 1. migrate persisted semantic references from WHERE to WHO
-2. make replacement payload append/current-index based
-3. persist sparse changed payload
+2. keep existing top-level WHERE stable; append replacement owned payload
+3. persist sparse patches/appends/liveness changes
 4. remove graph_dense_projection from normal BUILD
 ```
 
@@ -357,12 +377,15 @@ Target V4 keeps the good V3 separation but completes it:
 
 ```text
 semantic relationships -> WHO
-current physical placement -> WHERE
-normal BUILD -> append replacement + patch current location
-REBUILD -> compaction
+physical placement -> WHERE
+normal BUILD existing entity -> patch same top-level WHERE
+normal BUILD new entity      -> append new WHERE
+replacement owned payload    -> append
+REBUILD                      -> compaction / WHERE may change
 ```
 
-This avoids making stable physical handle lineage the semantic foundation.
+Stable WHERE between REBUILDs is only a physical optimization. It never becomes
+semantic identity; `identity_ref` remains the sole WHO contract.
 
 ## Performance evidence and target
 
@@ -491,15 +514,18 @@ Update link/initialization indexes so their semantic keys do not depend on objec
 
 ### GRAPH-APPEND-01
 
-Change normal BUILD replacement from stable-slot patch/reactivation to:
+Keep an existing top-level type/object/link WHERE stable between REBUILDs:
 
 ```text
-append replacement payload
-patch current_location
-account stale storage
+UPDATE existing -> patch same WHERE
+DELETE          -> same WHERE, live = false
+RE-ADD same WHO -> reactivate same WHERE
+NEW WHO         -> append new WHERE
+
+replacement owned variable payload -> append
 ```
 
-No semantic version chain.
+No semantic version chain and no `handle == identity` contract.
 
 ### GRAPH-APPEND-02
 

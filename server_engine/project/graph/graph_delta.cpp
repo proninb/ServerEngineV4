@@ -275,79 +275,6 @@ server_status graph_delta::sparse_index::insert(
     return server_status::success;
 }
 
-server_status graph_delta::sparse_index::assign(
-    std::uint32_t key,
-    std::uint32_t value) noexcept {
-
-    if (key == 0 ||
-        value == 0) {
-
-        return server_status::
-            project_configuration_invalid;
-    }
-
-    if (!slots.empty()) {
-        const auto mask =
-            slots.size() - 1;
-
-        auto position =
-            static_cast<std::size_t>(
-                mix32(key)) &
-            mask;
-
-        for (std::size_t probe = 0;
-             probe < slots.size();
-             ++probe) {
-
-            auto& slot =
-                slots[position];
-
-            if (slot.key == key) {
-                slot.value = value;
-                return server_status::success;
-            }
-
-            if (slot.key == 0) {
-                break;
-            }
-
-            position =
-                (position + 1) &
-                mask;
-        }
-    }
-
-    const auto prepared =
-        ensure_capacity(1);
-
-    if (!succeeded(prepared)) {
-        return prepared;
-    }
-
-    const auto mask =
-        slots.size() - 1;
-
-    auto position =
-        static_cast<std::size_t>(
-            mix32(key)) &
-        mask;
-
-    while (slots[position].key != 0) {
-        position =
-            (position + 1) &
-            mask;
-    }
-
-    slots[position] = {
-        key,
-        value,
-    };
-
-    ++count;
-
-    return server_status::success;
-}
-
 std::uint32_t graph_delta::encode_location(
     location_kind kind,
     std::uint32_t slot) noexcept {
@@ -481,7 +408,7 @@ server_status graph_delta::ensure_identity_slot(
     }
 }
 
-server_status graph_delta::set_identity_location(
+server_status graph_delta::publish_identity_location(
     identity_ref identity,
     location_kind kind,
     std::uint32_t slot) noexcept {
@@ -505,7 +432,7 @@ server_status graph_delta::set_identity_location(
     }
 
     if (baseline != nullptr) {
-        return identity_overlay.assign(
+        return identity_overlay.insert(
             identity.value(),
             location);
     }
@@ -518,47 +445,23 @@ server_status graph_delta::set_identity_location(
         return prepared;
     }
 
-    identity_locations[
-        identity.slot()] =
-        location;
+    auto& target =
+        identity_locations[
+            identity.slot()];
+
+    if (target != 0) {
+        return target == location
+            ? server_status::success
+            : server_status::
+                project_configuration_invalid;
+    }
+
+    target = location;
 
     return server_status::success;
 }
 
-server_status graph_delta::clear_identity_location(
-    identity_ref identity) noexcept {
-
-    if (!identity ||
-        (identity.kind() !=
-             identity_kind::type &&
-         identity.kind() !=
-             identity_kind::object)) {
-
-        return server_status::
-            project_configuration_invalid;
-    }
-
-    if (baseline != nullptr) {
-        return identity_overlay.assign(
-            identity.value(),
-            no_current_location);
-    }
-
-    const auto prepared =
-        ensure_identity_slot(
-            identity);
-
-    if (!succeeded(prepared)) {
-        return prepared;
-    }
-
-    identity_locations[
-        identity.slot()] = 0;
-
-    return server_status::success;
-}
-
-std::uint32_t graph_delta::current_location(
+std::uint32_t graph_delta::lineage_location(
     identity_ref identity) const noexcept {
 
     if (!identity) {
@@ -578,7 +481,7 @@ std::uint32_t graph_delta::current_location(
             identity_kind::type) {
 
             const auto type =
-                baseline->find_type(
+                baseline->find_type_lineage(
                     identity);
 
             return type
@@ -592,7 +495,7 @@ std::uint32_t graph_delta::current_location(
             identity_kind::object) {
 
             const auto object =
-                baseline->find_object(
+                baseline->find_object_lineage(
                     identity);
 
             return object
@@ -612,11 +515,11 @@ std::uint32_t graph_delta::current_location(
         : 0;
 }
 
-type_handle graph_delta::current_type(
+type_handle graph_delta::lineage_type(
     identity_ref identity) const noexcept {
 
     const auto location =
-        current_location(
+        lineage_location(
             identity);
 
     return decode_location_kind(
@@ -628,11 +531,11 @@ type_handle graph_delta::current_type(
         : type_handle{};
 }
 
-object_handle graph_delta::current_object(
+object_handle graph_delta::lineage_object(
     identity_ref identity) const noexcept {
 
     const auto location =
-        current_location(
+        lineage_location(
             identity);
 
     return decode_location_kind(
@@ -1360,7 +1263,7 @@ type_handle graph_delta::find_type(
     identity_ref identity_value) const noexcept {
 
     const auto output =
-        current_type(
+        lineage_type(
             identity_value);
 
     return contains(output)
@@ -1372,7 +1275,7 @@ object_handle graph_delta::find_object(
     identity_ref identity_value) const noexcept {
 
     const auto output =
-        current_object(
+        lineage_object(
             identity_value);
 
     return contains(output)
@@ -1453,29 +1356,85 @@ server_status graph_delta::declare_record(
     }
 
     if (const auto existing =
-            current_type(
+            lineage_type(
                 identity_value);
         existing) {
 
-        if (!contains(existing)) {
-            return server_status::
-                project_artifact_invalid;
+        if (contains(existing)) {
+            type_entry entry;
+
+            if (!type(
+                    existing,
+                    entry) ||
+                entry.kind !=
+                    graph_type_kind::record ||
+                !compatible_record_kind(
+                    entry.record_kind,
+                    kind)) {
+
+                return server_status::
+                    project_configuration_invalid;
+            }
+
+            output = existing;
+            return server_status::success;
         }
 
-        type_entry entry;
+        if (existing.value() <=
+            baseline_type_count) {
 
-        if (!type(
-                existing,
-                entry) ||
-            entry.kind !=
-                graph_type_kind::record ||
-            !compatible_record_kind(
-                entry.record_kind,
-                kind)) {
+            type_patch* patch = nullptr;
 
-            return server_status::
-                project_configuration_invalid;
+            const auto prepared =
+                ensure_type_patch(
+                    existing,
+                    patch);
+
+            if (!succeeded(prepared) ||
+                patch == nullptr) {
+
+                return succeeded(prepared)
+                    ? server_status::
+                        project_artifact_invalid
+                    : prepared;
+            }
+
+            patch->value = {
+                {},
+                {},
+                graph_type_kind::record,
+                kind,
+                0,
+            };
+
+            patch->live = true;
         }
+        else {
+            const auto index =
+                static_cast<std::size_t>(
+                    existing.value() -
+                    baseline_type_count -
+                    1);
+
+            if (index >= types.size() ||
+                index >= type_live.size()) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            types[index] = {
+                {},
+                {},
+                graph_type_kind::record,
+                kind,
+                0,
+            };
+
+            type_live[index] = 1;
+        }
+
+        ++live_type_count_value;
 
         output = existing;
         return server_status::success;
@@ -1528,7 +1487,7 @@ server_status graph_delta::declare_record(
             type_count())};
 
     const auto published =
-        set_identity_location(
+        publish_identity_location(
             identity_value,
             location_kind::type,
             output.value());
@@ -1569,59 +1528,16 @@ server_status graph_delta::clear_definition(
         return server_status::success;
     }
 
-    const auto type_identity =
-        identity(
-            type_value);
-
-    if (!type_identity ||
-        type_identity.kind() !=
-            identity_kind::type) {
-
-        return server_status::
-            project_artifact_invalid;
-    }
-
-    const auto retired =
-        retire(
-            type_value);
-
-    if (!succeeded(retired)) {
-        return retired;
-    }
-
-    type_handle replacement;
-
-    return declare_record(
-        type_identity,
-        entry.record_kind,
-        replacement);
-}
-
-server_status graph_delta::retire(
-    type_handle type_value) noexcept {
-
-    if (!contains(type_value)) {
-        return server_status::
-            project_configuration_invalid;
-    }
-
-    const auto type_identity =
-        identity(
-            type_value);
-
-    if (!type_identity ||
-        type_identity.kind() !=
-            identity_kind::type) {
-
-        return server_status::
-            project_artifact_invalid;
-    }
-
-    type_patch* patch = nullptr;
-    std::size_t local_index = 0;
+    entry.members = {};
+    entry.bases = {};
+    entry.flags &=
+        static_cast<std::uint16_t>(
+            ~graph_type_flag_mask);
 
     if (type_value.value() <=
         baseline_type_count) {
+
+        type_patch* patch = nullptr;
 
         const auto prepared =
             ensure_type_patch(
@@ -1636,42 +1552,81 @@ server_status graph_delta::retire(
                     project_artifact_invalid
                 : prepared;
         }
-    }
-    else {
-        local_index =
-            static_cast<std::size_t>(
-                type_value.value() -
-                baseline_type_count -
-                1);
 
-        if (local_index >=
-                type_live.size() ||
-            type_live[local_index] == 0) {
+        patch->value =
+            entry;
 
-            return server_status::
-                project_artifact_invalid;
-        }
+        return server_status::success;
     }
 
-    const auto cleared =
-        clear_identity_location(
-            type_identity);
+    const auto index =
+        static_cast<std::size_t>(
+            type_value.value() -
+            baseline_type_count -
+            1);
 
-    if (!succeeded(cleared)) {
-        return cleared;
+    if (index >=
+        types.size()) {
+
+        return server_status::
+            project_artifact_invalid;
     }
 
-    if (patch != nullptr) {
-        patch->live = false;
-    }
-    else {
-        type_live[
-            local_index] = 0;
+    types[index] =
+        entry;
+
+    return server_status::success;
+}
+
+server_status graph_delta::retire(
+    type_handle type_value) noexcept {
+
+    if (!contains(type_value)) {
+        return server_status::
+            project_configuration_invalid;
     }
 
     if (live_type_count_value == 0) {
         return server_status::
             project_artifact_invalid;
+    }
+
+    if (type_value.value() <=
+        baseline_type_count) {
+
+        type_patch* patch = nullptr;
+
+        const auto prepared =
+            ensure_type_patch(
+                type_value,
+                patch);
+
+        if (!succeeded(prepared) ||
+            patch == nullptr) {
+
+            return succeeded(prepared)
+                ? server_status::
+                    project_artifact_invalid
+                : prepared;
+        }
+
+        patch->live = false;
+    }
+    else {
+        const auto index =
+            static_cast<std::size_t>(
+                type_value.value() -
+                baseline_type_count -
+                1);
+
+        if (index >=
+            type_live.size()) {
+
+            return server_status::
+                project_artifact_invalid;
+        }
+
+        type_live[index] = 0;
     }
 
     --live_type_count_value;
@@ -2497,34 +2452,155 @@ server_status graph_delta::add_object(
     }
 
     if (const auto existing =
-            current_object(
+            lineage_object(
                 identity_value);
         existing) {
 
-        if (!contains(existing)) {
-            return server_status::
-                project_artifact_invalid;
+        if (contains(existing)) {
+            object_entry entry;
+            construction_value existing_initial;
+
+            if (!object(
+                    existing,
+                    entry) ||
+                !construction(
+                    existing,
+                    existing_initial) ||
+                entry.type != type_value ||
+                (entry.state &
+                    graph_object_flag_mask) !=
+                    flags ||
+                existing_initial !=
+                    initial) {
+
+                return server_status::
+                    project_configuration_invalid;
+            }
+
+            output = existing;
+            return server_status::success;
         }
 
-        object_entry entry;
-        construction_value existing_initial;
+        if (existing.value() <=
+            baseline_object_count) {
 
-        if (!object(
-                existing,
-                entry) ||
-            !construction(
-                existing,
-                existing_initial) ||
-            entry.type != type_value ||
-            (entry.state &
-                graph_object_flag_mask) !=
-                flags ||
-            existing_initial !=
-                initial) {
+            object_patch* patch = nullptr;
 
-            return server_status::
-                project_configuration_invalid;
+            const auto prepared =
+                ensure_object_patch(
+                    existing,
+                    patch);
+
+            if (!succeeded(prepared) ||
+                patch == nullptr) {
+
+                return succeeded(prepared)
+                    ? server_status::
+                        project_artifact_invalid
+                    : prepared;
+            }
+
+            std::uint32_t construction_slot = 0;
+
+            if ((flags &
+                graph_object_non_default_initializer) !=
+                0) {
+
+                const auto logical_construction_count =
+                    baseline_object_construction_count +
+                    object_construction.size();
+
+                if (logical_construction_count >=
+                    graph_object_construction_slot_mask) {
+
+                    return server_status::
+                        io_error;
+                }
+
+                try {
+                    object_construction.push_back(
+                        initial);
+                }
+                catch (...) {
+                    return server_status::
+                        io_error;
+                }
+
+                construction_slot =
+                    static_cast<std::uint32_t>(
+                        baseline_object_construction_count +
+                        object_construction.size());
+            }
+
+            patch->value = {
+                type_value,
+                flags |
+                    construction_slot,
+            };
+
+            patch->construction =
+                initial;
+
+            patch->live = true;
         }
+        else {
+            const auto index =
+                static_cast<std::size_t>(
+                    existing.value() -
+                    baseline_object_count -
+                    1);
+
+            if (index >=
+                    objects.size() ||
+                index >=
+                    object_live.size()) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            std::uint32_t construction_slot = 0;
+
+            if ((flags &
+                graph_object_non_default_initializer) !=
+                0) {
+
+                const auto logical_construction_count =
+                    baseline_object_construction_count +
+                    object_construction.size();
+
+                if (logical_construction_count >=
+                    graph_object_construction_slot_mask) {
+
+                    return server_status::
+                        io_error;
+                }
+
+                try {
+                    object_construction.push_back(
+                        initial);
+                }
+                catch (...) {
+                    return server_status::
+                        io_error;
+                }
+
+                construction_slot =
+                    static_cast<std::uint32_t>(
+                        baseline_object_construction_count +
+                        object_construction.size());
+            }
+
+            objects[index] = {
+                type_value,
+                flags |
+                    construction_slot,
+            };
+
+            object_live[index] = 1;
+        }
+
+        ++live_object_count_value;
 
         output = existing;
         return server_status::success;
@@ -2553,7 +2629,7 @@ server_status graph_delta::add_object(
 
         if ((flags &
             graph_object_non_default_initializer) !=
-                0) {
+            0) {
 
             const auto logical_construction_count =
                 baseline_object_construction_count +
@@ -2606,7 +2682,7 @@ server_status graph_delta::add_object(
             object_count())};
 
     const auto published =
-        set_identity_location(
+        publish_identity_location(
             identity_value,
             location_kind::object,
             output.value());
@@ -2641,23 +2717,15 @@ server_status graph_delta::retire(
             project_configuration_invalid;
     }
 
-    const auto object_identity =
-        identity(
-            object_value);
-
-    if (!object_identity ||
-        object_identity.kind() !=
-            identity_kind::object) {
-
+    if (live_object_count_value == 0) {
         return server_status::
             project_artifact_invalid;
     }
 
-    object_patch* patch = nullptr;
-    std::size_t local_index = 0;
-
     if (object_value.value() <=
         baseline_object_count) {
+
+        object_patch* patch = nullptr;
 
         const auto prepared =
             ensure_object_patch(
@@ -2672,42 +2740,24 @@ server_status graph_delta::retire(
                     project_artifact_invalid
                 : prepared;
         }
+
+        patch->live = false;
     }
     else {
-        local_index =
+        const auto index =
             static_cast<std::size_t>(
                 object_value.value() -
                 baseline_object_count -
                 1);
 
-        if (local_index >=
-                object_live.size() ||
-            object_live[local_index] == 0) {
+        if (index >=
+            object_live.size()) {
 
             return server_status::
                 project_artifact_invalid;
         }
-    }
 
-    const auto cleared =
-        clear_identity_location(
-            object_identity);
-
-    if (!succeeded(cleared)) {
-        return cleared;
-    }
-
-    if (patch != nullptr) {
-        patch->live = false;
-    }
-    else {
-        object_live[
-            local_index] = 0;
-    }
-
-    if (live_object_count_value == 0) {
-        return server_status::
-            project_artifact_invalid;
+        object_live[index] = 0;
     }
 
     --live_object_count_value;
@@ -3892,7 +3942,7 @@ server_status graph_delta::ensure_link_target_index_capacity(
                 continue;
             }
 
-            (void)set_link_target_index(
+            insert_link_target_index(
                 candidate,
                 value.key,
                 value.link);
@@ -3908,16 +3958,10 @@ server_status graph_delta::ensure_link_target_index_capacity(
     }
 }
 
-bool graph_delta::set_link_target_index(
+void graph_delta::insert_link_target_index(
     std::vector<link_target_index_slot>& target,
     std::uint64_t key,
     link_handle link_value) const noexcept {
-
-    if (target.empty() ||
-        key == 0) {
-
-        return false;
-    }
 
     const auto mask =
         target.size() - 1;
@@ -3927,42 +3971,20 @@ bool graph_delta::set_link_target_index(
             mix64(key)) &
         mask;
 
-    for (std::size_t probe = 0;
-         probe < target.size();
-         ++probe) {
-
-        auto& slot =
-            target[position];
-
-        if (slot.key == key) {
-            slot.link =
-                link_value;
-
-            return false;
-        }
-
-        if (slot.key == 0) {
-            slot = {
-                key,
-                link_value,
-            };
-
-            return true;
-        }
-
+    while (target[position].key != 0) {
         position =
             (position + 1) &
             mask;
     }
 
-    return false;
+    target[position] = {
+        key,
+        link_value,
+    };
 }
 
-bool graph_delta::find_local_link_target(
-    object_endpoint target,
-    link_handle& output) const noexcept {
-
-    output = {};
+link_handle graph_delta::find_local_link_target(
+    object_endpoint target) const noexcept {
 
     const auto key =
         link_target_key(
@@ -3971,7 +3993,7 @@ bool graph_delta::find_local_link_target(
     if (key == 0 ||
         link_target_index.empty()) {
 
-        return false;
+        return {};
     }
 
     const auto mask =
@@ -3992,14 +4014,11 @@ bool graph_delta::find_local_link_target(
                 position];
 
         if (slot.key == 0) {
-            return false;
+            return {};
         }
 
         if (slot.key == key) {
-            output =
-                slot.link;
-
-            return true;
+            return slot.link;
         }
 
         position =
@@ -4007,23 +4026,22 @@ bool graph_delta::find_local_link_target(
             mask;
     }
 
-    return false;
+    return {};
 }
 
-link_handle graph_delta::current_link_target(
+link_handle graph_delta::lineage_link_target(
     object_endpoint target) const noexcept {
 
-    link_handle local;
-
-    if (find_local_link_target(
-            target,
-            local)) {
+    if (const auto local =
+            find_local_link_target(
+                target);
+        local) {
 
         return local;
     }
 
     return baseline != nullptr
-        ? baseline->find_link_target(
+        ? baseline->find_link_target_lineage(
             target)
         : link_handle{};
 }
@@ -4764,28 +4782,80 @@ server_status graph_delta::add_link(
     }
 
     if (const auto existing =
-            current_link_target(
+            lineage_link_target(
                 target);
         existing) {
 
-        if (!contains(existing)) {
-            return server_status::
-                project_artifact_invalid;
+        if (contains(existing)) {
+            link_record value;
+
+            if (!link(
+                    existing,
+                    value) ||
+                value.target !=
+                    target ||
+                value.source !=
+                    source) {
+
+                return server_status::
+                    project_configuration_invalid;
+            }
+
+            output = existing;
+            return server_status::success;
         }
 
-        link_record value;
+        if (existing.value() <=
+            baseline_link_count) {
 
-        if (!link(
-                existing,
-                value) ||
-            value.target !=
-                target ||
-            value.source !=
-                source) {
+            link_patch* patch = nullptr;
 
-            return server_status::
-                project_configuration_invalid;
+            const auto prepared =
+                ensure_link_patch(
+                    existing,
+                    patch);
+
+            if (!succeeded(prepared) ||
+                patch == nullptr) {
+
+                return succeeded(prepared)
+                    ? server_status::
+                        project_artifact_invalid
+                    : prepared;
+            }
+
+            patch->value = {
+                source,
+                target,
+            };
+
+            patch->live = true;
         }
+        else {
+            const auto index =
+                static_cast<std::size_t>(
+                    existing.value() -
+                    baseline_link_count -
+                    1);
+
+            if (index >=
+                    links.size() ||
+                index >=
+                    link_live.size()) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            links[index] = {
+                source,
+                target,
+            };
+
+            link_live[index] = 1;
+        }
+
+        ++live_link_count_value;
 
         output = existing;
         return server_status::success;
@@ -4798,21 +4868,11 @@ server_status graph_delta::add_link(
         return server_status::io_error;
     }
 
-    link_handle local_target;
+    const auto prepared =
+        ensure_link_target_index_capacity(1);
 
-    const bool has_local_target =
-        find_local_link_target(
-            target,
-            local_target);
-
-    if (!has_local_target) {
-        const auto prepared =
-            ensure_link_target_index_capacity(
-                1);
-
-        if (!succeeded(prepared)) {
-            return prepared;
-        }
+    if (!succeeded(prepared)) {
+        return prepared;
     }
 
     const auto old_link_count =
@@ -4860,16 +4920,12 @@ server_status graph_delta::add_link(
             project_configuration_invalid;
     }
 
-    const bool inserted =
-        set_link_target_index(
-            link_target_index,
-            key,
-            output);
+    insert_link_target_index(
+        link_target_index,
+        key,
+        output);
 
-    if (inserted) {
-        ++link_target_index_count;
-    }
-
+    ++link_target_index_count;
     ++live_link_count_value;
 
     return server_status::success;
@@ -4878,42 +4934,20 @@ server_status graph_delta::add_link(
 server_status graph_delta::retire(
     link_handle link_value) noexcept {
 
-    link_record value;
-
-    if (!contains(link_value) ||
-        !link(
-            link_value,
-            value) ||
-        current_link_target(
-            value.target) !=
-            link_value) {
-
+    if (!contains(link_value)) {
         return server_status::
             project_configuration_invalid;
     }
 
-    link_handle local_target;
-
-    const bool has_local_target =
-        find_local_link_target(
-            value.target,
-            local_target);
-
-    if (!has_local_target) {
-        const auto prepared =
-            ensure_link_target_index_capacity(
-                1);
-
-        if (!succeeded(prepared)) {
-            return prepared;
-        }
+    if (live_link_count_value == 0) {
+        return server_status::
+            project_artifact_invalid;
     }
-
-    link_patch* patch = nullptr;
-    std::size_t local_index = 0;
 
     if (link_value.value() <=
         baseline_link_count) {
+
+        link_patch* patch = nullptr;
 
         const auto prepared =
             ensure_link_patch(
@@ -4928,53 +4962,24 @@ server_status graph_delta::retire(
                     project_artifact_invalid
                 : prepared;
         }
+
+        patch->live = false;
     }
     else {
-        local_index =
+        const auto index =
             static_cast<std::size_t>(
                 link_value.value() -
                 baseline_link_count -
                 1);
 
-        if (local_index >=
-                link_live.size() ||
-            link_live[local_index] == 0) {
+        if (index >=
+            link_live.size()) {
 
             return server_status::
                 project_artifact_invalid;
         }
-    }
 
-    const auto key =
-        link_target_key(
-            value.target);
-
-    if (key == 0) {
-        return server_status::
-            project_artifact_invalid;
-    }
-
-    const bool inserted =
-        set_link_target_index(
-            link_target_index,
-            key,
-            {});
-
-    if (inserted) {
-        ++link_target_index_count;
-    }
-
-    if (patch != nullptr) {
-        patch->live = false;
-    }
-    else {
-        link_live[
-            local_index] = 0;
-    }
-
-    if (live_link_count_value == 0) {
-        return server_status::
-            project_artifact_invalid;
+        link_live[index] = 0;
     }
 
     --live_link_count_value;

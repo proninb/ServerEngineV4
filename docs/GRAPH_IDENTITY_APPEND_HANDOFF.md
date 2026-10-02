@@ -6,25 +6,35 @@ Verified decision baseline: `c5e73eca19065aec8018b875a6ef9ef76e1c73e3`
 
 ## Decision
 
-The next Graph architecture is identity-driven:
+The Graph architecture is identity-driven:
 
 ```text
 identity_ref = WHO
-Graph handle = current WHERE
+Graph handle = physical WHERE
 ```
 
-Do not continue the abandoned persisted tombstone/liveness-bitset direction.
+Graph handles are not semantic identity and REBUILD may relocate them. For
+performance, normal BUILD keeps an already assigned top-level WHERE stable.
 
-Normal BUILD must eventually become:
+Normal BUILD target:
 
 ```text
-changed identity
-    -> append replacement semantic payload
-    -> patch direct current-location index
-    -> old physical payload becomes stale storage
+UPDATE existing
+    -> patch same top-level WHERE
+    -> append replacement owned variable payload when required
+
+DELETE
+    -> same WHERE, live = false
+
+RE-ADD same WHO
+    -> reactivate same WHERE
+
+NEW WHO
+    -> append one new WHERE
 ```
 
-There is no semantic version chain (`A v1/A v2/A v3`).
+There is no semantic version chain (`A v1/A v2/A v3`) and no
+`handle == identity` contract.
 
 REBUILD is the compaction boundary.
 
@@ -62,7 +72,7 @@ GRAPH-IDENTITY-REF-01C
 Then:
 
 ```text
-GRAPH-APPEND-01
+GRAPH-APPEND-01 stable top-level WHERE / append owned payload
 GRAPH-APPEND-02 sparse persistence
 GRAPH-APPEND-03 remove normal-BUILD graph_dense_projection
 RUNTIME-CURRENT-01 current-only Runtime construction
