@@ -10407,6 +10407,209 @@ void test_sparse_in_place_payload_reuse(
 }
 
 
+
+void test_sparse_object_construction_growth(
+    test_state& tests,
+    const compiled_fixture& fixture,
+    const compiled_test_image& baseline_image) {
+
+    auto image =
+        baseline_image.bytes;
+
+    compiled_project_view baseline;
+    object_entry baseline_object;
+    construction_value baseline_initial;
+
+    if (!tests.expect(
+            baseline.bind(
+                image) ==
+                compiled_project_image_result::success &&
+            baseline.object(
+                fixture.left,
+                baseline_object) &&
+            !baseline_object.
+                non_default_initializer() &&
+            baseline.construction(
+                fixture.left,
+                baseline_initial) &&
+            baseline_initial ==
+                construction_value{},
+            "bind object without explicit construction")) {
+
+        return;
+    }
+
+    graph_delta delta;
+    object_handle restored;
+
+    if (!tests.expect(
+            succeeded(
+                delta.bind_baseline(
+                    baseline)) &&
+            succeeded(
+                delta.retire(
+                    fixture.left)) &&
+            succeeded(
+                delta.add_object(
+                    fixture.left_identity,
+                    fixture.named_type,
+                    restored,
+                    graph_object_non_default_initializer,
+                    construction_value{})) &&
+            restored ==
+                fixture.left &&
+            delta.object_construction_entries().
+                size() == 1,
+            "prepare genuinely new object construction")) {
+
+        return;
+    }
+
+    std::size_t growth = 0;
+
+    if (!tests.expect(
+            prepare_compiled_project_graph_growth(
+                delta,
+                baseline,
+                growth) ==
+                compiled_project_image_result::success &&
+            growth ==
+                sizeof(construction_value),
+            "measure one EOF construction record")) {
+
+        return;
+    }
+
+    const auto old_size =
+        image.size();
+
+    try {
+        image.resize(
+            old_size +
+            growth);
+    }
+    catch (...) {
+        tests.expect(
+            false,
+            "grow compiled image for one construction record");
+        return;
+    }
+
+    if (!tests.expect(
+            apply_compiled_project_graph_writes(
+                delta,
+                image,
+                old_size) ==
+                compiled_project_image_result::success,
+            "append one object construction to Graph tail")) {
+
+        return;
+    }
+
+    compiled_project_view current;
+    object_entry current_object;
+    construction_value current_initial;
+
+    if (!tests.expect(
+            current.bind(
+                image) ==
+                compiled_project_image_result::success &&
+            current.verify_contents() ==
+                compiled_project_image_result::success &&
+            current.find_object(
+                fixture.left_identity) ==
+                fixture.left &&
+            current.object(
+                fixture.left,
+                current_object) &&
+            current_object.
+                non_default_initializer() &&
+            current_object.construction_slot() >
+                current.object_construction_count() &&
+            current.construction(
+                fixture.left,
+                current_initial) &&
+            current_initial ==
+                construction_value{} &&
+            current.graph_append_byte_size() ==
+                sizeof(construction_value) &&
+            image.size() ==
+                old_size +
+                sizeof(construction_value),
+            "LOAD resolves direct object construction in EOF tail")) {
+
+        return;
+    }
+
+    const auto tail_locator =
+        current_object.construction_slot();
+
+    graph_delta second;
+    object_handle second_restored;
+
+    if (!tests.expect(
+            succeeded(
+                second.bind_baseline(
+                    current)) &&
+            succeeded(
+                second.retire(
+                    fixture.left)) &&
+            succeeded(
+                second.add_object(
+                    fixture.left_identity,
+                    fixture.named_type,
+                    second_restored,
+                    graph_object_non_default_initializer,
+                    construction_value{})) &&
+            second_restored ==
+                fixture.left,
+            "prepare update of existing tail construction")) {
+
+        return;
+    }
+
+    std::size_t second_growth = 0;
+
+    if (!tests.expect(
+            prepare_compiled_project_graph_growth(
+                second,
+                current,
+                second_growth) ==
+                compiled_project_image_result::success &&
+            second_growth == 0 &&
+            apply_compiled_project_graph_fixed_writes(
+                second,
+                image) ==
+                compiled_project_image_result::success,
+            "existing tail construction patches without growth")) {
+
+        return;
+    }
+
+    compiled_project_view final_view;
+    object_entry final_object;
+
+    tests.expect(
+        final_view.bind(
+            image) ==
+                compiled_project_image_result::success &&
+        final_view.verify_contents() ==
+            compiled_project_image_result::success &&
+        final_view.object(
+            fixture.left,
+            final_object) &&
+        !final_object.internal_static() &&
+        final_object.construction_slot() ==
+            tail_locator &&
+        final_view.graph_append_byte_size() ==
+            sizeof(construction_value) &&
+        image.size() ==
+            old_size +
+            sizeof(construction_value),
+        "second BUILD reuses tail construction WHERE");
+}
+
+
 void test_graph_append_tail_boundary(
     test_state& tests,
     const compiled_test_image& image) {
@@ -11650,6 +11853,11 @@ int main() {
             first);
 
         test_sparse_in_place_payload_reuse(
+            tests,
+            fixture,
+            first);
+
+        test_sparse_object_construction_growth(
             tests,
             fixture,
             first);

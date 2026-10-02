@@ -2815,17 +2815,57 @@ bool compiled_project_view::construction(
             compiled_project_section::
                 object_construction);
 
-    if (slot == 0 ||
-        slot > values.count) {
-
+    if (slot == 0) {
         return false;
     }
 
-    const auto* record =
-        values.data +
-        static_cast<std::size_t>(
-            slot - 1) *
+    const std::byte* record = nullptr;
+
+    if (slot <= values.count) {
+        record =
+            values.data +
+            static_cast<std::size_t>(
+                slot - 1) *
+                construction_record_size;
+    }
+    else {
+        const auto tail_unit =
+            static_cast<std::uint64_t>(
+                slot) -
+            values.count -
+            1;
+
+        if (tail_unit >
+            (std::numeric_limits<
+                std::uint64_t>::max)() /
+                construction_record_size) {
+
+            return false;
+        }
+
+        const auto tail_offset =
+            tail_unit *
             construction_record_size;
+
+        const auto& tail =
+            section(
+                compiled_project_section::
+                    graph_append_bytes);
+
+        if (tail_offset >
+                tail.count ||
+            construction_record_size >
+                tail.count -
+                    tail_offset) {
+
+            return false;
+        }
+
+        record =
+            tail.data +
+            static_cast<std::size_t>(
+                tail_offset);
+    }
 
     output.low =
         read_u32(record);
@@ -4715,8 +4755,6 @@ compiled_project_view::verify_contents() const noexcept {
         }
     }
 
-    std::uint32_t expected_construction_slot = 0;
-
     for (std::size_t index = 0;
          index <
             object_count_value;
@@ -4749,17 +4787,7 @@ compiled_project_view::verify_contents() const noexcept {
         }
 
         if (value.non_default_initializer()) {
-            if (expected_construction_slot ==
-                graph_object_construction_slot_mask) {
-
-                return compiled_project_image_result::
-                    invalid_image;
-            }
-
-            ++expected_construction_slot;
-
-            if (value.construction_slot() !=
-                    expected_construction_slot ||
+            if (value.construction_slot() == 0 ||
                 !construction_compatible(
                     *this,
                     value.type,
@@ -4779,15 +4807,6 @@ compiled_project_view::verify_contents() const noexcept {
             return compiled_project_image_result::
                 invalid_image;
         }
-    }
-
-    if (expected_construction_slot !=
-        section(
-            compiled_project_section::
-                object_construction).count) {
-
-        return compiled_project_image_result::
-            invalid_image;
     }
 
     const auto& graph_identity =
