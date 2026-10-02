@@ -10005,11 +10005,33 @@ void test_build_lineage_overlays(
             fixture.reference_type,
         "BUILD graph_delta reuses persisted derived slot");
 
+    const auto initial_stale_types =
+        G.stale_type_count();
+
     if (!tests.expect(
             succeeded(
                 G.clear_definition(
                     fixture.type)),
             "BUILD graph_delta clears baseline type definition")) {
+        return;
+    }
+
+    auto current_type =
+        G.find_type(
+            fixture.type_identity);
+
+    if (!tests.expect(
+            current_type &&
+            current_type !=
+                fixture.type &&
+            current_type.value() ==
+                baseline.type_slot_count() + 1 &&
+            !G.contains(
+                fixture.type) &&
+            G.stale_type_count() ==
+                initial_stale_types + 1,
+            "BUILD type replacement appends WHERE and preserves WHO")) {
+
         return;
     }
 
@@ -10038,7 +10060,7 @@ void test_build_lineage_overlays(
     if (!tests.expect(
             succeeded(
                 G.define_record(
-                    fixture.type,
+                    current_type,
                     graph_record_kind::struct_type,
                     replacement_members,
                     replacement_construction)),
@@ -10051,16 +10073,16 @@ void test_build_lineage_overlays(
     tests.expect(
         G.find_type(
             fixture.type_identity) ==
-            fixture.type &&
+            current_type &&
         G.construction(
-            fixture.type,
+            current_type,
             fixture.value_member,
             replacement_value) &&
         replacement_value ==
             construction_value::constant(
                 construction_kind::signed_integer,
                 99),
-        "graph_delta type replacement preserves type_handle");
+        "graph_delta type replacement keeps identity and moves physical handle");
 
     string_id build_base_name;
     identity_ref build_base_identity;
@@ -10105,19 +10127,39 @@ void test_build_lineage_overlays(
             },
         }};
 
+    const auto first_replacement_type =
+        current_type;
+
     if (!tests.expect(
             succeeded(
                 G.clear_definition(
-                    fixture.type)) &&
+                    current_type)),
+            "BUILD graph_delta clears first replacement definition")) {
+
+        return;
+    }
+
+    current_type =
+        G.find_type(
+            fixture.type_identity);
+
+    if (!tests.expect(
+            current_type &&
+            current_type !=
+                first_replacement_type &&
+            !G.contains(
+                first_replacement_type) &&
+            G.stale_type_count() ==
+                initial_stale_types + 2 &&
             succeeded(
                 G.define_record(
-                    fixture.type,
+                    current_type,
                     graph_record_kind::struct_type,
                     replacement_members,
                     replacement_construction,
                     replacement_bases,
                     false)),
-            "BUILD graph_delta replaces type with base topology")) {
+            "BUILD graph_delta appends second current type payload")) {
 
         return;
     }
@@ -10127,14 +10169,14 @@ void test_build_lineage_overlays(
 
     tests.expect(
         G.type(
-            fixture.type,
+            current_type,
             inherited_type) &&
         inherited_type.bases.count == 1 &&
         inherited_type.polymorphic() &&
         G.polymorphic(
-            fixture.type) &&
+            current_type) &&
         G.base(
-            fixture.type,
+            current_type,
             0,
             inherited_base) &&
         inherited_base.type ==
@@ -10146,6 +10188,12 @@ void test_build_lineage_overlays(
     const auto old_live_objects =
         G.live_object_count();
 
+    const auto old_object_slots =
+        G.object_count();
+
+    const auto old_stale_objects =
+        G.stale_object_count();
+
     if (!tests.expect(
             succeeded(
                 G.retire(
@@ -10155,8 +10203,10 @@ void test_build_lineage_overlays(
             !G.find_object(
                 fixture.scalar_identity) &&
             G.live_object_count() + 1 ==
-                old_live_objects,
-            "BUILD graph_delta tombstones baseline object")) {
+                old_live_objects &&
+            G.stale_object_count() ==
+                old_stale_objects + 1,
+            "BUILD graph_delta retires baseline object into stale storage")) {
         return;
     }
 
@@ -10172,9 +10222,16 @@ void test_build_lineage_overlays(
                     construction_value::constant(
                         construction_kind::unsigned_integer,
                         9))) &&
-            restored_scalar ==
-                fixture.scalar,
-            "BUILD graph_delta reuses retired scalar object slot")) {
+            restored_scalar !=
+                fixture.scalar &&
+            restored_scalar.value() ==
+                old_object_slots + 1 &&
+            G.find_object(
+                fixture.scalar_identity) ==
+                restored_scalar &&
+            G.stale_object_count() ==
+                old_stale_objects + 1,
+            "BUILD graph_delta appends scalar replacement and moves current location")) {
         return;
     }
 
@@ -10196,10 +10253,16 @@ void test_build_lineage_overlays(
             construction_value::constant(
                 construction_kind::unsigned_integer,
                 9),
-        "BUILD graph_delta patches scalar object construction without baseline copy");
+        "BUILD graph_delta stores scalar replacement construction in append arena");
 
     const auto old_live_links =
         G.live_link_count();
+
+    const auto old_link_slots =
+        G.link_count();
+
+    const auto old_stale_links =
+        G.stale_link_count();
 
     if (!tests.expect(
             succeeded(
@@ -10208,8 +10271,10 @@ void test_build_lineage_overlays(
             !G.contains(
                 fixture.link) &&
             G.live_link_count() + 1 ==
-                old_live_links,
-            "BUILD graph_delta tombstones baseline link")) {
+                old_live_links &&
+            G.stale_link_count() ==
+                old_stale_links + 1,
+            "BUILD graph_delta retires baseline link into stale storage")) {
         return;
     }
 
@@ -10224,11 +10289,18 @@ void test_build_lineage_overlays(
                 old_link.source,
                 old_link.target,
                 restored_link)) &&
-        restored_link ==
+        restored_link !=
             fixture.link &&
+        restored_link.value() ==
+            old_link_slots + 1 &&
         G.live_link_count() ==
-            old_live_links,
-        "BUILD graph_delta reuses retired link target slot");
+            old_live_links &&
+        G.stale_link_count() ==
+            old_stale_links + 1,
+        "BUILD graph_delta appends replacement link for semantic target");
+
+    const auto object_slots_before_append =
+        G.object_count();
 
     object_handle appended_object;
 
@@ -10239,7 +10311,7 @@ void test_build_lineage_overlays(
                     fixture.named_type,
                     appended_object)) &&
             appended_object.value() ==
-                baseline.object_count() + 1 &&
+                object_slots_before_append + 1 &&
             G.find_object(
                 appended_identity) ==
                 appended_object,
@@ -10262,6 +10334,9 @@ void test_build_lineage_overlays(
             baseline.derived_type_count() + 1,
         "BUILD graph_delta appends derived type after baseline slots");
 
+    const auto link_slots_before_append =
+        G.link_count();
+
     link_handle appended_link;
 
     tests.expect(
@@ -10277,8 +10352,8 @@ void test_build_lineage_overlays(
                 },
                 appended_link)) &&
         appended_link.value() ==
-            baseline.link_count() + 1,
-        "BUILD graph_delta appends link after baseline slots");
+            link_slots_before_append + 1,
+        "BUILD graph_delta appends link after current physical storage");
 
     compiled_project_layout merged_layout;
 

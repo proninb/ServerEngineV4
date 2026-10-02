@@ -307,7 +307,8 @@ public:
         type_ref type,
         derived_type_record& output) const noexcept;
 
-    // Count means lineage slot count. Slots are never compacted by BUILD.
+    // Count is physical Graph storage. Normal BUILD may leave stale
+    // replacement payload behind; REBUILD is the compaction boundary.
     [[nodiscard]] std::size_t type_count() const noexcept {
         return baseline_type_count +
             types.size();
@@ -315,6 +316,11 @@ public:
 
     [[nodiscard]] std::size_t live_type_count() const noexcept {
         return live_type_count_value;
+    }
+
+    [[nodiscard]] std::size_t stale_type_count() const noexcept {
+        return type_count() -
+            live_type_count_value;
     }
 
     [[nodiscard]] std::size_t member_count() const noexcept {
@@ -336,6 +342,11 @@ public:
         return live_object_count_value;
     }
 
+    [[nodiscard]] std::size_t stale_object_count() const noexcept {
+        return object_count() -
+            live_object_count_value;
+    }
+
     [[nodiscard]] std::size_t link_count() const noexcept {
         return baseline_link_count +
             links.size();
@@ -343,6 +354,11 @@ public:
 
     [[nodiscard]] std::size_t live_link_count() const noexcept {
         return live_link_count_value;
+    }
+
+    [[nodiscard]] std::size_t stale_link_count() const noexcept {
+        return link_count() -
+            live_link_count_value;
     }
 
     [[nodiscard]] std::size_t initialization_count() const noexcept {
@@ -457,6 +473,8 @@ private:
         object = 2,
     };
 
+    static constexpr std::uint32_t no_current_location = 1;
+
     struct derived_index_slot final {
         std::uint32_t fingerprint = 0;
         type_ref type{};
@@ -482,6 +500,10 @@ private:
             std::uint32_t key) const noexcept;
 
         [[nodiscard]] server_status insert(
+            std::uint32_t key,
+            std::uint32_t value) noexcept;
+
+        [[nodiscard]] server_status assign(
             std::uint32_t key,
             std::uint32_t value) noexcept;
 
@@ -545,18 +567,21 @@ private:
     [[nodiscard]] server_status ensure_identity_slot(
         identity_ref identity) noexcept;
 
-    [[nodiscard]] server_status publish_identity_location(
+    [[nodiscard]] server_status set_identity_location(
         identity_ref identity,
         location_kind kind,
         std::uint32_t slot) noexcept;
 
-    [[nodiscard]] std::uint32_t lineage_location(
+    [[nodiscard]] server_status clear_identity_location(
+        identity_ref identity) noexcept;
+
+    [[nodiscard]] std::uint32_t current_location(
         identity_ref identity) const noexcept;
 
-    [[nodiscard]] type_handle lineage_type(
+    [[nodiscard]] type_handle current_type(
         identity_ref identity) const noexcept;
 
-    [[nodiscard]] object_handle lineage_object(
+    [[nodiscard]] object_handle current_object(
         identity_ref identity) const noexcept;
 
     [[nodiscard]] const type_patch* find_type_patch(
@@ -643,15 +668,16 @@ private:
     [[nodiscard]] server_status ensure_link_target_index_capacity(
         std::size_t additional) noexcept;
 
-    void insert_link_target_index(
+    [[nodiscard]] bool set_link_target_index(
         std::vector<link_target_index_slot>& target,
         std::uint64_t key,
         link_handle link) const noexcept;
 
-    [[nodiscard]] link_handle find_local_link_target(
-        object_endpoint target) const noexcept;
+    [[nodiscard]] bool find_local_link_target(
+        object_endpoint target,
+        link_handle& output) const noexcept;
 
-    [[nodiscard]] link_handle lineage_link_target(
+    [[nodiscard]] link_handle current_link_target(
         object_endpoint target) const noexcept;
 
     [[nodiscard]] const initialization_patch*
