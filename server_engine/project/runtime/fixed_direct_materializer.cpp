@@ -1707,8 +1707,20 @@ private:
         reference,
     };
 
+    static constexpr record_offset
+        no_direct_source_offset =
+            (std::numeric_limits<record_offset>::max)();
+
     struct planned_member final {
-        std::size_t offset = 0;
+        record_offset offset = 0;
+
+        // For a reference member whose construction is a same-record
+        // member_binding to a non-reference value, this is the already
+        // validated source member offset. All other cases use the sentinel
+        // and retain the generic resolver.
+        record_offset direct_source_offset =
+            no_direct_source_offset;
+
         construction_value construction{};
         type_ref type{};
         materialization_action action =
@@ -2089,6 +2101,46 @@ private:
                         construction,
                         plan_type);
 
+                record_offset direct_source_offset =
+                    no_direct_source_offset;
+
+                if (action ==
+                        materialization_action::reference &&
+                    construction.kind ==
+                        construction_kind::member_binding &&
+                    construction.operand != 0) {
+
+                    const auto source_local =
+                        construction.operand - 1;
+
+                    if (source_local <
+                        type.members.count) {
+
+                        const auto source_global =
+                            static_cast<std::size_t>(
+                                type.members.begin) +
+                            source_local;
+
+                        member_record source_member;
+                        record_offset source_offset = 0;
+                        type_ref source_referent;
+
+                        if (project.member_at(
+                                source_global,
+                                source_member) &&
+                            layout.member_offset(
+                                source_global,
+                                source_offset) &&
+                            !reference_referent(
+                                source_member.type,
+                                source_referent)) {
+
+                            direct_source_offset =
+                                source_offset;
+                        }
+                    }
+                }
+
                 if (telemetry != nullptr) {
                     ++telemetry->plan_members_built;
 
@@ -2116,6 +2168,7 @@ private:
 
                 planned_members.push_back({
                     offset,
+                    direct_source_offset,
                     construction,
                     plan_type,
                     action,
@@ -2291,6 +2344,33 @@ private:
             if (member.action ==
                 materialization_action::reference) {
 
+                if (telemetry != nullptr) {
+                    switch (member.construction.kind) {
+                    case construction_kind::zero:
+                        ++telemetry->
+                            planned_reference_zero_construction;
+                        break;
+
+                    case construction_kind::member_binding:
+                        ++telemetry->
+                            planned_reference_member_binding;
+                        break;
+
+                    case construction_kind::object_binding:
+                        ++telemetry->
+                            planned_reference_object_binding;
+                        break;
+
+                    case construction_kind::signed_integer:
+                    case construction_kind::unsigned_integer:
+                    case construction_kind::real:
+                    case construction_kind::unsupported:
+                        ++telemetry->
+                            planned_reference_other_construction;
+                        break;
+                    }
+                }
+
                 std::uint64_t stored = 0;
 
                 if (!read_reference_slot(
@@ -2305,6 +2385,43 @@ private:
                         stored) ||
                     is_pending_link(
                         stored)) {
+
+                    continue;
+                }
+
+                if (stored != 0) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                if (member.direct_source_offset !=
+                    no_direct_source_offset) {
+
+                    const auto* source_address =
+                        base +
+                        static_cast<std::size_t>(
+                            member.direct_source_offset);
+
+                    const auto value_target =
+                        target_address(
+                            source_address);
+
+                    if (value_target == 0) {
+                        return fixed_direct_materialization_result::
+                            invalid_input;
+                    }
+
+                    // fixed_direct_target_range_compatible() validated the
+                    // complete Runtime target range before construction, so
+                    // every in-range target address fits the target ABI word.
+                    store_target_word(
+                        target,
+                        value_target);
+
+                    if (telemetry != nullptr) {
+                        ++telemetry->
+                            direct_member_binding_fast;
+                    }
 
                     continue;
                 }
@@ -3452,6 +3569,11 @@ private:
 
             if (source->action ==
                 materialization_action::reference) {
+
+                if (telemetry != nullptr) {
+                    ++telemetry->
+                        member_binding_to_reference;
+                }
                 next = {
                     current.record_type,
                     current.record_base,
@@ -3464,6 +3586,11 @@ private:
 
                 return fixed_direct_materialization_result::
                     success;
+            }
+
+            if (telemetry != nullptr) {
+                ++telemetry->
+                    member_binding_to_value;
             }
 
             output =
@@ -3515,6 +3642,11 @@ private:
                     source.type,
                     source_referent)) {
 
+                if (telemetry != nullptr) {
+                    ++telemetry->
+                        object_binding_to_reference;
+                }
+
                 construction_value source_construction;
 
                 if (!project.construction(
@@ -3551,6 +3683,11 @@ private:
 
                 return fixed_direct_materialization_result::
                     success;
+            }
+
+            if (telemetry != nullptr) {
+                ++telemetry->
+                    object_binding_to_value;
             }
 
             output =
@@ -4043,6 +4180,11 @@ private:
                 resolution_path.push_back(
                     reinterpret_cast<std::uintptr_t>(
                         slot));
+
+                if (telemetry != nullptr) {
+                    ++telemetry->
+                        resolver_path_pushes;
+                }
             }
             catch (...) {
                 return fixed_direct_materialization_result::
@@ -4219,6 +4361,11 @@ private:
                  maximum_steps;
              ++step) {
 
+            if (telemetry != nullptr) {
+                ++telemetry->
+                    resolver_steps_total;
+            }
+
             std::uint64_t stored = 0;
 
             if (!read_reference_slot(
@@ -4367,6 +4514,12 @@ private:
                     }
 
                     if (consumed != 0) {
+                        if (telemetry != nullptr) {
+                            telemetry->
+                                resolver_steps_total +=
+                                consumed - 1;
+                        }
+
                         step +=
                             consumed - 1;
 
@@ -4437,6 +4590,11 @@ private:
                 resolution_path.push_back(
                     reinterpret_cast<std::uintptr_t>(
                         current.slot));
+
+                if (telemetry != nullptr) {
+                    ++telemetry->
+                        resolver_path_pushes;
+                }
             }
             catch (...) {
                 return fixed_direct_materialization_result::

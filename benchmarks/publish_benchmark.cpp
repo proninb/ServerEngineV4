@@ -513,6 +513,28 @@ int main(
             << runtime_telemetry.materializer.planned_none_visits
             << ",planned_reference_visits="
             << runtime_telemetry.materializer.planned_reference_visits
+            << ",planned_reference_zero_construction="
+            << runtime_telemetry.materializer.planned_reference_zero_construction
+            << ",planned_reference_member_binding="
+            << runtime_telemetry.materializer.planned_reference_member_binding
+            << ",planned_reference_object_binding="
+            << runtime_telemetry.materializer.planned_reference_object_binding
+            << ",planned_reference_other_construction="
+            << runtime_telemetry.materializer.planned_reference_other_construction
+            << ",direct_member_binding_fast="
+            << runtime_telemetry.materializer.direct_member_binding_fast
+            << ",member_binding_to_value="
+            << runtime_telemetry.materializer.member_binding_to_value
+            << ",member_binding_to_reference="
+            << runtime_telemetry.materializer.member_binding_to_reference
+            << ",object_binding_to_value="
+            << runtime_telemetry.materializer.object_binding_to_value
+            << ",object_binding_to_reference="
+            << runtime_telemetry.materializer.object_binding_to_reference
+            << ",resolver_steps_total="
+            << runtime_telemetry.materializer.resolver_steps_total
+            << ",resolver_path_pushes="
+            << runtime_telemetry.materializer.resolver_path_pushes
             << ",planned_materialize_visits="
             << runtime_telemetry.materializer.planned_materialize_visits
             << ",unplanned_member_visits="

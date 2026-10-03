@@ -43,6 +43,20 @@ struct fixed_direct_materialization_telemetry final {
     std::uint64_t planned_member_visits = 0;
     std::uint64_t planned_none_visits = 0;
     std::uint64_t planned_reference_visits = 0;
+    std::uint64_t planned_reference_zero_construction = 0;
+    std::uint64_t planned_reference_member_binding = 0;
+    std::uint64_t planned_reference_object_binding = 0;
+    std::uint64_t planned_reference_other_construction = 0;
+
+    std::uint64_t direct_member_binding_fast = 0;
+    std::uint64_t member_binding_to_value = 0;
+    std::uint64_t member_binding_to_reference = 0;
+    std::uint64_t object_binding_to_value = 0;
+    std::uint64_t object_binding_to_reference = 0;
+
+    std::uint64_t resolver_steps_total = 0;
+    std::uint64_t resolver_path_pushes = 0;
+
     std::uint64_t planned_materialize_visits = 0;
     std::uint64_t unplanned_member_visits = 0;
 
