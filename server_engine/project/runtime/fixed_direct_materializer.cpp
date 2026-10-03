@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -194,16 +195,35 @@ public:
         const runtime_layout& layout,
         const server_abi_configuration& abi,
         std::uint64_t target_base_address,
-        std::span<std::byte> runtime) noexcept
+        std::span<std::byte> runtime,
+        fixed_direct_materialization_telemetry* telemetry) noexcept
         : project(project),
           layout(layout),
           abi(abi),
           target_base_address(target_base_address),
-          runtime(runtime) {
+          runtime(runtime),
+          telemetry(telemetry) {
     }
 
     [[nodiscard]] fixed_direct_materialization_result
     run() noexcept {
+
+        using clock_type =
+            std::chrono::steady_clock;
+
+        const auto elapsed_ns =
+            [](clock_type::time_point begin,
+               clock_type::time_point end) noexcept {
+                return static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<
+                        std::chrono::nanoseconds>(
+                        end - begin)
+                        .count());
+            };
+
+        if (telemetry != nullptr) {
+            *telemetry = {};
+        }
 
         if (!project.valid() ||
             layout.size() >
@@ -253,9 +273,15 @@ public:
             static_cast<std::size_t>(
                 layout.size());
 
+        const auto workspace_started =
+            clock_type::now();
+
         try {
             record_plans.resize(
                 project.type_count());
+
+            zero_construction_states.resize(
+                project.type_slot_count());
 
             link_target_slots.resize(
                 project.link_count());
@@ -266,10 +292,36 @@ public:
                 failed;
         }
 
+        const auto workspace_finished =
+            clock_type::now();
+
+        if (telemetry != nullptr) {
+            telemetry->workspace_ns =
+                elapsed_ns(
+                    workspace_started,
+                    workspace_finished);
+        }
+
+        const auto zero_started =
+            clock_type::now();
+
         std::fill_n(
             runtime.data(),
             logical_size,
             std::byte{0});
+
+        const auto zero_finished =
+            clock_type::now();
+
+        if (telemetry != nullptr) {
+            telemetry->zero_ns =
+                elapsed_ns(
+                    zero_started,
+                    zero_finished);
+        }
+
+        const auto canonical_started =
+            clock_type::now();
 
         for (std::size_t index = 0;
              index <
@@ -313,8 +365,31 @@ public:
             }
         }
 
+        const auto canonical_finished =
+            clock_type::now();
+
+        if (telemetry != nullptr) {
+            telemetry->canonical_ns =
+                elapsed_ns(
+                    canonical_started,
+                    canonical_finished);
+        }
+
+        const auto links_mark_started =
+            clock_type::now();
+
         const auto links_marked =
             mark_link_targets();
+
+        const auto links_mark_finished =
+            clock_type::now();
+
+        if (telemetry != nullptr) {
+            telemetry->links_mark_ns =
+                elapsed_ns(
+                    links_mark_started,
+                    links_mark_finished);
+        }
 
         if (links_marked !=
             fixed_direct_materialization_result::
@@ -322,6 +397,9 @@ public:
 
             return links_marked;
         }
+
+        const auto objects_started =
+            clock_type::now();
 
         for (std::size_t index = 0;
              index <
@@ -376,8 +454,31 @@ public:
             }
         }
 
+        const auto objects_finished =
+            clock_type::now();
+
+        if (telemetry != nullptr) {
+            telemetry->objects_ns =
+                elapsed_ns(
+                    objects_started,
+                    objects_finished);
+        }
+
+        const auto links_materialize_started =
+            clock_type::now();
+
         const auto links_materialized =
             materialize_links();
+
+        const auto links_materialize_finished =
+            clock_type::now();
+
+        if (telemetry != nullptr) {
+            telemetry->links_materialize_ns =
+                elapsed_ns(
+                    links_materialize_started,
+                    links_materialize_finished);
+        }
 
         if (links_materialized !=
             fixed_direct_materialization_result::
@@ -388,8 +489,27 @@ public:
 
         // Source initializations may address fields through a reference. Bind
         // every link before locating those destinations; links store addresses.
-        const auto initialized = apply_object_initializations();
-        if (initialized != fixed_direct_materialization_result::success) { return initialized; }
+        const auto initializations_started =
+            clock_type::now();
+
+        const auto initialized =
+            apply_object_initializations();
+
+        const auto initializations_finished =
+            clock_type::now();
+
+        if (telemetry != nullptr) {
+            telemetry->initializations_ns =
+                elapsed_ns(
+                    initializations_started,
+                    initializations_finished);
+        }
+
+        if (initialized !=
+            fixed_direct_materialization_result::success) {
+
+            return initialized;
+        }
 
         return fixed_direct_materialization_result::
             success;
@@ -937,6 +1057,14 @@ private:
         std::byte* target,
         object_handle top_object) noexcept {
 
+        if (zero_value_noop(
+                type,
+                construction)) {
+
+            return fixed_direct_materialization_result::
+                success;
+        }
+
         switch (type.kind()) {
         case type_ref_kind::intrinsic:
             return normal_intrinsic(
@@ -1059,6 +1187,15 @@ private:
 
                     return fixed_direct_materialization_result::
                         invalid_input;
+                }
+
+                if (telemetry != nullptr) {
+                    ++telemetry->array_calls;
+                    telemetry->array_elements_visited +=
+                        derived.payload;
+                    ++telemetry->zero_array_calls;
+                    telemetry->zero_array_elements_visited +=
+                        derived.payload;
                 }
 
                 for (std::uint64_t index = 0;
@@ -1268,6 +1405,302 @@ private:
             invalid_input;
     }
 
+
+    enum class zero_construction_state : std::uint8_t {
+        unknown = 0,
+        visiting,
+        noop,
+        materialize,
+    };
+
+    [[nodiscard]] bool
+    has_constructor_defaults(
+        type_handle handle) const noexcept {
+
+        const auto owner =
+            project.identity(
+                handle);
+
+        if (!owner) {
+            // Conservative fallback: never skip construction if persisted
+            // ownership cannot be resolved.
+            return true;
+        }
+
+        std::size_t first = 0;
+        std::size_t last =
+            project.constructor_default_count();
+
+        while (first < last) {
+            const auto middle =
+                first +
+                (last - first) / 2;
+
+            constructor_default entry;
+
+            if (!project.constructor_default_at(
+                    middle,
+                    entry)) {
+
+                return true;
+            }
+
+            if (entry.owner.value() <
+                owner.value()) {
+
+                first =
+                    middle + 1;
+            }
+            else {
+                last =
+                    middle;
+            }
+        }
+
+        if (first >=
+            project.constructor_default_count()) {
+
+            return false;
+        }
+
+        constructor_default entry;
+
+        return
+            !project.constructor_default_at(
+                first,
+                entry) ||
+            entry.owner ==
+                owner;
+    }
+
+    [[nodiscard]] bool
+    zero_record_noop(
+        type_handle handle) noexcept {
+
+        if (!handle ||
+            handle.value() >
+                zero_construction_states.size()) {
+
+            return false;
+        }
+
+        auto& state =
+            zero_construction_states[
+                handle.value() - 1];
+
+        switch (state) {
+        case zero_construction_state::noop:
+            return true;
+
+        case zero_construction_state::materialize:
+        case zero_construction_state::visiting:
+            return false;
+
+        case zero_construction_state::unknown:
+            break;
+        }
+
+        state =
+            zero_construction_state::visiting;
+
+        type_entry type;
+
+        if (!project.type(
+                handle,
+                type) ||
+            !type.defined() ||
+            type.kind !=
+                graph_type_kind::record ||
+            (type.record_kind !=
+                 graph_record_kind::struct_type &&
+             type.record_kind !=
+                 graph_record_kind::class_type) ||
+            has_constructor_defaults(
+                handle)) {
+
+            state =
+                zero_construction_state::materialize;
+
+            return false;
+        }
+
+        for (std::uint32_t local = 0;
+             local <
+                 type.bases.count;
+             ++local) {
+
+            const auto global =
+                static_cast<std::size_t>(
+                    type.bases.begin) +
+                local;
+
+            base_record base;
+
+            if (!project.base_at(
+                    global,
+                    base) ||
+                base.virtual_base()) {
+
+                state =
+                    zero_construction_state::materialize;
+
+                return false;
+            }
+
+            const auto base_handle =
+                project.find_type(
+                    base.type);
+
+            if (!base_handle ||
+                !zero_record_noop(
+                    base_handle)) {
+
+                state =
+                    zero_construction_state::materialize;
+
+                return false;
+            }
+        }
+
+        for (std::uint32_t local = 0;
+             local <
+                 type.members.count;
+             ++local) {
+
+            const auto global =
+                static_cast<std::size_t>(
+                    type.members.begin) +
+                local;
+
+            member_record member;
+            construction_value construction;
+
+            if (!project.member_at(
+                    global,
+                    member) ||
+                !project.construction(
+                    handle,
+                    local,
+                    construction) ||
+                !zero_value_noop(
+                    member.type,
+                    construction)) {
+
+                state =
+                    zero_construction_state::materialize;
+
+                return false;
+            }
+        }
+
+        state =
+            zero_construction_state::noop;
+
+        return true;
+    }
+
+    [[nodiscard]] bool
+    zero_value_noop(
+        type_ref type,
+        construction_value construction) noexcept {
+
+        if (!type) {
+            return false;
+        }
+
+        type_ref referent;
+
+        if (reference_referent(
+                type,
+                referent)) {
+
+            return false;
+        }
+
+        switch (type.kind()) {
+        case type_ref_kind::intrinsic: {
+            if (construction.kind !=
+                construction_kind::zero) {
+
+                return false;
+            }
+
+            const auto intrinsic =
+                static_cast<intrinsic_type>(
+                    type.payload());
+
+            return
+                intrinsic >=
+                    intrinsic_type::bool_type &&
+                intrinsic <=
+                    intrinsic_type::nullptr_type;
+        }
+
+        case type_ref_kind::named: {
+            if (construction.kind !=
+                construction_kind::zero) {
+
+                return false;
+            }
+
+            type_handle handle;
+
+            return
+                project.named(
+                    type,
+                    handle) &&
+                zero_record_noop(
+                    handle);
+        }
+
+        case type_ref_kind::derived: {
+            derived_type_record derived;
+
+            if (!project.derived(
+                    type,
+                    derived)) {
+
+                return false;
+            }
+
+            switch (derived.kind) {
+            case derived_type_kind::const_qualified:
+            case derived_type_kind::volatile_qualified:
+                return zero_value_noop(
+                    derived.child,
+                    construction);
+
+            case derived_type_kind::pointer:
+                return zero_pointer_construction(
+                    construction);
+
+            case derived_type_kind::lvalue_reference:
+            case derived_type_kind::rvalue_reference:
+                return false;
+
+            case derived_type_kind::bounded_array:
+                return
+                    construction.kind ==
+                        construction_kind::zero &&
+                    derived.payload != 0 &&
+                    zero_value_noop(
+                        derived.child,
+                        {});
+
+            case derived_type_kind::unbounded_array:
+                return false;
+            }
+
+            return false;
+        }
+
+        case type_ref_kind::invalid:
+            return false;
+        }
+
+        return false;
+    }
+
     enum class materialization_action : std::uint8_t {
         materialize = 0,
         none,
@@ -1288,7 +1721,7 @@ private:
     classify_materialization(
         type_ref type,
         construction_value construction,
-        type_ref& plan_type) const noexcept {
+        type_ref& plan_type) noexcept {
 
         type_ref referent;
 
@@ -1305,6 +1738,14 @@ private:
 
         plan_type =
             type;
+
+        if (zero_value_noop(
+                type,
+                construction)) {
+
+            return materialization_action::
+                none;
+        }
 
         for (;;) {
             if (type.kind() ==
@@ -1389,13 +1830,21 @@ private:
     };
 
     struct record_plan final {
+        // Dense range remains addressable by local member index for endpoint
+        // and reference resolution.
         std::uint32_t begin = 0;
         std::uint32_t count = 0;
+
+        // Sparse execution range contains only local indices whose action is
+        // not materialization_action::none.
+        std::uint32_t active_begin = 0;
+        std::uint32_t active_count = 0;
+
         record_plan_state state =
             record_plan_state::empty;
     };
 
-    static_assert(sizeof(record_plan) == 12);
+    static_assert(sizeof(record_plan) == 20);
 
     [[nodiscard]] record_plan* plan(
         type_handle handle) noexcept {
@@ -1572,6 +2021,9 @@ private:
         const auto old_count =
             planned_members.size();
 
+        const auto old_active_count =
+            active_member_locals.size();
+
         const auto maximum =
             static_cast<std::size_t>(
                 (std::numeric_limits<std::uint32_t>::max)());
@@ -1579,7 +2031,11 @@ private:
         if (old_count >
                 maximum ||
             type.members.count >
-                maximum - old_count) {
+                maximum - old_count ||
+            old_active_count >
+                maximum ||
+            type.members.count >
+                maximum - old_active_count) {
 
             return fixed_direct_materialization_result::
                 overflow;
@@ -1618,6 +2074,9 @@ private:
                     planned_members.resize(
                         old_count);
 
+                    active_member_locals.resize(
+                        old_active_count);
+
                     return fixed_direct_materialization_result::
                         invalid_input;
                 }
@@ -1629,6 +2088,31 @@ private:
                         member.type,
                         construction,
                         plan_type);
+
+                if (telemetry != nullptr) {
+                    ++telemetry->plan_members_built;
+
+                    switch (action) {
+                    case materialization_action::none:
+                        ++telemetry->plan_none_members;
+                        break;
+
+                    case materialization_action::reference:
+                        ++telemetry->plan_reference_members;
+                        break;
+
+                    case materialization_action::materialize:
+                        ++telemetry->plan_materialize_members;
+                        break;
+                    }
+                }
+
+                if (action !=
+                    materialization_action::none) {
+
+                    active_member_locals.push_back(
+                        local);
+                }
 
                 planned_members.push_back({
                     offset,
@@ -1642,6 +2126,9 @@ private:
             planned_members.resize(
                 old_count);
 
+            active_member_locals.resize(
+                old_active_count);
+
             return fixed_direct_materialization_result::
                 failed;
         }
@@ -1652,6 +2139,15 @@ private:
 
         output.count =
             type.members.count;
+
+        output.active_begin =
+            static_cast<std::uint32_t>(
+                old_active_count);
+
+        output.active_count =
+            static_cast<std::uint32_t>(
+                active_member_locals.size() -
+                old_active_count);
 
         output.state =
             type.bases.count == 0
@@ -1715,16 +2211,71 @@ private:
         object_handle link_object,
         const record_plan& record) noexcept {
 
-        for (std::uint32_t local = 0;
-             local <
-                 record.count;
-             ++local) {
+        if (telemetry != nullptr) {
+            ++telemetry->planned_record_calls;
+        }
+
+        for (std::uint32_t active = 0;
+             active <
+                 record.active_count;
+             ++active) {
+
+            const auto active_index =
+                static_cast<std::size_t>(
+                    record.active_begin) +
+                active;
+
+            if (active_index >=
+                active_member_locals.size()) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            const auto local =
+                active_member_locals[
+                    active_index];
+
+            if (local >=
+                record.count) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            const auto planned_index =
+                static_cast<std::size_t>(
+                    record.begin) +
+                local;
+
+            if (planned_index >=
+                planned_members.size()) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
 
             const auto& member =
                 planned_members[
-                    static_cast<std::size_t>(
-                        record.begin) +
-                    local];
+                    planned_index];
+
+            if (telemetry != nullptr) {
+                ++telemetry->planned_member_visits;
+
+                switch (member.action) {
+                case materialization_action::none:
+                    ++telemetry->planned_none_visits;
+                    break;
+
+                case materialization_action::reference:
+                    ++telemetry->planned_reference_visits;
+                    break;
+
+                case materialization_action::materialize:
+                    ++telemetry->planned_materialize_visits;
+                    break;
+                }
+            }
 
             if (member.action ==
                 materialization_action::none) {
@@ -1828,6 +2379,12 @@ private:
 
             return fixed_direct_materialization_result::
                 invalid_input;
+        }
+
+        if (telemetry != nullptr) {
+            ++telemetry->unplanned_record_calls;
+            telemetry->unplanned_member_visits +=
+                type.members.count;
         }
 
         if (type.record_kind ==
@@ -1977,11 +2534,18 @@ private:
         std::byte* base,
         object_handle link_object) noexcept {
 
+        if (telemetry != nullptr) {
+            ++telemetry->normal_record_calls;
+        }
+
         const auto initialized = normal_record_members(handle, base, link_object);
         if (initialized != fixed_direct_materialization_result::success) { return initialized; }
         if (!handle || handle.value() > constructor_plans.size()) { return fixed_direct_materialization_result::invalid_input; }
         auto& defaults = constructor_plans[handle.value() - 1];
         if (!defaults.ready) {
+        if (telemetry != nullptr) {
+            ++telemetry->constructor_plan_builds;
+        }
         defaults.begin = constructor_fields.size();
         const auto owner = project.identity(handle);
         std::size_t first = 0, last = project.constructor_default_count();
@@ -2051,7 +2615,18 @@ private:
         }
         defaults.count = constructor_fields.size() - defaults.begin;
         defaults.ready = true;
+
+        if (telemetry != nullptr) {
+            telemetry->constructor_defaults_cached +=
+                defaults.count;
         }
+        }
+
+        if (telemetry != nullptr) {
+            telemetry->constructor_defaults_applied +=
+                defaults.count;
+        }
+
         for (std::size_t i = 0; i < defaults.count; ++i) {
             const auto& field = constructor_fields[defaults.begin + i];
             const auto written = normal_value(field.type, field.value, base + field.offset, {});
@@ -4324,9 +4899,18 @@ private:
     std::uint64_t target_base_address = 0;
     abi_properties properties;
     std::span<std::byte> runtime;
+    fixed_direct_materialization_telemetry* telemetry = nullptr;
     std::vector<std::uintptr_t> resolution_path;
     std::vector<record_plan> record_plans;
+    std::vector<zero_construction_state>
+        zero_construction_states;
     std::vector<planned_member> planned_members;
+
+    // Sparse execution sidecar. Values are type-local member indices, so the
+    // dense plan remains the metadata source for endpoint/reference lookup
+    // while hot object construction skips action::none members.
+    std::vector<std::uint32_t>
+        active_member_locals;
     struct constructor_plan { std::size_t begin = 0, count = 0; bool ready = false; };
     struct constructor_field { std::size_t offset; type_ref type; construction_value value; };
     std::vector<constructor_plan> constructor_plans;
@@ -4434,7 +5018,8 @@ materialize_fixed_direct(
     const runtime_layout& layout,
     const server_abi_configuration& abi,
     std::uint64_t target_base_address,
-    std::span<std::byte> runtime) noexcept {
+    std::span<std::byte> runtime,
+    fixed_direct_materialization_telemetry* telemetry) noexcept {
 
     fixed_direct_materializer materializer{
         project,
@@ -4442,6 +5027,7 @@ materialize_fixed_direct(
         abi,
         target_base_address,
         runtime,
+        telemetry,
     };
 
     return materializer.run();
@@ -4452,7 +5038,8 @@ materialize_fixed_direct(
     const compiled_project_view& project,
     const runtime_layout& layout,
     const server_abi_configuration& abi,
-    std::span<std::byte> runtime) noexcept {
+    std::span<std::byte> runtime,
+    fixed_direct_materialization_telemetry* telemetry) noexcept {
 
     return materialize_fixed_direct(
         project,
@@ -4461,7 +5048,8 @@ materialize_fixed_direct(
         static_cast<std::uint64_t>(
             reinterpret_cast<std::uintptr_t>(
                 runtime.data())),
-        runtime);
+        runtime,
+        telemetry);
 }
 
 }

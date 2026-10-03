@@ -8,6 +8,7 @@
 #pragma once
 
 #include "../project.hpp"
+#include "fixed_direct_materializer.hpp"
 
 #include "../../configuration/server_configuration.hpp"
 #include "../../diagnostics/diagnostic_collection.hpp"
@@ -15,10 +16,20 @@
 #include "../../read_only_file_mapping.hpp"
 #include "../../server_status.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 
 namespace cw::server {
+
+struct project_runtime_telemetry final {
+    std::uint64_t layout_ns = 0;
+    std::uint64_t shm_create_ns = 0;
+    std::uint64_t materialization_ns = 0;
+    std::uint64_t runtime_bytes = 0;
+    std::uint64_t shm_bytes = 0;
+    fixed_direct_materialization_telemetry materializer{};
+};
 
 // Creates the final resident Project state for the configured Runtime/SHM mode.
 // FIXED_DIRECT allocates the one named Project SHM at the configured exact VA
@@ -30,6 +41,7 @@ namespace cw::server {
     diagnostic_collection& diagnostics,
     read_only_file_mapping&& compiled_mapping,
     compiled_project_view compiled,
-    std::unique_ptr<project>& output);
+    std::unique_ptr<project>& output,
+    project_runtime_telemetry* telemetry = nullptr);
 
 }

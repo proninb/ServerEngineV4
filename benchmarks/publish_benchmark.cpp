@@ -12,6 +12,7 @@
 #include "project/project_publish.hpp"
 #include "project/project_build.hpp"
 #include "project/project_rebuild.hpp"
+#include "project/runtime/project_runtime.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -199,6 +200,14 @@ path_file_size(
             value);
 }
 
+[[nodiscard]] double ns_to_ms(
+    std::uint64_t value) noexcept {
+
+    return static_cast<double>(
+        value) /
+        1'000'000.0;
+}
+
 [[nodiscard]] bool path_exists(
     const std::filesystem::path& path) noexcept {
 
@@ -304,6 +313,9 @@ int main(
     cw::server::project_build_telemetry
         build_telemetry;
 
+    cw::server::project_runtime_telemetry
+        runtime_telemetry;
+
     if (mode ==
         benchmark_mode::publish) {
 
@@ -336,7 +348,8 @@ int main(
                 settings,
                 cw::server::operation_id{1},
                 diagnostics,
-                project);
+                project,
+                &runtime_telemetry);
     }
 
     if (mode == benchmark_mode::audit && cw::server::succeeded(status) && project) {
@@ -449,6 +462,84 @@ int main(
         << compiled.string_count()
         << ",identities="
         << compiled.identity_count();
+
+    if (mode == benchmark_mode::load ||
+        mode == benchmark_mode::audit) {
+
+        std::cout
+            << ",runtime_layout_ms="
+            << ns_to_ms(
+                runtime_telemetry.layout_ns)
+            << ",shm_create_ms="
+            << ns_to_ms(
+                runtime_telemetry.shm_create_ns)
+            << ",materialization_ms="
+            << ns_to_ms(
+                runtime_telemetry.materialization_ns)
+            << ",runtime_bytes="
+            << runtime_telemetry.runtime_bytes
+            << ",shm_bytes="
+            << runtime_telemetry.shm_bytes
+            << ",materializer_workspace_ms="
+            << ns_to_ms(
+                runtime_telemetry.materializer.workspace_ns)
+            << ",shm_zero_ms="
+            << ns_to_ms(
+                runtime_telemetry.materializer.zero_ns)
+            << ",canonical_ms="
+            << ns_to_ms(
+                runtime_telemetry.materializer.canonical_ns)
+            << ",links_mark_ms="
+            << ns_to_ms(
+                runtime_telemetry.materializer.links_mark_ns)
+            << ",objects_ms="
+            << ns_to_ms(
+                runtime_telemetry.materializer.objects_ns)
+            << ",links_materialize_ms="
+            << ns_to_ms(
+                runtime_telemetry.materializer.links_materialize_ns)
+            << ",initializations_ms="
+            << ns_to_ms(
+                runtime_telemetry.materializer.initializations_ns)
+            << ",normal_record_calls="
+            << runtime_telemetry.materializer.normal_record_calls
+            << ",planned_record_calls="
+            << runtime_telemetry.materializer.planned_record_calls
+            << ",unplanned_record_calls="
+            << runtime_telemetry.materializer.unplanned_record_calls
+            << ",planned_member_visits="
+            << runtime_telemetry.materializer.planned_member_visits
+            << ",planned_none_visits="
+            << runtime_telemetry.materializer.planned_none_visits
+            << ",planned_reference_visits="
+            << runtime_telemetry.materializer.planned_reference_visits
+            << ",planned_materialize_visits="
+            << runtime_telemetry.materializer.planned_materialize_visits
+            << ",unplanned_member_visits="
+            << runtime_telemetry.materializer.unplanned_member_visits
+            << ",plan_members_built="
+            << runtime_telemetry.materializer.plan_members_built
+            << ",plan_none_members="
+            << runtime_telemetry.materializer.plan_none_members
+            << ",plan_reference_members="
+            << runtime_telemetry.materializer.plan_reference_members
+            << ",plan_materialize_members="
+            << runtime_telemetry.materializer.plan_materialize_members
+            << ",array_calls="
+            << runtime_telemetry.materializer.array_calls
+            << ",array_elements_visited="
+            << runtime_telemetry.materializer.array_elements_visited
+            << ",zero_array_calls="
+            << runtime_telemetry.materializer.zero_array_calls
+            << ",zero_array_elements_visited="
+            << runtime_telemetry.materializer.zero_array_elements_visited
+            << ",constructor_plan_builds="
+            << runtime_telemetry.materializer.constructor_plan_builds
+            << ",constructor_defaults_cached="
+            << runtime_telemetry.materializer.constructor_defaults_cached
+            << ",constructor_defaults_applied="
+            << runtime_telemetry.materializer.constructor_defaults_applied;
+    }
 
     if (mode == benchmark_mode::build) {
         const auto ns_ms =

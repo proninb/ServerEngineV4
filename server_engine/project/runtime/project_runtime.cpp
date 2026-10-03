@@ -7,6 +7,7 @@
 #include "../../diagnostics/diagnostic_descriptor.hpp"
 #include "../../fixed_shared_memory.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -188,9 +189,27 @@ server_status create_resident_project(
     diagnostic_collection& diagnostics,
     read_only_file_mapping&& compiled_mapping,
     compiled_project_view compiled,
-    std::unique_ptr<project>& output) {
+    std::unique_ptr<project>& output,
+    project_runtime_telemetry* telemetry) {
 
     output.reset();
+
+    if (telemetry != nullptr) {
+        *telemetry = {};
+    }
+
+    using clock_type =
+        std::chrono::steady_clock;
+
+    const auto elapsed_ns =
+        [](clock_type::time_point begin,
+           clock_type::time_point end) noexcept {
+            return static_cast<std::uint64_t>(
+                std::chrono::duration_cast<
+                    std::chrono::nanoseconds>(
+                        end - begin)
+                    .count());
+        };
 
     if (settings.shm.mode !=
         shm_runtime_mode::fixed_direct) {
@@ -239,11 +258,27 @@ server_status create_resident_project(
 
     runtime_layout layout;
 
+    const auto layout_started =
+        clock_type::now();
+
     const auto prepared =
         prepare_runtime_layout(
             compiled,
             settings.abi,
             layout);
+
+    const auto layout_finished =
+        clock_type::now();
+
+    if (telemetry != nullptr) {
+        telemetry->layout_ns =
+            elapsed_ns(
+                layout_started,
+                layout_finished);
+
+        telemetry->runtime_bytes =
+            layout.size();
+    }
 
     if (prepared !=
         runtime_layout_result::success) {
@@ -314,7 +349,16 @@ server_status create_resident_project(
         return server_status::project_runtime_failed;
     }
 
+    if (telemetry != nullptr) {
+        telemetry->shm_bytes =
+            static_cast<std::uint64_t>(
+                mapping_size);
+    }
+
     fixed_shared_memory shared_memory;
+
+    const auto shm_create_started =
+        clock_type::now();
 
     const auto created =
         shared_memory.create(
@@ -322,6 +366,16 @@ server_status create_resident_project(
             mapping_size,
             static_cast<std::uintptr_t>(
                 settings.shm.fixed_base_address));
+
+    const auto shm_create_finished =
+        clock_type::now();
+
+    if (telemetry != nullptr) {
+        telemetry->shm_create_ns =
+            elapsed_ns(
+                shm_create_started,
+                shm_create_finished);
+    }
 
     if (created !=
         fixed_shared_memory_result::success) {
@@ -339,13 +393,29 @@ server_status create_resident_project(
         return server_status::project_runtime_failed;
     }
 
+    const auto materialization_started =
+        clock_type::now();
+
     const auto materialized =
         materialize_fixed_direct(
             compiled,
             layout,
             settings.abi,
             settings.shm.fixed_base_address,
-            shared_memory.bytes());
+            shared_memory.bytes(),
+            telemetry != nullptr
+                ? &telemetry->materializer
+                : nullptr);
+
+    const auto materialization_finished =
+        clock_type::now();
+
+    if (telemetry != nullptr) {
+        telemetry->materialization_ns =
+            elapsed_ns(
+                materialization_started,
+                materialization_finished);
+    }
 
     if (materialized !=
         fixed_direct_materialization_result::success) {

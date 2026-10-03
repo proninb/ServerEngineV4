@@ -28,6 +28,39 @@ enum class fixed_direct_materialization_result : std::uint8_t {
     failed,
 };
 
+struct fixed_direct_materialization_telemetry final {
+    std::uint64_t workspace_ns = 0;
+    std::uint64_t zero_ns = 0;
+    std::uint64_t canonical_ns = 0;
+    std::uint64_t links_mark_ns = 0;
+    std::uint64_t objects_ns = 0;
+    std::uint64_t links_materialize_ns = 0;
+    std::uint64_t initializations_ns = 0;
+
+    std::uint64_t normal_record_calls = 0;
+    std::uint64_t planned_record_calls = 0;
+    std::uint64_t unplanned_record_calls = 0;
+    std::uint64_t planned_member_visits = 0;
+    std::uint64_t planned_none_visits = 0;
+    std::uint64_t planned_reference_visits = 0;
+    std::uint64_t planned_materialize_visits = 0;
+    std::uint64_t unplanned_member_visits = 0;
+
+    std::uint64_t plan_members_built = 0;
+    std::uint64_t plan_none_members = 0;
+    std::uint64_t plan_reference_members = 0;
+    std::uint64_t plan_materialize_members = 0;
+
+    std::uint64_t array_calls = 0;
+    std::uint64_t array_elements_visited = 0;
+    std::uint64_t zero_array_calls = 0;
+    std::uint64_t zero_array_elements_visited = 0;
+
+    std::uint64_t constructor_plan_builds = 0;
+    std::uint64_t constructor_defaults_cached = 0;
+    std::uint64_t constructor_defaults_applied = 0;
+};
+
 [[nodiscard]] bool fixed_direct_host_compatible(
     const server_abi_configuration& abi) noexcept;
 
@@ -42,13 +75,15 @@ materialize_fixed_direct(
     const runtime_layout& layout,
     const server_abi_configuration& abi,
     std::uint64_t target_base_address,
-    std::span<std::byte> runtime) noexcept;
+    std::span<std::byte> runtime,
+    fixed_direct_materialization_telemetry* telemetry = nullptr) noexcept;
 
 [[nodiscard]] fixed_direct_materialization_result
 materialize_fixed_direct(
     const compiled_project_view& project,
     const runtime_layout& layout,
     const server_abi_configuration& abi,
-    std::span<std::byte> runtime) noexcept;
+    std::span<std::byte> runtime,
+    fixed_direct_materialization_telemetry* telemetry = nullptr) noexcept;
 
 }
