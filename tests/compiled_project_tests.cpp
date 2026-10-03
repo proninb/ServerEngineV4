@@ -118,6 +118,184 @@ compiled_project_image_result build_test_compiled_image(
     const compiled_fixture& fixture,
     compiled_test_image& output);
 
+void test_nested_defaults_persistence(test_state& tests) {
+    compiled_fixture f;
+    const auto name = [&](const char* text) { string_id id; (void)f.strings.intern(text, id); return id; };
+    const auto identity = [&](const char* text, identity_kind kind) {
+        identity_ref id; (void)f.identities.resolve(f.identities.root(), name(text), kind, id); return id;
+    };
+    const auto leaf_id = identity("Leaf", identity_kind::type);
+    const auto byte_id = identity("byte", identity_kind::type);
+    type_handle byte_alias;
+    tests.expect(succeeded(f.G.define_intrinsic_alias(byte_id, intrinsic_type::unsigned_char, byte_alias)), "declare intrinsic typedef");
+    const auto owner_id = identity("Owner", identity_kind::type);
+    type_handle leaf, owner;
+    (void)f.G.declare_record(leaf_id, graph_record_kind::struct_type, leaf);
+    (void)f.G.declare_record(owner_id, graph_record_kind::struct_type, owner);
+    const std::array<member_record, 1> leaf_members{{
+        {name("value"), f.G.intrinsic(intrinsic_type::signed_int), graph_member_access::public_access}}};
+    type_ref row, matrix, items, text, reference;
+    (void)f.G.derive(f.G.intrinsic(intrinsic_type::char_type), derived_type_kind::bounded_array, 8, text);
+    (void)f.G.derive(f.G.intrinsic(intrinsic_type::signed_int), derived_type_kind::lvalue_reference, 0, reference);
+    (void)f.G.derive(f.G.intrinsic(intrinsic_type::signed_int), derived_type_kind::bounded_array, 3, row);
+    (void)f.G.derive(row, derived_type_kind::bounded_array, 2, matrix);
+    (void)f.G.derive(f.G.named(leaf), derived_type_kind::bounded_array, 2, items);
+    const std::array<member_record, 6> owner_members{{
+        {name("p"), f.G.named(leaf), graph_member_access::public_access},
+        {name("other"), f.G.named(leaf), graph_member_access::public_access},
+        {name("matrix"), matrix, graph_member_access::public_access},
+        {name("items"), items, graph_member_access::public_access},
+        {name("text"), text, graph_member_access::public_access},
+        {name("ref"), reference, graph_member_access::public_access}}};
+    (void)f.G.define_record(leaf, graph_record_kind::struct_type, leaf_members);
+    (void)f.G.define_record(owner, graph_record_kind::struct_type, owner_members);
+    tests.expect(succeeded(f.G.constructor_defaults.add({owner_id, name("p.value"),
+        construction_value::constant(construction_kind::unsigned_integer, 42)})), "add nested default");
+    object_handle instance;
+    for (const auto path : {"matrix[0][0]", "matrix[1][2]", "items[1].value"}) {
+        tests.expect(succeeded(f.G.constructor_defaults.add({owner_id, name(path),
+            construction_value::constant(construction_kind::unsigned_integer, 42)})), "add array default");
+    }
+    (void)f.G.add_object(identity("instance", identity_kind::object), f.G.named(owner), instance);
+    (void)f.G.add_object(identity("second", identity_kind::object), f.G.named(owner), instance);
+    type_handle derived_owner;
+    const auto derived_id = identity("DerivedOwner", identity_kind::type);
+    (void)f.G.declare_record(derived_id, graph_record_kind::struct_type, derived_owner);
+    const std::array<base_record, 1> bases{{{owner_id, graph_member_access::public_access, 0, 0}}};
+    (void)f.G.define_record(derived_owner, graph_record_kind::struct_type, {}, {}, bases);
+    const auto derived_object = identity("derived", identity_kind::object);
+    (void)f.G.add_object(derived_object, f.G.named(derived_owner), instance);
+    const auto scalar_id = identity("scalar", identity_kind::object);
+    const auto integer = f.G.intrinsic(intrinsic_type::signed_int);
+    (void)f.G.add_object(scalar_id, integer, instance);
+    endpoint_path_handle scalar_path;
+    tests.expect(succeeded(f.G.intern_endpoint_path(integer, {}, scalar_path)), "whole-object endpoint path");
+    bool replaced = false;
+    (void)f.G.add_initialization({scalar_id, endpoint_ref::from_path(scalar_path)},
+        construction_value::constant(construction_kind::unsigned_integer, 73), replaced);
+    const auto ref_index = f.G.find_member(owner, name("ref"));
+    const std::array<endpoint_path_step, 2> reference_steps{{
+        {0, endpoint_path_step_kind::base, {}}, {ref_index.value(), endpoint_path_step_kind::member, {}}}};
+    endpoint_path_handle reference_path;
+    (void)f.G.intern_endpoint_path(f.G.named(derived_owner), reference_steps, reference_path);
+    link_handle link;
+    tests.expect(succeeded(f.G.add_link({scalar_id, endpoint_ref::from_path(scalar_path)},
+        {derived_object, endpoint_ref::from_path(reference_path)}, link)), "inherited reference binds a whole scalar object");
+    const auto alias_id = identity("alias", identity_kind::object);
+    (void)f.G.add_object(alias_id, reference, instance);
+    endpoint_path_handle alias_path;
+    (void)f.G.intern_endpoint_path(reference, {}, alias_path);
+    tests.expect(succeeded(f.G.add_link({scalar_id, endpoint_ref::from_path(scalar_path)},
+        {alias_id, endpoint_ref::from_path(alias_path)}, link)), "top-level reference binds scalar object");
+    const auto wrapper_id = identity("Wrapper", identity_kind::type);
+    type_handle wrapper;
+    (void)f.G.declare_record(wrapper_id, graph_record_kind::struct_type, wrapper);
+    type_ref owner_ref;
+    (void)f.G.derive(f.G.named(owner), derived_type_kind::lvalue_reference, 0, owner_ref);
+    const std::array<member_record, 1> wrapper_members{{{name("target"), owner_ref, graph_member_access::public_access}}};
+    (void)f.G.define_record(wrapper, graph_record_kind::struct_type, wrapper_members);
+    const auto wrapper_object = identity("wrapper", identity_kind::object);
+    (void)f.G.add_object(wrapper_object, f.G.named(wrapper), instance);
+    endpoint_path_handle owner_path;
+    (void)f.G.intern_endpoint_path(f.G.named(owner), {}, owner_path);
+    (void)f.G.add_link({identity("instance", identity_kind::object), endpoint_ref::from_path(owner_path)},
+        {wrapper_object, f.G.find_member(wrapper, name("target"))}, link);
+    const std::array<endpoint_path_step, 4> through_reference{{
+        {0, endpoint_path_step_kind::member, {}}, {0, endpoint_path_step_kind::dereference, {}},
+        {f.G.find_member(owner, name("other")).value(), endpoint_path_step_kind::member, {}},
+        {0, endpoint_path_step_kind::member, {}}}};
+    endpoint_path_handle dereference_path;
+    (void)f.G.intern_endpoint_path(f.G.named(wrapper), through_reference, dereference_path);
+    tests.expect(succeeded(f.G.add_initialization({wrapper_object, endpoint_ref::from_path(dereference_path)},
+        construction_value::constant(construction_kind::unsigned_integer, 19), replaced)), "initialize through record reference");
+    const auto text_index = f.G.find_member(owner, name("text"));
+    std::array<endpoint_path_step, 3> steps{{{0, endpoint_path_step_kind::base, {}},
+        {text_index.value(), endpoint_path_step_kind::member, {}}, {0, endpoint_path_step_kind::array_index, {}}}};
+    const char expected_text[8] = "0.0.3";
+    for (std::size_t i = 0; i < 8; ++i) {
+        steps.back().value = i;
+        endpoint_path_handle path;
+        (void)f.G.intern_endpoint_path(f.G.named(derived_owner), steps, path);
+        tests.expect(succeeded(f.G.add_initialization({derived_object, endpoint_ref::from_path(path)},
+            construction_value::constant(construction_kind::unsigned_integer, expected_text[i]), replaced)), "inherited string byte initialization");
+    }
+    (void)f.sources.finalize(f.files.size(), f.identities, f.G);
+    compiled_test_image image;
+    compiled_project_view view;
+    if (!tests.expect(build_test_compiled_image(f, image) == compiled_project_image_result::success &&
+        view.bind(image.bytes) == compiled_project_image_result::success &&
+        view.verify_contents() == compiled_project_image_result::success &&
+        view.constructor_default_count() == 4, "persist and audit nested defaults")) return;
+    graph_delta delta;
+    tests.expect(succeeded(delta.bind_baseline(view)) &&
+        delta.constructor_defaults.entries().size() == 4,
+        "BUILD retains unchanged nested defaults from baseline");
+    type_entry alias_entry;
+    tests.expect(view.type(view.find_type(byte_id), alias_entry) &&
+        alias_entry.alias_intrinsic() == intrinsic_type::unsigned_char, "persist typedef underlying scalar type");
+    tests.expect(succeeded(delta.clear_definition(delta.find_type(byte_id))) &&
+        succeeded(delta.define_intrinsic_alias(byte_id, intrinsic_type::signed_char, byte_alias)) &&
+        delta.type(byte_alias, alias_entry) && alias_entry.alias_intrinsic() == intrinsic_type::signed_char,
+        "BUILD redefines typedef after invalidation");
+    tests.expect(succeeded(delta.clear_definition(delta.find_type(owner_id))) &&
+        delta.constructor_defaults.entries().empty(),
+        "BUILD clears nested defaults when reparsing their owner");
+#if defined(_WIN32)
+    const server_abi_configuration abi{abi_target::windows_x64, 8};
+#else
+    const server_abi_configuration abi{abi_target::posix_x64, 8};
+#endif
+    runtime_layout layout;
+    if (!tests.expect(prepare_runtime_layout(view, abi, layout) == runtime_layout_result::success,
+        "prepare nested defaults layout")) return;
+    std::vector<std::byte> runtime(static_cast<std::size_t>(layout.size()), std::byte{0xcc});
+    if (!tests.expect(materialize_fixed_direct(view, layout, abi, runtime) ==
+        fixed_direct_materialization_result::success, "materialize nested defaults")) return;
+    runtime_binding_index bindings;
+    (void)layout.release_bindings(bindings);
+    runtime_value bound;
+    tests.expect(get_runtime_value(view, bindings, runtime, "alias", bound) == runtime_query_result::success &&
+        bound.bits == 73, "top-level reference resolves to initialized scalar");
+    tests.expect(get_runtime_value(view, bindings, runtime, "derived.ref", bound) == runtime_query_result::success &&
+        bound.bits == 73, "persisted whole-object link resolves through inherited reference");
+    runtime_offset derived_offset;
+    type_entry persisted_owner;
+    record_offset text_offset;
+    if (tests.expect(bindings.object_offset(view.find_object(derived_object), derived_offset) &&
+        view.type(view.find_type(owner_id), persisted_owner) &&
+        bindings.member_offset(persisted_owner.members.begin + text_index.value(), text_offset), "locate inherited string")) {
+        tests.expect(std::memcmp(runtime.data() + derived_offset + text_offset, expected_text, 8) == 0,
+            "persisted string bytes and trailing zeros reach Runtime");
+    }
+    for (const auto path : {"instance.p.value", "second.p.value"}) {
+        runtime_value result;
+        tests.expect(get_runtime_value(view, bindings, runtime, path, result) == runtime_query_result::success &&
+            result.bits == 42,
+            "nested defaults apply to every instance without changing sibling members");
+    }
+    for (const auto path : {"instance.other.value"}) {
+        runtime_value result;
+        tests.expect(get_runtime_value(view, bindings, runtime, path, result) == runtime_query_result::success &&
+            result.bits == 19, "assignment through a record reference reaches its target");
+    }
+    struct native_leaf { int value; };
+    struct native_owner { native_leaf p, other; int matrix[2][3]; native_leaf items[2]; };
+    for (const auto object_name : {"instance", "second"}) {
+        const auto object = view.find_object(identity(object_name, identity_kind::object));
+        runtime_offset offset;
+        if (!tests.expect(bindings.object_offset(object, offset) &&
+            offset <= runtime.size() && sizeof(native_owner) <= runtime.size() - offset,
+            "locate array constructor Runtime object")) return;
+        native_owner actual{};
+        std::memcpy(&actual, runtime.data() + offset, sizeof(actual));
+        tests.expect(actual.matrix[0][0] == 42 && actual.matrix[1][2] == 42 &&
+            actual.items[1].value == 42 && actual.items[0].value == 0 &&
+            actual.matrix[0][1] == 0 && actual.matrix[0][2] == 0 &&
+            actual.matrix[1][0] == 0 && actual.matrix[1][1] == 0,
+            "persisted multidimensional and record-array defaults preserve neighboring elements");
+    }
+}
+
 void test_class_abi_persistence(
     test_state& tests) {
 
@@ -9757,8 +9935,20 @@ void test_windows_class_abi_runtime(
             windows_abi,
             empty_layout) ==
                 runtime_layout_result::
-                    unsupported_type,
-        "empty-base optimization remains fail-closed in V1B");
+                    success,
+        "single empty base has a supported Windows layout");
+    struct native_empty {};
+    struct native_derived : native_empty { int value; };
+    runtime_value_layout actual;
+    record_offset base_offset = 99, member_offset = 99;
+    type_entry persisted;
+    tests.expect(empty_view.type(empty_view.find_type(derived_identity), persisted) &&
+        empty_layout.value(empty_fixture.G.named(empty_derived), actual) &&
+        empty_layout.base_offset(persisted.bases.begin, base_offset) &&
+        empty_layout.member_offset(persisted.members.begin, member_offset) &&
+        actual.size == sizeof(native_derived) && actual.alignment == alignof(native_derived) &&
+        base_offset == 0 && member_offset == 0,
+        "single empty-base layout matches the native compiler");
 }
 
 void test_runtime_layout_tail_alignment(
@@ -10403,6 +10593,46 @@ void test_sparse_in_place_payload_reuse(
 }
 
 
+
+struct direct_object_sink_test_context final {
+    std::span<std::byte> image;
+    std::size_t writes = 0;
+};
+
+[[nodiscard]] server_status direct_object_sink_test_write(
+    void* opaque,
+    const graph_delta& graph,
+    const graph_delta_object_change& change) noexcept {
+
+    auto& context =
+        *static_cast<
+            direct_object_sink_test_context*>(
+                opaque);
+
+    if (change.kind !=
+        graph_delta_change_kind::patch) {
+
+        return server_status::success;
+    }
+
+    const auto written =
+        apply_compiled_project_graph_object_write(
+            graph,
+            change,
+            context.image);
+
+    if (written !=
+        compiled_project_image_result::
+            success) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    ++context.writes;
+    return server_status::success;
+}
+
 void test_sparse_object_construction_slot_activation(
     test_state& tests,
     const compiled_fixture& fixture,
@@ -10431,16 +10661,8 @@ void test_sparse_object_construction_slot_activation(
 
     if (!tests.expect(
             succeeded(delta.bind_baseline(baseline)) &&
-            succeeded(delta.retire(fixture.left)) &&
-            succeeded(delta.add_object(
-                fixture.left_identity,
-                fixture.named_type,
-                restored,
-                graph_object_non_default_initializer,
-                construction_value{})) &&
-            restored == fixture.left &&
-            delta.object_construction_entries().size() == 1,
-            "prepare object initializer activation")) {
+            succeeded(delta.retire(fixture.left)),
+            "prepare object invalidation before direct semantic write")) {
         return;
     }
 
@@ -10450,7 +10672,29 @@ void test_sparse_object_construction_slot_activation(
             apply_compiled_project_graph_fixed_writes(delta, image) ==
                 compiled_project_image_result::success &&
             image.size() == old_size,
-            "activate construction_slot without growing compiled.bin")) {
+            "persist object invalidation before semantic replay")) {
+        return;
+    }
+
+    direct_object_sink_test_context
+        sink_context{
+            image};
+
+    delta.set_object_change_sink(
+        &sink_context,
+        direct_object_sink_test_write);
+
+    if (!tests.expect(
+            succeeded(delta.add_object(
+                fixture.left_identity,
+                fixture.named_type,
+                restored,
+                graph_object_non_default_initializer,
+                construction_value{})) &&
+            restored == fixture.left &&
+            delta.object_construction_entries().size() == 1 &&
+            sink_context.writes == 1,
+            "valid object semantic result writes final mapped bytes immediately")) {
         return;
     }
 
@@ -11626,6 +11870,7 @@ int main() {
     try {
         test_state tests;
 
+        test_nested_defaults_persistence(tests);
         test_class_abi_persistence(
             tests);
 

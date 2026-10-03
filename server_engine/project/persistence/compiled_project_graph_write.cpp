@@ -1365,4 +1365,114 @@ apply_compiled_project_graph_fixed_writes(
         image);
 }
 
+
+compiled_project_image_result
+apply_compiled_project_graph_object_write(
+    const graph_delta& G,
+    const graph_delta_object_change& change,
+    std::span<std::byte> image) noexcept {
+
+    compiled_project_view validation;
+
+    if (validation.bind(
+            image) !=
+        compiled_project_image_result::
+            success) {
+
+        return compiled_project_image_result::
+            invalid_image;
+    }
+
+    if (change.kind !=
+        graph_delta_change_kind::patch) {
+
+        return compiled_project_image_result::
+            invalid_state;
+    }
+
+    sparse_fixed_write_context context{
+        image,
+        &G,
+    };
+
+    if (!sparse_section_at(
+            image,
+            compiled_project_section::objects,
+            sparse_object_record_size,
+            context.objects) ||
+        !sparse_section_at(
+            image,
+            compiled_project_section::
+                object_identities,
+            4,
+            context.object_identities) ||
+        !sparse_section_at(
+            image,
+            compiled_project_section::
+                object_construction,
+            sparse_construction_record_size,
+            context.object_construction) ||
+        !sparse_section_at(
+            image,
+            compiled_project_section::
+                graph_identity_index,
+            sparse_graph_identity_record_size,
+            context.graph_identity)) {
+
+        return compiled_project_image_result::
+            invalid_image;
+    }
+
+    const auto written =
+        sparse_write_object_change(
+            &context,
+            change);
+
+    if (!succeeded(written)) {
+        return compiled_project_image_result::
+            invalid_state;
+    }
+
+    sparse_write_u64(
+        image.data() +
+            sparse_header_type_count_offset,
+        G.live_type_count());
+
+    sparse_write_u64(
+        image.data() +
+            sparse_header_object_count_offset,
+        G.live_object_count());
+
+    sparse_write_u64(
+        image.data() +
+            sparse_header_link_count_offset,
+        G.live_link_count());
+
+    std::array<
+        std::byte,
+        compiled_project_header_size>
+        header{};
+
+    std::memcpy(
+        header.data(),
+        image.data(),
+        header.size());
+
+    sparse_write_u64(
+        header.data() +
+            sparse_header_crc_offset,
+        0);
+
+    sparse_write_u64(
+        image.data() +
+            sparse_header_crc_offset,
+        persistence_crc64(
+            header));
+
+    compiled_project_view rebound;
+
+    return rebound.bind(
+        image);
+}
+
 }

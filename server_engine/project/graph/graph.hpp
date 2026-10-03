@@ -9,6 +9,7 @@
 #pragma once
 
 #include "construction_value.hpp"
+#include "constructor_defaults.hpp"
 #include "link_handle.hpp"
 #include "member_index.hpp"
 #include "object_handle.hpp"
@@ -180,6 +181,8 @@ static_assert(std::is_trivially_copyable_v<endpoint_ref>);
 enum class endpoint_path_step_kind : std::uint8_t {
     member = 1,
     array_index = 2,
+    base = 3,
+    dereference = 4,
 };
 
 struct endpoint_path_step final {
@@ -207,6 +210,7 @@ static_assert(std::is_trivially_copyable_v<endpoint_path_record>);
 
 enum class graph_type_kind : std::uint8_t {
     record = 1,
+    intrinsic_alias = 2,
 };
 
 enum class graph_record_kind : std::uint8_t {
@@ -250,7 +254,7 @@ inline constexpr std::uint16_t graph_type_polymorphic =
 
 inline constexpr std::uint16_t graph_type_flag_mask =
     graph_type_defined |
-    graph_type_polymorphic;
+    graph_type_polymorphic | 0xff00u;
 
 struct type_entry final {
     graph_range members;
@@ -267,6 +271,17 @@ struct type_entry final {
 
     [[nodiscard]] constexpr bool polymorphic() const noexcept {
         return (flags & graph_type_polymorphic) != 0;
+    }
+
+    [[nodiscard]] constexpr intrinsic_type alias_intrinsic() const noexcept {
+        return kind == graph_type_kind::intrinsic_alias ? static_cast<intrinsic_type>(flags >> 8) : intrinsic_type::none;
+    }
+
+    [[nodiscard]] constexpr bool valid_kind() const noexcept {
+        return kind == graph_type_kind::record ? (flags & 0xff00u) == 0 :
+            kind == graph_type_kind::intrinsic_alias && defined() && !polymorphic() &&
+            members.count == 0 && bases.count == 0 &&
+            alias_intrinsic() >= intrinsic_type::bool_type && alias_intrinsic() <= intrinsic_type::long_double_type;
     }
 };
 
@@ -351,6 +366,7 @@ static_assert(std::is_trivially_copyable_v<object_initialization_record>);
 // construction is sparse cold storage addressed from the compact object state.
 class graph final {
 public:
+    constructor_default_table constructor_defaults;
     graph() = default;
 
     graph(const graph&) = delete;
@@ -358,6 +374,8 @@ public:
 
     graph(graph&&) noexcept = default;
     graph& operator=(graph&&) noexcept = default;
+
+    [[nodiscard]] server_status define_intrinsic_alias(identity_ref identity, intrinsic_type intrinsic, type_handle& output) noexcept;
 
     [[nodiscard]] server_status declare_record(
         identity_ref identity,

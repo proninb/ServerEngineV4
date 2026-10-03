@@ -23,6 +23,7 @@
 #include "string/string_table.hpp"
 #include "../configuration/server_configuration.hpp"
 #include "../read_only_file_mapping.hpp"
+#include "../writable_file_mapping.hpp"
 
 namespace cw::server {
 
@@ -51,6 +52,7 @@ public:
     read_only_file_mapping source_mapping;
     read_only_file_mapping database_mapping;
     read_only_file_mapping compiled_mapping;
+    writable_file_mapping compiled_write_mapping;
 
     source_save_view source;
     file_context files;

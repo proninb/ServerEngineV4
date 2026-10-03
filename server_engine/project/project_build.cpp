@@ -1296,7 +1296,7 @@ struct build_initialization_invalidation_metrics final {
     diagnostic_collection& diagnostics,
     preprocessor_configuration& output) {
 
-    output.predefines.clear();
+    output = {};
 
     std::filesystem::path root;
 

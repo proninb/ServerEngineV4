@@ -539,6 +539,7 @@ prepare_build_compiled_project_layout(
             static_cast<std::uint64_t>(
                 files.size()),
             source_path_bytes,
+            G.constructor_defaults.entries().size(),
         };
 
     return compiled_project_layout::
@@ -813,6 +814,7 @@ encode_build_compiled_project_image(
              compiled_project_section::string_index,
              compiled_project_section::identity_index,
              compiled_project_section::graph_identity_index,
+             compiled_project_section::object_construction,
              compiled_project_section::member_name_index,
              compiled_project_section::derived_index,
              compiled_project_section::link_target_index,
@@ -1118,8 +1120,7 @@ encode_build_compiled_project_image(
             !G.type(
                 lineage,
                 value) ||
-            value.kind !=
-                graph_type_kind::record ||
+            !value.valid_kind() ||
             !build_valid_record_kind(
                 value.record_kind) ||
             (value.flags &
@@ -1775,8 +1776,7 @@ encode_build_compiled_project_image(
                     dense_path_cursor + 1 ||
                 !G.endpoint_path(
                     lineage,
-                    value) ||
-                value.steps.count == 0) {
+                    value)) {
 
                 return compiled_project_image_result::
                     invalid_state;
@@ -2838,6 +2838,20 @@ encode_build_compiled_project_image(
         }
     }
 
+    {
+        const auto entries = G.constructor_defaults.entries();
+        if (count(compiled_project_section::constructor_defaults) != entries.size()) {
+            return compiled_project_image_result::invalid_state;
+        }
+        auto* data = section_data(compiled_project_section::constructor_defaults);
+        for (const auto& value : entries) {
+            build_write_u32(data, value.owner.value()); build_write_u32(data + 4, value.path.value());
+            build_write_u32(data + 8, value.value.low); build_write_u32(data + 12, value.value.high);
+            build_write_u32(data + 16, value.value.operand);
+            build_write_u32(data + 20, static_cast<std::uint32_t>(value.value.kind));
+            data += 24;
+        }
+    }
     // No whole-section payload checksum pass. Normal BUILD is being moved
     // to changed-record writes and must remain independent of Project size.
 

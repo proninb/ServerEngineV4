@@ -75,6 +75,14 @@ apply_compiled_project_graph_fixed_writes(
     const graph_delta& G,
     std::span<std::byte> image) noexcept;
 
+// Writes one validated existing-object semantic result directly to mapped
+// final compiled.bin bytes. New object WHERE allocation is outside this slice.
+[[nodiscard]] compiled_project_image_result
+apply_compiled_project_graph_object_write(
+    const graph_delta& G,
+    const graph_delta_object_change& change,
+    std::span<std::byte> image) noexcept;
+
 [[nodiscard]] compiled_project_image_result
 prepare_build_compiled_project_layout(
     const string_table& strings,

@@ -259,6 +259,7 @@ public:
 
             link_target_slots.resize(
                 project.link_count());
+            constructor_plans.resize(project.type_slot_count());
         }
         catch (...) {
             return fixed_direct_materialization_result::
@@ -375,16 +376,6 @@ public:
             }
         }
 
-        const auto initialized =
-            apply_object_initializations();
-
-        if (initialized !=
-            fixed_direct_materialization_result::
-                success) {
-
-            return initialized;
-        }
-
         const auto links_materialized =
             materialize_links();
 
@@ -394,6 +385,11 @@ public:
 
             return links_materialized;
         }
+
+        // Source initializations may address fields through a reference. Bind
+        // every link before locating those destinations; links store addresses.
+        const auto initialized = apply_object_initializations();
+        if (initialized != fixed_direct_materialization_result::success) { return initialized; }
 
         return fixed_direct_materialization_result::
             success;
@@ -1013,6 +1009,13 @@ private:
 
                     return fixed_direct_materialization_result::
                         invalid_input;
+                }
+
+                std::uint64_t stored = 0;
+                if (!read_reference_slot(target, stored)) { return fixed_direct_materialization_result::invalid_input; }
+                if (stored != 0) {
+                    std::uint64_t resolved = 0;
+                    return resolve_reference_member({}, target, top_object, 0, target, resolved);
                 }
 
                 std::uint64_t sentinel = 0;
@@ -1974,6 +1977,95 @@ private:
         std::byte* base,
         object_handle link_object) noexcept {
 
+        const auto initialized = normal_record_members(handle, base, link_object);
+        if (initialized != fixed_direct_materialization_result::success) { return initialized; }
+        if (!handle || handle.value() > constructor_plans.size()) { return fixed_direct_materialization_result::invalid_input; }
+        auto& defaults = constructor_plans[handle.value() - 1];
+        if (!defaults.ready) {
+        defaults.begin = constructor_fields.size();
+        const auto owner = project.identity(handle);
+        std::size_t first = 0, last = project.constructor_default_count();
+        while (first < last) {
+            const auto middle = first + (last - first) / 2;
+            constructor_default entry;
+            if (!project.constructor_default_at(middle, entry)) {
+                return fixed_direct_materialization_result::invalid_input;
+            }
+            if (entry.owner.value() < owner.value()) { first = middle + 1; }
+            else { last = middle; }
+        }
+        for (; first < project.constructor_default_count(); ++first) {
+            constructor_default entry;
+            if (!project.constructor_default_at(first, entry)) {
+                return fixed_direct_materialization_result::invalid_input;
+            }
+            if (entry.owner != owner) { break; }
+            constructor_path_reader path{project.string(entry.path)};
+            auto record = handle;
+            auto* destination = base;
+            type_ref target_type;
+            while (!path.remaining.empty()) {
+                std::string_view field;
+                std::uint64_t index;
+                if (!path.next(field, index)) {
+                    return fixed_direct_materialization_result::invalid_input;
+                }
+                if (field.empty()) {
+                    derived_type_record array;
+                    runtime_value_layout child;
+                    if (!project.derived(target_type, array) ||
+                        array.kind != derived_type_kind::bounded_array || index >= array.payload ||
+                        !layout.value(array.child, child) ||
+                        (child.size != 0 && index > (std::numeric_limits<std::size_t>::max)() / child.size)) {
+                        return fixed_direct_materialization_result::invalid_input;
+                    }
+                    const auto offset = index * child.size;
+                    if (!value_fits(static_cast<std::uint64_t>(destination - runtime.data()), offset)) {
+                        return fixed_direct_materialization_result::invalid_input;
+                    }
+                    destination += static_cast<std::size_t>(offset);
+                    target_type = array.child;
+                    continue;
+                }
+                if (target_type && !project.named(target_type, record)) {
+                    return fixed_direct_materialization_result::invalid_input;
+                }
+                const auto name = project.find_string(field);
+                const auto local = project.find_member(record, name);
+                type_entry type;
+                member_record member;
+                record_offset offset = 0;
+                if (!name || !local || !project.type(record, type) ||
+                    !project.member_at(type.members.begin + local.value(), member) ||
+                    !layout.member_offset(type.members.begin + local.value(), offset)) {
+                    return fixed_direct_materialization_result::invalid_input;
+                }
+                destination += static_cast<std::size_t>(offset);
+                target_type = member.type;
+            }
+            if (target_type.kind() != type_ref_kind::intrinsic) {
+                return fixed_direct_materialization_result::invalid_input;
+            }
+            try { constructor_fields.push_back({static_cast<std::size_t>(destination - base), target_type, entry.value}); }
+            catch (...) { return fixed_direct_materialization_result::failed; }
+        }
+        defaults.count = constructor_fields.size() - defaults.begin;
+        defaults.ready = true;
+        }
+        for (std::size_t i = 0; i < defaults.count; ++i) {
+            const auto& field = constructor_fields[defaults.begin + i];
+            const auto written = normal_value(field.type, field.value, base + field.offset, {});
+            if (written != fixed_direct_materialization_result::success) { return written; }
+        }
+        return fixed_direct_materialization_result::success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    normal_record_members(
+        type_handle handle,
+        std::byte* base,
+        object_handle link_object) noexcept {
+
         auto* record =
             plan(
                 handle);
@@ -2284,6 +2376,37 @@ private:
                     qualified.child;
             }
 
+            if (step.kind == endpoint_path_step_kind::dereference) {
+                type_ref referent;
+                std::uint64_t pointer = 0;
+                if (step.value != 0 || !reference_referent(current_type, referent) ||
+                    !read_reference_slot(current_address, pointer) || pointer < target_base_address ||
+                    pointer - target_base_address >= runtime.size()) {
+                    return fixed_direct_materialization_result::invalid_input;
+                }
+                current_address = runtime.data() + static_cast<std::size_t>(pointer - target_base_address);
+                current_type = referent;
+                final_record = {};
+                final_record_base = nullptr;
+                continue;
+            }
+            if (step.kind == endpoint_path_step_kind::base) {
+                type_handle record;
+                type_entry type;
+                base_record base;
+                record_offset offset;
+                if (!project.named(current_type, record) || !project.type(record, type) ||
+                    step.value >= type.bases.count ||
+                    !project.base_at(type.bases.begin + static_cast<std::size_t>(step.value), base) ||
+                    base.virtual_base() || !layout.base_offset(type.bases.begin + static_cast<std::size_t>(step.value), offset)) {
+                    return fixed_direct_materialization_result::invalid_input;
+                }
+                current_address += static_cast<std::size_t>(offset);
+                current_type = project.named(project.find_type(base.type));
+                final_record = {};
+                final_record_base = nullptr;
+                continue;
+            }
             if (step.kind ==
                 endpoint_path_step_kind::array_index) {
 
@@ -2433,8 +2556,7 @@ private:
                 current_type,
                 referent)) {
 
-            if (!final_record ||
-                final_record_base == nullptr) {
+            if ((!final_record || final_record_base == nullptr) && path.steps.count != 0) {
 
                 return fixed_direct_materialization_result::
                     invalid_input;
@@ -2442,7 +2564,7 @@ private:
 
             next = {
                 final_record,
-                final_record_base,
+                final_record_base != nullptr ? final_record_base : current_address,
                 object_handle_value,
                 final_local,
                 current_address,
@@ -3962,6 +4084,7 @@ private:
                 !runtime_address(
                     target_address_value)) {
 
+
                 return fixed_direct_materialization_result::
                     invalid_input;
             }
@@ -3971,6 +4094,7 @@ private:
             if (!endpoint_value_type(
                     initialization.target,
                     target_type)) {
+
 
                 return fixed_direct_materialization_result::
                     invalid_input;
@@ -4203,6 +4327,10 @@ private:
     std::vector<std::uintptr_t> resolution_path;
     std::vector<record_plan> record_plans;
     std::vector<planned_member> planned_members;
+    struct constructor_plan { std::size_t begin = 0, count = 0; bool ready = false; };
+    struct constructor_field { std::size_t offset; type_ref type; construction_value value; };
+    std::vector<constructor_plan> constructor_plans;
+    std::vector<constructor_field> constructor_fields;
 
     // PASS 1 owns target validation. PASS 2 reuses the exact validated SHM
     // slot without repeating endpoint resolution. Pending-link identity lives

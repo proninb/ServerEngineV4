@@ -688,6 +688,7 @@ private:
             no_primary;
 
         std::uint32_t record_alignment = 1;
+        bool single_empty_base = false;
 
         for (std::uint32_t local = 0;
              local <
@@ -746,14 +747,9 @@ private:
                 return resolved;
             }
 
-            if (base_handle.value() >
-                    output.type_slots.size() ||
-                output.type_slots[
-                    base_handle.value() - 1].
-                        empty_record) {
-
-                return runtime_layout_result::
-                    unsupported_type;
+            if (output.type_slots[base_handle.value() - 1].empty_record) {
+                if (base_count != 1) { return runtime_layout_result::unsupported_type; }
+                single_empty_base = true;
             }
 
             const auto effective_alignment =
@@ -977,7 +973,7 @@ private:
 
                 if (!add_u64(
                         aligned,
-                        base_layout.size,
+                        single_empty_base ? 0 : base_layout.size,
                         cursor)) {
 
                     return runtime_layout_result::
@@ -1258,7 +1254,7 @@ private:
         slot.alignment =
             record_alignment;
 
-        slot.empty_record = false;
+        slot.empty_record = single_empty_base && type.members.count == 0 && !type.polymorphic();
 
         slot.state =
             runtime_layout::slot_state::ready;
@@ -1338,11 +1334,19 @@ private:
 
         if (!project.type(
                 handle,
-                type) ||
-            type.kind !=
-                graph_type_kind::record) {
+                type) || !type.valid_kind()) {
 
             return runtime_layout_result::invalid_input;
+        }
+
+        if (type.kind == graph_type_kind::intrinsic_alias) {
+            const auto result = intrinsic_layout(type.alias_intrinsic(), abi.target, value);
+            if (result == runtime_layout_result::success) {
+                slot.size = value.size;
+                slot.alignment = value.alignment;
+                slot.state = runtime_layout::slot_state::ready;
+            }
+            return result;
         }
 
         if (!type.defined()) {

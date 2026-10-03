@@ -4,7 +4,8 @@
  * Unchanged state stays in the immutable compiled_project_view mmap baseline.
  * Existing top-level type/object/link WHERE is stable between REBUILDs:
  * updates patch that slot, deletions mark it inactive, and only new semantic
- * owners append top-level slots. Replacement owned payload remains append-only.
+ * owners allocate new top-level slots. BUILD-local replacement buffers do not
+ * prescribe persisted placement; writers reuse assigned physical storage when possible.
  * graph_delta is BUILD operation state, never resident G.
  */
 #pragma once
@@ -61,6 +62,7 @@ struct graph_delta_initialization_change final {
 
 class graph_delta final {
 public:
+    constructor_default_table constructor_defaults;
     graph_delta() = default;
 
     graph_delta(const graph_delta&) = delete;
@@ -72,9 +74,28 @@ public:
     [[nodiscard]] server_status bind_baseline(
         const compiled_project_view& baseline) noexcept;
 
+    using object_change_sink =
+        server_status (*)(
+            void* context,
+            const graph_delta& graph,
+            const graph_delta_object_change& change) noexcept;
+
+    void set_object_change_sink(
+        void* context,
+        object_change_sink sink) noexcept {
+        object_sink_context = context;
+        object_sink = sink;
+    }
+
+    [[nodiscard]] bool object_change(
+        object_handle object,
+        graph_delta_object_change& output) const noexcept;
+
     [[nodiscard]] bool baseline_bound() const noexcept {
         return baseline != nullptr;
     }
+
+    [[nodiscard]] server_status define_intrinsic_alias(identity_ref identity, intrinsic_type intrinsic, type_handle& output) noexcept;
 
     [[nodiscard]] server_status declare_record(
         identity_ref identity,
@@ -493,8 +514,8 @@ public:
         return initialization_patches.size();
     }
 
-    // Append arenas are already the physical sparse persistence payload.
-    // Unchanged baseline ranges remain in the mapped compiled.bin.
+    // BUILD-local replacement/new-storage buffers. Persistence decides whether
+    // each semantic result patches assigned storage or needs new owner storage.
     [[nodiscard]] std::span<const type_entry>
     type_entries() const noexcept {
         return types;
@@ -787,7 +808,13 @@ private:
         object_endpoint endpoint,
         type_ref& output) const noexcept;
 
+    [[nodiscard]] server_status notify_object_change(
+        object_handle object) noexcept;
+
     const compiled_project_view* baseline = nullptr;
+
+    void* object_sink_context = nullptr;
+    object_change_sink object_sink = nullptr;
 
     std::size_t baseline_type_count = 0;
     std::size_t baseline_base_count = 0;

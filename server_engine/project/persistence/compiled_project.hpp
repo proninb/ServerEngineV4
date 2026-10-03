@@ -27,12 +27,12 @@ class graph_delta;
 class graph_dense_projection;
 class source_map_overlay_view;
 
-inline constexpr std::uint32_t compiled_project_format_version = 17;
+inline constexpr std::uint32_t compiled_project_format_version = 20;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;
 
-inline constexpr std::size_t compiled_project_directory_count = 32;
+inline constexpr std::size_t compiled_project_directory_count = 33;
 
 inline constexpr std::size_t
 compiled_project_directory_entry_size = 32;
@@ -78,6 +78,7 @@ enum class compiled_project_section : std::uint32_t {
     member_name_index = 30,
     object_initializations = 31,
     object_initialization_target_index = 32,
+    constructor_defaults = 33,
 };
 
 enum class compiled_project_image_result : std::uint8_t {
@@ -115,6 +116,7 @@ private:
         std::uint64_t source_contribution_count = 0;
         std::uint64_t source_file_count = 0;
         std::uint64_t source_path_bytes = 0;
+        std::uint64_t constructor_default_count = 0;
     };
 
     [[nodiscard]] static compiled_project_image_result
@@ -182,6 +184,10 @@ private:
 // Read-only query view over one mapped/immutable compiled.bin image.
 class compiled_project_view final {
 public:
+    std::size_t constructor_default_count() const noexcept {
+        return static_cast<std::size_t>(section(compiled_project_section::constructor_defaults).count);
+    }
+    bool constructor_default_at(std::size_t index, constructor_default& output) const noexcept;
     compiled_project_view() noexcept = default;
 
     [[nodiscard]] compiled_project_image_result bind(
@@ -378,6 +384,11 @@ public:
     [[nodiscard]] member_index find_member(
         type_handle type,
         string_id name) const noexcept;
+
+    [[nodiscard]] type_ref named(type_handle type) const noexcept {
+        const auto value = identity(type);
+        return value ? type_ref::make(type_ref_kind::named, value.slot()) : type_ref{};
+    }
 
     [[nodiscard]] bool named(
         type_ref type,

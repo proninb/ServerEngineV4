@@ -925,6 +925,44 @@ namespace-scope Header `static` object. The latter is stored as an
 `object_binding` to the existing `object_handle`. No constructor representation
 or executable constructor program survives in G.
 
+Constructor-body assignments such as `params.inner.enabled = false;` also
+support dot-separated paths through direct named record members to intrinsic
+scalar fields. Each normalized override belongs to the containing type; it
+does not alter defaults of the shared nested type. Repeated assignments to the
+same path retain the last value. Bounded-array elements are supported with
+nonnegative decimal literal indices, including `values[0]`, `matrix[1][2]`, and
+`items[1].value`. Every index is checked against its declared bound. Computed
+indices, pointer/reference traversal, and nonconstant right-hand expressions
+are outside this subset.
+The `constructor_defaults` section in compiled format 20 persists the owner,
+interned path, and scalar value. Runtime applies these overrides after nested
+members are constructed and before object-specific initialization. Earlier
+compiled formats require PUBLISH or REBUILD.
+
+Header constructors also accept positional and declaration-ordered designated
+initializers of direct records, such as `a{"hello", 42, 1.5}` and
+`a{.name = "hello", .value = 42, .scale = 1.5}` when `name` is a bounded
+`char` array. Mixed forms and out-of-order designators are rejected. This is
+a construction-data subset, not execution of arbitrary constructor bodies.
+
+Header `typedef` currently supports intrinsic scalar aliases, including
+`typedef unsigned char byte;` and aliases of existing scalar aliases. Alias
+identities participate in Source Map dependencies and BUILD invalidation.
+The type entry uses `intrinsic_alias` kind and the high byte of flags for the
+underlying intrinsic identifier; it owns no members or bases. Uses normalize
+to the underlying intrinsic type. Pointer, array, and record typedefs are
+outside this initial subset.
+
+Source (`.ogd`/`.page`) string assignment to writable bounded `char[]` decodes
+ordinary narrow literals, adjacent literals and standard single-byte escapes.
+It requires room for a terminating zero, rejects overflow, and zero-fills the
+remaining array. It becomes scalar element initialization records, so the
+existing persistence and invalidation mechanisms retain the data.
+Source endpoints can select a whole object, traverse nonvirtual base classes,
+and access members through references. Runtime binds static links before
+applying Source initializations through them. Constructor path resolution is
+cached per materialization and type rather than repeated for every instance.
+
 Namespace-scope Header `static` objects use the normal Graph object storage but
 carry internal-static storage semantics and their own persisted object
 construction value. They are root-local internal-linkage entities and are not
@@ -1195,6 +1233,31 @@ contain one parameter without a default argument or ellipsis. `= default` and
 implement assignment execution or full C++ special-member validation.
 Assignment operators add no instance data members. Global/static assignment
 operators and method bodies are rejected.
+
+Compound assignment declarations (`+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`,
+`|=`, `<<=`, `>>=`) use the same one-parameter declaration path, including
+ref-qualifiers, `noexcept`, virtual suffixes and `= delete`. They reject
+`= default` and do not implement operator execution or add data members.
+
+Logical-not member declarations (`operator!()`, also spelled `operator!(void)`)
+accept the supported return types, including references, const/ref qualifiers,
+`noexcept`, virtual suffixes and `= delete`. They require an empty parameter
+list. Static/global forms, `= default`, and bodies are unsupported. Like other
+method declarations they contribute no instance fields; virtual forms retain
+the existing polymorphic-layout behavior. This does not execute logical-not.
+
+Comparison member declarations (`==`, `!=`, `<`, `>`, `<=`, `>=`) accept one
+parameter with the same declaration-only qualifiers and virtual behavior.
+Default arguments, ellipsis, bodies and `= default` comparison generation are
+unsupported; `= delete` is accepted. The return type uses the supported type
+grammar and is not restricted to bool.
+
+For legacy generated headers, named operator declarations inside a record may
+carry the redundant enclosing-record qualifier, for example
+`bool U_ANY::operator==(const U_ANY& value) const;` inside `U_ANY`.
+The qualifier must match the current record exactly. This compatibility rule
+does not enable unrelated/nested qualifiers, qualified ordinary methods, or
+out-of-class operator declarations.
 
 Subscript declarations such as `short& operator[](int index);` also use the
 declaration-only method path. The supported subset has exactly one parameter,

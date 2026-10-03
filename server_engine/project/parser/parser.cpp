@@ -92,6 +92,8 @@ struct constructor_operation final {
     string_id target{};
     semantic_source_location target_location;
     pending_construction expression;
+    struct path_step final { string_id name{}; std::uint64_t index = 0; };
+    std::vector<path_step> path;
 };
 
 struct resolved_link_endpoint final {
@@ -110,6 +112,7 @@ struct declarator_modifier final {
 struct parsed_declarator final {
     string_id name{};
     semantic_source_location location;
+    bool binary_operator = false;
 };
 
 template <typename Graph, typename Sources>
@@ -217,6 +220,44 @@ private:
                 type,
                 output);
         }
+    }
+
+    [[nodiscard]] server_status inherited_member_path(type_handle record, string_id name,
+        std::vector<endpoint_path_step>& path, type_handle& owner, member_index& member,
+        std::size_t depth = 0) noexcept {
+        if (depth >= parser_scope_depth_limit) {
+            return fail(parser_failure_kind::unsupported, "Inherited member lookup exceeds supported depth");
+        }
+        auto dependency = sources.add_dependency(G.identity(record));
+        if (!succeeded(dependency)) { return dependency; }
+        member = G.find_member(record, name);
+        if (member) { owner = record; return server_status::success; }
+        type_entry entry;
+        if (!read_type(record, entry)) { return server_status::project_configuration_invalid; }
+        bool found = false;
+        for (std::uint32_t i = 0; i < entry.bases.count; ++i) {
+            base_record base;
+            if constexpr (std::is_same_v<Graph, graph>) { base = G.bases(record)[i]; }
+            else if (!G.base(record, i, base)) { return server_status::project_configuration_invalid; }
+            std::vector<endpoint_path_step> candidate;
+            type_handle candidate_owner;
+            member_index candidate_member;
+            const auto status = inherited_member_path(G.find_type(base.type), name, candidate,
+                candidate_owner, candidate_member, depth + 1);
+            if (!succeeded(status)) { return status; }
+            if (!candidate_member) { continue; }
+            if (found || base.virtual_base()) {
+                return fail(parser_failure_kind::unsupported, "Ambiguous or virtual inherited member path");
+            }
+            try {
+                path.push_back({i, endpoint_path_step_kind::base, {}});
+                path.insert(path.end(), candidate.begin(), candidate.end());
+            } catch (...) { return server_status::io_error; }
+            owner = candidate_owner;
+            member = candidate_member;
+            found = true;
+        }
+        return server_status::success;
     }
 
     [[nodiscard]] bool read_object(
@@ -1119,7 +1160,9 @@ private:
                 return dependency;
             }
 
-            output = G.named(handle);
+            type_entry entry;
+            if (!read_type(handle, entry)) { return server_status::project_artifact_invalid; }
+            output = entry.kind == graph_type_kind::intrinsic_alias ? G.intrinsic(entry.alias_intrinsic()) : G.named(handle);
 
             const auto advanced = advance();
             if (!succeeded(advanced)) {
@@ -1207,7 +1250,8 @@ private:
     [[nodiscard]] server_status parse_declarator_node(
         parsed_declarator& output,
         std::size_t depth,
-        bool allow_named_operator = false) noexcept {
+        bool allow_named_operator = false,
+        string_id enclosing_record = {}) noexcept {
 
         if (depth >=
             declarator_depth_limit) {
@@ -1254,6 +1298,34 @@ private:
         const auto prefix_end =
             declarator_modifiers.size();
 
+        // Legacy generated headers qualify in-class operators with their own
+        // record name. Accept only that redundant qualifier, not other scopes.
+        if (allow_named_operator && depth == 0 && at(token_kind::identifier)) {
+            semantic_token next;
+            auto status = peek(next);
+            if (!succeeded(status)) {
+                return status;
+            }
+            if (next.kind == token_kind::scope) {
+                if (!enclosing_record || current.identifier != enclosing_record) {
+                    return fail(parser_failure_kind::semantic,
+                        "In-class operator qualifier must name the enclosing record");
+                }
+                status = advance();
+                if (!succeeded(status)) {
+                    return status;
+                }
+                status = advance();
+                if (!succeeded(status)) {
+                    return status;
+                }
+                if (!at(token_kind::kw_operator)) {
+                    return fail(parser_failure_kind::unsupported,
+                        "In-class qualification is supported only for named operators");
+                }
+            }
+        }
+
         if (allow_named_operator && depth == 0 && at(token_kind::kw_operator)) {
             output.location = current_location();
             auto status = advance();
@@ -1272,9 +1344,32 @@ private:
                         "Expected ']' in operator[] declarator");
                 }
             }
+            else if (at(token_kind::exclamation)) {
+                operator_name = "operator!";
+            }
             else if (!at(token_kind::assign)) {
-                return fail(parser_failure_kind::unsupported,
-                    "Only operator= and operator[] are supported in named operator declarators");
+                switch (current.kind) {
+                case token_kind::plus_assign: operator_name = "operator+="; break;
+                case token_kind::minus_assign: operator_name = "operator-="; break;
+                case token_kind::star_assign: operator_name = "operator*="; break;
+                case token_kind::slash_assign: operator_name = "operator/="; break;
+                case token_kind::percent_assign: operator_name = "operator%="; break;
+                case token_kind::caret_assign: operator_name = "operator^="; break;
+                case token_kind::ampersand_assign: operator_name = "operator&="; break;
+                case token_kind::pipe_assign: operator_name = "operator|="; break;
+                case token_kind::shift_left_assign: operator_name = "operator<<="; break;
+                case token_kind::shift_right_assign: operator_name = "operator>>="; break;
+                case token_kind::equal: operator_name = "operator=="; break;
+                case token_kind::not_equal: operator_name = "operator!="; break;
+                case token_kind::less: operator_name = "operator<"; break;
+                case token_kind::greater: operator_name = "operator>"; break;
+                case token_kind::less_equal: operator_name = "operator<="; break;
+                case token_kind::greater_equal: operator_name = "operator>="; break;
+                default:
+                    return fail(parser_failure_kind::unsupported,
+                        "Named operator declarator is not supported");
+                }
+                output.binary_operator = true;
             }
             status = strings.intern(operator_name, output.name);
             if (!succeeded(status)) {
@@ -1557,7 +1652,8 @@ private:
         identity_ref scope,
         type_ref& output,
         parsed_declarator& declarator,
-        bool allow_named_operator = false) noexcept {
+        bool allow_named_operator = false,
+        string_id enclosing_record = {}) noexcept {
 
         output = {};
         declarator = {};
@@ -1578,7 +1674,8 @@ private:
             parse_declarator_node(
                 declarator,
                 0,
-                allow_named_operator);
+                allow_named_operator,
+                enclosing_record);
 
         if (!succeeded(status)) {
             return status;
@@ -1962,6 +2059,102 @@ private:
         }
     }
 
+    [[nodiscard]] server_status parse_constructor_aggregate(
+        string_id target, const semantic_source_location& location, type_ref type,
+        std::vector<constructor_operation::path_step> path,
+        std::vector<constructor_operation>& operations, std::size_t depth = 0) noexcept {
+        if (depth >= parser_scope_depth_limit) {
+            return fail(parser_failure_kind::unsupported, "Aggregate initializer exceeds supported depth");
+        }
+        derived_type_record array;
+        intrinsic_type intrinsic;
+        if (at(token_kind::string_literal) && G.derived(type, array) &&
+            array.kind == derived_type_kind::bounded_array && G.intrinsic(array.child, intrinsic) &&
+            intrinsic == intrinsic_type::char_type) {
+            std::vector<unsigned char> bytes;
+            auto status = parse_string_bytes(array.payload, bytes);
+            if (!succeeded(status)) { return status; }
+            for (std::uint64_t i = 0; i < array.payload; ++i) {
+                pending_construction value;
+                value.location = location;
+                value.value = construction_value::constant(construction_kind::unsigned_integer,
+                    i < bytes.size() ? bytes[static_cast<std::size_t>(i)] : 0);
+                status = append_constructor_operation(operations, target, location, value);
+                if (!succeeded(status)) { return status; }
+                try { operations.back().path = path; operations.back().path.push_back({{}, i}); }
+                catch (...) { return server_status::io_error; }
+            }
+            return server_status::success;
+        }
+        type_handle record;
+        type_entry entry;
+        if (G.named(type, record)) {
+            if (!read_type(record, entry) || entry.bases.count != 0 || entry.polymorphic()) {
+                return fail(parser_failure_kind::unsupported, "Aggregate initializer requires a direct non-polymorphic record");
+            }
+            auto status = expect(token_kind::l_brace, "Expected '{' for aggregate initializer");
+            if (!succeeded(status)) { return status; }
+            status = advance();
+            if (!succeeded(status)) { return status; }
+            std::uint32_t position = 0;
+            int mode = 0;
+            while (!at(token_kind::r_brace)) {
+                const bool designated = at(token_kind::dot);
+                if (mode != 0 && mode != (designated ? 1 : 2)) {
+                    return fail(parser_failure_kind::syntax, "Cannot mix designated and positional aggregate initializers");
+                }
+                mode = designated ? 1 : 2;
+                member_record member;
+                if (designated) {
+                    status = advance();
+                    if (!succeeded(status)) { return status; }
+                    const auto index = G.find_member(record, current.identifier);
+                    if (!at(token_kind::identifier) || !index || index.value() < position) {
+                        return fail(parser_failure_kind::semantic, "Aggregate designators must name distinct fields in declaration order");
+                    }
+                    position = index.value();
+                    status = advance();
+                    if (!succeeded(status)) { return status; }
+                    status = expect(token_kind::assign, "Expected '=' after aggregate designator");
+                    if (!succeeded(status)) { return status; }
+                    status = advance();
+                    if (!succeeded(status)) { return status; }
+                }
+                // find_member supplies the checked member_index without constructing a private handle.
+                if (position >= entry.members.count) {
+                    return fail(parser_failure_kind::semantic, "Too many aggregate initializers");
+                }
+                if constexpr (std::is_same_v<Graph, graph>) { member = G.members(record)[position]; }
+                else {
+                    if (!G.member(record, position, member)) {
+                        return fail(parser_failure_kind::semantic, "Aggregate field is unavailable");
+                    }
+                }
+                std::vector<constructor_operation::path_step> child;
+                try { child = path; child.push_back({member.name, 0}); }
+                catch (...) { return server_status::io_error; }
+                status = parse_constructor_aggregate(target, location, member.type, std::move(child), operations, depth + 1);
+                if (!succeeded(status)) { return status; }
+                ++position;
+                if (!at(token_kind::comma)) { break; }
+                status = advance();
+                if (!succeeded(status)) { return status; }
+            }
+            status = expect(token_kind::r_brace, "Expected '}' after aggregate initializer");
+            return succeeded(status) ? advance() : status;
+        }
+        pending_construction value;
+        auto status = parse_constructor_expression(value);
+        if (!succeeded(status)) { return status; }
+        if (value.kind != pending_construction_kind::value || !construction_compatible(G, type, value.value)) {
+            return fail(parser_failure_kind::semantic, "Aggregate value does not match field type");
+        }
+        status = append_constructor_operation(operations, target, location, value);
+        if (!succeeded(status)) { return status; }
+        operations.back().path = std::move(path);
+        return server_status::success;
+    }
+
     [[nodiscard]] server_status parse_constructor(
         string_id record_name,
         std::vector<constructor_operation>& operations) noexcept {
@@ -2084,6 +2277,19 @@ private:
                 token_kind close =
                     token_kind::invalid;
 
+                if (at(token_kind::l_brace)) {
+                    const auto member = std::find_if(record_members.begin(), record_members.end(),
+                        [target](const auto& value) { return value.name == target; });
+                    if (member != record_members.end() && member->type.kind() == type_ref_kind::named) {
+                        status = parse_constructor_aggregate(target, target_location, member->type, {}, operations);
+                        if (!succeeded(status)) { return status; }
+                        if (!at(token_kind::comma)) { break; }
+                        status = advance();
+                        if (!succeeded(status)) { return status; }
+                        continue;
+                    }
+                }
+
                 if (at(token_kind::l_paren)) {
                     close =
                         token_kind::r_paren;
@@ -2196,10 +2402,43 @@ private:
                 return status;
             }
 
-            status =
-                expect(
-                    token_kind::assign,
-                    "Managed constructor body supports field assignments only");
+            std::vector<constructor_operation::path_step> nested_path;
+            while (at(token_kind::dot) || at(token_kind::l_bracket)) {
+                if (nested_path.size() >= parser_scope_depth_limit) {
+                    return fail(parser_failure_kind::unsupported, "Constructor path exceeds supported depth");
+                }
+                if (at(token_kind::l_bracket)) {
+                    status = advance();
+                    if (!succeeded(status)) { return status; }
+                    const auto spelling = token_text(current);
+                    std::uint64_t index = 0;
+                    const auto converted = std::from_chars(spelling.data(), spelling.data() + spelling.size(), index);
+                    if (!at(token_kind::pp_number) || converted.ec != std::errc{} ||
+                        converted.ptr != spelling.data() + spelling.size()) {
+                        return fail(parser_failure_kind::unsupported, "Constructor array index requires a decimal integer literal");
+                    }
+                    status = advance();
+                    if (!succeeded(status)) { return status; }
+                    status = expect(token_kind::r_bracket, "Expected ']' after constructor array index");
+                    if (!succeeded(status)) { return status; }
+                    try { nested_path.push_back({{}, index}); }
+                    catch (...) { return server_status::io_error; }
+                    status = advance();
+                    if (!succeeded(status)) { return status; }
+                    continue;
+                }
+                status = advance();
+                if (!succeeded(status)) { return status; }
+                if (!at(token_kind::identifier) || nested_path.size() >= parser_scope_depth_limit) {
+                    return fail(parser_failure_kind::syntax, "Invalid nested constructor field path");
+                }
+                try { nested_path.push_back({current.identifier, 0}); }
+                catch (...) { return server_status::io_error; }
+                status = advance();
+                if (!succeeded(status)) { return status; }
+            }
+            status = expect(token_kind::assign,
+                "Managed constructor body supports field assignments only");
 
             if (!succeeded(status)) {
                 return status;
@@ -2240,6 +2479,7 @@ private:
             if (!succeeded(status)) {
                 return status;
             }
+            operations.back().path = std::move(nested_path);
 
             status = advance();
 
@@ -2253,6 +2493,7 @@ private:
 
     [[nodiscard]] server_status normalize_constructor_operations(
         identity_ref scope,
+        identity_ref owner,
         const std::vector<member_record>& members,
         const std::vector<constructor_operation>& operations,
         std::vector<construction_value>& construction) noexcept {
@@ -2262,6 +2503,7 @@ private:
         }
 
         auto& assigned = record_assigned;
+        std::vector<constructor_default> nested_defaults;
 
         try {
             assigned.assign(members.size(), false);
@@ -2292,6 +2534,67 @@ private:
             }
 
             construction_value value;
+
+            if (!operation.path.empty()) {
+                auto target_type = members[target_index].type;
+                std::string path;
+                try { path = strings.get(operation.target); }
+                catch (...) { return server_status::io_error; }
+                for (const auto& step : operation.path) {
+                    if (!step.name) {
+                        derived_type_record array;
+                        if (!G.derived(target_type, array) || array.kind != derived_type_kind::bounded_array) {
+                            return fail_at(parser_failure_kind::semantic,
+                                "Constructor array index requires a bounded array", operation.target_location);
+                        }
+                        if (step.index >= array.payload) {
+                            return fail_at(parser_failure_kind::semantic,
+                                "Constructor array index is outside the declared bound", operation.target_location);
+                        }
+                        target_type = array.child;
+                        try { path += '['; path += std::to_string(step.index); path += ']'; }
+                        catch (...) { return server_status::io_error; }
+                        continue;
+                    }
+                    const auto name = step.name;
+                    if (target_type.kind() != type_ref_kind::named) {
+                        return fail_at(parser_failure_kind::unsupported,
+                            "Nested constructor path requires direct record fields", operation.target_location);
+                    }
+                    type_handle nested_type;
+                    if (!G.named(target_type, nested_type)) {
+                        return fail_at(parser_failure_kind::semantic,
+                            "Nested constructor target type is invalid", operation.target_location);
+                    }
+                    const auto member = G.find_member(nested_type, name);
+                    member_record record;
+                    if (!read_member(nested_type, member, record)) {
+                        return fail_at(parser_failure_kind::semantic,
+                            "Nested constructor field does not exist", operation.target_location);
+                    }
+                    target_type = record.type;
+                    try { path += '.'; path += strings.get(name); }
+                    catch (...) { return server_status::io_error; }
+                }
+                if (operation.expression.kind != pending_construction_kind::value ||
+                    target_type.kind() != type_ref_kind::intrinsic ||
+                    !construction_compatible(G, target_type, operation.expression.value)) {
+                    return fail_at(parser_failure_kind::unsupported,
+                        "Nested constructor assignment requires a writable scalar field and scalar constant",
+                        operation.expression.location);
+                }
+                string_id spelling;
+                auto status = strings.intern(path, spelling);
+                if (!succeeded(status)) { return status; }
+                auto found = std::find_if(nested_defaults.begin(), nested_defaults.end(),
+                    [spelling](const auto& item) { return item.path == spelling; });
+                if (found != nested_defaults.end()) { found->value = operation.expression.value; }
+                else {
+                    try { nested_defaults.push_back({owner, spelling, operation.expression.value}); }
+                    catch (...) { return server_status::io_error; }
+                }
+                continue;
+            }
 
             if (reference_type(
                     members[target_index].type)) {
@@ -2359,6 +2662,13 @@ private:
                 value;
             assigned[target_index] =
                 true;
+        }
+
+        for (const auto& value : nested_defaults) {
+            const auto status = G.constructor_defaults.add(value);
+            if (!succeeded(status)) {
+                return fail(parser_failure_kind::semantic, "Conflicting nested constructor defaults");
+            }
         }
 
         return server_status::success;
@@ -2753,7 +3063,8 @@ private:
         const auto parse_method_tail =
             [&](bool virtual_prefix, bool conversion = false,
                 bool assignment_operator = false,
-                bool subscript_operator = false) -> server_status {
+                bool subscript_operator = false,
+                bool binary_operator = false) -> server_status {
                 if (!at(token_kind::l_paren)) {
                     return fail(
                         parser_failure_kind::syntax,
@@ -2772,7 +3083,7 @@ private:
                             "Method parameter list is not closed");
                     }
 
-                    if ((assignment_operator || subscript_operator) &&
+                    if ((assignment_operator || subscript_operator || binary_operator) &&
                         depth == 1 && !at(token_kind::r_paren)) {
                         if (at(token_kind::comma) || at(token_kind::ellipsis) ||
                             at(token_kind::assign)) {
@@ -2789,7 +3100,7 @@ private:
                         }
                         else {
                             return fail(parser_failure_kind::syntax,
-                                "Conversion operator must have an empty parameter list");
+                                "This operator must have an empty parameter list");
                         }
                     }
 
@@ -2816,7 +3127,7 @@ private:
                     }
                 }
 
-                if ((assignment_operator || subscript_operator) &&
+                if ((assignment_operator || subscript_operator || binary_operator) &&
                     (parameter_tokens == 0 || sole_void)) {
                     return fail(parser_failure_kind::syntax,
                         "Named operator requires one parameter");
@@ -2827,7 +3138,7 @@ private:
                 bool ref_qualifier_seen = false;
 
                 for (;;) {
-                    if ((conversion || assignment_operator || subscript_operator) && !ref_qualifier_seen &&
+                    if ((conversion || assignment_operator || subscript_operator || binary_operator) && !ref_qualifier_seen &&
                         (at(token_kind::ampersand) || at(token_kind::logical_and))) {
                         ref_qualifier_seen = true;
                         const auto advanced = advance();
@@ -2944,7 +3255,7 @@ private:
 
                         pure = true;
                     }
-                    else if ((conversion || subscript_operator || !at(token_kind::kw_default)) &&
+                    else if ((conversion || subscript_operator || binary_operator || !at(token_kind::kw_default)) &&
                              !at(token_kind::kw_delete)) {
 
                         return fail(
@@ -3201,7 +3512,8 @@ private:
                     scope,
                     member_type,
                     declarator,
-                    true);
+                    true,
+                    record_name);
 
             if (!succeeded(status)) {
                 return status;
@@ -3210,9 +3522,10 @@ private:
             if (at(token_kind::l_paren)) {
                 status =
                     parse_method_tail(
-                        virtual_prefix, false,
+                        virtual_prefix, strings.get(declarator.name) == "operator!",
                         strings.get(declarator.name) == "operator=",
-                        strings.get(declarator.name) == "operator[]");
+                        strings.get(declarator.name) == "operator[]",
+                        declarator.binary_operator);
 
                 if (!succeeded(status)) {
                     return status;
@@ -3333,6 +3646,7 @@ private:
         status =
             normalize_constructor_operations(
                 scope,
+                identity,
                 members,
                 constructor_operations,
                 construction);
@@ -3848,6 +4162,13 @@ private:
                 auto record_type =
                     current_type;
 
+                type_ref referent;
+                if (reference_referent(record_type, referent)) {
+                    try { endpoint_steps.push_back({0, endpoint_path_step_kind::dereference, {}}); }
+                    catch (...) { return server_status::io_error; }
+                    record_type = referent;
+                }
+
                 strip_cv(
                     record_type);
 
@@ -3888,10 +4209,14 @@ private:
                 const auto member_location =
                     current_location();
 
-                const auto member =
-                    G.find_member(
-                        record,
-                        current.identifier);
+                member_index member;
+                type_handle owner;
+                std::vector<endpoint_path_step> inherited;
+                status = inherited_member_path(record, current.identifier, inherited, owner, member);
+                if (!succeeded(status)) { return status; }
+                try { endpoint_steps.insert(endpoint_steps.end(), inherited.begin(), inherited.end()); }
+                catch (...) { return server_status::io_error; }
+                if (member) { record = owner; }
 
                 if (!member) {
                     return fail_at(
@@ -3949,13 +4274,6 @@ private:
             }
 
             break;
-        }
-
-        if (endpoint_steps.empty()) {
-            return fail_at(
-                parser_failure_kind::syntax,
-                "Link endpoint must select a member or bounded-array subobject",
-                object_location);
         }
 
         output.type =
@@ -4016,6 +4334,108 @@ private:
         };
 
         return server_status::success;
+    }
+
+    [[nodiscard]] server_status parse_string_bytes(std::uint64_t bound,
+        std::vector<unsigned char>& bytes) noexcept {
+        while (at(token_kind::string_literal)) {
+            const auto text = token_text(current);
+            if (text.size() < 2 || text.front() != '"' || text.back() != '"') {
+                return fail(parser_failure_kind::unsupported, "Only ordinary narrow string literals are supported");
+            }
+            for (std::size_t i = 1; i + 1 < text.size(); ++i) {
+                unsigned int value = static_cast<unsigned char>(text[i]);
+                if (value == '\\') {
+                    if (++i + 1 >= text.size()) { return fail(parser_failure_kind::syntax, "Incomplete string escape"); }
+                    const auto escape = text[i];
+                    switch (escape) {
+                    case '\\': case '\'': case '"': case '?': value = escape; break;
+                    case 'a': value = 7; break;
+                    case 'b': value = 8; break;
+                    case 'f': value = 12; break;
+                    case 'n': value = 10; break;
+                    case 'r': value = 13; break;
+                    case 't': value = 9; break;
+                    case 'v': value = 11; break;
+                    default: {
+                        const bool hex = escape == 'x';
+                        if (!hex && (escape < '0' || escape > '7')) {
+                            return fail(parser_failure_kind::unsupported, "Unsupported string escape");
+                        }
+                        const std::size_t begin = i + (hex ? 1 : 0);
+                        auto end = begin;
+                        while (end + 1 < text.size()) {
+                            const auto c = text[end];
+                            const bool digit = hex ? ((c >= '0' && c <= '9') ||
+                                (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) : (c >= '0' && c <= '7');
+                            if (!digit || (!hex && end - begin == 3)) { break; }
+                            ++end;
+                        }
+                        const auto converted = std::from_chars(text.data() + begin, text.data() + end, value, hex ? 16 : 8);
+                        if (converted.ec != std::errc{} || value > 255) {
+                            return fail(parser_failure_kind::semantic, "String escape is outside the byte range");
+                        }
+                        i = end - 1;
+                        break;
+                    }
+                    }
+                }
+                if (!bound || bytes.size() >= bound - 1) {
+                    return fail(parser_failure_kind::semantic, "String including terminator exceeds the char array bound");
+                }
+                try { bytes.push_back(static_cast<unsigned char>(value)); }
+                catch (...) { return server_status::io_error; }
+            }
+            const auto status = advance();
+            if (!succeeded(status)) { return status; }
+        }
+        return server_status::success;
+    }
+
+    [[nodiscard]] server_status parse_source_string_assignment(
+        const resolved_link_endpoint& target, file_id statement_file) noexcept {
+        derived_type_record array;
+        intrinsic_type character;
+        if (!G.derived(target.type, array) || array.kind != derived_type_kind::bounded_array ||
+            !array.payload || !G.intrinsic(array.child, character) || character != intrinsic_type::char_type) {
+            return fail(parser_failure_kind::semantic, "String assignment requires a writable bounded char array");
+        }
+        std::vector<unsigned char> bytes;
+        auto status = parse_string_bytes(array.payload, bytes);
+        if (!succeeded(status)) { return status; }
+        status = expect(token_kind::semicolon, "Expected ';' after string assignment");
+        if (!succeeded(status)) { return status; }
+        object_entry object;
+        if (!read_object(G.find_object(target.endpoint.object), object)) {
+            return fail(parser_failure_kind::semantic, "String assignment object is invalid");
+        }
+        // Normalize to scalar paths, reusing persisted initialization and BUILD provenance.
+        try { endpoint_steps.push_back({0, endpoint_path_step_kind::array_index, {}}); }
+        catch (...) { return server_status::io_error; }
+        bool any_replaced = false;
+        for (std::uint64_t i = 0; i < array.payload; ++i) {
+            endpoint_steps.back().value = i;
+            endpoint_path_handle path;
+            status = G.intern_endpoint_path(object.type, endpoint_steps, path);
+            if (!succeeded(status)) { return status; }
+            const object_endpoint element{target.endpoint.object, endpoint_ref::from_path(path)};
+            const auto value = construction_value::constant(construction_kind::unsigned_integer,
+                i < bytes.size() ? bytes[static_cast<std::size_t>(i)] : 0);
+            bool replaced = false;
+            status = G.add_initialization(element, value, replaced);
+            if (!succeeded(status)) { return status; }
+            any_replaced |= replaced;
+            status = sources.add_initialization(element);
+            if (!succeeded(status)) { return status; }
+        }
+        status = sources.add(statement_file, source_data_ref::object(target.endpoint.object));
+        if (!succeeded(status)) { return status; }
+        if (any_replaced) {
+            status = warn_at(parser_warning_kind::duplicate_initialization,
+                "Object member is initialized more than once; the last initialization is used", target.location);
+            if (!succeeded(status)) { return status; }
+        }
+        return advance();
     }
 
     [[nodiscard]] server_status parse_source_assignment(
@@ -4117,6 +4537,10 @@ private:
             }
 
             return advance();
+        }
+
+        if (at(token_kind::string_literal)) {
+            return parse_source_string_assignment(target, statement_file);
         }
 
         if (at(token_kind::identifier) ||
@@ -4222,6 +4646,33 @@ private:
         return advance();
     }
 
+    [[nodiscard]] server_status parse_typedef(identity_ref scope) noexcept {
+        if (domain != semantic_domain::header) {
+            return fail(parser_failure_kind::unsupported, "Typedef declarations belong in Header inputs");
+        }
+        const auto file = current.file;
+        auto status = advance();
+        if (!succeeded(status)) { return status; }
+        type_ref type;
+        parsed_declarator declarator;
+        status = parse_declared_type(scope, type, declarator, false, {});
+        if (!succeeded(status)) { return status; }
+        intrinsic_type intrinsic;
+        if (!G.intrinsic(type, intrinsic) || intrinsic < intrinsic_type::bool_type || intrinsic > intrinsic_type::long_double_type) {
+            return fail(parser_failure_kind::unsupported, "Typedef currently supports intrinsic scalar aliases");
+        }
+        status = expect(token_kind::semicolon, "Expected ';' after typedef");
+        if (!succeeded(status)) { return status; }
+        identity_ref identity;
+        status = identities.resolve(scope, declarator.name, identity_kind::type, identity);
+        if (!succeeded(status)) { return status; }
+        type_handle handle;
+        status = G.define_intrinsic_alias(identity, intrinsic, handle);
+        if (!succeeded(status)) { return fail(parser_failure_kind::semantic, "Typedef conflicts with an existing type"); }
+        status = sources.add(file, source_data_ref::type(identity, true));
+        return succeeded(status) ? advance() : status;
+    }
+
     [[nodiscard]] server_status parse_scope(
         identity_ref scope,
         bool expect_close,
@@ -4247,6 +4698,12 @@ private:
                 if (!succeeded(status)) {
                     return status;
                 }
+                continue;
+            }
+
+            if (at(token_kind::kw_typedef)) {
+                const auto status = parse_typedef(scope);
+                if (!succeeded(status)) { return status; }
                 continue;
             }
 

@@ -61,7 +61,13 @@ def main():
     parser.add_argument("destination", type=Path)
     parser.add_argument("--expand-sdk-byte", action="store_true",
                         help="Expand the legacy SDK byte identifier to unsigned char")
+    parser.add_argument("--typedef-sdk-byte", action="store_true",
+                        help="Declare typedef unsigned char byte in the copied base header")
+    parser.add_argument("--empty-simlink", action="store_true",
+                        help="Add the requested empty SimLink to unity_pro_xl_base.h")
     args = parser.parse_args()
+    if args.expand_sdk_byte and args.typedef_sdk_byte:
+        parser.error("Choose typedef or textual expansion, not both")
     source, destination = args.source.resolve(), args.destination.resolve()
     if source == destination or source in destination.parents or destination in source.parents:
         parser.error("Source and destination must be separate directory trees")
@@ -84,6 +90,17 @@ def main():
                     return b"unsigned char"
                 return match.group()
             cleaned = TOKEN.sub(expand, cleaned)
+        if (args.empty_simlink or args.typedef_sdk_byte) and path.relative_to(source).as_posix() == "unity_pro_xl_base.h":
+            anchor = b"struct SimObject {};"
+            if cleaned.count(anchor) != 1:
+                raise ValueError("Expected one SimObject declaration in unity_pro_xl_base.h")
+            newline = b"\r\n" if b"\r\n" in cleaned else b"\n"
+            declarations = anchor
+            if args.empty_simlink:
+                declarations += newline + b"struct SimLink {};"
+            if args.typedef_sdk_byte:
+                declarations += newline + b"typedef unsigned char byte;"
+            cleaned = cleaned.replace(anchor, declarations, 1)
         target = destination / path.relative_to(source)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(cleaned)
@@ -98,6 +115,8 @@ def main():
     report = {"source": str(source), "destination": str(destination),
               "headers": len(records), "removed": dict(total),
               "expanded_byte": sum(record["expanded_byte"] for record in records),
+              "empty_simlink": args.empty_simlink,
+              "typedef_sdk_byte": args.typedef_sdk_byte,
               "files": records}
     (destination / "annotation-removal.json").write_text(
         json.dumps(report, indent=2), encoding="utf-8")

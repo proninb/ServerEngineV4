@@ -33,6 +33,7 @@ enum class schema_context : std::uint8_t {
     preprocessor,
     predefines,
     predefine,
+    include_directories,
     item_children,
 };
 
@@ -180,7 +181,7 @@ public:
         }
 
         case schema_context::preprocessor:
-            if (ended.index != 1) {
+            if (ended.index != 1 && ended.index != 2) {
                 fail("preprocessor requires predefines");
             }
             return;
@@ -199,6 +200,7 @@ public:
 
         case schema_context::project_items:
         case schema_context::predefines:
+        case schema_context::include_directories:
         case schema_context::item_children:
             fail("internal Project schema object mismatch");
             return;
@@ -234,6 +236,12 @@ public:
             return;
         }
 
+        if (parent.context == schema_context::preprocessor && parent.index == 1) {
+            parent.index = 2;
+            stack.push_back({schema_context::include_directories});
+            return;
+        }
+
         if (parent.context == schema_context::item &&
             parent.stage == item_stage::expect_payload &&
             parent.type == item_type::group) {
@@ -256,6 +264,7 @@ public:
 
         if (context != schema_context::project_items &&
             context != schema_context::predefines &&
+            context != schema_context::include_directories &&
             context != schema_context::item_children) {
 
             fail("unexpected array end in Project configuration");
@@ -279,8 +288,9 @@ public:
             return;
 
         case schema_context::preprocessor:
-            if (current.index != 0 || key != "predefines") {
-                fail("preprocessor fields must be ordered: predefines");
+            if (!((current.index == 0 && key == "predefines") ||
+                  (current.index == 1 && key == "include_directories"))) {
+                fail("preprocessor fields must be ordered: predefines[, include_directories]");
             }
             return;
 
@@ -314,6 +324,9 @@ public:
         case schema_context::predefines:
             fail("predefines array elements must be objects");
             return;
+        case schema_context::include_directories:
+            fail("include_directories elements must be path strings");
+            return;
         }
     }
 
@@ -332,6 +345,18 @@ public:
             stack.back();
 
         switch (current.context) {
+        case schema_context::include_directories: {
+            std::string text;
+            std::filesystem::path directory;
+            if (!value.get(text) || text.empty() || text.find('\0') != std::string::npos ||
+                filesystem_path_from_utf8(text, directory) != filesystem_path_result::success ||
+                (!directory.is_absolute() && directory.has_root_path())) {
+                fail("include_directories elements must be non-empty relative or absolute paths");
+                return;
+            }
+            preprocessor->include_directories.push_back(std::move(text));
+            return;
+        }
         case schema_context::root:
             read_root_value(current, value);
             return;
@@ -978,7 +1003,8 @@ server_status read_project_configuration(
             return server_status::project_configuration_invalid;
         }
 
-        preprocessor->predefines.clear();
+        *preprocessor = {};
+        preprocessor->root_directory = path.parent_path();
     } else if (
         preprocessor != nullptr ||
         runtime != nullptr) {
@@ -1000,7 +1026,7 @@ server_status read_project_configuration(
     if (!parsed.ok()) {
         dependencies.clear();
         if (preprocessor != nullptr) {
-            preprocessor->predefines.clear();
+            *preprocessor = {};
         }
 
         const auto file_id =
@@ -1028,7 +1054,7 @@ server_status read_project_configuration(
     if (!handler.valid()) {
         dependencies.clear();
         if (preprocessor != nullptr) {
-            preprocessor->predefines.clear();
+            *preprocessor = {};
         }
 
         const auto& error =
@@ -1177,4 +1203,4 @@ server_status load_project_runtime_configuration(
     }
 }
 
-} 
+}

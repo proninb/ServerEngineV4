@@ -1057,6 +1057,22 @@ read_runtime_system_value(
             return false;
         }
 
+        if (step.kind == endpoint_path_step_kind::dereference) {
+            derived_type_record reference;
+            if (step.value != 0 || !project.derived(type, reference) ||
+                (reference.kind != derived_type_kind::lvalue_reference && reference.kind != derived_type_kind::rvalue_reference)) { return false; }
+            type = reference.child;
+            continue;
+        }
+        if (step.kind == endpoint_path_step_kind::base) {
+            type_handle record;
+            type_entry entry;
+            base_record base;
+            if (!project.named(type, record) || !project.type(record, entry) || step.value >= entry.bases.count ||
+                !project.base_at(entry.bases.begin + static_cast<std::size_t>(step.value), base)) { return false; }
+            type = project.named(project.find_type(base.type));
+            continue;
+        }
         if (step.kind ==
             endpoint_path_step_kind::member) {
 

@@ -141,9 +141,15 @@ calculate_preprocessor_hash_impl(
             predefine.replacement.size());
     }
 
-    const auto digest =
-        hash_file_content(
-            canonical);
+    if (!preprocessor.include_directories.empty()) {
+        canonical.append("INCDIRS1", 8);
+        append_u64(canonical, preprocessor.include_directories.size());
+        for (const auto& directory : preprocessor.include_directories) {
+            append_u64(canonical, directory.size());
+            canonical.append(directory);
+        }
+    }
+    const auto digest = hash_file_content(canonical);
 
     project_preprocessor_hash output;
     output.bytes = digest.bytes;
@@ -314,7 +320,7 @@ public:
 
     [[nodiscard]] server_status compose() {
         output = {};
-        preprocessor.predefines.clear();
+        preprocessor = {};
 
         if (semantic_roots != nullptr) {
             semantic_roots->clear();
@@ -357,7 +363,7 @@ public:
 
         if (!succeeded(status)) {
             output = {};
-            preprocessor.predefines.clear();
+            preprocessor = {};
 
             if (semantic_roots != nullptr) {
                 semantic_roots->clear();

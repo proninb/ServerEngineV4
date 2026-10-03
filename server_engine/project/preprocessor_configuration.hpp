@@ -8,6 +8,7 @@
 #pragma once
 
 #include <string>
+#include <filesystem>
 #include <vector>
 
 namespace cw::server {
@@ -21,6 +22,9 @@ struct predefine_configuration final {
 
 struct preprocessor_configuration final {
     std::vector<predefine_configuration> predefines;
+    std::vector<std::string> include_directories;
+    // Resolution base only; the ordered locators above participate in identity.
+    std::filesystem::path root_directory;
 };
 
 }

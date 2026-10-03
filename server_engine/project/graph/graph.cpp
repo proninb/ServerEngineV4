@@ -309,6 +309,26 @@ identity_ref graph::identity(
         : identity_ref{};
 }
 
+server_status graph::define_intrinsic_alias(identity_ref identity, intrinsic_type intrinsic_value, type_handle& output) noexcept {
+    if (intrinsic_value < intrinsic_type::bool_type || intrinsic_value > intrinsic_type::long_double_type) {
+        return server_status::project_configuration_invalid;
+    }
+    output = find_type(identity);
+    if (output) {
+        const auto* entry = find(output);
+        return entry && entry->kind == graph_type_kind::intrinsic_alias && entry->alias_intrinsic() == intrinsic_value
+            ? server_status::success : server_status::project_configuration_invalid;
+    }
+    auto status = declare_record(identity, graph_record_kind::struct_type, output);
+    if (!succeeded(status)) { return status; }
+    status = define_record(output, graph_record_kind::struct_type, {});
+    if (!succeeded(status)) { return status; }
+    auto& entry = types[output.value() - 1];
+    entry.kind = graph_type_kind::intrinsic_alias;
+    entry.flags = graph_type_defined | (static_cast<std::uint16_t>(intrinsic_value) << 8);
+    return server_status::success;
+}
+
 server_status graph::declare_record(
     identity_ref identity,
     graph_record_kind kind,
@@ -1576,8 +1596,7 @@ bool graph::resolve_endpoint_path(
 
     output = {};
 
-    if (!contains(root_type) ||
-        steps.empty()) {
+    if (!contains(root_type)) {
 
         return false;
     }
@@ -1609,6 +1628,19 @@ bool graph::resolve_endpoint_path(
         }
 
         switch (step.kind) {
+        case endpoint_path_step_kind::dereference:
+            if (step.value != 0 || !derived(current_type, derived_value) ||
+                (derived_value.kind != derived_type_kind::lvalue_reference && derived_value.kind != derived_type_kind::rvalue_reference)) { return false; }
+            current_type = derived_value.child;
+            break;
+        case endpoint_path_step_kind::base: {
+            type_handle record;
+            if (!named(current_type, record)) { return false; }
+            const auto values = bases(record);
+            if (step.value >= values.size() || values[step.value].virtual_base()) { return false; }
+            current_type = named(find_type(values[step.value].type));
+            break;
+        }
         case endpoint_path_step_kind::member: {
             if (step.value >
                 (std::numeric_limits<std::uint32_t>::max)()) {

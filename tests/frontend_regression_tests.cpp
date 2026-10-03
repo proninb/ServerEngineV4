@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <array>
+#include <bit>
 #include <iostream>
 #include <span>
 #include <stdexcept>
@@ -383,6 +384,145 @@ void test_assignment_operators(test_state& tests) {
     }
 }
 
+void test_compound_assignment_operators(test_state& tests) {
+    for (const auto op : {"+=", "-=", "*=", "/=", "%=", "^=", "&=", "|=", "<<=", ">>="}) {
+        const std::string declaration = std::string{"Value& operator"} + op;
+        const temporary_source header{"compound_assignment",
+            "struct Value { int data; " + declaration + "(const Value&) & noexcept; };\n"
+            "struct Base { virtual int operator" + op + "(int) = 0; };\n"
+            "struct Derived : Base { int operator" + op + "(int) override; };\n"};
+        file_context files;
+        lexical_generation lexical;
+        file_id root;
+        if (!prepare_root(tests, header.path(), files, lexical, root)) {
+            return;
+        }
+        preprocessor_configuration configuration;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        parser_failure failure;
+        const auto status = parse_semantic_project(
+            files, lexical, 1, configuration, strings, identities, G, sources, &failure);
+        (void)tests.expect(succeeded(status), "parse compound assignment declaration");
+        (void)tests.expect(G.type_count() == 3 && G.member_count() == 1,
+            "compound operators do not add data members");
+        const temporary_source deleted{"deleted_compound",
+            "struct Value { " + declaration + "(int) = delete; };"};
+        (void)tests.expect(succeeded(parse_file(tests, deleted.path(), failure)),
+            "deleted compound declaration accepted");
+        for (const auto suffix : {"();", "(void);", "(int, int);", "(int x = 0);",
+                                  "(...);", "(int) = default;", "(int) { return *this; }"}) {
+            const temporary_source invalid{"invalid_compound",
+                "struct Value { " + declaration + suffix + " };"};
+            (void)tests.expect(!succeeded(parse_file(tests, invalid.path(), failure)),
+                "reject invalid or unsupported compound declarations");
+        }
+    }
+}
+
+void test_logical_not_operator(test_state& tests) {
+    const temporary_source header{"logical_not_operator",
+        "struct Value { int data; Value& operator!(); };\n"
+        "struct ConstValue { bool operator!() const & noexcept; };\n"
+        "struct Rvalue { bool operator!(void) && = delete; };\n"
+        "struct Base { virtual bool operator!() const = 0; };\n"
+        "struct Derived : Base { bool operator!() const override; };\n"};
+    file_context files;
+    lexical_generation lexical;
+    file_id root;
+    if (!prepare_root(tests, header.path(), files, lexical, root)) {
+        return;
+    }
+    preprocessor_configuration configuration;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    parser_failure failure;
+    const auto status = parse_semantic_project(
+        files, lexical, 1, configuration, strings, identities, G, sources, &failure);
+    (void)tests.expect(succeeded(status), "parse logical-not declarations including reference return");
+    (void)tests.expect(G.type_count() == 5 && G.member_count() == 1,
+        "logical-not declarations add no data members");
+    const auto base = G.find_type(identities.find(
+        identities.root(), strings.find("Base"), identity_kind::type));
+    const auto derived = G.find_type(identities.find(
+        identities.root(), strings.find("Derived"), identity_kind::type));
+    (void)tests.expect(base && derived && G.polymorphic(base) && G.polymorphic(derived),
+        "virtual logical-not participates in polymorphic layout");
+    for (const auto text : {
+        "struct Bad { bool operator!(int); };",
+        "struct Bad { bool operator!(void, int); };",
+        "struct Bad { bool operator!(...); };",
+        "struct Bad { bool operator!; };",
+        "struct Bad { bool operator!() = default; };",
+        "struct Bad { bool operator!() { return false; } };",
+        "struct Bad { static bool operator!(); };",
+        "struct Bad { bool operator!() override; };",
+        "struct Bad { bool operator!() = 0; };",
+        "bool operator!();"}) {
+        const temporary_source invalid{"invalid_logical_not", text};
+        (void)tests.expect(!succeeded(parse_file(tests, invalid.path(), failure)),
+            "reject invalid or unsupported logical-not declarations");
+    }
+}
+
+void test_comparison_operators(test_state& tests) {
+    for (const auto op : {"==", "!=", "<", ">", "<=", ">="}) {
+        const std::string declaration = std::string{"bool Value::operator"} + op;
+        const temporary_source header{"comparison_operator",
+            "struct Value { int data; " + declaration + "(const Value&) const & noexcept; };\n"
+            "struct Base { virtual bool operator" + op + "(int) const = 0; };\n"
+            "struct Derived : Base { bool Derived::operator" + op + "(int) const override; };\n"};
+        file_context files;
+        lexical_generation lexical;
+        file_id root;
+        if (!prepare_root(tests, header.path(), files, lexical, root)) {
+            return;
+        }
+        preprocessor_configuration configuration;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        parser_failure failure;
+        const auto status = parse_semantic_project(
+            files, lexical, 1, configuration, strings, identities, G, sources, &failure);
+        (void)tests.expect(succeeded(status), "parse qualified and unqualified comparisons");
+        (void)tests.expect(G.type_count() == 3 && G.member_count() == 1,
+            "comparison declarations do not add data members");
+        const auto derived = G.find_type(identities.find(
+            identities.root(), strings.find("Derived"), identity_kind::type));
+        (void)tests.expect(derived && G.polymorphic(derived), "qualified comparison retains virtual semantics");
+        for (const auto suffix : {"();", "(void);", "(int, int);", "(int x = 0);",
+                                  "(...);", "(int) = default;", "(int) { return true; }"}) {
+            const temporary_source invalid{"invalid_comparison",
+                "struct Value { " + declaration + suffix + " };"};
+            (void)tests.expect(!succeeded(parse_file(tests, invalid.path(), failure)),
+                "reject unsupported comparison declaration");
+        }
+    }
+    parser_failure failure;
+    for (const auto text : {
+        "struct Value { bool Other::operator==(int); };",
+        "struct Value { bool Value::Other::operator==(int); };",
+        "struct Value { bool Value::method(int); };",
+        "struct Value { static bool operator==(int); };",
+        "struct Value {}; bool Value::operator==(int);"}) {
+        const temporary_source invalid{"invalid_operator_qualifier", text};
+        (void)tests.expect(!succeeded(parse_file(tests, invalid.path(), failure)),
+            "reject unrelated qualifier or unsupported operator scope");
+    }
+    const temporary_source compatible{"qualified_existing_operators",
+        "struct Value { int data; Value& Value::operator=(int);\n"
+        "int& Value::operator[](int); bool Value::operator!();\n"
+        "Value& Value::operator&=(int); bool operator==(int) = delete; };"};
+    (void)tests.expect(succeeded(parse_file(tests, compatible.path(), failure)),
+        "same-record qualification works for previously supported named operators");
+}
+
 void test_subscript_operators(test_state& tests) {
     const temporary_source header{"subscript_operators",
         "struct Value { short data[32];\n"
@@ -469,6 +609,36 @@ void test_microsoft_int64(test_state& tests) {
         (void)tests.expect(!succeeded(parse_file(tests, invalid.path(), failure)),
             "reject invalid Microsoft int64 type combinations");
     }
+}
+
+void test_global_include_directories(test_state& tests) {
+    const temporary_source shared{"global_header", "struct GlobalType {};\n"};
+    const auto directory = shared.path().parent_path() / (shared.path().stem().string() + "_nested");
+    std::filesystem::create_directory(directory);
+    const auto root_path = directory / "root.h";
+    {
+        std::ofstream stream{root_path};
+        stream << "#include <" << shared.path().filename().string() << ">\n";
+    }
+    file_context files;
+    lexical_generation lexical;
+    file_id root;
+    if (prepare_root(tests, root_path, files, lexical, root)) {
+        preprocessor_configuration configuration;
+        configuration.root_directory = shared.path().parent_path();
+        configuration.include_directories = {"missing-directory", "."};
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        parser_failure failure;
+        (void)tests.expect(succeeded(parse_semantic_project(
+            files, lexical, 1, configuration, strings, identities, G, sources, &failure)) &&
+            G.type_count() == 1,
+            "nested header resolves relative global include directories from root Project base");
+    }
+    std::filesystem::remove(root_path);
+    std::filesystem::remove(directory);
 }
 
 void test_header_name_diagnostics(
@@ -1144,6 +1314,98 @@ void test_source_preprocessor_rejected(
         "Source rejects C++ preprocessing");
 }
 
+void test_nested_constructor_defaults(test_state& tests) {
+    for (const bool invalid : {false, true}) {
+        const temporary_source source{"nested_constructor_defaults",
+            invalid ? "struct Leaf { int value; }; struct A { Leaf p; A() { p.missing = 2; } };"
+            : "struct Leaf { int value; }; struct Mid { Leaf leaf; }; "
+              "struct A { Mid p; A() { p.leaf.value = 1; p.leaf.value = 42; } }; "
+              "struct B { Mid p; B() { p.leaf.value = 9; } };"};
+        file_context files;
+        lexical_generation lexical;
+        file_id root;
+        if (!prepare_root(tests, source.path(), files, lexical, root)) return;
+        preprocessor_configuration configuration;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        parser_failure failure;
+        const auto status = parse_semantic_project(files, lexical, 1, configuration,
+            strings, identities, G, sources, &failure);
+        tests.expect(succeeded(status) != invalid, "nested constructor path validation");
+        if (!invalid && succeeded(status)) {
+            const auto entries = G.constructor_defaults.entries();
+            tests.expect(entries.size() == 2 && entries[0].value.bits() == 42 &&
+                entries[1].value.bits() == 9 && entries[0].owner != entries[1].owner &&
+                entries[0].path == strings.find("p.leaf.value"),
+                "nested defaults are type-local and the last assignment wins");
+        }
+    }
+}
+
+void test_constructor_aggregate_defaults(test_state& tests) {
+    for (const auto init : {"{.name = \"hello\", .value = 42, .scale = 1.5}",
+        "{\"hello\", 42, 1.5}", "{.value = 42, .name = \"hello\"}", "{\"hello\", .value = 42}"}) {
+        const bool valid = std::string_view{init} == "{.name = \"hello\", .value = 42, .scale = 1.5}" ||
+            std::string_view{init} == "{\"hello\", 42, 1.5}";
+        const temporary_source source{"aggregate_constructor", std::string{
+            "struct A { char name[8]; int value; double scale; }; struct B { A a; B() : a"} + init + " {} };"};
+        file_context files;
+        lexical_generation lexical;
+        file_id root;
+        if (!prepare_root(tests, source.path(), files, lexical, root)) return;
+        preprocessor_configuration configuration;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        parser_failure failure;
+        const auto status = parse_semantic_project(files, lexical, 1, configuration,
+            strings, identities, G, sources, &failure);
+        tests.expect(succeeded(status) == valid, "C++ aggregate constructor designated and positional forms");
+        if (valid && succeeded(status)) {
+            const auto entries = G.constructor_defaults.entries();
+            tests.expect(entries.size() == 10, "aggregate constructor stores every char and scalar value");
+            for (const auto& entry : entries) {
+                const auto path = strings.get(entry.path);
+                if (path == "a.value") tests.expect(entry.value.bits() == 42, "aggregate integer value");
+                if (path == "a.scale") tests.expect(std::bit_cast<double>(entry.value.bits()) == 1.5, "aggregate real value");
+                if (path == "a.name[0]") tests.expect(entry.value.bits() == 'h', "aggregate string value");
+                if (path == "a.name[5]") tests.expect(entry.value.bits() == 0, "aggregate string terminator");
+            }
+        }
+    }
+}
+
+void test_constructor_array_defaults(test_state& tests) {
+    for (const auto target : {"a[0][1]", "items[1].value", "a[2][0]", "a[0][3]",
+        "a[-1][0]", "a[18446744073709551616][0]", "a[1+0][0]", "items[0].value[0]"}) {
+        const auto valid = std::string_view{target} == "a[0][1]" || std::string_view{target} == "items[1].value";
+        const std::string text = std::string{"struct Leaf { int value; }; struct A { int a[2][3]; Leaf items[2]; A() { "} +
+            target + " = 1; " + target + " = 42; } };";
+        const temporary_source source{"constructor_array_defaults", text};
+        file_context files;
+        lexical_generation lexical;
+        file_id root;
+        if (!prepare_root(tests, source.path(), files, lexical, root)) return;
+        preprocessor_configuration configuration;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        parser_failure failure;
+        const auto status = parse_semantic_project(files, lexical, 1, configuration,
+            strings, identities, G, sources, &failure);
+        tests.expect(succeeded(status) == valid, "constructor array indices validate shape and bounds");
+        if (valid && succeeded(status)) {
+            const auto entries = G.constructor_defaults.entries();
+            tests.expect(entries.size() == 1 && entries[0].path == strings.find(target) &&
+                entries[0].value.bits() == 42, "constructor array assignments retain the last value");
+        }
+    }
+}
+
 void test_class_abi_semantics(
     test_state& tests) {
 
@@ -1528,6 +1790,44 @@ void test_header_static_constructor_binding(
         "Header internal static is not visible as a Source Project object");
 }
 
+
+void test_source_string_assignment(test_state& tests) {
+    for (const auto literal : {"\"0.0.3\"", "\"\"", "\"A\\n\\x42\\103\"", "\"ab\" \"cd\"",
+        "\"12345678\"", "\"\\x100\"", "L\"wide\""}) {
+        const bool valid = std::string_view{literal} != "\"12345678\"" &&
+            std::string_view{literal} != "\"\\x100\"" && std::string_view{literal} != "L\"wide\"";
+        const temporary_source header{"string_header", "typedef unsigned char byte; typedef byte octet; struct Base { char VAL[8]; }; struct Text : Base {}; struct T { Text text; int& ref; byte code; };"};
+        const temporary_source source{"string_source", std::string{"octet flag; int value; T a; a.ref = value; a.text.VAL = "} + literal + ";"};
+        file_context files;
+        lexical_generation lexical;
+        file_id h, s;
+        (void)files.resolve(header.path(), file_kind::header, h);
+        (void)files.resolve(source.path(), file_kind::source, s);
+        const std::array<file_id, 2> roots{h, s};
+        if (!prepare_all_roots(tests, files, lexical, roots)) return;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        preprocessor_configuration configuration;
+        parser_failure failure;
+        const auto status = parse_semantic_project(files, lexical, roots.size(), configuration,
+            strings, identities, G, sources, &failure);
+        tests.expect(succeeded(status) == valid, "Source string bounds, escapes and literal encoding");
+        if (valid && succeeded(status)) {
+            const auto entries = G.initialization_entries();
+            const std::string expected = std::string_view{literal} == "\"0.0.3\"" ? "0.0.3" :
+                std::string_view{literal} == "\"\"" ? "" : std::string_view{literal} == "\"ab\" \"cd\"" ? "abcd" : "A\nBC";
+            tests.expect(entries.size() == 8 && G.link_entries().size() == 1, "inherited string and whole-object binding normalize");
+            for (const auto& entry : entries) {
+                const auto steps = G.endpoint_path_steps(entry.target.member.path());
+                const auto index = steps.back().value;
+                tests.expect(entry.value.bits() == (index < expected.size() ? static_cast<unsigned char>(expected[index]) : 0),
+                    "Source string bytes and terminator are preserved");
+            }
+        }
+    }
+}
 
 void test_source_value_initialization(
     test_state& tests) {
@@ -3302,10 +3602,14 @@ int main() {
             tests);
 
         test_record_scratch_isolation(tests);
+        test_nested_constructor_defaults(tests);
+        test_constructor_array_defaults(tests);
+        test_constructor_aggregate_defaults(tests);
 
         test_class_abi_semantics(
             tests);
 
+        test_source_string_assignment(tests);
         test_source_value_initialization(
             tests);
 
@@ -3340,6 +3644,10 @@ int main() {
 
         test_conversion_operators(tests);
         test_assignment_operators(tests);
+        test_compound_assignment_operators(tests);
+        test_logical_not_operator(tests);
+        test_comparison_operators(tests);
+        test_global_include_directories(tests);
         test_subscript_operators(tests);
         test_microsoft_int64(tests);
 

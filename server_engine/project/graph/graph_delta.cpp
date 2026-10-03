@@ -336,6 +336,14 @@ server_status graph_delta::bind_baseline(
     }
 
     baseline = &value;
+    for (std::size_t index = 0; index < value.constructor_default_count(); ++index) {
+        constructor_default entry;
+        if (!value.constructor_default_at(index, entry)) {
+            return server_status::project_artifact_invalid;
+        }
+        const auto status = constructor_defaults.add(entry);
+        if (!succeeded(status)) { return status; }
+    }
 
     baseline_type_count =
         value.type_slot_count();
@@ -377,6 +385,141 @@ server_status graph_delta::bind_baseline(
         value.initialization_count();
 
     return server_status::success;
+}
+
+
+bool graph_delta::object_change(
+    object_handle object_value,
+    graph_delta_object_change& output) const noexcept {
+
+    output = {};
+
+    if (baseline == nullptr ||
+        !object_value ||
+        object_value.value() >
+            object_count()) {
+
+        return false;
+    }
+
+    if (object_value.value() <=
+        baseline_object_count) {
+
+        const auto* patch =
+            find_object_patch(
+                object_value.value());
+
+        if (patch == nullptr) {
+            return false;
+        }
+
+        const auto identity_value =
+            baseline->object_identity_raw(
+                object_value);
+
+        if (!identity_value ||
+            identity_value.kind() !=
+                identity_kind::object) {
+
+            return false;
+        }
+
+        output = {
+            object_value,
+            identity_value,
+            patch->value,
+            patch->construction,
+            graph_delta_change_kind::patch,
+            patch->live,
+        };
+
+        return true;
+    }
+
+    const auto index =
+        static_cast<std::size_t>(
+            object_value.value() -
+            baseline_object_count -
+            1);
+
+    if (index >= objects.size() ||
+        index >= object_identities.size() ||
+        index >= object_live.size()) {
+
+        return false;
+    }
+
+    construction_value construction;
+    const auto& value =
+        objects[index];
+
+    if (value.non_default_initializer()) {
+        const auto slot =
+            static_cast<std::size_t>(
+                value.construction_slot());
+
+        if (slot <=
+                baseline_object_construction_count ||
+            slot >
+                baseline_object_construction_count +
+                    object_construction.size()) {
+
+            return false;
+        }
+
+        construction =
+            object_construction[
+                slot -
+                baseline_object_construction_count -
+                1];
+    }
+    else if (value.construction_slot() != 0) {
+        return false;
+    }
+
+    const auto identity_value =
+        object_identities[index];
+
+    if (!identity_value ||
+        identity_value.kind() !=
+            identity_kind::object) {
+
+        return false;
+    }
+
+    output = {
+        object_value,
+        identity_value,
+        value,
+        construction,
+        graph_delta_change_kind::append,
+        object_live[index] != 0,
+    };
+
+    return true;
+}
+
+server_status graph_delta::notify_object_change(
+    object_handle object_value) noexcept {
+
+    if (object_sink == nullptr) {
+        return server_status::success;
+    }
+
+    graph_delta_object_change change;
+
+    if (!object_change(
+            object_value,
+            change)) {
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    return object_sink(
+        object_sink_context,
+        *this,
+        change);
 }
 
 server_status graph_delta::ensure_identity_slot(
@@ -1511,8 +1654,34 @@ server_status graph_delta::declare_record(
     return server_status::success;
 }
 
+server_status graph_delta::define_intrinsic_alias(identity_ref identity_value, intrinsic_type intrinsic_value, type_handle& output) noexcept {
+    if (intrinsic_value < intrinsic_type::bool_type || intrinsic_value > intrinsic_type::long_double_type) {
+        return server_status::project_configuration_invalid;
+    }
+    output = find_type(identity_value);
+    type_entry entry;
+    if (output && type(output, entry) && entry.defined()) {
+        return entry.kind == graph_type_kind::intrinsic_alias && entry.alias_intrinsic() == intrinsic_value
+            ? server_status::success : server_status::project_configuration_invalid;
+    }
+    auto status = declare_record(identity_value, graph_record_kind::struct_type, output);
+    if (!succeeded(status)) { return status; }
+    status = define_record(output, graph_record_kind::struct_type, {});
+    if (!succeeded(status) || !type(output, entry)) { return succeeded(status) ? server_status::project_artifact_invalid : status; }
+    entry.kind = graph_type_kind::intrinsic_alias;
+    entry.flags = graph_type_defined | (static_cast<std::uint16_t>(intrinsic_value) << 8);
+    if (output.value() <= baseline_type_count) {
+        type_patch* patch = nullptr;
+        status = ensure_type_patch(output, patch);
+        if (!succeeded(status)) { return status; }
+        patch->value = entry;
+    } else { types[output.value() - baseline_type_count - 1] = entry; }
+    return server_status::success;
+}
+
 server_status graph_delta::clear_definition(
     type_handle type_value) noexcept {
+    constructor_defaults.erase(identity(type_value));
 
     type_entry entry;
 
@@ -1530,6 +1699,7 @@ server_status graph_delta::clear_definition(
 
     entry.members = {};
     entry.bases = {};
+    entry.kind = graph_type_kind::record;
     entry.flags &=
         static_cast<std::uint16_t>(
             ~graph_type_flag_mask);
@@ -1580,6 +1750,7 @@ server_status graph_delta::clear_definition(
 
 server_status graph_delta::retire(
     type_handle type_value) noexcept {
+    constructor_defaults.erase(identity(type_value));
 
     if (!contains(type_value)) {
         return server_status::
@@ -2603,7 +2774,14 @@ server_status graph_delta::add_object(
         ++live_object_count_value;
 
         output = existing;
-        return server_status::success;
+
+        const auto notified =
+            notify_object_change(
+                output);
+
+        return succeeded(notified)
+            ? server_status::success
+            : notified;
     }
 
     if (object_count() >=
@@ -2706,7 +2884,13 @@ server_status graph_delta::add_object(
 
     ++live_object_count_value;
 
-    return server_status::success;
+    const auto notified =
+        notify_object_change(
+            output);
+
+    return succeeded(notified)
+        ? server_status::success
+        : notified;
 }
 
 server_status graph_delta::retire(
@@ -2762,7 +2946,13 @@ server_status graph_delta::retire(
 
     --live_object_count_value;
 
-    return server_status::success;
+    const auto notified =
+        notify_object_change(
+            object_value);
+
+    return succeeded(notified)
+        ? server_status::success
+        : notified;
 }
 
 bool graph_delta::construction(
@@ -3320,9 +3510,7 @@ bool graph_delta::resolve_endpoint_path(
 
     output = {};
 
-    if (!contains(
-            root_type) ||
-        steps.empty()) {
+    if (!contains(root_type)) {
 
         return false;
     }
@@ -3358,6 +3546,20 @@ bool graph_delta::resolve_endpoint_path(
         }
 
         switch (step.kind) {
+        case endpoint_path_step_kind::dereference:
+            if (step.value != 0 || !derived(current_type, derived_value) ||
+                (derived_value.kind != derived_type_kind::lvalue_reference && derived_value.kind != derived_type_kind::rvalue_reference)) { return false; }
+            current_type = derived_value.child;
+            break;
+        case endpoint_path_step_kind::base: {
+            type_handle record;
+            base_record value;
+            if (step.value > (std::numeric_limits<std::uint32_t>::max)() ||
+                !named(current_type, record) || !base(record, static_cast<std::uint32_t>(step.value), value) ||
+                value.virtual_base()) { return false; }
+            current_type = named(find_type(value.type));
+            break;
+        }
         case endpoint_path_step_kind::member: {
             if (step.value >
                 (std::numeric_limits<

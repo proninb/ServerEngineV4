@@ -438,9 +438,41 @@ server_status semantic_input::resolve_include(
             source_path_view.begin(),
             source_path_view.end()};
 
-        const auto candidate =
+        auto candidate =
             source_path.parent_path() /
             locator;
+
+        if (!locator.is_absolute() && !configuration.include_directories.empty()) {
+            // Quoted includes prefer the including file. Angled includes prefer
+            // the root Project's ordered search directories, then local fallback.
+            std::error_code error;
+            bool found = request.form == include_form::quoted &&
+                std::filesystem::is_regular_file(candidate, error);
+            if (error && error != std::errc::no_such_file_or_directory) {
+                return fail(request.source, request.locator,
+                    "Cannot inspect local include path", server_status::io_error);
+            }
+            for (const auto& configured : configuration.include_directories) {
+                if (found) {
+                    break;
+                }
+                std::filesystem::path directory;
+                if (filesystem_path_from_utf8(configured, directory) != filesystem_path_result::success) {
+                    return fail(request.source, request.locator,
+                        "Invalid configured include directory", server_status::project_configuration_invalid);
+                }
+                const auto searched = configuration.root_directory / directory / locator;
+                error.clear();
+                if (std::filesystem::is_regular_file(searched, error)) {
+                    candidate = searched;
+                    found = true;
+                }
+                else if (error && error != std::errc::no_such_file_or_directory) {
+                    return fail(request.source, request.locator,
+                        "Cannot inspect configured include path", server_status::io_error);
+                }
+            }
+        }
 
         const auto resolved =
             files.resolve(

@@ -372,8 +372,25 @@ Only the root `project.json` owns immutable preprocessing configuration.
 ```
 
 Header preprocessing accepts `#pragma once` and direct `#include "path"` or
-`#include <path>`. Both include forms resolve relative to the including Header;
-there is no system include path or configured include-directory search.
+`#include <path>`. The root Project may append `include_directories` after
+`predefines`, for example:
+
+```json
+"preprocessor": {
+  "predefines": [],
+  "include_directories": ["Types"]
+}
+```
+
+These ordered directories are shared by all Headers, including nested Projects
+and recursively included files. Relative directories resolve against the root
+`project.json` directory; absolute directories are also accepted. Quoted includes
+search the including Header's directory first, then the configured directories.
+Angled includes search the configured directories first, then the including
+Header's directory for backward compatibility. No environment/system search path
+is added. Include-directory changes participate in preprocessing identity and
+invalidate Header replay during BUILD. This is search configuration, not an
+automatic directory scan or declaration of Header roots.
 An executed `#pragma once` suppresses later entries of the same physical file
 within one frontend root replay, including self-inclusion. Its state resets for
 each root, and a pragma in an inactive conditional branch has no effect.

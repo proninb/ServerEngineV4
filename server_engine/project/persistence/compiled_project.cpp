@@ -497,7 +497,8 @@ void write_u64(
     return kind ==
             endpoint_path_step_kind::member ||
         kind ==
-            endpoint_path_step_kind::array_index;
+            endpoint_path_step_kind::array_index || kind == endpoint_path_step_kind::base ||
+            kind == endpoint_path_step_kind::dereference;
 }
 
 [[nodiscard]] std::uint64_t link_target_hash(
@@ -580,6 +581,8 @@ void write_u64(
     compiled_project_section kind) noexcept {
 
     switch (kind) {
+    case compiled_project_section::constructor_defaults:
+        return 24;
     case compiled_project_section::string_core:
         return string_core_size;
 
@@ -2891,8 +2894,7 @@ bool compiled_project_view::endpoint_path(
     const auto step_count =
         endpoint_path_step_count();
 
-    return output.steps.count != 0 &&
-        output.steps.begin <=
+    return output.steps.begin <=
             step_count &&
         output.steps.count <=
             step_count -
@@ -2951,7 +2953,6 @@ compiled_project_view::find_endpoint_path(
 
     if (!type_ref_from_raw(
             root_type.value()) ||
-        steps.empty() ||
         steps.size() >
             (std::numeric_limits<
                 std::uint32_t>::max)()) {
@@ -3299,6 +3300,47 @@ bool compiled_project_view::link(
             output);
 }
 
+
+bool compiled_project_view::constructor_default_at(
+    std::size_t index, constructor_default& output) const noexcept {
+    output = {};
+    const auto& values = section(compiled_project_section::constructor_defaults);
+    if (!valid() || index >= values.count) { return false; }
+    const auto* record = values.data + index * 24;
+    output.owner = identity_from_raw(read_u32(record));
+    output.path = string_id{read_u32(record + 4)};
+    output.value = {read_u32(record + 8), read_u32(record + 12),
+        read_u32(record + 16), static_cast<construction_kind>(read_u32(record + 20))};
+    if (!(output.owner && find_type(output.owner) && output.path &&
+        output.path.value() <= string_count() && valid_construction(output.value) &&
+        output.value.kind <= construction_kind::real)) { return false; }
+    const auto spelling = string(output.path);
+    if (spelling.find_first_of(".[") == std::string_view::npos) { return false; }
+    constructor_path_reader path{spelling};
+    type_ref target;
+    auto owner = find_type(output.owner);
+    while (!path.remaining.empty()) {
+        std::string_view field;
+        std::uint64_t index;
+        if (!path.next(field, index)) { return false; }
+        if (field.empty()) {
+            derived_type_record array;
+            if (!derived(target, array) || array.kind != derived_type_kind::bounded_array ||
+                index >= array.payload) { return false; }
+            target = array.child;
+        } else {
+            const auto name = find_string(field);
+            if (!name || (target && !named(target, owner))) { return false; }
+            const auto local = find_member(owner, name);
+            type_entry type;
+            member_record member;
+            if (!local || !this->type(owner, type) ||
+                !member_at(type.members.begin + local.value(), member)) { return false; }
+            target = member.type;
+        }
+    }
+    return target.kind() == type_ref_kind::intrinsic && construction_compatible(*this, target, output.value);
+}
 
 bool compiled_project_view::initialization_at(
     std::size_t index,
@@ -3812,6 +3854,18 @@ compiled_project_view::verify_contents() const noexcept {
             invalid_state;
     }
 
+    constructor_default previous_default{};
+    for (std::size_t i = 0; i < constructor_default_count(); ++i) {
+        constructor_default current{};
+        if (!constructor_default_at(i, current) ||
+            (i != 0 && (current.owner.value() < previous_default.owner.value() ||
+                (current.owner == previous_default.owner &&
+                 current.path.value() <= previous_default.path.value())))) {
+            return compiled_project_image_result::invalid_image;
+        }
+        previous_default = current;
+    }
+
     const auto source_result = verify_sources();
     if (source_result != compiled_project_image_result::success)
         return source_result;
@@ -4196,8 +4250,7 @@ compiled_project_view::verify_contents() const noexcept {
         if (!type(
                 handle,
                 type_value) ||
-            type_value.kind !=
-                graph_type_kind::record ||
+            !type_value.valid_kind() ||
             !valid_record_kind(
                 type_value.record_kind) ||
             (type_value.flags &
@@ -4947,6 +5000,26 @@ compiled_project_view::verify_contents() const noexcept {
                         derived_value.child;
                 }
 
+                if (step.kind == endpoint_path_step_kind::dereference) {
+                    if (step.value != 0 || !derived(current_type, derived_value) ||
+                        (derived_value.kind != derived_type_kind::lvalue_reference && derived_value.kind != derived_type_kind::rvalue_reference)) {
+                        return compiled_project_image_result::invalid_image;
+                    }
+                    current_type = derived_value.child;
+                    continue;
+                }
+                if (step.kind == endpoint_path_step_kind::base) {
+                    type_handle record_handle;
+                    type_entry record;
+                    base_record base;
+                    if (!named(current_type, record_handle) || !type(record_handle, record) ||
+                        step.value >= record.bases.count ||
+                        !base_at(record.bases.begin + static_cast<std::size_t>(step.value), base) || base.virtual_base()) {
+                        return compiled_project_image_result::invalid_image;
+                    }
+                    current_type = named(find_type(base.type));
+                    continue;
+                }
                 if (step.kind ==
                     endpoint_path_step_kind::array_index) {
 
@@ -5876,6 +5949,7 @@ compiled_project_layout::prepare_counts(
                 index_record_size,
                 initialization_target_index_count,
             },
+            {compiled_project_section::constructor_defaults, 24, counts.constructor_default_count},
         }};
 
     std::uint64_t cursor =
@@ -6030,6 +6104,7 @@ prepare_compiled_project_layout(
             static_cast<std::uint64_t>(
                 files.size()),
             source_path_bytes,
+            G.constructor_defaults.entries().size(),
         };
 
     return compiled_project_layout::
@@ -6124,6 +6199,12 @@ encode_compiled_project_image(const string_table &strings,
     clear_section(
         compiled_project_section::
             graph_identity_index);
+
+    // One persisted construction cell is reserved per object WHERE.
+    // Objects with construction_slot == 0 must keep that cell zero.
+    clear_section(
+        compiled_project_section::
+            object_construction);
 
     clear_section(
         compiled_project_section::
@@ -6323,6 +6404,20 @@ encode_compiled_project_image(const string_table &strings,
     };
 
     // Strings + persisted string lookup index.
+    {
+        const auto entries = G.constructor_defaults.entries();
+        if (layout[section_index(compiled_project_section::constructor_defaults)].count != entries.size()) {
+            return compiled_project_image_result::invalid_state;
+        }
+        auto* data = section_data(compiled_project_section::constructor_defaults);
+        for (const auto& value : entries) {
+            write_u32(data, value.owner.value()); write_u32(data + 4, value.path.value());
+            write_u32(data + 8, value.value.low); write_u32(data + 12, value.value.high);
+            write_u32(data + 16, value.value.operand);
+            write_u32(data + 20, static_cast<std::uint32_t>(value.value.kind));
+            data += 24;
+        }
+    }
     {
         auto* core =
             section_data(
@@ -6568,8 +6663,7 @@ encode_compiled_project_image(const string_table &strings,
             const auto identity =
                 type_identities[index];
 
-            if (value.kind !=
-                    graph_type_kind::record ||
+            if (!value.valid_kind() ||
                 !valid_record_kind(
                     value.record_kind) ||
                 (value.flags &
@@ -7266,7 +7360,6 @@ encode_compiled_project_image(const string_table &strings,
 
             if (value.steps.begin !=
                     expected_begin ||
-                value.steps.count == 0 ||
                 value.steps.begin >
                     step_entries.size() ||
                 value.steps.count >

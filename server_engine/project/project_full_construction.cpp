@@ -38,8 +38,7 @@ namespace {
     diagnostic_collection& diagnostics) {
 
     if (!file ||
-        !files.contains(file) ||
-        !files.content_available(file)) {
+        !files.contains(file)) {
 
         return server_status::success;
     }
@@ -51,6 +50,12 @@ namespace {
         const std::filesystem::path path{
             path_view.begin(),
             path_view.end()};
+
+        if (!files.content_available(file)) {
+            diagnostics.emit(
+                diagnostic(descriptor, operation).file(path).detail(detail).build());
+            return server_status::success;
+        }
 
         const auto source =
             files.content(file);
