@@ -444,40 +444,31 @@ public:
         const auto objects_started =
             clock_type::now();
 
-        for (const auto& object :
-             object_plans) {
-
-            if (!object.materialize) {
-                continue;
-            }
-
-            auto* target =
-                address(
-                    object.offset);
-
-            if (target == nullptr) {
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
-
-            const auto materialized =
-                object.record_type
-                ? execute_fused_type_program(
-                    object.record_type,
-                    target,
-                    object.handle)
-                : normal_value(
-                    object.type,
-                    object.construction,
-                    target,
-                    object.handle);
-
-            if (materialized !=
+        fixed_direct_materialization_result
+            objects_materialized =
                 fixed_direct_materialization_result::
-                    success) {
+                    incompatible_abi;
 
-                return materialized;
-            }
+        // REFERENCE-WORD-DISPATCH-01:
+        // Reference width is an ABI invariant for the entire materialization.
+        // Select the object-program specialization once; every shared CALL
+        // remains in that same TargetWord specialization.
+        if (properties.reference_size == 4) {
+            objects_materialized =
+                materialize_objects_word<
+                    std::uint32_t>();
+        }
+        else if (properties.reference_size == 8) {
+            objects_materialized =
+                materialize_objects_word<
+                    std::uint64_t>();
+        }
+
+        if (objects_materialized !=
+            fixed_direct_materialization_result::
+                success) {
+
+            return objects_materialized;
         }
 
         const auto objects_finished =
@@ -1901,11 +1892,10 @@ private:
         std::uint32_t constructor_begin = 0;
         std::uint32_t constructor_count = 0;
 
-        // Fused execution program. Direct bases and direct by-value records are
-        // expanded once per TYPE into physical leaf operations with accumulated
-        // offsets. No expansion occurs per object instance or array element.
-        std::uint32_t fused_begin = 0;
-        std::uint32_t fused_count = 0;
+        // Compact execution program. Terminal direct children are leaf-fused
+        // once per TYPE; non-terminal children remain shared CALL operations.
+        std::uint32_t program_begin = 0;
+        std::uint32_t program_count = 0;
 
         runtime_type_plan_state state =
             runtime_type_plan_state::empty;
@@ -1978,39 +1968,60 @@ private:
             local];
     }
 
-    enum class fused_type_op_kind : std::uint8_t {
-        reference = 0,
+    enum class runtime_program_op_kind : std::uint8_t {
+        direct_reference = 0,
+        generic_reference,
         value,
         constructor,
         call,
     };
 
-    static constexpr runtime_offset
-        no_fused_source_offset =
-            (std::numeric_limits<runtime_offset>::max)();
+    static constexpr std::uint32_t
+        runtime_program_call_type_mask =
+            type_handle::maximum_slot;
 
     static constexpr std::uint32_t
-        no_fused_source_index =
-            (std::numeric_limits<std::uint32_t>::max)();
+        runtime_program_call_member_flag =
+            0x40000000u;
 
-    struct fused_type_op final {
-        runtime_offset target_offset = 0;
-        runtime_offset record_base_offset = 0;
-        runtime_offset direct_source_offset =
-            no_fused_source_offset;
+    static constexpr std::uint32_t
+        runtime_program_call_link_object_flag =
+            0x80000000u;
 
-        std::uint32_t source_index = 0;
-        type_handle record_type{};
-        std::uint32_t local = 0;
+    static_assert(
+        runtime_program_call_type_mask ==
+            0x3fffffffu);
 
-        fused_type_op_kind kind =
-            fused_type_op_kind::value;
+    struct runtime_program_op final {
+        // Always relative to the current native record/program root.
+        record_offset target_offset = 0;
 
-        bool use_link_object = false;
-        std::uint8_t reserved[2]{};
+        // direct_reference -> source record_offset
+        // generic_reference -> runtime_program_references index
+        // value -> planned_members index
+        // constructor -> constructor_fields index
+        // call -> child type slot + two flags above
+        std::uint32_t payload = 0;
+
+        runtime_program_op_kind kind =
+            runtime_program_op_kind::value;
+
+        std::uint8_t reserved[3]{};
     };
 
-    static_assert(sizeof(fused_type_op) == 40);
+    static_assert(sizeof(runtime_program_op) == 12);
+
+    struct runtime_program_reference final {
+        // Owning record base for the referenced member, relative to the
+        // current program root. Needed only by the generic resolver path.
+        record_offset record_base_offset = 0;
+        type_handle record_type{};
+        std::uint32_t local = 0;
+        bool use_link_object = false;
+        std::uint8_t reserved[3]{};
+    };
+
+    static_assert(sizeof(runtime_program_reference) == 16);
 
     [[nodiscard]] fixed_direct_materialization_result
     prepare_value_plan(
@@ -2402,28 +2413,35 @@ private:
     }
 
     [[nodiscard]] bool
-    add_fused_offset(
-        runtime_offset value,
-        runtime_offset delta,
-        runtime_offset& output) const noexcept {
+    add_program_offset(
+        record_offset value,
+        record_offset delta,
+        record_offset& output) const noexcept {
 
-        if (value >
-            (std::numeric_limits<runtime_offset>::max)() -
-                delta) {
+        const auto sum =
+            static_cast<std::uint64_t>(
+                value) +
+            static_cast<std::uint64_t>(
+                delta);
+
+        if (sum >=
+            static_cast<std::uint64_t>(
+                (std::numeric_limits<
+                    record_offset>::max)())) {
 
             output = 0;
             return false;
         }
 
         output =
-            value +
-            delta;
+            static_cast<record_offset>(
+                sum);
 
         return true;
     }
 
     [[nodiscard]] fixed_direct_materialization_result
-    terminal_fused_program(
+    terminal_runtime_program(
         const runtime_type_plan& type,
         bool& output) const noexcept {
 
@@ -2494,44 +2512,49 @@ private:
     }
 
     [[nodiscard]] fixed_direct_materialization_result
-    append_terminal_fused_program(
+    append_terminal_runtime_program(
         const runtime_type_plan& child,
-        runtime_offset delta,
+        record_offset delta,
         bool allow_link_object) noexcept {
 
         const auto begin =
             static_cast<std::size_t>(
-                child.fused_begin);
+                child.program_begin);
 
         if (begin >
-                fused_type_ops.size() ||
-            child.fused_count >
-                fused_type_ops.size() -
+                runtime_program_ops.size() ||
+            child.program_count >
+                runtime_program_ops.size() -
                     begin) {
 
             return fixed_direct_materialization_result::
                 invalid_input;
         }
 
+        const auto maximum =
+            static_cast<std::size_t>(
+                (std::numeric_limits<
+                    std::uint32_t>::max)());
+
         try {
             for (std::uint32_t local = 0;
                  local <
-                     child.fused_count;
+                     child.program_count;
                  ++local) {
 
                 auto op =
-                    fused_type_ops[
+                    runtime_program_ops[
                         begin +
                         local];
 
                 if (op.kind ==
-                    fused_type_op_kind::call) {
+                    runtime_program_op_kind::call) {
 
                     return fixed_direct_materialization_result::
                         invalid_input;
                 }
 
-                if (!add_fused_offset(
+                if (!add_program_offset(
                         op.target_offset,
                         delta,
                         op.target_offset)) {
@@ -2541,37 +2564,85 @@ private:
                 }
 
                 if (op.kind ==
-                    fused_type_op_kind::reference) {
+                    runtime_program_op_kind::direct_reference) {
 
-                    if (!add_fused_offset(
-                            op.record_base_offset,
+                    record_offset source = 0;
+
+                    if (!add_program_offset(
+                            static_cast<record_offset>(
+                                op.payload),
                             delta,
-                            op.record_base_offset)) {
+                            source)) {
 
                         return fixed_direct_materialization_result::
                             overflow;
                     }
 
-                    if (op.direct_source_offset !=
-                        no_fused_source_offset) {
+                    op.payload =
+                        source;
+                }
+                else if (op.kind ==
+                    runtime_program_op_kind::generic_reference) {
 
-                        if (!add_fused_offset(
-                                op.direct_source_offset,
-                                delta,
-                                op.direct_source_offset)) {
+                    if (op.payload >=
+                        runtime_program_references.size()) {
 
-                            return fixed_direct_materialization_result::
-                                overflow;
-                        }
+                        return fixed_direct_materialization_result::
+                            invalid_input;
                     }
+
+                    auto reference =
+                        runtime_program_references[
+                            op.payload];
+
+                    if (!add_program_offset(
+                            reference.record_base_offset,
+                            delta,
+                            reference.record_base_offset)) {
+
+                        return fixed_direct_materialization_result::
+                            overflow;
+                    }
+
+                    reference.use_link_object =
+                        reference.use_link_object &&
+                        allow_link_object;
+
+                    if (runtime_program_references.size() >
+                        maximum) {
+
+                        return fixed_direct_materialization_result::
+                            overflow;
+                    }
+
+                    const auto reference_index =
+                        static_cast<std::uint32_t>(
+                            runtime_program_references.size());
+
+                    runtime_program_references.push_back(
+                        reference);
+
+                    op.payload =
+                        reference_index;
                 }
 
-                op.use_link_object =
-                    op.use_link_object &&
-                    allow_link_object;
-
-                fused_type_ops.push_back(
+                runtime_program_ops.push_back(
                     op);
+
+                if (profile != nullptr) {
+                    if (op.kind ==
+                        runtime_program_op_kind::direct_reference) {
+
+                        ++profile->
+                            program_direct_reference_ops_built;
+                    }
+                    else if (op.kind ==
+                        runtime_program_op_kind::generic_reference) {
+
+                        ++profile->
+                            program_generic_reference_ops_built;
+                    }
+                }
             }
         }
         catch (...) {
@@ -2580,7 +2651,7 @@ private:
         }
 
         if (profile != nullptr) {
-            ++profile->fused_inlined_programs;
+            ++profile->program_inlined_programs;
         }
 
         return fixed_direct_materialization_result::
@@ -2588,22 +2659,38 @@ private:
     }
 
     [[nodiscard]] fixed_direct_materialization_result
-    append_shared_fused_call(
+    append_runtime_program_call(
         type_handle child,
-        runtime_offset delta,
+        record_offset delta,
         bool use_link_object,
-        std::uint32_t source_index) noexcept {
+        bool counts_materialize_member) noexcept {
+
+        if (!child ||
+            child.value() >
+                runtime_program_call_type_mask) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        auto payload =
+            child.value();
+
+        if (use_link_object) {
+            payload |=
+                runtime_program_call_link_object_flag;
+        }
+
+        if (counts_materialize_member) {
+            payload |=
+                runtime_program_call_member_flag;
+        }
 
         try {
-            fused_type_ops.push_back({
+            runtime_program_ops.push_back({
                 delta,
-                0,
-                no_fused_source_offset,
-                source_index,
-                child,
-                0,
-                fused_type_op_kind::call,
-                use_link_object,
+                payload,
+                runtime_program_op_kind::call,
                 {},
             });
         }
@@ -2613,7 +2700,7 @@ private:
         }
 
         if (profile != nullptr) {
-            ++profile->fused_shared_calls_built;
+            ++profile->program_shared_calls_built;
         }
 
         return fixed_direct_materialization_result::
@@ -2621,11 +2708,91 @@ private:
     }
 
     [[nodiscard]] fixed_direct_materialization_result
-    append_child_program_or_call(
+    append_runtime_program_reference(
+        type_handle owner,
+        std::uint32_t local,
+        const planned_member& member) noexcept {
+
+        if (member.action !=
+            materialization_action::reference) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        try {
+            if (member.direct_source_offset !=
+                no_direct_source_offset) {
+
+                runtime_program_ops.push_back({
+                    member.offset,
+                    member.direct_source_offset,
+                    runtime_program_op_kind::
+                        direct_reference,
+                    {},
+                });
+
+                if (profile != nullptr) {
+                    ++profile->
+                        program_direct_reference_ops_built;
+                }
+
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            const auto maximum =
+                static_cast<std::size_t>(
+                    (std::numeric_limits<
+                        std::uint32_t>::max)());
+
+            if (runtime_program_references.size() >
+                maximum) {
+
+                return fixed_direct_materialization_result::
+                    overflow;
+            }
+
+            const auto reference_index =
+                static_cast<std::uint32_t>(
+                    runtime_program_references.size());
+
+            runtime_program_references.push_back({
+                0,
+                owner,
+                local,
+                true,
+                {},
+            });
+
+            runtime_program_ops.push_back({
+                member.offset,
+                reference_index,
+                runtime_program_op_kind::
+                    generic_reference,
+                {},
+            });
+
+            if (profile != nullptr) {
+                ++profile->
+                    program_generic_reference_ops_built;
+            }
+        }
+        catch (...) {
+            return fixed_direct_materialization_result::
+                failed;
+        }
+
+        return fixed_direct_materialization_result::
+            success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    append_child_runtime_program_or_call(
         type_handle child_handle,
-        runtime_offset delta,
+        record_offset delta,
         bool allow_link_object,
-        std::uint32_t source_index) noexcept {
+        bool counts_materialize_member) noexcept {
 
         const auto* child =
             plan(
@@ -2642,7 +2809,7 @@ private:
         bool terminal = false;
 
         const auto classified =
-            terminal_fused_program(
+            terminal_runtime_program(
                 *child,
                 terminal);
 
@@ -2654,29 +2821,35 @@ private:
         }
 
         return terminal
-            ? append_terminal_fused_program(
+            ? append_terminal_runtime_program(
                 *child,
                 delta,
                 allow_link_object)
-            : append_shared_fused_call(
+            : append_runtime_program_call(
                 child_handle,
                 delta,
                 allow_link_object,
-                source_index);
+                counts_materialize_member);
     }
 
     [[nodiscard]] fixed_direct_materialization_result
-    prepare_fused_type_program(
+    prepare_runtime_program(
         type_handle handle,
         runtime_type_plan& output) noexcept {
 
-        const auto old_count =
-            fused_type_ops.size();
+        const auto old_op_count =
+            runtime_program_ops.size();
+
+        const auto old_reference_count =
+            runtime_program_references.size();
 
         const auto rollback =
             [&]() noexcept {
-                fused_type_ops.resize(
-                    old_count);
+                runtime_program_ops.resize(
+                    old_op_count);
+
+                runtime_program_references.resize(
+                    old_reference_count);
             };
 
         const auto maximum =
@@ -2684,13 +2857,15 @@ private:
                 (std::numeric_limits<
                     std::uint32_t>::max)());
 
-        if (old_count >
+        if (old_op_count >
             maximum) {
 
             return fixed_direct_materialization_result::
                 overflow;
         }
 
+        // Base subobjects execute before this record's own members and inherit
+        // the top Project-object context.
         for (std::uint32_t local = 0;
              local <
                  output.base_count;
@@ -2713,12 +2888,11 @@ private:
                 planned_bases[index];
 
             const auto appended =
-                append_child_program_or_call(
+                append_child_runtime_program_or_call(
                     base.type,
-                    static_cast<runtime_offset>(
-                        base.offset),
+                    base.offset,
                     true,
-                    no_fused_source_index);
+                    false);
 
             if (appended !=
                 fixed_direct_materialization_result::
@@ -2729,6 +2903,7 @@ private:
             }
         }
 
+        // Own active members remain in declaration order.
         for (std::uint32_t active = 0;
              active <
                  output.active_count;
@@ -2781,36 +2956,18 @@ private:
             if (member.action ==
                 materialization_action::reference) {
 
-                runtime_offset direct_source =
-                    no_fused_source_offset;
-
-                if (member.direct_source_offset !=
-                    no_direct_source_offset) {
-
-                    direct_source =
-                        static_cast<runtime_offset>(
-                            member.direct_source_offset);
-                }
-
-                try {
-                    fused_type_ops.push_back({
-                        static_cast<runtime_offset>(
-                            member.offset),
-                        0,
-                        direct_source,
-                        static_cast<std::uint32_t>(
-                            planned_index),
+                const auto appended =
+                    append_runtime_program_reference(
                         handle,
                         local,
-                        fused_type_op_kind::reference,
-                        true,
-                        {},
-                    });
-                }
-                catch (...) {
+                        member);
+
+                if (appended !=
+                    fixed_direct_materialization_result::
+                        success) {
+
                     rollback();
-                    return fixed_direct_materialization_result::
-                        failed;
+                    return appended;
                 }
 
                 continue;
@@ -2826,13 +2983,11 @@ private:
 
             if (member.child_record) {
                 const auto appended =
-                    append_child_program_or_call(
+                    append_child_runtime_program_or_call(
                         member.child_record,
-                        static_cast<runtime_offset>(
-                            member.offset),
+                        member.offset,
                         false,
-                        static_cast<std::uint32_t>(
-                            planned_index));
+                        true);
 
                 if (appended !=
                     fixed_direct_materialization_result::
@@ -2846,17 +3001,11 @@ private:
             }
 
             try {
-                fused_type_ops.push_back({
-                    static_cast<runtime_offset>(
-                        member.offset),
-                    0,
-                    no_fused_source_offset,
+                runtime_program_ops.push_back({
+                    member.offset,
                     static_cast<std::uint32_t>(
                         planned_index),
-                    {},
-                    0,
-                    fused_type_op_kind::value,
-                    false,
+                    runtime_program_op_kind::value,
                     {},
                 });
             }
@@ -2903,16 +3052,23 @@ private:
                 const auto& field =
                     constructor_fields[index];
 
-                fused_type_ops.push_back({
-                    field.offset,
-                    0,
-                    no_fused_source_offset,
+                if (field.offset >=
+                    static_cast<runtime_offset>(
+                        (std::numeric_limits<
+                            record_offset>::max)())) {
+
+                    rollback();
+                    return fixed_direct_materialization_result::
+                        overflow;
+                }
+
+                runtime_program_ops.push_back({
+                    static_cast<record_offset>(
+                        field.offset),
                     static_cast<std::uint32_t>(
                         index),
-                    {},
-                    0,
-                    fused_type_op_kind::constructor,
-                    false,
+                    runtime_program_op_kind::
+                        constructor,
                     {},
                 });
             }
@@ -2924,8 +3080,8 @@ private:
         }
 
         const auto count =
-            fused_type_ops.size() -
-            old_count;
+            runtime_program_ops.size() -
+            old_op_count;
 
         if (count >
             maximum) {
@@ -2935,17 +3091,17 @@ private:
                 overflow;
         }
 
-        output.fused_begin =
+        output.program_begin =
             static_cast<std::uint32_t>(
-                old_count);
+                old_op_count);
 
-        output.fused_count =
+        output.program_count =
             static_cast<std::uint32_t>(
                 count);
 
         if (profile != nullptr) {
-            profile->fused_ops_built +=
-                output.fused_count;
+            profile->program_ops_built +=
+                output.program_count;
         }
 
         return fixed_direct_materialization_result::
@@ -3323,16 +3479,16 @@ private:
             }
         }
 
-        const auto fused =
-            prepare_fused_type_program(
+        const auto program =
+            prepare_runtime_program(
                 handle,
                 *output);
 
-        if (fused !=
+        if (program !=
             fixed_direct_materialization_result::
                 success) {
 
-            return fused;
+            return program;
         }
 
         output->state =
@@ -3456,20 +3612,22 @@ private:
                   invalid_input;
     }
 
+    template <typename TargetWord>
     [[nodiscard]] fixed_direct_materialization_result
-    execute_fused_type_program(
-        type_handle handle,
+    execute_runtime_program_word(
+        const runtime_type_plan& type,
         std::byte* base,
+        std::uint64_t native_base,
         object_handle link_object) noexcept {
 
-        const auto* type =
-            plan(
-                handle);
+        static_assert(
+            sizeof(TargetWord) == 4 ||
+            sizeof(TargetWord) == 8);
 
-        if (type == nullptr ||
-            type->state !=
+        if (type.state !=
                 runtime_type_plan_state::ready ||
-            base == nullptr) {
+            base == nullptr ||
+            native_base == 0) {
 
             return fixed_direct_materialization_result::
                 invalid_input;
@@ -3477,12 +3635,12 @@ private:
 
         const auto begin =
             static_cast<std::size_t>(
-                type->fused_begin);
+                type.program_begin);
 
         if (begin >
-                fused_type_ops.size() ||
-            type->fused_count >
-                fused_type_ops.size() -
+                runtime_program_ops.size() ||
+            type.program_count >
+                runtime_program_ops.size() -
                     begin) {
 
             return fixed_direct_materialization_result::
@@ -3491,27 +3649,18 @@ private:
 
         if (profile != nullptr) {
             ++profile->planned_record_calls;
-            ++profile->fused_program_calls;
+            ++profile->program_executions;
         }
 
         for (std::uint32_t local_op = 0;
              local_op <
-                 type->fused_count;
+                 type.program_count;
              ++local_op) {
 
             const auto& op =
-                fused_type_ops[
+                runtime_program_ops[
                     begin +
                     local_op];
-
-            if (op.target_offset >
-                static_cast<runtime_offset>(
-                    (std::numeric_limits<
-                        std::size_t>::max)())) {
-
-                return fixed_direct_materialization_result::
-                    overflow;
-            }
 
             auto* target =
                 base +
@@ -3519,40 +3668,55 @@ private:
                     op.target_offset);
 
             if (profile != nullptr) {
-                ++profile->fused_op_visits;
+                ++profile->program_op_visits;
             }
 
-            if (op.kind ==
-                fused_type_op_kind::call) {
+            switch (op.kind) {
+            case runtime_program_op_kind::call: {
+                const auto child_slot =
+                    op.payload &
+                    runtime_program_call_type_mask;
 
-                if (!op.record_type) {
+                if (child_slot == 0 ||
+                    child_slot >
+                        type_plans.size()) {
+
                     return fixed_direct_materialization_result::
                         invalid_input;
                 }
 
-                if (profile != nullptr &&
-                    op.source_index !=
-                        no_fused_source_index) {
+                const auto& child =
+                    type_plans[
+                        child_slot - 1];
 
-                    if (op.source_index >=
-                            planned_members.size() ||
-                        planned_members[
-                            op.source_index].action !=
-                            materialization_action::materialize) {
+                if (child.state !=
+                    runtime_type_plan_state::ready) {
 
-                        return fixed_direct_materialization_result::
-                            invalid_input;
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                if (profile != nullptr) {
+                    ++profile->normal_record_calls;
+
+                    if ((op.payload &
+                         runtime_program_call_member_flag) != 0) {
+
+                        ++profile->planned_member_visits;
+                        ++profile->
+                            planned_materialize_visits;
                     }
-
-                    ++profile->planned_member_visits;
-                    ++profile->planned_materialize_visits;
                 }
 
                 const auto called =
-                    normal_record(
-                        op.record_type,
+                    execute_runtime_program_word<
+                        TargetWord>(
+                        child,
                         target,
-                        op.use_link_object
+                        native_base +
+                            op.target_offset,
+                        (op.payload &
+                         runtime_program_call_link_object_flag) != 0
                             ? link_object
                             : object_handle{});
 
@@ -3563,13 +3727,11 @@ private:
                     return called;
                 }
 
-                continue;
+                break;
             }
 
-            if (op.kind ==
-                fused_type_op_kind::constructor) {
-
-                if (op.source_index >=
+            case runtime_program_op_kind::constructor: {
+                if (op.payload >=
                     constructor_fields.size()) {
 
                     return fixed_direct_materialization_result::
@@ -3578,7 +3740,7 @@ private:
 
                 const auto& field =
                     constructor_fields[
-                        op.source_index];
+                        op.payload];
 
                 if (profile != nullptr) {
                     ++profile->
@@ -3599,26 +3761,20 @@ private:
                     return written;
                 }
 
-                continue;
+                break;
             }
 
-            if (op.source_index >=
-                planned_members.size()) {
+            case runtime_program_op_kind::value: {
+                if (op.payload >=
+                    planned_members.size()) {
 
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
 
-            const auto& member =
-                planned_members[
-                    op.source_index];
-
-            if (profile != nullptr) {
-                ++profile->planned_member_visits;
-            }
-
-            if (op.kind ==
-                fused_type_op_kind::value) {
+                const auto& member =
+                    planned_members[
+                        op.payload];
 
                 if (member.action !=
                     materialization_action::materialize) {
@@ -3628,6 +3784,7 @@ private:
                 }
 
                 if (profile != nullptr) {
+                    ++profile->planned_member_visits;
                     ++profile->
                         planned_materialize_visits;
                 }
@@ -3646,152 +3803,303 @@ private:
                     return materialized;
                 }
 
-                continue;
+                break;
             }
 
-            if (op.kind !=
-                    fused_type_op_kind::reference ||
-                member.action !=
-                    materialization_action::reference ||
-                op.record_base_offset >
-                    static_cast<runtime_offset>(
-                        (std::numeric_limits<
-                            std::size_t>::max)())) {
-
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
-
-            if (profile != nullptr) {
-                ++profile->planned_reference_visits;
-
-                switch (member.construction.kind) {
-                case construction_kind::zero:
-                    ++profile->
-                        planned_reference_zero_construction;
-                    break;
-
-                case construction_kind::member_binding:
+            case runtime_program_op_kind::direct_reference: {
+                if (profile != nullptr) {
+                    ++profile->planned_member_visits;
+                    ++profile->planned_reference_visits;
                     ++profile->
                         planned_reference_member_binding;
-                    break;
-
-                case construction_kind::object_binding:
                     ++profile->
-                        planned_reference_object_binding;
-                    break;
+                        program_direct_reference_visits;
+                }
 
-                case construction_kind::signed_integer:
-                case construction_kind::unsigned_integer:
-                case construction_kind::real:
-                case construction_kind::unsupported:
-                    ++profile->
-                        planned_reference_other_construction;
+                TargetWord stored = 0;
+
+                std::memcpy(
+                    &stored,
+                    target,
+                    sizeof(stored));
+
+                // REFERENCE-ZERO-FAST-01 remains the dominant path, now with
+                // no per-operation ABI-width branch.
+                if (stored == 0) {
+                    const auto native_target =
+                        native_base +
+                        static_cast<std::uint64_t>(
+                            op.payload);
+
+                    // fixed_direct_target_range_compatible() validated the
+                    // complete Runtime target range for TargetWord.
+                    const auto narrowed =
+                        static_cast<TargetWord>(
+                            native_target);
+
+                    std::memcpy(
+                        target,
+                        &narrowed,
+                        sizeof(narrowed));
+
+                    if (profile != nullptr) {
+                        ++profile->
+                            direct_member_binding_fast;
+                    }
+
                     break;
                 }
-            }
 
-            std::uint64_t stored = 0;
+                const auto stored_wide =
+                    static_cast<std::uint64_t>(
+                        stored);
 
-            if (!read_reference_slot(
-                    target,
-                    stored)) {
+                if (runtime_address(
+                        stored_wide) ||
+                    is_pending_link(
+                        stored_wide)) {
 
-                return fixed_direct_materialization_result::
-                    incompatible_abi;
-            }
+                    break;
+                }
 
-            if (runtime_address(
-                    stored) ||
-                is_pending_link(
-                    stored)) {
-
-                continue;
-            }
-
-            if (stored != 0) {
                 return fixed_direct_materialization_result::
                     invalid_input;
             }
 
-            if (op.direct_source_offset !=
-                no_fused_source_offset) {
+            case runtime_program_op_kind::generic_reference: {
+                if (op.payload >=
+                    runtime_program_references.size()) {
 
-                if (op.direct_source_offset >
-                    static_cast<runtime_offset>(
-                        (std::numeric_limits<
-                            std::size_t>::max)())) {
-
-                    return fixed_direct_materialization_result::
-                        overflow;
-                }
-
-                const auto* source_address =
-                    base +
-                    static_cast<std::size_t>(
-                        op.direct_source_offset);
-
-                const auto value_target =
-                    target_address(
-                        source_address);
-
-                if (value_target == 0) {
                     return fixed_direct_materialization_result::
                         invalid_input;
                 }
 
-                store_target_word(
-                    target,
-                    value_target);
+                const auto& reference =
+                    runtime_program_references[
+                        op.payload];
 
                 if (profile != nullptr) {
                     ++profile->
-                        direct_member_binding_fast;
+                        program_generic_reference_visits;
+
+                    const auto* member =
+                        planned_member_at(
+                            reference.record_type,
+                            reference.local);
+
+                    if (member == nullptr ||
+                        member->action !=
+                            materialization_action::reference) {
+
+                        return fixed_direct_materialization_result::
+                            invalid_input;
+                    }
+
+                    ++profile->planned_member_visits;
+                    ++profile->planned_reference_visits;
+
+                    switch (member->construction.kind) {
+                    case construction_kind::zero:
+                        ++profile->
+                            planned_reference_zero_construction;
+                        break;
+
+                    case construction_kind::member_binding:
+                        ++profile->
+                            planned_reference_member_binding;
+                        break;
+
+                    case construction_kind::object_binding:
+                        ++profile->
+                            planned_reference_object_binding;
+                        break;
+
+                    case construction_kind::signed_integer:
+                    case construction_kind::unsigned_integer:
+                    case construction_kind::real:
+                    case construction_kind::unsupported:
+                        ++profile->
+                            planned_reference_other_construction;
+                        break;
+                    }
                 }
 
-                continue;
+                // Generic references are deliberately cold sidecar operations.
+                // Keep the authoritative general resolver/read/write path.
+                std::uint64_t stored = 0;
+
+                if (!read_reference_slot(
+                        target,
+                        stored)) {
+
+                    return fixed_direct_materialization_result::
+                        incompatible_abi;
+                }
+
+                if (stored == 0) {
+                    auto* record_base =
+                        base +
+                        static_cast<std::size_t>(
+                            reference.record_base_offset);
+
+                    std::uint64_t value_target = 0;
+
+                    const auto resolved =
+                        resolve_reference_member(
+                            reference.record_type,
+                            record_base,
+                            reference.use_link_object
+                                ? link_object
+                                : object_handle{},
+                            reference.local,
+                            target,
+                            value_target);
+
+                    if (resolved !=
+                        fixed_direct_materialization_result::
+                            success) {
+
+                        return resolved;
+                    }
+
+                    const auto written =
+                        write_address(
+                            target,
+                            value_target);
+
+                    if (written !=
+                        fixed_direct_materialization_result::
+                            success) {
+
+                        return written;
+                    }
+
+                    break;
+                }
+
+                if (runtime_address(
+                        stored) ||
+                    is_pending_link(
+                        stored)) {
+
+                    break;
+                }
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
             }
-
-            auto* record_base =
-                base +
-                static_cast<std::size_t>(
-                    op.record_base_offset);
-
-            std::uint64_t value_target = 0;
-
-            const auto resolved =
-                resolve_reference_member(
-                    op.record_type,
-                    record_base,
-                    op.use_link_object
-                        ? link_object
-                        : object_handle{},
-                    op.local,
-                    target,
-                    value_target);
-
-            if (resolved !=
-                fixed_direct_materialization_result::
-                    success) {
-
-                return resolved;
-            }
-
-            const auto written =
-                write_address(
-                    target,
-                    value_target);
-
-            if (written !=
-                fixed_direct_materialization_result::
-                    success) {
-
-                return written;
             }
         }
 
         return fixed_direct_materialization_result::
             success;
+    }
+
+    template <typename TargetWord>
+    [[nodiscard]] fixed_direct_materialization_result
+    materialize_objects_word() noexcept {
+
+        static_assert(
+            sizeof(TargetWord) == 4 ||
+            sizeof(TargetWord) == 8);
+
+        for (const auto& object :
+             object_plans) {
+
+            if (!object.materialize) {
+                continue;
+            }
+
+            auto* target =
+                address(
+                    object.offset);
+
+            if (target == nullptr) {
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            fixed_direct_materialization_result
+                materialized =
+                    fixed_direct_materialization_result::
+                        invalid_input;
+
+            if (object.record_type) {
+                const auto* type =
+                    plan(
+                        object.record_type);
+
+                if (type == nullptr) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                materialized =
+                    execute_runtime_program_word<
+                        TargetWord>(
+                        *type,
+                        target,
+                        target_base_address +
+                            object.offset,
+                        object.handle);
+            }
+            else {
+                materialized =
+                    normal_value(
+                        object.type,
+                        object.construction,
+                        target,
+                        object.handle);
+            }
+
+            if (materialized !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return materialized;
+            }
+        }
+
+        return fixed_direct_materialization_result::
+            success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    execute_runtime_program(
+        type_handle handle,
+        std::byte* base,
+        std::uint64_t native_base,
+        object_handle link_object) noexcept {
+
+        const auto* type =
+            plan(
+                handle);
+
+        if (type == nullptr) {
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        if (properties.reference_size == 4) {
+            return execute_runtime_program_word<
+                std::uint32_t>(
+                    *type,
+                    base,
+                    native_base,
+                    link_object);
+        }
+
+        if (properties.reference_size == 8) {
+            return execute_runtime_program_word<
+                std::uint64_t>(
+                    *type,
+                    base,
+                    native_base,
+                    link_object);
+        }
+
+        return fixed_direct_materialization_result::
+            incompatible_abi;
     }
 
     [[nodiscard]] fixed_direct_materialization_result
@@ -3804,9 +4112,21 @@ private:
             ++profile->normal_record_calls;
         }
 
-        return execute_fused_type_program(
+        const auto native_base =
+            target_address(
+                base);
+
+        if (native_base == 0) {
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        // Residual named-record entries (primarily bounded-array elements)
+        // re-dispatch here. Shared CALLs never come through this wrapper.
+        return execute_runtime_program(
             handle,
             base,
+            native_base,
             link_object);
     }
 
@@ -6050,10 +6370,13 @@ private:
     std::vector<constructor_field>
         constructor_fields;
 
-    // Construction-only fused leaf programs. A type owns one contiguous
-    // range; direct child records are expanded here once per parent TYPE.
-    std::vector<fused_type_op>
-        fused_type_ops;
+    // Construction-only compact program. The hot stream is 12 bytes/op;
+    // only rare generic-reference operations need a 16-byte cold sidecar.
+    std::vector<runtime_program_op>
+        runtime_program_ops;
+
+    std::vector<runtime_program_reference>
+        runtime_program_references;
 
     // PASS 1 owns target validation. PASS 2 reuses the exact validated SHM
     // slot without repeating endpoint resolution. Pending-link identity lives

@@ -573,16 +573,24 @@ int main(
             << runtime_profile.materializer.plan_reference_members
             << ",plan_materialize_members="
             << runtime_profile.materializer.plan_materialize_members
-            << ",fused_ops_built="
-            << runtime_profile.materializer.fused_ops_built
-            << ",fused_inlined_programs="
-            << runtime_profile.materializer.fused_inlined_programs
-            << ",fused_shared_calls_built="
-            << runtime_profile.materializer.fused_shared_calls_built
-            << ",fused_program_calls="
-            << runtime_profile.materializer.fused_program_calls
-            << ",fused_op_visits="
-            << runtime_profile.materializer.fused_op_visits
+            << ",program_ops_built="
+            << runtime_profile.materializer.program_ops_built
+            << ",program_inlined_programs="
+            << runtime_profile.materializer.program_inlined_programs
+            << ",program_shared_calls_built="
+            << runtime_profile.materializer.program_shared_calls_built
+            << ",program_direct_reference_ops_built="
+            << runtime_profile.materializer.program_direct_reference_ops_built
+            << ",program_generic_reference_ops_built="
+            << runtime_profile.materializer.program_generic_reference_ops_built
+            << ",program_executions="
+            << runtime_profile.materializer.program_executions
+            << ",program_op_visits="
+            << runtime_profile.materializer.program_op_visits
+            << ",program_direct_reference_visits="
+            << runtime_profile.materializer.program_direct_reference_visits
+            << ",program_generic_reference_visits="
+            << runtime_profile.materializer.program_generic_reference_visits
             << ",array_calls="
             << runtime_profile.materializer.array_calls
             << ",array_elements_visited="

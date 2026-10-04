@@ -130,34 +130,58 @@ default destinations. The object plan owns the object handle/type/construction
 and final Runtime offset. Runtime object execution must not lazily build type
 plans from Graph metadata.
 
-`runtime_type_plan` owns a bounded leaf-fused physical execution program.
-Planning classifies each direct base/by-value child structurally:
+`runtime_type_plan` owns a bounded leaf-fused compact physical program.
+The structural policy remains:
 
 ```text
-terminal child
-    no direct bases
-    no active direct by-value record child
-        -> inline its physical leaf ops once into the parent TYPE
+terminal direct child
+    -> inline leaf operations once into the parent TYPE
 
-non-terminal child
-        -> emit one shared CALL to the child type program
+non-terminal direct child
+    -> one shared CALL
+
+bounded array
+    -> compact residual loop
 ```
 
-Fusion therefore stops after one terminal structural edge. It never builds a
-transitive closure of a nested type tree. This preserves reusable type programs
-and native C++ recursion for non-terminal structure while removing the hottest
-terminal record transitions.
+The hot instruction stream follows the Runtime layout contract: all offsets
+inside one native record are `record_offset` (`uint32_t`). One
+`runtime_program_op` is therefore 12 bytes:
 
-Reference leaf ops retain the owning record handle, owning-record base offset,
-local member index, and optional direct source offset required to preserve
-member-binding semantics. Base subobjects preserve the top Project-object
-context; a direct by-value member clears it exactly as the previous
-`normal_value(..., {})` path did.
+```text
+target record_offset : 4
+payload              : 4
+opcode + reserved    : 4
+```
 
-Bounded arrays remain compact value/repeat execution and are never expanded by
-element count. Diagnostic profile counters `fused_ops_built`,
-`fused_inlined_programs`, `fused_shared_calls_built`, and `fused_op_visits`
-expose both the construction-only plan-size cost and Runtime execution work.
+`DIRECT_REFERENCE` stores only target/source record offsets. It does not read
+`planned_member` and does not convert a host pointer back to a Runtime offset.
+The executor carries both the host record base and the target-native
+FIXED_DIRECT base; a shared `CALL` adds the same record offset to both.
+
+A native reference slot is also its construction state. The unresolved zero
+slot is the dominant `DIRECT_REFERENCE` path and is handled first as a direct
+load/compare/store. Only a nonzero slot is classified as an already-resolved
+Runtime address, pending Graph-link marker, or invalid state. This preserves
+the reference-state contract while keeping pending-link decoding and Runtime
+range checks off the normal direct-binding path.
+
+Reference width is also an invariant of one materialization. Object
+construction dispatches once to a `uint32_t` or `uint64_t` compact-program
+executor. All shared `CALL` operations recurse directly within that same
+specialization, so `DIRECT_REFERENCE` performs fixed-width native loads/stores
+without checking `reference_size` per operation. Residual record entries such
+as bounded-array elements may re-dispatch through `normal_record()`; they are
+not on the shared-CALL hot path.
+
+`CALL` uses the 30-bit Graph type slot already guaranteed by `type_handle` and
+packs its two execution flags into the remaining high bits of the 32-bit
+payload, so CALL needs no sidecar. Only the rare generic-reference resolver
+uses a cold 16-byte sidecar containing owning-record base/type/local metadata.
+
+This compact program is construction-only, is never persisted, and does not
+change G or Runtime ABI. Leaf fusion still stops after one terminal structural
+edge; there is no transitive type-program expansion.
 
 Global construction barriers remain explicit:
 
