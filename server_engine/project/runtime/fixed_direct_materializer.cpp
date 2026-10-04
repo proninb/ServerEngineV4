@@ -167,6 +167,11 @@ write_real(
     return fixed_direct_materialization_result::success;
 }
 
+enum class runtime_storage_initial_state : std::uint8_t {
+    arbitrary = 0,
+    zeroed,
+};
+
 [[nodiscard]] bool zero_pointer_construction(
     construction_value construction) noexcept {
 
@@ -196,6 +201,7 @@ public:
         const server_abi_configuration& abi,
         std::uint64_t target_base_address,
         std::span<std::byte> runtime,
+        runtime_storage_initial_state storage_initial_state,
         fixed_direct_materialization_telemetry* telemetry,
         fixed_direct_materialization_profile* profile) noexcept
         : project(project),
@@ -203,6 +209,7 @@ public:
           abi(abi),
           target_base_address(target_base_address),
           runtime(runtime),
+          storage_initial_state(storage_initial_state),
           telemetry(telemetry),
           profile(profile) {
     }
@@ -333,22 +340,27 @@ public:
             return runtime_planned;
         }
 
-        const auto zero_started =
-            clock_type::now();
+        if (storage_initial_state ==
+            runtime_storage_initial_state::
+                arbitrary) {
 
-        std::fill_n(
-            runtime.data(),
-            logical_size,
-            std::byte{0});
+            const auto zero_started =
+                clock_type::now();
 
-        const auto zero_finished =
-            clock_type::now();
+            std::fill_n(
+                runtime.data(),
+                logical_size,
+                std::byte{0});
 
-        if (telemetry != nullptr) {
-            telemetry->zero_ns =
-                elapsed_ns(
-                    zero_started,
-                    zero_finished);
+            const auto zero_finished =
+                clock_type::now();
+
+            if (telemetry != nullptr) {
+                telemetry->zero_ns =
+                    elapsed_ns(
+                        zero_started,
+                        zero_finished);
+            }
         }
 
         const auto canonical_started =
@@ -5404,6 +5416,8 @@ private:
     std::uint64_t target_base_address = 0;
     abi_properties properties;
     std::span<std::byte> runtime;
+    runtime_storage_initial_state storage_initial_state =
+        runtime_storage_initial_state::arbitrary;
     fixed_direct_materialization_telemetry* telemetry = nullptr;
     fixed_direct_materialization_profile* profile = nullptr;
     std::vector<std::uintptr_t> resolution_path;
@@ -5539,6 +5553,7 @@ materialize_fixed_direct(
         abi,
         target_base_address,
         runtime,
+        runtime_storage_initial_state::arbitrary,
         telemetry,
         profile,
     };
@@ -5556,6 +5571,52 @@ materialize_fixed_direct(
     fixed_direct_materialization_profile* profile) noexcept {
 
     return materialize_fixed_direct(
+        project,
+        layout,
+        abi,
+        static_cast<std::uint64_t>(
+            reinterpret_cast<std::uintptr_t>(
+                runtime.data())),
+        runtime,
+        telemetry,
+        profile);
+}
+
+
+fixed_direct_materialization_result
+materialize_fixed_direct_zeroed(
+    const compiled_project_view& project,
+    const runtime_layout& layout,
+    const server_abi_configuration& abi,
+    std::uint64_t target_base_address,
+    std::span<std::byte> runtime,
+    fixed_direct_materialization_telemetry* telemetry,
+    fixed_direct_materialization_profile* profile) noexcept {
+
+    fixed_direct_materializer materializer{
+        project,
+        layout,
+        abi,
+        target_base_address,
+        runtime,
+        runtime_storage_initial_state::zeroed,
+        telemetry,
+        profile,
+    };
+
+    return materializer.run();
+}
+
+fixed_direct_materialization_result
+materialize_fixed_direct_zeroed(
+    const compiled_project_view& project,
+    const runtime_layout& layout,
+    const server_abi_configuration& abi,
+    std::span<std::byte> runtime,
+    fixed_direct_materialization_telemetry* telemetry,
+    fixed_direct_materialization_profile* profile) noexcept {
+
+    return materialize_fixed_direct_zeroed(
         project,
         layout,
         abi,

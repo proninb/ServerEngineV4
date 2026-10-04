@@ -43,6 +43,9 @@ public:
     fixed_shared_memory& operator=(
         fixed_shared_memory&& other) noexcept;
 
+    // Creates a brand-new named mapping. On success every byte in the
+    // returned mapping is zero before the caller performs its first write.
+    // This guarantee does not apply to open(), which maps existing storage.
     [[nodiscard]] fixed_shared_memory_result create(
         std::string_view name,
         std::size_t size,

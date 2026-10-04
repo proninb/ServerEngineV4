@@ -487,6 +487,9 @@ int main(
             << ",shm_create_ms="
             << ns_to_ms(
                 runtime_telemetry.shm_create_ns)
+            << ",shm_pretouch_ms="
+            << ns_to_ms(
+                runtime_telemetry.shm_pretouch_ns)
             << ",materialization_ms="
             << ns_to_ms(
                 runtime_telemetry.materialization_ns)

@@ -110,4 +110,28 @@ materialize_fixed_direct(
     fixed_direct_materialization_telemetry* telemetry = nullptr,
     fixed_direct_materialization_profile* profile = nullptr) noexcept;
 
+
+// Materializes into storage guaranteed to be all-zero on entry.
+// The caller owns storage provenance/preparation. This entry point skips the
+// materializer's full-buffer zero pass; arbitrary/reused buffers must call
+// materialize_fixed_direct() instead.
+[[nodiscard]] fixed_direct_materialization_result
+materialize_fixed_direct_zeroed(
+    const compiled_project_view& project,
+    const runtime_layout& layout,
+    const server_abi_configuration& abi,
+    std::uint64_t target_base_address,
+    std::span<std::byte> runtime,
+    fixed_direct_materialization_telemetry* telemetry = nullptr,
+    fixed_direct_materialization_profile* profile = nullptr) noexcept;
+
+[[nodiscard]] fixed_direct_materialization_result
+materialize_fixed_direct_zeroed(
+    const compiled_project_view& project,
+    const runtime_layout& layout,
+    const server_abi_configuration& abi,
+    std::span<std::byte> runtime,
+    fixed_direct_materialization_telemetry* telemetry = nullptr,
+    fixed_direct_materialization_profile* profile = nullptr) noexcept;
+
 }

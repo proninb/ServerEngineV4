@@ -398,11 +398,60 @@ server_status create_resident_project(
         return server_status::project_runtime_failed;
     }
 
+    // A brand-new mapping is logically zero, but leaving every page untouched
+    // pushes first-write faults into the sparse construction traversal. Prepare
+    // physical Runtime pages sequentially with one zero write per OS page.
+    // This establishes pages without streaming across every Runtime byte.
+    const auto page_size =
+        fixed_shared_memory::
+            size_alignment();
+
+    if (page_size == 0) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_runtime_failed,
+                operation)
+                .file(project_path)
+                .detail(
+                    "Cannot determine Project SHM page size for Runtime pre-touch")
+                .build());
+
+        return server_status::project_runtime_failed;
+    }
+
+    const auto pretouch_started =
+        clock_type::now();
+
+    auto shared_bytes =
+        shared_memory.bytes();
+
+    const auto logical_size =
+        static_cast<std::size_t>(
+            layout.size());
+
+    for (std::size_t offset = 0;
+         offset < logical_size;
+         offset += page_size) {
+
+        shared_bytes[offset] =
+            std::byte{0};
+    }
+
+    const auto pretouch_finished =
+        clock_type::now();
+
+    if (telemetry != nullptr) {
+        telemetry->shm_pretouch_ns =
+            elapsed_ns(
+                pretouch_started,
+                pretouch_finished);
+    }
+
     const auto materialization_started =
         clock_type::now();
 
     const auto materialized =
-        materialize_fixed_direct(
+        materialize_fixed_direct_zeroed(
             compiled,
             layout,
             settings.abi,

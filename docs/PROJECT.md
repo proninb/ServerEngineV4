@@ -159,6 +159,29 @@ Ordinary LOAD never enables the profile. This keeps record/member/reference
 counter writes out of the production construction hot path. Benchmark
 `load-profile` enables them explicitly when architectural diagnosis is needed.
 
+
+FIXED_DIRECT storage preparation is explicit:
+
+```text
+fixed_shared_memory::create()
+    -> brand-new logically zero mapping
+    -> sequential pre-touch: one zero write per logical Runtime page
+    -> materialize_fixed_direct_zeroed()
+       no full Runtime memset
+
+arbitrary/reused test buffer
+    -> materialize_fixed_direct()
+       explicit full zero pass
+```
+
+The zeroed materializer contract is about storage state, not OS provenance.
+Resident Project publication owns the `create()` + pre-touch sequence because
+it knows both the mapping provenance and OS page size. `open()` does not imply
+fresh storage. The pre-touch deliberately establishes pages sequentially before
+the sparse construction traversal without streaming writes across every Runtime
+byte. `project_runtime_telemetry::shm_pretouch_ns` measures this cost separately
+from `materializer.zero_ns`.
+
 ### Runtime System prefix
 
 The final physical Runtime image contains one Server-owned `System` prefix before all Project-derived Runtime storage:

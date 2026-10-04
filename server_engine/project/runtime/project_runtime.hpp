@@ -25,6 +25,7 @@ namespace cw::server {
 struct project_runtime_telemetry final {
     std::uint64_t layout_ns = 0;
     std::uint64_t shm_create_ns = 0;
+    std::uint64_t shm_pretouch_ns = 0;
     std::uint64_t materialization_ns = 0;
     std::uint64_t runtime_bytes = 0;
     std::uint64_t shm_bytes = 0;

@@ -531,6 +531,26 @@ void test_contract(
         auto bytes =
             owner.bytes();
 
+        bool fresh_zeroed = true;
+
+        for (const auto value :
+             bytes) {
+
+            if (value !=
+                std::byte{0}) {
+
+                fresh_zeroed = false;
+                break;
+            }
+        }
+
+        if (!tests.expect(
+                fresh_zeroed,
+                "new shared-memory mapping is zero before first write")) {
+
+            return;
+        }
+
         bytes[0] =
             std::byte{0x5a};
 
