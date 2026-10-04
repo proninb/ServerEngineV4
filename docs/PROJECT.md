@@ -161,17 +161,37 @@ payload              : 4
 opcode + reserved    : 4
 ```
 
+The three bytes after the opcode normally remain zero. A
+`DIRECT_REFERENCE_RUN_16` reuses them as a 24-bit logical reference count, so
+the run remains one 12-byte instruction and needs no sidecar.
+
 `DIRECT_REFERENCE` stores only target/source record offsets. It does not read
 `planned_member` and does not convert a host pointer back to a Runtime offset.
 The executor carries both the host record base and the target-native
 FIXED_DIRECT base; a shared `CALL` adds the same record offset to both.
 
+`DIRECT-REFERENCE-RUN-16-01` adds one profiled physical compaction rule. After
+`STORE_12` compaction and before one TYPE publishes its `program_count`, a
+maximal logical sequence whose target and source offsets both advance by
+exactly 16 bytes is represented by `DIRECT_REFERENCE_RUN_16`. The op stores the
+first target offset, first source offset, and a 24-bit count in the existing
+12-byte instruction. Existing run ops copied from terminal child programs are
+recognized by the parent compactor, so bottom-up planning does not create an
+artificial compaction boundary. No generic stride-run opcode or sidecar is
+introduced.
+
+Terminal child inlining rebases both run starts and validates the final logical
+target/source offsets with the same `record_offset` overflow rule that applied
+when the references were separate operations.
+
 A native reference slot is also its construction state. The unresolved zero
 slot is the dominant `DIRECT_REFERENCE` path and is handled first as a direct
-load/compare/store. Only a nonzero slot is classified as an already-resolved
-Runtime address, pending Graph-link marker, or invalid state. This preserves
-the reference-state contract while keeping pending-link decoding and Runtime
-range checks off the normal direct-binding path.
+load/compare/store. `DIRECT_REFERENCE_RUN_16` executes that same state machine
+for every slot in the run: zero binds the corresponding source address;
+already-resolved Runtime addresses and pending Graph-link markers are
+preserved; every other nonzero state fails. The compaction therefore removes
+program dispatch/address-description repetition without weakening reference
+semantics.
 
 Reference width is also an invariant of one materialization. Object
 construction dispatches once to a `uint32_t` or `uint64_t` compact-program

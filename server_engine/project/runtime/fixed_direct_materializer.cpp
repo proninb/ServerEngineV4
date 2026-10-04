@@ -2707,6 +2707,7 @@ private:
 
     enum class runtime_program_op_kind : std::uint8_t {
         direct_reference = 0,
+        direct_reference_run_16,
         generic_reference,
         store_1,
         store_2,
@@ -2740,6 +2741,8 @@ private:
         record_offset target_offset = 0;
 
         // direct_reference -> source record_offset
+        // direct_reference_run_16 -> first source record_offset;
+        //     reserved[0..2] stores a 24-bit logical reference count
         // generic_reference -> runtime_program_references index
         // store_1/2/4 -> target-native bytes inline in payload
         // store_8 -> runtime_program_constants_64 index
@@ -2756,6 +2759,84 @@ private:
     };
 
     static_assert(sizeof(runtime_program_op) == 12);
+
+    static constexpr std::uint32_t
+        runtime_program_reference_run_count_max =
+            0x00ffffffu;
+
+    [[nodiscard]] static std::uint32_t
+    runtime_program_reference_run_count(
+        const runtime_program_op& op) noexcept {
+
+        return
+            static_cast<std::uint32_t>(
+                op.reserved[0]) |
+            (static_cast<std::uint32_t>(
+                 op.reserved[1]) <<
+             8) |
+            (static_cast<std::uint32_t>(
+                 op.reserved[2]) <<
+             16);
+    }
+
+    [[nodiscard]] static bool
+    set_runtime_program_reference_run_count(
+        runtime_program_op& op,
+        std::uint32_t count) noexcept {
+
+        if (count < 2 ||
+            count >
+                runtime_program_reference_run_count_max) {
+
+            return false;
+        }
+
+        op.reserved[0] =
+            static_cast<std::uint8_t>(
+                count &
+                0xffu);
+
+        op.reserved[1] =
+            static_cast<std::uint8_t>(
+                (count >> 8) &
+                0xffu);
+
+        op.reserved[2] =
+            static_cast<std::uint8_t>(
+                (count >> 16) &
+                0xffu);
+
+        return true;
+    }
+
+    [[nodiscard]] static bool
+    runtime_program_direct_reference_segment(
+        const runtime_program_op& op,
+        std::uint32_t& count) noexcept {
+
+        count = 0;
+
+        if (op.kind ==
+            runtime_program_op_kind::
+                direct_reference) {
+
+            count = 1;
+            return true;
+        }
+
+        if (op.kind !=
+            runtime_program_op_kind::
+                direct_reference_run_16) {
+
+            return false;
+        }
+
+        count =
+            runtime_program_reference_run_count(
+                op);
+
+        return count >= 2;
+    }
 
     struct runtime_program_reference final {
         // Owning record base for the referenced member, relative to the
@@ -3307,6 +3388,66 @@ private:
                         invalid_input;
                 }
 
+                if (op.kind ==
+                    runtime_program_op_kind::
+                        direct_reference_run_16) {
+
+                    const auto count =
+                        runtime_program_reference_run_count(
+                            op);
+
+                    if (count < 2) {
+                        return fixed_direct_materialization_result::
+                            invalid_input;
+                    }
+
+                    const auto span =
+                        static_cast<std::uint64_t>(
+                            count - 1) *
+                        16u;
+
+                    const auto last_target =
+                        static_cast<std::uint64_t>(
+                            op.target_offset) +
+                        span;
+
+                    const auto last_source =
+                        static_cast<std::uint64_t>(
+                            op.payload) +
+                        span;
+
+                    const auto record_maximum =
+                        static_cast<std::uint64_t>(
+                            (std::numeric_limits<
+                                record_offset>::max)());
+
+                    if (last_target >=
+                            record_maximum ||
+                        last_source >=
+                            record_maximum) {
+
+                        return fixed_direct_materialization_result::
+                            overflow;
+                    }
+
+                    record_offset rebased_last = 0;
+
+                    if (!add_program_offset(
+                            static_cast<record_offset>(
+                                last_target),
+                            delta,
+                            rebased_last) ||
+                        !add_program_offset(
+                            static_cast<record_offset>(
+                                last_source),
+                            delta,
+                            rebased_last)) {
+
+                        return fixed_direct_materialization_result::
+                            overflow;
+                    }
+                }
+
                 if (!add_program_offset(
                         op.target_offset,
                         delta,
@@ -3317,7 +3458,11 @@ private:
                 }
 
                 if (op.kind ==
-                    runtime_program_op_kind::direct_reference) {
+                        runtime_program_op_kind::
+                            direct_reference ||
+                    op.kind ==
+                        runtime_program_op_kind::
+                            direct_reference_run_16) {
 
                     record_offset source = 0;
 
@@ -3388,6 +3533,15 @@ private:
 
                         ++profile->
                             program_direct_reference_ops_built;
+                    }
+                    else if (op.kind ==
+                        runtime_program_op_kind::
+                            direct_reference_run_16) {
+
+                        profile->
+                            program_direct_reference_ops_built +=
+                            runtime_program_reference_run_count(
+                                op);
                     }
                     else if (op.kind ==
                         runtime_program_op_kind::generic_reference) {
@@ -4073,6 +4227,205 @@ private:
     }
 
     [[nodiscard]] fixed_direct_materialization_result
+    compact_runtime_direct_reference_run_16(
+        std::size_t begin) noexcept {
+
+        if (begin >
+            runtime_program_ops.size()) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        const auto end =
+            runtime_program_ops.size();
+
+        auto read =
+            begin;
+
+        auto write =
+            begin;
+
+        while (read < end) {
+            const auto first =
+                runtime_program_ops[
+                    read];
+
+            std::uint32_t first_count = 0;
+
+            if (!runtime_program_direct_reference_segment(
+                    first,
+                    first_count)) {
+
+                if (write != read) {
+                    runtime_program_ops[
+                        write] =
+                        first;
+                }
+
+                ++read;
+                ++write;
+                continue;
+            }
+
+            std::uint64_t logical_count =
+                first_count;
+
+            std::uint64_t expected_target =
+                static_cast<std::uint64_t>(
+                    first.target_offset) +
+                static_cast<std::uint64_t>(
+                    first_count) *
+                    16u;
+
+            std::uint64_t expected_source =
+                static_cast<std::uint64_t>(
+                    first.payload) +
+                static_cast<std::uint64_t>(
+                    first_count) *
+                    16u;
+
+            auto run_end =
+                read + 1;
+
+            while (run_end < end) {
+                const auto& next =
+                    runtime_program_ops[
+                        run_end];
+
+                std::uint32_t next_count = 0;
+
+                if (!runtime_program_direct_reference_segment(
+                        next,
+                        next_count) ||
+                    static_cast<std::uint64_t>(
+                        next.target_offset) !=
+                        expected_target ||
+                    static_cast<std::uint64_t>(
+                        next.payload) !=
+                        expected_source) {
+
+                    break;
+                }
+
+                logical_count +=
+                    next_count;
+
+                expected_target +=
+                    static_cast<std::uint64_t>(
+                        next_count) *
+                    16u;
+
+                expected_source +=
+                    static_cast<std::uint64_t>(
+                        next_count) *
+                    16u;
+
+                ++run_end;
+            }
+
+            if (logical_count < 2) {
+                if (write != read) {
+                    runtime_program_ops[
+                        write] =
+                        first;
+                }
+
+                ++read;
+                ++write;
+                continue;
+            }
+
+            // DIRECT-REFERENCE-RUN-16-01:
+            // The profile showed (+16,+16) as the dominant physical shape.
+            // Encode only that exact shape. The 24-bit count keeps one run in
+            // the existing 12-byte op and requires no sidecar.
+            const auto start_target =
+                static_cast<std::uint64_t>(
+                    first.target_offset);
+
+            const auto start_source =
+                static_cast<std::uint64_t>(
+                    first.payload);
+
+            std::uint64_t consumed = 0;
+            auto remaining =
+                logical_count;
+
+            while (remaining >= 2) {
+                const auto chunk =
+                    static_cast<std::uint32_t>(
+                        (std::min)(
+                            remaining,
+                            static_cast<std::uint64_t>(
+                                runtime_program_reference_run_count_max)));
+
+                runtime_program_op run{
+                    static_cast<record_offset>(
+                        start_target +
+                        consumed *
+                            16u),
+                    static_cast<std::uint32_t>(
+                        start_source +
+                        consumed *
+                            16u),
+                    runtime_program_op_kind::
+                        direct_reference_run_16,
+                    {},
+                };
+
+                if (!set_runtime_program_reference_run_count(
+                        run,
+                        chunk)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                runtime_program_ops[
+                    write] =
+                    run;
+
+                ++write;
+
+                consumed +=
+                    chunk;
+
+                remaining -=
+                    chunk;
+            }
+
+            if (remaining == 1) {
+                runtime_program_ops[
+                    write] = {
+                        static_cast<record_offset>(
+                            start_target +
+                            consumed *
+                                16u),
+                        static_cast<std::uint32_t>(
+                            start_source +
+                            consumed *
+                                16u),
+                        runtime_program_op_kind::
+                            direct_reference,
+                        {},
+                    };
+
+                ++write;
+            }
+
+            read =
+                run_end;
+        }
+
+        runtime_program_ops.resize(
+            write);
+
+        return fixed_direct_materialization_result::
+            success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
     prepare_runtime_program(
         type_handle handle,
         runtime_type_plan& output) noexcept {
@@ -4365,6 +4718,18 @@ private:
 
             rollback();
             return compacted;
+        }
+
+        const auto references_compacted =
+            compact_runtime_direct_reference_run_16(
+                old_op_count);
+
+        if (references_compacted !=
+            fixed_direct_materialization_result::
+                success) {
+
+            rollback();
+            return references_compacted;
         }
 
         const auto count =
@@ -5210,6 +5575,94 @@ private:
                         success) {
 
                     return materialized;
+                }
+
+                break;
+            }
+
+            case runtime_program_op_kind::
+                direct_reference_run_16: {
+
+                const auto count =
+                    runtime_program_reference_run_count(
+                        op);
+
+                if (count < 2) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                if (profile != nullptr) {
+                    profile->planned_member_visits +=
+                        count;
+
+                    profile->planned_reference_visits +=
+                        count;
+
+                    profile->
+                        planned_reference_member_binding +=
+                        count;
+
+                    profile->
+                        program_direct_reference_visits +=
+                        count;
+                }
+
+                auto* run_target =
+                    target;
+
+                auto native_source =
+                    native_base +
+                    static_cast<std::uint64_t>(
+                        op.payload);
+
+                for (std::uint32_t index = 0;
+                     index <
+                         count;
+                     ++index) {
+
+                    TargetWord stored = 0;
+
+                    std::memcpy(
+                        &stored,
+                        run_target,
+                        sizeof(stored));
+
+                    if (stored == 0) {
+                        const auto narrowed =
+                            static_cast<TargetWord>(
+                                native_source);
+
+                        std::memcpy(
+                            run_target,
+                            &narrowed,
+                            sizeof(narrowed));
+
+                        if (profile != nullptr) {
+                            ++profile->
+                                direct_member_binding_fast;
+                        }
+                    }
+                    else {
+                        const auto stored_wide =
+                            static_cast<std::uint64_t>(
+                                stored);
+
+                        if (!runtime_address(
+                                stored_wide) &&
+                            !is_pending_link(
+                                stored_wide)) {
+
+                            return fixed_direct_materialization_result::
+                                invalid_input;
+                        }
+                    }
+
+                    run_target +=
+                        16;
+
+                    native_source +=
+                        16;
                 }
 
                 break;
