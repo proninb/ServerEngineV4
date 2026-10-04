@@ -3,6 +3,8 @@
 #include "project/persistence/crc64_ecma.hpp"
 #include "project/runtime/fixed_direct_materializer.hpp"
 #include "project/runtime/runtime_layout.hpp"
+#include "project/shm/shm_layout.hpp"
+#include "project/shm/shm_runtime_v2.hpp"
 #include "project/runtime/runtime_system.hpp"
 #include "project/runtime/runtime_query.hpp"
 #include "project/runtime/runtime_ic.hpp"
@@ -8438,6 +8440,65 @@ void test_fixed_direct_link_prebind(
             return true;
         };
 
+    const auto prepare_runtime_v2 =
+        [&](compiled_test_image& image,
+            compiled_project_view& view,
+            shm_layout& layout,
+            shm_runtime_v2& runtime_model,
+            std::vector<std::byte>& runtime) {
+
+            if (view.bind(
+                    image.bytes) !=
+                        compiled_project_image_result::
+                            success ||
+                prepare_shm_layout(
+                    view,
+                    abi,
+                    layout) !=
+                        shm_layout_result::
+                            success ||
+                prepare_shm_runtime_v2(
+                    view,
+                    abi,
+                    layout,
+                    runtime_model) !=
+                        shm_runtime_v2_result::
+                            success) {
+
+                return false;
+            }
+
+            try {
+                runtime.assign(
+                    static_cast<std::size_t>(
+                        layout.size()),
+                    std::byte{0});
+            }
+            catch (...) {
+                return false;
+            }
+
+            return
+                materialize_shm_runtime_v2_canonical(
+                    runtime_model,
+                    abi,
+                    layout,
+                    runtime) ==
+                    shm_runtime_v2_result::success &&
+                mark_shm_runtime_v2_links(
+                    runtime_model,
+                    abi,
+                    layout,
+                    runtime) ==
+                    shm_runtime_v2_result::success &&
+                materialize_shm_runtime_v2_objects(
+                    runtime_model,
+                    abi,
+                    layout,
+                    runtime) ==
+                    shm_runtime_v2_result::success;
+        };
+
     {
         fixture value;
 
@@ -8590,6 +8651,105 @@ void test_fixed_direct_link_prebind(
                     in_offset) ==
                     c_out,
             "dense link prebind resolves reference dependency through later link");
+
+        compiled_project_view v2_view;
+        shm_layout v2_layout;
+        shm_runtime_v2 v2_model;
+        std::vector<std::byte> v2_runtime;
+
+        if (!tests.expect(
+                prepare_runtime_v2(
+                    image,
+                    v2_view,
+                    v2_layout,
+                    v2_model,
+                    v2_runtime),
+                "prepare Runtime V2 later-link dependency")) {
+
+            return;
+        }
+
+        if (!tests.expect(
+                materialize_shm_runtime_v2_links(
+                    v2_model,
+                    abi,
+                    v2_layout,
+                    v2_runtime) ==
+                    shm_runtime_v2_result::success,
+                "Runtime V2 resolves later-link dependency")) {
+
+            return;
+        }
+
+        type_entry v2_record;
+        shm_record_offset v2_out_offset = 0;
+        shm_record_offset v2_in_offset = 0;
+        shm_offset v2_a_offset = 0;
+        shm_offset v2_b_offset = 0;
+        shm_offset v2_c_offset = 0;
+
+        if (!tests.expect(
+                v2_view.type(
+                    value.type,
+                    v2_record) &&
+                v2_layout.member_offset(
+                    static_cast<std::size_t>(
+                        v2_record.members.begin) +
+                        value.out.value(),
+                    v2_out_offset) &&
+                v2_layout.member_offset(
+                    static_cast<std::size_t>(
+                        v2_record.members.begin) +
+                        value.in.value(),
+                    v2_in_offset) &&
+                v2_layout.object_offset(
+                    value.a,
+                    v2_a_offset) &&
+                v2_layout.object_offset(
+                    value.b,
+                    v2_b_offset) &&
+                v2_layout.object_offset(
+                    value.c,
+                    v2_c_offset),
+                "query Runtime V2 dependency offsets")) {
+
+            return;
+        }
+
+        const auto v2_base =
+            reinterpret_cast<std::uintptr_t>(
+                v2_runtime.data());
+
+        const auto v2_read_address =
+            [&](shm_offset offset) {
+                std::uintptr_t result = 0;
+
+                std::memcpy(
+                    &result,
+                    v2_runtime.data() +
+                        static_cast<std::size_t>(
+                            offset),
+                    sizeof(result));
+
+                return result;
+            };
+
+        const auto v2_c_out =
+            v2_base +
+            static_cast<std::uintptr_t>(
+                v2_c_offset +
+                v2_out_offset);
+
+        tests.expect(
+            v2_read_address(
+                v2_a_offset +
+                    v2_in_offset) ==
+                    v2_c_out &&
+            v2_read_address(
+                v2_b_offset +
+                    v2_in_offset) ==
+                    v2_c_out,
+            "Runtime V2 pending-link recursion matches legacy dependency result");
     }
 
     {
@@ -8672,6 +8832,33 @@ void test_fixed_direct_link_prebind(
                 fixed_direct_materialization_result::
                     invalid_input,
             "FIXED_DIRECT rejects Graph link dependency cycle");
+
+        compiled_project_view v2_view;
+        shm_layout v2_layout;
+        shm_runtime_v2 v2_model;
+        std::vector<std::byte> v2_runtime;
+
+        if (!tests.expect(
+                prepare_runtime_v2(
+                    image,
+                    v2_view,
+                    v2_layout,
+                    v2_model,
+                    v2_runtime),
+                "prepare Runtime V2 link dependency cycle")) {
+
+            return;
+        }
+
+        tests.expect(
+            materialize_shm_runtime_v2_links(
+                v2_model,
+                abi,
+                v2_layout,
+                v2_runtime) ==
+                shm_runtime_v2_result::
+                    invalid_input,
+            "Runtime V2 rejects Graph link dependency cycle");
     }
 
     {

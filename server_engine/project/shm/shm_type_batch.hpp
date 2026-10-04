@@ -108,6 +108,9 @@ struct shm_type_batch_execute_telemetry final {
     std::uint64_t store_writes = 0;
     std::uint64_t constructor_default_writes = 0;
 
+    // A static-link target is marked before object construction.
+    std::uint64_t pending_link_preserves = 0;
+
     std::uint64_t batch_api_applications = 0;
     std::uint64_t child_visits = 0;
     std::uint64_t repeat_visits = 0;

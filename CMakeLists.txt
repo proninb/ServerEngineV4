@@ -842,6 +842,9 @@ if(BUILD_TESTING)
 
     add_executable(ServerEngineV4Tests
         tests/compiled_project_tests.cpp
+        server_engine/project/shm/shm_layout.cpp
+        server_engine/project/shm/shm_type_batch.cpp
+        server_engine/project/shm/shm_runtime_v2.cpp
         server_engine/project/runtime/runtime_layout.cpp
         server_engine/project/runtime/runtime_query.cpp
         server_engine/project/runtime/runtime_ic.cpp

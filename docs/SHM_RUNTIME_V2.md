@@ -932,3 +932,68 @@ Constructor defaults no longer force legacy Runtime publication.
 Experimental Hybrid paths explicitly reject a constructor-bearing Type API
 until their flat representation gets an ordered post-store phase. They must
 never silently reorder constructor overrides.
+
+
+## RUNTIME-V2-LINKS-03
+
+Static Graph links are now a native Runtime V2 construction phase.
+
+The legacy semantic ordering is preserved:
+
+```text
+canonical
+    -> mark link target reference slots as pending
+    -> object-major INLINE-64 construction
+    -> resolve/materialize links
+    -> per-object initializations
+```
+
+The mark phase is required. A normal reference initializer must not overwrite a
+slot owned by a static link. Runtime V2 reference writes therefore recognize
+the reserved `~link_handle` pending marker and leave that target slot untouched.
+
+### Physical endpoint representation
+
+Graph endpoint metadata is consumed only during Runtime V2 prepare. Member,
+base, and array-index displacements between dereferences are folded into one
+physical displacement. Runtime stores only:
+
+```text
+endpoint_program
+    root object WHERE
+    dereference range
+    final static tail
+    final-is-reference
+
+dereference[]
+    static displacement before native reference load
+```
+
+There are no names, identity lookups, member lookups, path handles, or Graph
+walks in link execution.
+
+### Link dependency resolution
+
+After object construction, ordinary member/reference construction has already
+resolved to native Runtime addresses. Link resolution therefore only needs to:
+
+1. execute the prepared physical source endpoint;
+2. follow native references;
+3. if a reference contains another pending link marker, resolve that link by
+   its stable Graph link WHERE;
+4. write the final native source address into the target slot.
+
+Each stable Graph link slot owns one `link_plan`. Dead Graph link slots remain
+empty so `~link_handle` remains a direct one-based index into physical link
+state.
+
+A link dependency cycle is detected by the physical
+`marked -> resolving -> resolved` state transition and fails closed.
+
+The resident V2 compatibility gate is now reduced to only:
+
+```text
+per-object initializations
+```
+
+Static links no longer require `runtime_layout` or the legacy materializer.

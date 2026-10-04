@@ -688,20 +688,20 @@ server_status create_resident_project(
         return server_status::project_runtime_failed;
     }
 
-    // RUNTIME-V2-RESIDENT-01:
-    // V2 is production-selected only when every semantic construction phase
-    // represented by the old materializer is already covered by V2.
+    // RUNTIME-V2-LINKS-03:
+    // Constructor defaults and static Graph links are physical Runtime V2
+    // construction phases. Per-object initializations remain the only
+    // compatibility gate in this slice.
     const auto constructor_defaults =
         compiled.constructor_default_count();
 
-    const auto blocking_links =
+    const auto link_count =
         compiled.live_link_count();
 
     const auto blocking_initializations =
         compiled.initialization_count();
 
     const auto use_runtime_v2 =
-        blocking_links == 0 &&
         blocking_initializations == 0;
 
     if (telemetry != nullptr) {
@@ -712,8 +712,8 @@ server_status create_resident_project(
             runtime_v2_constructor_defaults =
                 constructor_defaults;
 
-        telemetry->runtime_v2_blocking_links =
-            blocking_links;
+        telemetry->runtime_v2_link_count =
+            link_count;
 
         telemetry->
             runtime_v2_blocking_initializations =
@@ -796,6 +796,26 @@ server_status create_resident_project(
             telemetry->runtime_v2_metadata_bytes =
                 static_cast<std::uint64_t>(
                     v2_runtime.resident_bytes());
+
+            telemetry->
+                runtime_v2_link_dereferences =
+                    static_cast<std::uint64_t>(
+                        v2_runtime.
+                            link_dereference_count());
+
+            telemetry->runtime_v2_links.links_prepared =
+                static_cast<std::uint64_t>(
+                    v2_runtime.link_count());
+
+            telemetry->runtime_v2_links.endpoint_programs =
+                static_cast<std::uint64_t>(
+                    v2_runtime.
+                        link_endpoint_program_count());
+
+            telemetry->runtime_v2_links.dereference_steps =
+                static_cast<std::uint64_t>(
+                    v2_runtime.
+                        link_dereference_count());
         }
 
         if (prepared_runtime !=
@@ -1068,6 +1088,54 @@ server_status create_resident_project(
                     project_runtime_failed;
         }
 
+        const auto links_mark_started =
+            clock_type::now();
+
+        const auto links_marked =
+            mark_shm_runtime_v2_links(
+                v2_runtime,
+                settings.abi,
+                v2_layout,
+                shared_memory.bytes(),
+                telemetry != nullptr
+                    ? &telemetry->
+                        runtime_v2_links
+                    : nullptr);
+
+        const auto links_mark_finished =
+            clock_type::now();
+
+        if (telemetry != nullptr) {
+            telemetry->materializer.links_mark_ns =
+                elapsed_ns(
+                    links_mark_started,
+                    links_mark_finished);
+        }
+
+        if (links_marked !=
+            shm_runtime_v2_result::success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_runtime_failed,
+                    operation)
+                    .file(project_path)
+                    .detail(
+                        runtime_v2_failure_detail(
+                            links_marked))
+                    .build());
+
+            return links_marked ==
+                        shm_runtime_v2_result::
+                            unsupported_type ||
+                    links_marked ==
+                        shm_runtime_v2_result::
+                            incompatible_abi
+                ? server_status::unsupported
+                : server_status::
+                    project_runtime_failed;
+        }
+
         const auto objects_started =
             clock_type::now();
 
@@ -1109,6 +1177,56 @@ server_status create_resident_project(
                         shm_runtime_v2_result::
                             unsupported_type ||
                     objects ==
+                        shm_runtime_v2_result::
+                            incompatible_abi
+                ? server_status::unsupported
+                : server_status::
+                    project_runtime_failed;
+        }
+
+        const auto links_started =
+            clock_type::now();
+
+        const auto links =
+            materialize_shm_runtime_v2_links(
+                v2_runtime,
+                settings.abi,
+                v2_layout,
+                shared_memory.bytes(),
+                telemetry != nullptr
+                    ? &telemetry->
+                        runtime_v2_links
+                    : nullptr);
+
+        const auto links_finished =
+            clock_type::now();
+
+        if (telemetry != nullptr) {
+            telemetry->
+                materializer.
+                    links_materialize_ns =
+                elapsed_ns(
+                    links_started,
+                    links_finished);
+        }
+
+        if (links !=
+            shm_runtime_v2_result::success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_runtime_failed,
+                    operation)
+                    .file(project_path)
+                    .detail(
+                        runtime_v2_failure_detail(
+                            links))
+                    .build());
+
+            return links ==
+                        shm_runtime_v2_result::
+                            unsupported_type ||
+                    links ==
                         shm_runtime_v2_result::
                             incompatible_abi
                 ? server_status::unsupported

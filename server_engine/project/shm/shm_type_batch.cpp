@@ -3505,6 +3505,58 @@ private:
             return shm_type_batch_result::invalid_input;
         }
 
+        // RUNTIME-V2-LINKS-03:
+        // Static link targets are pre-marked with ~link_handle before object
+        // construction. Preserve that marker instead of writing the ordinary
+        // member/reference default.
+        std::uint64_t stored = 0;
+
+        if (properties.reference_size == 4) {
+            std::uint32_t word = 0;
+
+            std::memcpy(
+                &word,
+                target,
+                sizeof(word));
+
+            stored = word;
+        }
+        else if (properties.reference_size == 8) {
+            std::memcpy(
+                &stored,
+                target,
+                sizeof(stored));
+        }
+        else {
+            return shm_type_batch_result::incompatible_abi;
+        }
+
+        const auto mask =
+            properties.reference_size == 4
+            ? static_cast<std::uint64_t>(
+                (std::numeric_limits<
+                    std::uint32_t>::max)())
+            : (std::numeric_limits<
+                std::uint64_t>::max)();
+
+        const auto decoded =
+            (~stored) &
+            mask;
+
+        if (stored != mask &&
+            decoded != 0 &&
+            decoded <=
+                link_handle::
+                    maximum_slot) {
+
+            if (telemetry != nullptr) {
+                ++telemetry->
+                    pending_link_preserves;
+            }
+
+            return shm_type_batch_result::success;
+        }
+
         const auto value =
             reinterpret_cast<std::uintptr_t>(
                 source);

@@ -493,9 +493,27 @@ int main(
             << ",runtime_v2_constructor_defaults="
             << runtime_telemetry.
                 runtime_v2_constructor_defaults
-            << ",runtime_v2_blocking_links="
+            << ",runtime_v2_link_count="
             << runtime_telemetry.
-                runtime_v2_blocking_links
+                runtime_v2_link_count
+            << ",runtime_v2_link_dereferences="
+            << runtime_telemetry.
+                runtime_v2_link_dereferences
+            << ",runtime_v2_link_targets_marked="
+            << runtime_telemetry.
+                runtime_v2_links.targets_marked
+            << ",runtime_v2_links_resolved="
+            << runtime_telemetry.
+                runtime_v2_links.links_resolved
+            << ",runtime_v2_link_recursive_resolutions="
+            << runtime_telemetry.
+                runtime_v2_links.recursive_resolutions
+            << ",runtime_v2_link_dereference_reads="
+            << runtime_telemetry.
+                runtime_v2_links.dereference_reads
+            << ",runtime_v2_pending_link_preserves="
+            << runtime_telemetry.
+                runtime_v2_objects.pending_link_preserves
             << ",runtime_v2_blocking_initializations="
             << runtime_telemetry.
                 runtime_v2_blocking_initializations

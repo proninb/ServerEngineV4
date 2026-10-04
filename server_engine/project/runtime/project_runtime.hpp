@@ -42,12 +42,14 @@ struct project_runtime_telemetry final {
     // Explicit compatibility-gate counters. Non-zero means a semantic phase
     // not yet migrated to shm_layout/V2 required the legacy constructor.
     std::uint64_t runtime_v2_constructor_defaults = 0;
-    std::uint64_t runtime_v2_blocking_links = 0;
+    std::uint64_t runtime_v2_link_count = 0;
+    std::uint64_t runtime_v2_link_dereferences = 0;
     std::uint64_t runtime_v2_blocking_initializations = 0;
 
     shm_runtime_v2_prepare_telemetry runtime_v2_prepare{};
     shm_runtime_v2_execute_telemetry runtime_v2_canonical{};
     shm_runtime_v2_execute_telemetry runtime_v2_objects{};
+    shm_runtime_v2_link_telemetry runtime_v2_links{};
 
     fixed_direct_materialization_telemetry materializer{};
 };
