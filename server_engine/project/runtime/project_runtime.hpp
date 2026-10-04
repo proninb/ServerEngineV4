@@ -31,6 +31,10 @@ struct project_runtime_telemetry final {
     fixed_direct_materialization_telemetry materializer{};
 };
 
+struct project_runtime_profile final {
+    fixed_direct_materialization_profile materializer{};
+};
+
 // Creates the final resident Project state for the configured Runtime/SHM mode.
 // FIXED_DIRECT allocates the one named Project SHM at the configured exact VA
 // and materializes the final ABI-native Runtime image directly into that SHM.
@@ -42,6 +46,7 @@ struct project_runtime_telemetry final {
     read_only_file_mapping&& compiled_mapping,
     compiled_project_view compiled,
     std::unique_ptr<project>& output,
-    project_runtime_telemetry* telemetry = nullptr);
+    project_runtime_telemetry* telemetry = nullptr,
+    project_runtime_profile* profile = nullptr);
 
 }

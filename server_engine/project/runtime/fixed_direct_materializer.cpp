@@ -196,13 +196,15 @@ public:
         const server_abi_configuration& abi,
         std::uint64_t target_base_address,
         std::span<std::byte> runtime,
-        fixed_direct_materialization_telemetry* telemetry) noexcept
+        fixed_direct_materialization_telemetry* telemetry,
+        fixed_direct_materialization_profile* profile) noexcept
         : project(project),
           layout(layout),
           abi(abi),
           target_base_address(target_base_address),
           runtime(runtime),
-          telemetry(telemetry) {
+          telemetry(telemetry),
+          profile(profile) {
     }
 
     [[nodiscard]] fixed_direct_materialization_result
@@ -223,6 +225,10 @@ public:
 
         if (telemetry != nullptr) {
             *telemetry = {};
+        }
+
+        if (profile != nullptr) {
+            *profile = {};
         }
 
         if (!project.valid() ||
@@ -1197,12 +1203,12 @@ private:
                         invalid_input;
                 }
 
-                if (telemetry != nullptr) {
-                    ++telemetry->array_calls;
-                    telemetry->array_elements_visited +=
+                if (profile != nullptr) {
+                    ++profile->array_calls;
+                    profile->array_elements_visited +=
                         derived.payload;
-                    ++telemetry->zero_array_calls;
-                    telemetry->zero_array_elements_visited +=
+                    ++profile->zero_array_calls;
+                    profile->zero_array_elements_visited +=
                         derived.payload;
                 }
 
@@ -2109,8 +2115,8 @@ private:
         type_handle handle,
         runtime_type_plan& output) noexcept {
 
-        if (telemetry != nullptr) {
-            ++telemetry->constructor_plan_builds;
+        if (profile != nullptr) {
+            ++profile->constructor_plan_builds;
         }
 
         const auto old_count =
@@ -2378,8 +2384,8 @@ private:
                 constructor_fields.size() -
                 old_count);
 
-        if (telemetry != nullptr) {
-            telemetry->constructor_defaults_cached +=
+        if (profile != nullptr) {
+            profile->constructor_defaults_cached +=
                 output.constructor_count;
         }
 
@@ -2611,20 +2617,20 @@ private:
                     }
                 }
 
-                if (telemetry != nullptr) {
-                    ++telemetry->plan_members_built;
+                if (profile != nullptr) {
+                    ++profile->plan_members_built;
 
                     switch (action) {
                     case materialization_action::none:
-                        ++telemetry->plan_none_members;
+                        ++profile->plan_none_members;
                         break;
 
                     case materialization_action::reference:
-                        ++telemetry->plan_reference_members;
+                        ++profile->plan_reference_members;
                         break;
 
                     case materialization_action::materialize:
-                        ++telemetry->plan_materialize_members;
+                        ++profile->plan_materialize_members;
                         break;
                     }
                 }
@@ -2868,8 +2874,8 @@ private:
         object_handle link_object,
         const runtime_type_plan& record) noexcept {
 
-        if (telemetry != nullptr) {
-            ++telemetry->planned_record_calls;
+        if (profile != nullptr) {
+            ++profile->planned_record_calls;
         }
 
         for (std::uint32_t active = 0;
@@ -2916,20 +2922,20 @@ private:
                 planned_members[
                     planned_index];
 
-            if (telemetry != nullptr) {
-                ++telemetry->planned_member_visits;
+            if (profile != nullptr) {
+                ++profile->planned_member_visits;
 
                 switch (member.action) {
                 case materialization_action::none:
-                    ++telemetry->planned_none_visits;
+                    ++profile->planned_none_visits;
                     break;
 
                 case materialization_action::reference:
-                    ++telemetry->planned_reference_visits;
+                    ++profile->planned_reference_visits;
                     break;
 
                 case materialization_action::materialize:
-                    ++telemetry->planned_materialize_visits;
+                    ++profile->planned_materialize_visits;
                     break;
                 }
             }
@@ -2948,20 +2954,20 @@ private:
             if (member.action ==
                 materialization_action::reference) {
 
-                if (telemetry != nullptr) {
+                if (profile != nullptr) {
                     switch (member.construction.kind) {
                     case construction_kind::zero:
-                        ++telemetry->
+                        ++profile->
                             planned_reference_zero_construction;
                         break;
 
                     case construction_kind::member_binding:
-                        ++telemetry->
+                        ++profile->
                             planned_reference_member_binding;
                         break;
 
                     case construction_kind::object_binding:
-                        ++telemetry->
+                        ++profile->
                             planned_reference_object_binding;
                         break;
 
@@ -2969,7 +2975,7 @@ private:
                     case construction_kind::unsigned_integer:
                     case construction_kind::real:
                     case construction_kind::unsupported:
-                        ++telemetry->
+                        ++profile->
                             planned_reference_other_construction;
                         break;
                     }
@@ -3022,8 +3028,8 @@ private:
                         target,
                         value_target);
 
-                    if (telemetry != nullptr) {
-                        ++telemetry->
+                    if (profile != nullptr) {
+                        ++profile->
                             direct_member_binding_fast;
                     }
 
@@ -3088,8 +3094,8 @@ private:
         std::byte* base,
         object_handle link_object) noexcept {
 
-        if (telemetry != nullptr) {
-            ++telemetry->normal_record_calls;
+        if (profile != nullptr) {
+            ++profile->normal_record_calls;
         }
 
         auto* type =
@@ -3147,8 +3153,8 @@ private:
                 invalid_input;
         }
 
-        if (telemetry != nullptr) {
-            telemetry->constructor_defaults_applied +=
+        if (profile != nullptr) {
+            profile->constructor_defaults_applied +=
                 type->constructor_count;
         }
 
@@ -3906,8 +3912,8 @@ private:
             if (source->action ==
                 materialization_action::reference) {
 
-                if (telemetry != nullptr) {
-                    ++telemetry->
+                if (profile != nullptr) {
+                    ++profile->
                         member_binding_to_reference;
                 }
                 next = {
@@ -3924,8 +3930,8 @@ private:
                     success;
             }
 
-            if (telemetry != nullptr) {
-                ++telemetry->
+            if (profile != nullptr) {
+                ++profile->
                     member_binding_to_value;
             }
 
@@ -3978,8 +3984,8 @@ private:
                     source.type,
                     source_referent)) {
 
-                if (telemetry != nullptr) {
-                    ++telemetry->
+                if (profile != nullptr) {
+                    ++profile->
                         object_binding_to_reference;
                 }
 
@@ -4021,8 +4027,8 @@ private:
                     success;
             }
 
-            if (telemetry != nullptr) {
-                ++telemetry->
+            if (profile != nullptr) {
+                ++profile->
                     object_binding_to_value;
             }
 
@@ -4517,8 +4523,8 @@ private:
                     reinterpret_cast<std::uintptr_t>(
                         slot));
 
-                if (telemetry != nullptr) {
-                    ++telemetry->
+                if (profile != nullptr) {
+                    ++profile->
                         resolver_path_pushes;
                 }
             }
@@ -4697,8 +4703,8 @@ private:
                  maximum_steps;
              ++step) {
 
-            if (telemetry != nullptr) {
-                ++telemetry->
+            if (profile != nullptr) {
+                ++profile->
                     resolver_steps_total;
             }
 
@@ -4823,8 +4829,8 @@ private:
                         target);
             }
             else {
-                if (telemetry != nullptr) {
-                    ++telemetry->
+                if (profile != nullptr) {
+                    ++profile->
                         unplanned_reference_fallbacks;
                 }
 
@@ -4855,8 +4861,8 @@ private:
                     }
 
                     if (consumed != 0) {
-                        if (telemetry != nullptr) {
-                            telemetry->
+                        if (profile != nullptr) {
+                            profile->
                                 resolver_steps_total +=
                                 consumed - 1;
                         }
@@ -4932,8 +4938,8 @@ private:
                     reinterpret_cast<std::uintptr_t>(
                         current.slot));
 
-                if (telemetry != nullptr) {
-                    ++telemetry->
+                if (profile != nullptr) {
+                    ++profile->
                         resolver_path_pushes;
                 }
             }
@@ -5399,6 +5405,7 @@ private:
     abi_properties properties;
     std::span<std::byte> runtime;
     fixed_direct_materialization_telemetry* telemetry = nullptr;
+    fixed_direct_materialization_profile* profile = nullptr;
     std::vector<std::uintptr_t> resolution_path;
 
     // Construction-only prepared Runtime model. It is discarded with this
@@ -5523,7 +5530,8 @@ materialize_fixed_direct(
     const server_abi_configuration& abi,
     std::uint64_t target_base_address,
     std::span<std::byte> runtime,
-    fixed_direct_materialization_telemetry* telemetry) noexcept {
+    fixed_direct_materialization_telemetry* telemetry,
+    fixed_direct_materialization_profile* profile) noexcept {
 
     fixed_direct_materializer materializer{
         project,
@@ -5532,6 +5540,7 @@ materialize_fixed_direct(
         target_base_address,
         runtime,
         telemetry,
+        profile,
     };
 
     return materializer.run();
@@ -5543,7 +5552,8 @@ materialize_fixed_direct(
     const runtime_layout& layout,
     const server_abi_configuration& abi,
     std::span<std::byte> runtime,
-    fixed_direct_materialization_telemetry* telemetry) noexcept {
+    fixed_direct_materialization_telemetry* telemetry,
+    fixed_direct_materialization_profile* profile) noexcept {
 
     return materialize_fixed_direct(
         project,
@@ -5553,7 +5563,8 @@ materialize_fixed_direct(
             reinterpret_cast<std::uintptr_t>(
                 runtime.data())),
         runtime,
-        telemetry);
+        telemetry,
+        profile);
 }
 
 }

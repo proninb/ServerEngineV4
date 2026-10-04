@@ -145,6 +145,20 @@ Links and Source initializations are instance-specific, not type semantics.
 Their endpoint/path compilation is a later construction-plan slice; until then
 the existing endpoint resolver remains authoritative at those two barriers.
 
+Runtime publication telemetry is intentionally split from profiling:
+
+```text
+project_runtime_telemetry
+    -> coarse stage timings only
+
+project_runtime_profile
+    -> optional diagnostic per-operation counters
+```
+
+Ordinary LOAD never enables the profile. This keeps record/member/reference
+counter writes out of the production construction hot path. Benchmark
+`load-profile` enables them explicitly when architectural diagnosis is needed.
+
 ### Runtime System prefix
 
 The final physical Runtime image contains one Server-owned `System` prefix before all Project-derived Runtime storage:

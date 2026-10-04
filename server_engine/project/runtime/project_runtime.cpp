@@ -190,12 +190,17 @@ server_status create_resident_project(
     read_only_file_mapping&& compiled_mapping,
     compiled_project_view compiled,
     std::unique_ptr<project>& output,
-    project_runtime_telemetry* telemetry) {
+    project_runtime_telemetry* telemetry,
+    project_runtime_profile* profile) {
 
     output.reset();
 
     if (telemetry != nullptr) {
         *telemetry = {};
+    }
+
+    if (profile != nullptr) {
+        *profile = {};
     }
 
     using clock_type =
@@ -405,6 +410,9 @@ server_status create_resident_project(
             shared_memory.bytes(),
             telemetry != nullptr
                 ? &telemetry->materializer
+                : nullptr,
+            profile != nullptr
+                ? &profile->materializer
                 : nullptr);
 
     const auto materialization_finished =

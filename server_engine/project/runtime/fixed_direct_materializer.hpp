@@ -28,6 +28,8 @@ enum class fixed_direct_materialization_result : std::uint8_t {
     failed,
 };
 
+// Cheap stage timing collected by ordinary Runtime publication.
+// No per-record/member/reference counters belong here.
 struct fixed_direct_materialization_telemetry final {
     std::uint64_t workspace_ns = 0;
     std::uint64_t runtime_plan_ns = 0;
@@ -37,7 +39,11 @@ struct fixed_direct_materialization_telemetry final {
     std::uint64_t objects_ns = 0;
     std::uint64_t links_materialize_ns = 0;
     std::uint64_t initializations_ns = 0;
+};
 
+// Explicit diagnostic profiler. Passing nullptr removes these counter writes
+// from the normal FIXED_DIRECT hot path.
+struct fixed_direct_materialization_profile final {
     std::uint64_t normal_record_calls = 0;
     std::uint64_t planned_record_calls = 0;
     std::uint64_t unplanned_record_calls = 0;
@@ -92,7 +98,8 @@ materialize_fixed_direct(
     const server_abi_configuration& abi,
     std::uint64_t target_base_address,
     std::span<std::byte> runtime,
-    fixed_direct_materialization_telemetry* telemetry = nullptr) noexcept;
+    fixed_direct_materialization_telemetry* telemetry = nullptr,
+    fixed_direct_materialization_profile* profile = nullptr) noexcept;
 
 [[nodiscard]] fixed_direct_materialization_result
 materialize_fixed_direct(
@@ -100,6 +107,7 @@ materialize_fixed_direct(
     const runtime_layout& layout,
     const server_abi_configuration& abi,
     std::span<std::byte> runtime,
-    fixed_direct_materialization_telemetry* telemetry = nullptr) noexcept;
+    fixed_direct_materialization_telemetry* telemetry = nullptr,
+    fixed_direct_materialization_profile* profile = nullptr) noexcept;
 
 }

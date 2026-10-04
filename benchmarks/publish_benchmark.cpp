@@ -37,6 +37,7 @@ namespace {
 enum class benchmark_mode {
     publish,
     load,
+    load_profile,
     build,
     rebuild,
     audit,
@@ -53,6 +54,11 @@ enum class benchmark_mode {
 
     if (value == "load") {
         output = benchmark_mode::load;
+        return true;
+    }
+
+    if (value == "load-profile") {
+        output = benchmark_mode::load_profile;
         return true;
     }
 
@@ -225,8 +231,9 @@ void print_usage() {
     std::cerr
         << "Usage:\n"
         << "  ServerEngineV4PublishBenchmark publish <project.json> <expected-types>\n"
-        << "  ServerEngineV4PublishBenchmark load    <project.json> <expected-types>\n"
-        << "  ServerEngineV4PublishBenchmark build   <project.json> <expected-types>\n"
+        << "  ServerEngineV4PublishBenchmark load         <project.json> <expected-types>\n"
+        << "  ServerEngineV4PublishBenchmark load-profile <project.json> <expected-types>\n"
+        << "  ServerEngineV4PublishBenchmark build        <project.json> <expected-types>\n"
         << "  ServerEngineV4PublishBenchmark rebuild <project.json> <expected-types>\n"
         << "  ServerEngineV4PublishBenchmark audit   <project.json> <expected-types>\n";
 }
@@ -316,6 +323,9 @@ int main(
     cw::server::project_runtime_telemetry
         runtime_telemetry;
 
+    cw::server::project_runtime_profile
+        runtime_profile;
+
     if (mode ==
         benchmark_mode::publish) {
 
@@ -349,7 +359,10 @@ int main(
                 cw::server::operation_id{1},
                 diagnostics,
                 project,
-                &runtime_telemetry);
+                &runtime_telemetry,
+                mode == benchmark_mode::load_profile
+                    ? &runtime_profile
+                    : nullptr);
     }
 
     if (mode == benchmark_mode::audit && cw::server::succeeded(status) && project) {
@@ -464,6 +477,7 @@ int main(
         << compiled.identity_count();
 
     if (mode == benchmark_mode::load ||
+        mode == benchmark_mode::load_profile ||
         mode == benchmark_mode::audit) {
 
         std::cout
@@ -503,69 +517,73 @@ int main(
                 runtime_telemetry.materializer.links_materialize_ns)
             << ",initializations_ms="
             << ns_to_ms(
-                runtime_telemetry.materializer.initializations_ns)
+                runtime_telemetry.materializer.initializations_ns);
+    }
+
+    if (mode == benchmark_mode::load_profile) {
+        std::cout
             << ",normal_record_calls="
-            << runtime_telemetry.materializer.normal_record_calls
+            << runtime_profile.materializer.normal_record_calls
             << ",planned_record_calls="
-            << runtime_telemetry.materializer.planned_record_calls
+            << runtime_profile.materializer.planned_record_calls
             << ",unplanned_record_calls="
-            << runtime_telemetry.materializer.unplanned_record_calls
+            << runtime_profile.materializer.unplanned_record_calls
             << ",planned_member_visits="
-            << runtime_telemetry.materializer.planned_member_visits
+            << runtime_profile.materializer.planned_member_visits
             << ",planned_none_visits="
-            << runtime_telemetry.materializer.planned_none_visits
+            << runtime_profile.materializer.planned_none_visits
             << ",planned_reference_visits="
-            << runtime_telemetry.materializer.planned_reference_visits
+            << runtime_profile.materializer.planned_reference_visits
             << ",planned_reference_zero_construction="
-            << runtime_telemetry.materializer.planned_reference_zero_construction
+            << runtime_profile.materializer.planned_reference_zero_construction
             << ",planned_reference_member_binding="
-            << runtime_telemetry.materializer.planned_reference_member_binding
+            << runtime_profile.materializer.planned_reference_member_binding
             << ",planned_reference_object_binding="
-            << runtime_telemetry.materializer.planned_reference_object_binding
+            << runtime_profile.materializer.planned_reference_object_binding
             << ",planned_reference_other_construction="
-            << runtime_telemetry.materializer.planned_reference_other_construction
+            << runtime_profile.materializer.planned_reference_other_construction
             << ",direct_member_binding_fast="
-            << runtime_telemetry.materializer.direct_member_binding_fast
+            << runtime_profile.materializer.direct_member_binding_fast
             << ",member_binding_to_value="
-            << runtime_telemetry.materializer.member_binding_to_value
+            << runtime_profile.materializer.member_binding_to_value
             << ",member_binding_to_reference="
-            << runtime_telemetry.materializer.member_binding_to_reference
+            << runtime_profile.materializer.member_binding_to_reference
             << ",object_binding_to_value="
-            << runtime_telemetry.materializer.object_binding_to_value
+            << runtime_profile.materializer.object_binding_to_value
             << ",object_binding_to_reference="
-            << runtime_telemetry.materializer.object_binding_to_reference
+            << runtime_profile.materializer.object_binding_to_reference
             << ",resolver_steps_total="
-            << runtime_telemetry.materializer.resolver_steps_total
+            << runtime_profile.materializer.resolver_steps_total
             << ",resolver_path_pushes="
-            << runtime_telemetry.materializer.resolver_path_pushes
+            << runtime_profile.materializer.resolver_path_pushes
             << ",unplanned_reference_fallbacks="
-            << runtime_telemetry.materializer.unplanned_reference_fallbacks
+            << runtime_profile.materializer.unplanned_reference_fallbacks
             << ",planned_materialize_visits="
-            << runtime_telemetry.materializer.planned_materialize_visits
+            << runtime_profile.materializer.planned_materialize_visits
             << ",unplanned_member_visits="
-            << runtime_telemetry.materializer.unplanned_member_visits
+            << runtime_profile.materializer.unplanned_member_visits
             << ",plan_members_built="
-            << runtime_telemetry.materializer.plan_members_built
+            << runtime_profile.materializer.plan_members_built
             << ",plan_none_members="
-            << runtime_telemetry.materializer.plan_none_members
+            << runtime_profile.materializer.plan_none_members
             << ",plan_reference_members="
-            << runtime_telemetry.materializer.plan_reference_members
+            << runtime_profile.materializer.plan_reference_members
             << ",plan_materialize_members="
-            << runtime_telemetry.materializer.plan_materialize_members
+            << runtime_profile.materializer.plan_materialize_members
             << ",array_calls="
-            << runtime_telemetry.materializer.array_calls
+            << runtime_profile.materializer.array_calls
             << ",array_elements_visited="
-            << runtime_telemetry.materializer.array_elements_visited
+            << runtime_profile.materializer.array_elements_visited
             << ",zero_array_calls="
-            << runtime_telemetry.materializer.zero_array_calls
+            << runtime_profile.materializer.zero_array_calls
             << ",zero_array_elements_visited="
-            << runtime_telemetry.materializer.zero_array_elements_visited
+            << runtime_profile.materializer.zero_array_elements_visited
             << ",constructor_plan_builds="
-            << runtime_telemetry.materializer.constructor_plan_builds
+            << runtime_profile.materializer.constructor_plan_builds
             << ",constructor_defaults_cached="
-            << runtime_telemetry.materializer.constructor_defaults_cached
+            << runtime_profile.materializer.constructor_defaults_cached
             << ",constructor_defaults_applied="
-            << runtime_telemetry.materializer.constructor_defaults_applied;
+            << runtime_profile.materializer.constructor_defaults_applied;
     }
 
     if (mode == benchmark_mode::build) {
