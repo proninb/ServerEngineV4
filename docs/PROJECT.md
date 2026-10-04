@@ -137,10 +137,14 @@ The structural policy remains:
 physically empty child program
     -> emit nothing
 
+single self-contained physical child op
+    -> replace CALL with that one rebased op
+       (CALL and generic resolver remain shared)
+
 terminal non-empty direct child
     -> inline leaf operations once into the parent TYPE
 
-non-terminal non-empty direct child
+remaining non-terminal direct child
     -> one shared CALL
 
 bounded array
@@ -188,6 +192,14 @@ shape: a type may have bases or nested record members yet still compile to no
 Runtime writes after zero/no-op elimination. Child plans are prepared before
 their parents, so physically empty subtrees collapse bottom-up without
 transitive program fusion or duplicated instructions.
+
+A ready child whose physical program contains exactly one self-contained
+operation also does not need recursive CALL dispatch. The parent replaces its
+one CALL with that one rebased operation, so the hot instruction count remains
+exactly one instruction at that structural edge. Nested CALL remains shared.
+`GENERIC_REFERENCE` also remains shared in this rule because rebasing it would
+duplicate its cold resolver sidecar. This is not a fusion threshold and does
+not expand multi-operation child programs.
 
 This compact program is construction-only, is never persisted, and does not
 change G or Runtime ABI. Leaf fusion still stops after one terminal structural

@@ -3833,6 +3833,30 @@ private:
                 success;
         }
 
+        // SINGLE-OP-INLINE-01:
+        // Physical program shape is authoritative after planning. Replacing a
+        // shared CALL with one self-contained child operation is a strict 1:1
+        // instruction substitution: no hot-program growth and no recursive
+        // dispatch. CALL remains shared, and generic_reference remains shared
+        // here because rebasing it would duplicate its cold resolver sidecar.
+        if (child->program_count == 1) {
+            const auto& only =
+                runtime_program_ops[
+                    begin];
+
+            if (only.kind !=
+                    runtime_program_op_kind::call &&
+                only.kind !=
+                    runtime_program_op_kind::
+                        generic_reference) {
+
+                return append_terminal_runtime_program(
+                    *child,
+                    delta,
+                    allow_link_object);
+            }
+        }
+
         bool terminal = false;
 
         const auto classified =
