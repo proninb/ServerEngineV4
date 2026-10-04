@@ -1971,6 +1971,11 @@ private:
     enum class runtime_program_op_kind : std::uint8_t {
         direct_reference = 0,
         generic_reference,
+        store_1,
+        store_2,
+        store_4,
+        store_8,
+        store_16,
         value,
         constructor,
         call,
@@ -1998,7 +2003,10 @@ private:
 
         // direct_reference -> source record_offset
         // generic_reference -> runtime_program_references index
-        // value -> planned_members index
+        // store_1/2/4 -> target-native bytes inline in payload
+        // store_8 -> runtime_program_constants_64 index
+        // store_16 -> runtime_program_constants_128 index
+        // value -> residual planned_members index
         // constructor -> constructor_fields index
         // call -> child type slot + two flags above
         std::uint32_t payload = 0;
@@ -2022,6 +2030,13 @@ private:
     };
 
     static_assert(sizeof(runtime_program_reference) == 16);
+
+    struct runtime_program_constant_128 final {
+        std::uint64_t low = 0;
+        std::uint64_t high = 0;
+    };
+
+    static_assert(sizeof(runtime_program_constant_128) == 16);
 
     [[nodiscard]] fixed_direct_materialization_result
     prepare_value_plan(
@@ -2642,6 +2657,27 @@ private:
                         ++profile->
                             program_generic_reference_ops_built;
                     }
+                    else if (
+                        op.kind ==
+                            runtime_program_op_kind::store_1 ||
+                        op.kind ==
+                            runtime_program_op_kind::store_2 ||
+                        op.kind ==
+                            runtime_program_op_kind::store_4 ||
+                        op.kind ==
+                            runtime_program_op_kind::store_8 ||
+                        op.kind ==
+                            runtime_program_op_kind::store_16) {
+
+                        ++profile->
+                            program_physical_value_ops_built;
+                    }
+                    else if (op.kind ==
+                        runtime_program_op_kind::value) {
+
+                        ++profile->
+                            program_residual_value_ops_built;
+                    }
                 }
             }
         }
@@ -2788,6 +2824,235 @@ private:
     }
 
     [[nodiscard]] fixed_direct_materialization_result
+    append_runtime_program_physical_value(
+        const planned_member& member,
+        bool& physicalized) noexcept {
+
+        physicalized = false;
+
+        auto scalar_type =
+            member.type;
+
+        for (;;) {
+            if (scalar_type.kind() !=
+                type_ref_kind::derived) {
+
+                break;
+            }
+
+            derived_type_record derived;
+
+            if (!project.derived(
+                    scalar_type,
+                    derived)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            if (derived.kind !=
+                    derived_type_kind::const_qualified &&
+                derived.kind !=
+                    derived_type_kind::volatile_qualified) {
+
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            scalar_type =
+                derived.child;
+        }
+
+        if (scalar_type.kind() !=
+            type_ref_kind::intrinsic) {
+
+            return fixed_direct_materialization_result::
+                success;
+        }
+
+        const auto intrinsic =
+            static_cast<intrinsic_type>(
+                scalar_type.payload());
+
+        // nullptr is already a zero/no-op when valid. void/none and invalid
+        // scalar constructions stay on the authoritative residual path.
+        if (intrinsic == intrinsic_type::none ||
+            intrinsic == intrinsic_type::void_type ||
+            intrinsic == intrinsic_type::nullptr_type) {
+
+            return fixed_direct_materialization_result::
+                success;
+        }
+
+        std::byte bytes[16]{};
+
+        const auto encoded =
+            normal_intrinsic(
+                intrinsic,
+                member.construction,
+                bytes);
+
+        if (encoded !=
+            fixed_direct_materialization_result::
+                success) {
+
+            // Preserve existing failure timing/semantics through VALUE.
+            return fixed_direct_materialization_result::
+                success;
+        }
+
+        runtime_value_layout value;
+
+        if (!layout.value(
+                member.type,
+                value)) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        runtime_program_op_kind kind =
+            runtime_program_op_kind::value;
+
+        std::uint32_t payload = 0;
+
+        try {
+            switch (value.size) {
+            case 1:
+                std::memcpy(
+                    &payload,
+                    bytes,
+                    1);
+
+                kind =
+                    runtime_program_op_kind::store_1;
+                break;
+
+            case 2:
+                std::memcpy(
+                    &payload,
+                    bytes,
+                    2);
+
+                kind =
+                    runtime_program_op_kind::store_2;
+                break;
+
+            case 4:
+                std::memcpy(
+                    &payload,
+                    bytes,
+                    4);
+
+                kind =
+                    runtime_program_op_kind::store_4;
+                break;
+
+            case 8: {
+                const auto maximum =
+                    static_cast<std::size_t>(
+                        (std::numeric_limits<
+                            std::uint32_t>::max)());
+
+                if (runtime_program_constants_64.size() >
+                    maximum) {
+
+                    return fixed_direct_materialization_result::
+                        overflow;
+                }
+
+                std::uint64_t constant = 0;
+
+                std::memcpy(
+                    &constant,
+                    bytes,
+                    sizeof(constant));
+
+                payload =
+                    static_cast<std::uint32_t>(
+                        runtime_program_constants_64.size());
+
+                runtime_program_constants_64.push_back(
+                    constant);
+
+                kind =
+                    runtime_program_op_kind::store_8;
+
+                if (profile != nullptr) {
+                    ++profile->
+                        program_constant_64_built;
+                }
+
+                break;
+            }
+
+            case 16: {
+                const auto maximum =
+                    static_cast<std::size_t>(
+                        (std::numeric_limits<
+                            std::uint32_t>::max)());
+
+                if (runtime_program_constants_128.size() >
+                    maximum) {
+
+                    return fixed_direct_materialization_result::
+                        overflow;
+                }
+
+                runtime_program_constant_128 constant;
+
+                std::memcpy(
+                    &constant,
+                    bytes,
+                    sizeof(constant));
+
+                payload =
+                    static_cast<std::uint32_t>(
+                        runtime_program_constants_128.size());
+
+                runtime_program_constants_128.push_back(
+                    constant);
+
+                kind =
+                    runtime_program_op_kind::store_16;
+
+                if (profile != nullptr) {
+                    ++profile->
+                        program_constant_128_built;
+                }
+
+                break;
+            }
+
+            default:
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            runtime_program_ops.push_back({
+                member.offset,
+                payload,
+                kind,
+                {},
+            });
+        }
+        catch (...) {
+            return fixed_direct_materialization_result::
+                failed;
+        }
+
+        physicalized = true;
+
+        if (profile != nullptr) {
+            ++profile->
+                program_physical_value_ops_built;
+        }
+
+        return fixed_direct_materialization_result::
+            success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
     append_child_runtime_program_or_call(
         type_handle child_handle,
         record_offset delta,
@@ -2843,6 +3108,12 @@ private:
         const auto old_reference_count =
             runtime_program_references.size();
 
+        const auto old_constant_64_count =
+            runtime_program_constants_64.size();
+
+        const auto old_constant_128_count =
+            runtime_program_constants_128.size();
+
         const auto rollback =
             [&]() noexcept {
                 runtime_program_ops.resize(
@@ -2850,6 +3121,12 @@ private:
 
                 runtime_program_references.resize(
                     old_reference_count);
+
+                runtime_program_constants_64.resize(
+                    old_constant_64_count);
+
+                runtime_program_constants_128.resize(
+                    old_constant_128_count);
             };
 
         const auto maximum =
@@ -3000,6 +3277,25 @@ private:
                 continue;
             }
 
+            bool physicalized = false;
+
+            const auto physical =
+                append_runtime_program_physical_value(
+                    member,
+                    physicalized);
+
+            if (physical !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                rollback();
+                return physical;
+            }
+
+            if (physicalized) {
+                continue;
+            }
+
             try {
                 runtime_program_ops.push_back({
                     member.offset,
@@ -3013,6 +3309,11 @@ private:
                 rollback();
                 return fixed_direct_materialization_result::
                     failed;
+            }
+
+            if (profile != nullptr) {
+                ++profile->
+                    program_residual_value_ops_built;
             }
         }
 
@@ -3764,6 +4065,102 @@ private:
                 break;
             }
 
+            case runtime_program_op_kind::store_1:
+                std::memcpy(
+                    target,
+                    &op.payload,
+                    1);
+
+                if (profile != nullptr) {
+                    ++profile->planned_member_visits;
+                    ++profile->
+                        planned_materialize_visits;
+                    ++profile->
+                        program_physical_value_visits;
+                }
+
+                break;
+
+            case runtime_program_op_kind::store_2:
+                std::memcpy(
+                    target,
+                    &op.payload,
+                    2);
+
+                if (profile != nullptr) {
+                    ++profile->planned_member_visits;
+                    ++profile->
+                        planned_materialize_visits;
+                    ++profile->
+                        program_physical_value_visits;
+                }
+
+                break;
+
+            case runtime_program_op_kind::store_4:
+                std::memcpy(
+                    target,
+                    &op.payload,
+                    4);
+
+                if (profile != nullptr) {
+                    ++profile->planned_member_visits;
+                    ++profile->
+                        planned_materialize_visits;
+                    ++profile->
+                        program_physical_value_visits;
+                }
+
+                break;
+
+            case runtime_program_op_kind::store_8:
+                if (op.payload >=
+                    runtime_program_constants_64.size()) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                std::memcpy(
+                    target,
+                    &runtime_program_constants_64[
+                        op.payload],
+                    8);
+
+                if (profile != nullptr) {
+                    ++profile->planned_member_visits;
+                    ++profile->
+                        planned_materialize_visits;
+                    ++profile->
+                        program_physical_value_visits;
+                }
+
+                break;
+
+            case runtime_program_op_kind::store_16:
+                if (op.payload >=
+                    runtime_program_constants_128.size()) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                std::memcpy(
+                    target,
+                    &runtime_program_constants_128[
+                        op.payload],
+                    16);
+
+                if (profile != nullptr) {
+                    ++profile->planned_member_visits;
+                    ++profile->
+                        planned_materialize_visits;
+                    ++profile->
+                        program_physical_value_visits;
+                }
+
+                break;
+
             case runtime_program_op_kind::value: {
                 if (op.payload >=
                     planned_members.size()) {
@@ -3787,6 +4184,8 @@ private:
                     ++profile->planned_member_visits;
                     ++profile->
                         planned_materialize_visits;
+                    ++profile->
+                        program_residual_value_visits;
                 }
 
                 const auto materialized =
@@ -6377,6 +6776,14 @@ private:
 
     std::vector<runtime_program_reference>
         runtime_program_references;
+
+    // Physical scalar constants larger than the 32-bit inline payload.
+    // Terminal inlining copies only the 12-byte op and reuses these entries.
+    std::vector<std::uint64_t>
+        runtime_program_constants_64;
+
+    std::vector<runtime_program_constant_128>
+        runtime_program_constants_128;
 
     // PASS 1 owns target validation. PASS 2 reuses the exact validated SHM
     // slot without repeating endpoint resolution. Pending-link identity lives

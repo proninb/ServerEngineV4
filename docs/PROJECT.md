@@ -183,6 +183,27 @@ This compact program is construction-only, is never persisted, and does not
 change G or Runtime ABI. Leaf fusion still stops after one terminal structural
 edge; there is no transitive type-program expansion.
 
+Scalar member construction is also compiled to physical operations before SHM
+execution. The existing intrinsic conversion rules remain authoritative: the
+planner evaluates them once into target-native bytes. Values of 1, 2, and 4
+bytes are embedded directly in the 32-bit instruction payload; 8-byte and
+16-byte values use compact global constant sidecars. Terminal child inlining
+copies only the 12-byte operation and reuses the same constant entry.
+
+Therefore the normal scalar path is:
+
+```text
+G type + construction_value
+    -> planning: validate/convert once
+    -> STORE_1 / STORE_2 / STORE_4 / STORE_8 / STORE_16
+    -> execution: memcpy target-native bytes
+```
+
+`VALUE` remains only a residual opcode for structural or otherwise
+non-physicalized forms such as compact array execution. The Runtime hot path
+does not repeatedly interpret `type_ref`, `construction_kind`, or intrinsic
+numeric-conversion semantics for physical scalar values.
+
 Global construction barriers remain explicit:
 
 ```text

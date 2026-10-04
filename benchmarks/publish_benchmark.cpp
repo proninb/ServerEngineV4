@@ -583,6 +583,14 @@ int main(
             << runtime_profile.materializer.program_direct_reference_ops_built
             << ",program_generic_reference_ops_built="
             << runtime_profile.materializer.program_generic_reference_ops_built
+            << ",program_physical_value_ops_built="
+            << runtime_profile.materializer.program_physical_value_ops_built
+            << ",program_residual_value_ops_built="
+            << runtime_profile.materializer.program_residual_value_ops_built
+            << ",program_constant_64_built="
+            << runtime_profile.materializer.program_constant_64_built
+            << ",program_constant_128_built="
+            << runtime_profile.materializer.program_constant_128_built
             << ",program_executions="
             << runtime_profile.materializer.program_executions
             << ",program_op_visits="
@@ -591,6 +599,10 @@ int main(
             << runtime_profile.materializer.program_direct_reference_visits
             << ",program_generic_reference_visits="
             << runtime_profile.materializer.program_generic_reference_visits
+            << ",program_physical_value_visits="
+            << runtime_profile.materializer.program_physical_value_visits
+            << ",program_residual_value_visits="
+            << runtime_profile.materializer.program_residual_value_visits
             << ",array_calls="
             << runtime_profile.materializer.array_calls
             << ",array_elements_visited="

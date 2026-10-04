@@ -78,10 +78,16 @@ struct fixed_direct_materialization_profile final {
     std::uint64_t program_shared_calls_built = 0;
     std::uint64_t program_direct_reference_ops_built = 0;
     std::uint64_t program_generic_reference_ops_built = 0;
+    std::uint64_t program_physical_value_ops_built = 0;
+    std::uint64_t program_residual_value_ops_built = 0;
+    std::uint64_t program_constant_64_built = 0;
+    std::uint64_t program_constant_128_built = 0;
     std::uint64_t program_executions = 0;
     std::uint64_t program_op_visits = 0;
     std::uint64_t program_direct_reference_visits = 0;
     std::uint64_t program_generic_reference_visits = 0;
+    std::uint64_t program_physical_value_visits = 0;
+    std::uint64_t program_residual_value_visits = 0;
 
     std::uint64_t array_calls = 0;
     std::uint64_t array_elements_visited = 0;
