@@ -107,6 +107,44 @@ G + Server ABI + SHM policy
 The mode changes physical materialization only. It does not create another G or
 a second semantic construction stage.
 
+### Runtime construction planning
+
+Runtime construction is split into three responsibilities:
+
+```text
+compiled G + Server ABI
+    -> runtime_layout
+         physical ABI truth
+    -> runtime_type_plan[] + runtime_object_plan[]
+         temporary construction truth
+    -> FIXED_DIRECT executor
+         final native Runtime/SHM bytes
+```
+
+`runtime_type_plan` and `runtime_object_plan` are construction-only. They are
+prepared before Runtime bytes are written and are discarded before the resident
+Project is returned. They are not another G and are never persisted.
+
+The type plan owns physical member/base offsets and pre-resolved constructor
+default destinations. The object plan owns the object handle/type/construction
+and final Runtime offset. Runtime object execution must not lazily build type
+plans from Graph metadata.
+
+Global construction barriers remain explicit:
+
+```text
+prepare Runtime plans
+    -> initialize canonical Runtime state
+    -> mark all link targets
+    -> construct all objects from type/object plans
+    -> bind all links
+    -> apply all Source object initializations
+```
+
+Links and Source initializations are instance-specific, not type semantics.
+Their endpoint/path compilation is a later construction-plan slice; until then
+the existing endpoint resolver remains authoritative at those two barriers.
+
 ### Runtime System prefix
 
 The final physical Runtime image contains one Server-owned `System` prefix before all Project-derived Runtime storage:

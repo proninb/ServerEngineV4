@@ -30,6 +30,7 @@ enum class fixed_direct_materialization_result : std::uint8_t {
 
 struct fixed_direct_materialization_telemetry final {
     std::uint64_t workspace_ns = 0;
+    std::uint64_t runtime_plan_ns = 0;
     std::uint64_t zero_ns = 0;
     std::uint64_t canonical_ns = 0;
     std::uint64_t links_mark_ns = 0;
@@ -56,6 +57,7 @@ struct fixed_direct_materialization_telemetry final {
 
     std::uint64_t resolver_steps_total = 0;
     std::uint64_t resolver_path_pushes = 0;
+    std::uint64_t unplanned_reference_fallbacks = 0;
 
     std::uint64_t planned_materialize_visits = 0;
     std::uint64_t unplanned_member_visits = 0;

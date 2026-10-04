@@ -483,6 +483,9 @@ int main(
             << ",materializer_workspace_ms="
             << ns_to_ms(
                 runtime_telemetry.materializer.workspace_ns)
+            << ",runtime_plan_ms="
+            << ns_to_ms(
+                runtime_telemetry.materializer.runtime_plan_ns)
             << ",shm_zero_ms="
             << ns_to_ms(
                 runtime_telemetry.materializer.zero_ns)
@@ -535,6 +538,8 @@ int main(
             << runtime_telemetry.materializer.resolver_steps_total
             << ",resolver_path_pushes="
             << runtime_telemetry.materializer.resolver_path_pushes
+            << ",unplanned_reference_fallbacks="
+            << runtime_telemetry.materializer.unplanned_reference_fallbacks
             << ",planned_materialize_visits="
             << runtime_telemetry.materializer.planned_materialize_visits
             << ",unplanned_member_visits="

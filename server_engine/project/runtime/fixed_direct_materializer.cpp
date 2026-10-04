@@ -277,15 +277,17 @@ public:
             clock_type::now();
 
         try {
-            record_plans.resize(
-                project.type_count());
+            type_plans.resize(
+                project.type_slot_count());
+
+            object_plans.resize(
+                project.object_count());
 
             zero_construction_states.resize(
                 project.type_slot_count());
 
             link_target_slots.resize(
                 project.link_count());
-            constructor_plans.resize(project.type_slot_count());
         }
         catch (...) {
             return fixed_direct_materialization_result::
@@ -300,6 +302,29 @@ public:
                 elapsed_ns(
                     workspace_started,
                     workspace_finished);
+        }
+
+        const auto runtime_plan_started =
+            clock_type::now();
+
+        const auto runtime_planned =
+            prepare_runtime_plans();
+
+        const auto runtime_plan_finished =
+            clock_type::now();
+
+        if (telemetry != nullptr) {
+            telemetry->runtime_plan_ns =
+                elapsed_ns(
+                    runtime_plan_started,
+                    runtime_plan_finished);
+        }
+
+        if (runtime_planned !=
+            fixed_direct_materialization_result::
+                success) {
+
+            return runtime_planned;
         }
 
         const auto zero_started =
@@ -401,38 +426,16 @@ public:
         const auto objects_started =
             clock_type::now();
 
-        for (std::size_t index = 0;
-             index <
-                 project.object_count();
-             ++index) {
+        for (const auto& object :
+             object_plans) {
 
-            const auto handle =
-                project.object_at(
-                    index);
-
-            object_entry object;
-            construction_value construction;
-
-            std::uint64_t offset = 0;
-
-            if (!handle ||
-                !project.object(
-                    handle,
-                    object) ||
-                !project.construction(
-                    handle,
-                    construction) ||
-                !layout.object_offset(
-                    handle,
-                    offset)) {
-
-                return fixed_direct_materialization_result::
-                    invalid_input;
+            if (!object.materialize) {
+                continue;
             }
 
             auto* target =
                 address(
-                    offset);
+                    object.offset);
 
             if (target == nullptr) {
                 return fixed_direct_materialization_result::
@@ -440,11 +443,16 @@ public:
             }
 
             const auto materialized =
-                normal_value(
-                    object.type,
-                    construction,
+                object.record_type
+                ? normal_record(
+                    object.record_type,
                     target,
-                    handle);
+                    object.handle)
+                : normal_value(
+                    object.type,
+                    object.construction,
+                    target,
+                    object.handle);
 
             if (materialized !=
                 fixed_direct_materialization_result::
@@ -1834,41 +1842,71 @@ private:
         }
     }
 
-    enum class record_plan_state : std::uint32_t {
+    enum class runtime_type_plan_state : std::uint32_t {
         empty = 0,
-        seen,
+        preparing,
         ready,
-        ready_bases,
     };
 
-    struct record_plan final {
-        // Dense range remains addressable by local member index for endpoint
-        // and reference resolution.
+    struct planned_base final {
+        record_offset offset = 0;
+        type_handle type{};
+    };
+
+    struct constructor_field final {
+        runtime_offset offset = 0;
+        type_ref type{};
+        construction_value value{};
+    };
+
+    struct runtime_type_plan final {
+        // Dense member range remains addressable by type-local member index
+        // for reference/link endpoint resolution.
         std::uint32_t begin = 0;
         std::uint32_t count = 0;
 
-        // Sparse execution range contains only local indices whose action is
-        // not materialization_action::none.
+        // Sparse execution range contains only members that write/bind.
         std::uint32_t active_begin = 0;
         std::uint32_t active_count = 0;
 
-        record_plan_state state =
-            record_plan_state::empty;
+        // Physical base-subobject operations.
+        std::uint32_t base_begin = 0;
+        std::uint32_t base_count = 0;
+
+        // Physical constructor-default writes, already resolved from paths.
+        std::uint32_t constructor_begin = 0;
+        std::uint32_t constructor_count = 0;
+
+        runtime_type_plan_state state =
+            runtime_type_plan_state::empty;
     };
 
-    static_assert(sizeof(record_plan) == 20);
+    static_assert(sizeof(runtime_type_plan) == 36);
 
-    [[nodiscard]] record_plan* plan(
+    struct runtime_object_plan final {
+        object_handle handle{};
+        type_ref type{};
+        construction_value construction{};
+        runtime_offset offset = 0;
+
+        // Direct named-record entry avoids decoding type_ref for the normal
+        // Project-object case during execution.
+        type_handle record_type{};
+        bool materialize = false;
+        std::uint8_t reserved[3]{};
+    };
+
+    [[nodiscard]] runtime_type_plan* plan(
         type_handle handle) noexcept {
 
         if (!handle ||
             handle.value() >
-                record_plans.size()) {
+                type_plans.size()) {
 
             return nullptr;
         }
 
-        return &record_plans[
+        return &type_plans[
             handle.value() - 1];
     }
 
@@ -1879,23 +1917,21 @@ private:
 
         if (!handle ||
             handle.value() >
-                record_plans.size()) {
+                type_plans.size()) {
 
             return nullptr;
         }
 
         const auto& record =
-            record_plans[
+            type_plans[
                 handle.value() - 1];
 
         const auto begin =
             static_cast<std::size_t>(
                 record.begin);
 
-        if ((record.state !=
-                 record_plan_state::ready &&
-             record.state !=
-                 record_plan_state::ready_bases) ||
+        if (record.state !=
+                runtime_type_plan_state::ready ||
             local >=
                 record.count ||
             begin >
@@ -1913,20 +1949,20 @@ private:
     }
 
     [[nodiscard]] fixed_direct_materialization_result
-    normal_bases(
-        type_handle handle,
+    execute_bases(
+        const runtime_type_plan& type,
         std::byte* base,
         object_handle link_object) noexcept {
 
-        type_entry type;
+        const auto begin =
+            static_cast<std::size_t>(
+                type.base_begin);
 
-        if (!handle ||
-            !project.type(
-                handle,
-                type) ||
-            !type.defined() ||
-            type.kind !=
-                graph_type_kind::record) {
+        if (begin >
+                planned_bases.size() ||
+            type.base_count >
+                planned_bases.size() -
+                    begin) {
 
             return fixed_direct_materialization_result::
                 invalid_input;
@@ -1934,53 +1970,20 @@ private:
 
         for (std::uint32_t local = 0;
              local <
-                 type.bases.count;
+                 type.base_count;
              ++local) {
 
-            const auto global =
-                static_cast<std::size_t>(
-                    type.bases.begin) +
-                local;
-
-            base_record base_record_value;
-            record_offset offset = 0;
-
-            if (!project.base_at(
-                    global,
-                    base_record_value)) {
-
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
-
-            if (base_record_value.virtual_base()) {
-                return fixed_direct_materialization_result::
-                    unsupported_type;
-            }
-
-            if (!layout.base_offset(
-                    global,
-                    offset)) {
-
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
-
-            const auto base_handle =
-                project.find_type(
-                    base_record_value.type);
-
-            if (!base_handle) {
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
+            const auto& planned =
+                planned_bases[
+                    begin +
+                    local];
 
             const auto materialized =
                 normal_record(
-                    base_handle,
+                    planned.type,
                     base +
                         static_cast<std::size_t>(
-                            offset),
+                            planned.offset),
                     link_object);
 
             if (materialized !=
@@ -1996,14 +1999,431 @@ private:
     }
 
     [[nodiscard]] fixed_direct_materialization_result
-    prepare_record_plan(
+    prepare_value_plan(
+        type_ref type,
+        construction_value construction) noexcept {
+
+        if (zero_value_noop(
+                type,
+                construction)) {
+
+            return fixed_direct_materialization_result::
+                success;
+        }
+
+        for (;;) {
+            switch (type.kind()) {
+            case type_ref_kind::intrinsic:
+                return fixed_direct_materialization_result::
+                    success;
+
+            case type_ref_kind::named: {
+                if (construction.kind !=
+                    construction_kind::zero) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                type_handle handle;
+
+                if (!project.named(
+                        type,
+                        handle)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                return prepare_type_plan(
+                    handle);
+            }
+
+            case type_ref_kind::derived: {
+                derived_type_record derived;
+
+                if (!project.derived(
+                        type,
+                        derived)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                switch (derived.kind) {
+                case derived_type_kind::const_qualified:
+                case derived_type_kind::volatile_qualified:
+                    type =
+                        derived.child;
+                    continue;
+
+                case derived_type_kind::pointer:
+                    return zero_pointer_construction(
+                               construction)
+                        ? fixed_direct_materialization_result::
+                              success
+                        : fixed_direct_materialization_result::
+                              invalid_input;
+
+                case derived_type_kind::lvalue_reference:
+                case derived_type_kind::rvalue_reference:
+                    return construction.kind ==
+                            construction_kind::zero
+                        ? fixed_direct_materialization_result::
+                              success
+                        : fixed_direct_materialization_result::
+                              invalid_input;
+
+                case derived_type_kind::bounded_array:
+                    if (construction.kind !=
+                            construction_kind::zero ||
+                        derived.payload == 0) {
+
+                        return fixed_direct_materialization_result::
+                            invalid_input;
+                    }
+
+                    return prepare_value_plan(
+                        derived.child,
+                        {});
+
+                case derived_type_kind::unbounded_array:
+                    return fixed_direct_materialization_result::
+                        unsupported_type;
+                }
+
+                break;
+            }
+
+            case type_ref_kind::invalid:
+                break;
+            }
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    prepare_constructor_fields(
         type_handle handle,
-        record_plan& output) noexcept {
+        runtime_type_plan& output) noexcept {
+
+        if (telemetry != nullptr) {
+            ++telemetry->constructor_plan_builds;
+        }
+
+        const auto old_count =
+            constructor_fields.size();
+
+        const auto owner =
+            project.identity(
+                handle);
+
+        runtime_value_layout root_layout;
+
+        if (!owner ||
+            !layout.type(
+                handle,
+                root_layout)) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        std::size_t first = 0;
+        std::size_t last =
+            project.constructor_default_count();
+
+        while (first < last) {
+            const auto middle =
+                first +
+                (last - first) / 2;
+
+            constructor_default entry;
+
+            if (!project.constructor_default_at(
+                    middle,
+                    entry)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            if (entry.owner.value() <
+                owner.value()) {
+
+                first =
+                    middle + 1;
+            }
+            else {
+                last =
+                    middle;
+            }
+        }
+
+        try {
+            for (;
+                 first <
+                     project.constructor_default_count();
+                 ++first) {
+
+                constructor_default entry;
+
+                if (!project.constructor_default_at(
+                        first,
+                        entry)) {
+
+                    constructor_fields.resize(
+                        old_count);
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                if (entry.owner != owner) {
+                    break;
+                }
+
+                constructor_path_reader path{
+                    project.string(
+                        entry.path)};
+
+                auto record =
+                    handle;
+
+                runtime_offset destination = 0;
+                type_ref target_type;
+
+                while (!path.remaining.empty()) {
+                    std::string_view field;
+                    std::uint64_t index = 0;
+
+                    if (!path.next(
+                            field,
+                            index)) {
+
+                        constructor_fields.resize(
+                            old_count);
+
+                        return fixed_direct_materialization_result::
+                            invalid_input;
+                    }
+
+                    if (field.empty()) {
+                        derived_type_record array;
+                        runtime_value_layout child;
+
+                        if (!project.derived(
+                                target_type,
+                                array) ||
+                            array.kind !=
+                                derived_type_kind::
+                                    bounded_array ||
+                            index >=
+                                array.payload ||
+                            !layout.value(
+                                array.child,
+                                child) ||
+                            (child.size != 0 &&
+                             index >
+                                (std::numeric_limits<
+                                    runtime_offset>::max)() /
+                                    child.size)) {
+
+                            constructor_fields.resize(
+                                old_count);
+
+                            return fixed_direct_materialization_result::
+                                invalid_input;
+                        }
+
+                        const auto delta =
+                            index *
+                            child.size;
+
+                        if (destination >
+                                root_layout.size ||
+                            delta >
+                                root_layout.size -
+                                    destination) {
+
+                            constructor_fields.resize(
+                                old_count);
+
+                            return fixed_direct_materialization_result::
+                                invalid_input;
+                        }
+
+                        destination +=
+                            delta;
+
+                        target_type =
+                            array.child;
+
+                        continue;
+                    }
+
+                    if (target_type &&
+                        !project.named(
+                            target_type,
+                            record)) {
+
+                        constructor_fields.resize(
+                            old_count);
+
+                        return fixed_direct_materialization_result::
+                            invalid_input;
+                    }
+
+                    const auto name =
+                        project.find_string(
+                            field);
+
+                    const auto local =
+                        project.find_member(
+                            record,
+                            name);
+
+                    type_entry type;
+                    member_record member;
+                    record_offset offset = 0;
+
+                    if (!name ||
+                        !local ||
+                        !project.type(
+                            record,
+                            type) ||
+                        !project.member_at(
+                            static_cast<std::size_t>(
+                                type.members.begin) +
+                                local.value(),
+                            member) ||
+                        !layout.member_offset(
+                            static_cast<std::size_t>(
+                                type.members.begin) +
+                                local.value(),
+                            offset) ||
+                        destination >
+                            root_layout.size ||
+                        static_cast<runtime_offset>(
+                            offset) >
+                            root_layout.size -
+                                destination) {
+
+                        constructor_fields.resize(
+                            old_count);
+
+                        return fixed_direct_materialization_result::
+                            invalid_input;
+                    }
+
+                    destination +=
+                        static_cast<runtime_offset>(
+                            offset);
+
+                    target_type =
+                        member.type;
+                }
+
+                if (target_type.kind() !=
+                    type_ref_kind::intrinsic) {
+
+                    constructor_fields.resize(
+                        old_count);
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                constructor_fields.push_back({
+                    destination,
+                    target_type,
+                    entry.value,
+                });
+            }
+        }
+        catch (...) {
+            constructor_fields.resize(
+                old_count);
+
+            return fixed_direct_materialization_result::
+                failed;
+        }
+
+        const auto maximum =
+            static_cast<std::size_t>(
+                (std::numeric_limits<
+                    std::uint32_t>::max)());
+
+        if (old_count >
+                maximum ||
+            constructor_fields.size() -
+                    old_count >
+                maximum) {
+
+            constructor_fields.resize(
+                old_count);
+
+            return fixed_direct_materialization_result::
+                overflow;
+        }
+
+        output.constructor_begin =
+            static_cast<std::uint32_t>(
+                old_count);
+
+        output.constructor_count =
+            static_cast<std::uint32_t>(
+                constructor_fields.size() -
+                old_count);
+
+        if (telemetry != nullptr) {
+            telemetry->constructor_defaults_cached +=
+                output.constructor_count;
+        }
+
+        return fixed_direct_materialization_result::
+            success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    prepare_type_plan(
+        type_handle handle) noexcept {
+
+        // RUNTIME-CONSTRUCTION-01-RANGE-FIX:
+        // A type owns contiguous slices in shared append-only plan arrays.
+        // Recursive dependency preparation therefore must not occur while
+        // those slices are still open. First append and close this type's
+        // own bases/members/constructor fields, then prepare child programs.
+        auto* output =
+            plan(
+                handle);
+
+        if (output == nullptr) {
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        switch (output->state) {
+        case runtime_type_plan_state::ready:
+            return fixed_direct_materialization_result::
+                success;
+
+        case runtime_type_plan_state::preparing:
+            return fixed_direct_materialization_result::
+                invalid_input;
+
+        case runtime_type_plan_state::empty:
+            break;
+        }
+
+        output->state =
+            runtime_type_plan_state::preparing;
 
         type_entry type;
 
-        if (!handle ||
-            !project.type(
+        if (!project.type(
                 handle,
                 type) ||
             !type.defined() ||
@@ -2030,33 +2450,89 @@ private:
                 invalid_input;
         }
 
-        const auto old_count =
+        const auto member_begin =
             planned_members.size();
 
-        const auto old_active_count =
+        const auto active_begin =
             active_member_locals.size();
+
+        const auto base_begin =
+            planned_bases.size();
 
         const auto maximum =
             static_cast<std::size_t>(
-                (std::numeric_limits<std::uint32_t>::max)());
+                (std::numeric_limits<
+                    std::uint32_t>::max)());
 
-        if (old_count >
+        if (member_begin >
                 maximum ||
             type.members.count >
-                maximum - old_count ||
-            old_active_count >
+                maximum -
+                    member_begin ||
+            active_begin >
                 maximum ||
             type.members.count >
-                maximum - old_active_count) {
+                maximum -
+                    active_begin ||
+            base_begin >
+                maximum ||
+            type.bases.count >
+                maximum -
+                    base_begin) {
 
             return fixed_direct_materialization_result::
                 overflow;
         }
 
         try {
-            // Let push_back grow geometrically. Reserving the exact next
-            // record size here repeatedly copies all earlier record plans
-            // when a project contains many distinct record types.
+            for (std::uint32_t local = 0;
+                 local <
+                     type.bases.count;
+                 ++local) {
+
+                const auto global =
+                    static_cast<std::size_t>(
+                        type.bases.begin) +
+                    local;
+
+                base_record base;
+                record_offset offset = 0;
+
+                if (!project.base_at(
+                        global,
+                        base)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                if (base.virtual_base()) {
+                    return fixed_direct_materialization_result::
+                        unsupported_type;
+                }
+
+                if (!layout.base_offset(
+                        global,
+                        offset)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                const auto base_handle =
+                    project.find_type(
+                        base.type);
+
+                if (!base_handle) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                planned_bases.push_back({
+                    offset,
+                    base_handle,
+                });
+            }
 
             for (std::uint32_t local = 0;
                  local <
@@ -2082,12 +2558,6 @@ private:
                     !layout.member_offset(
                         global,
                         offset)) {
-
-                    planned_members.resize(
-                        old_count);
-
-                    active_member_locals.resize(
-                        old_active_count);
 
                     return fixed_direct_materialization_result::
                         invalid_input;
@@ -2176,93 +2646,227 @@ private:
             }
         }
         catch (...) {
-            planned_members.resize(
-                old_count);
-
-            active_member_locals.resize(
-                old_active_count);
-
             return fixed_direct_materialization_result::
                 failed;
         }
 
-        output.begin =
+        // Close this type's own contiguous ranges BEFORE any recursion.
+        output->begin =
             static_cast<std::uint32_t>(
-                old_count);
+                member_begin);
 
-        output.count =
+        output->count =
             type.members.count;
 
-        output.active_begin =
+        output->active_begin =
             static_cast<std::uint32_t>(
-                old_active_count);
+                active_begin);
 
-        output.active_count =
+        output->active_count =
             static_cast<std::uint32_t>(
                 active_member_locals.size() -
-                old_active_count);
+                active_begin);
 
-        output.state =
-            type.bases.count == 0
-            ? record_plan_state::ready
-            : record_plan_state::ready_bases;
+        output->base_begin =
+            static_cast<std::uint32_t>(
+                base_begin);
+
+        output->base_count =
+            type.bases.count;
+
+        const auto constructors =
+            prepare_constructor_fields(
+                handle,
+                *output);
+
+        if (constructors !=
+            fixed_direct_materialization_result::
+                success) {
+
+            return constructors;
+        }
+
+        // Phase C: parent ranges are closed; child/base plans append after.
+        for (std::uint32_t local = 0;
+             local <
+                 output->base_count;
+             ++local) {
+
+            const auto& base =
+                planned_bases[
+                    static_cast<std::size_t>(
+                        output->base_begin) +
+                    local];
+
+            const auto prepared =
+                prepare_type_plan(
+                    base.type);
+
+            if (prepared !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return prepared;
+            }
+        }
+
+        for (std::uint32_t local = 0;
+             local <
+                 output->count;
+             ++local) {
+
+            const auto& member =
+                planned_members[
+                    static_cast<std::size_t>(
+                        output->begin) +
+                    local];
+
+            if (member.action !=
+                materialization_action::materialize) {
+
+                continue;
+            }
+
+            const auto prepared =
+                prepare_value_plan(
+                    member.type,
+                    member.construction);
+
+            if (prepared !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return prepared;
+            }
+        }
+
+        output->state =
+            runtime_type_plan_state::ready;
 
         return fixed_direct_materialization_result::
             success;
     }
 
     [[nodiscard]] fixed_direct_materialization_result
-    observe_endpoint_plan(
-        type_handle handle,
-        std::uint32_t member_count) noexcept {
+    prepare_runtime_plans() noexcept {
 
-        auto* record =
-            plan(
-                handle);
+        for (std::size_t index = 0;
+             index <
+                 object_plans.size();
+             ++index) {
 
-        if (record == nullptr ||
-            member_count == 0) {
+            const auto handle =
+                project.object_at(
+                    index);
 
-            return fixed_direct_materialization_result::
-                invalid_input;
+            object_entry object;
+            construction_value construction;
+            runtime_offset offset = 0;
+
+            if (!handle ||
+                !project.object(
+                    handle,
+                    object) ||
+                !project.construction(
+                    handle,
+                    construction) ||
+                !layout.object_offset(
+                    handle,
+                    offset)) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            const auto no_op =
+                zero_value_noop(
+                    object.type,
+                    construction);
+
+            type_handle direct_record;
+
+            if (object.type.kind() ==
+                    type_ref_kind::named &&
+                construction.kind ==
+                    construction_kind::zero) {
+
+                if (!project.named(
+                        object.type,
+                        direct_record)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                // A no-op record can still participate in an instance-specific
+                // link endpoint, so its physical member plan must exist.
+                const auto prepared =
+                    prepare_type_plan(
+                        direct_record);
+
+                if (prepared !=
+                    fixed_direct_materialization_result::
+                        success) {
+
+                    return prepared;
+                }
+            }
+            else if (!no_op) {
+                const auto prepared =
+                    prepare_value_plan(
+                        object.type,
+                        construction);
+
+                if (prepared !=
+                    fixed_direct_materialization_result::
+                        success) {
+
+                    return prepared;
+                }
+            }
+
+            object_plans[index] = {
+                handle,
+                object.type,
+                construction,
+                offset,
+                direct_record,
+                !no_op,
+                {},
+            };
         }
 
-        if (record->state ==
-                record_plan_state::ready ||
-            record->state ==
-                record_plan_state::ready_bases) {
-
-            return fixed_direct_materialization_result::
-                success;
-        }
-
-        // Before publication count is temporary endpoint-use pressure.
-        // Build the full record plan only after point lookups have done at
-        // least one record-width of repeated semantic decoding.
-        if (record->count <
-            member_count) {
-
-            ++record->count;
-        }
-
-        if (record->count <
-            member_count) {
-
-            return fixed_direct_materialization_result::
-                success;
-        }
-
-        return prepare_record_plan(
-            handle,
-            *record);
+        return fixed_direct_materialization_result::
+            success;
     }
 
     [[nodiscard]] fixed_direct_materialization_result
-    normal_record_planned(
+    require_endpoint_plan(
+        type_handle handle,
+        std::uint32_t member_count) noexcept {
+
+        auto* type =
+            plan(
+                handle);
+
+        return
+            type != nullptr &&
+            type->state ==
+                runtime_type_plan_state::ready &&
+            type->count ==
+                member_count
+            ? fixed_direct_materialization_result::
+                  success
+            : fixed_direct_materialization_result::
+                  invalid_input;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    execute_type_plan(
         type_handle handle,
         std::byte* base,
         object_handle link_object,
-        const record_plan& record) noexcept {
+        const runtime_type_plan& record) noexcept {
 
         if (telemetry != nullptr) {
             ++telemetry->planned_record_calls;
@@ -2479,173 +3083,6 @@ private:
     }
 
     [[nodiscard]] fixed_direct_materialization_result
-    normal_record_unplanned(
-        type_handle handle,
-        std::byte* base,
-        object_handle link_object) noexcept {
-
-        type_entry type;
-
-        if (!handle ||
-            !project.type(
-                handle,
-                type) ||
-            !type.defined() ||
-            type.kind !=
-                graph_type_kind::record) {
-
-            return fixed_direct_materialization_result::
-                invalid_input;
-        }
-
-        if (telemetry != nullptr) {
-            ++telemetry->unplanned_record_calls;
-            telemetry->unplanned_member_visits +=
-                type.members.count;
-        }
-
-        if (type.record_kind ==
-            graph_record_kind::union_type) {
-
-            return fixed_direct_materialization_result::
-                unsupported_type;
-        }
-
-        if (type.record_kind !=
-                graph_record_kind::struct_type &&
-            type.record_kind !=
-                graph_record_kind::class_type) {
-
-            return fixed_direct_materialization_result::
-                invalid_input;
-        }
-
-        if (type.bases.count != 0) {
-            const auto bases_materialized =
-                normal_bases(
-                    handle,
-                    base,
-                    link_object);
-
-            if (bases_materialized !=
-                fixed_direct_materialization_result::
-                    success) {
-
-                return bases_materialized;
-            }
-        }
-
-        for (std::uint32_t local = 0;
-             local <
-                 type.members.count;
-             ++local) {
-
-            const auto global =
-                static_cast<std::size_t>(
-                    type.members.begin) +
-                local;
-
-            member_record member;
-            construction_value construction;
-            record_offset offset = 0;
-
-            if (!project.member_at(
-                    global,
-                    member) ||
-                !project.construction(
-                    handle,
-                    local,
-                    construction) ||
-                !layout.member_offset(
-                    global,
-                    offset)) {
-
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
-
-            auto* target =
-                base +
-                static_cast<std::size_t>(
-                    offset);
-
-            type_ref referent;
-
-            if (reference_referent(
-                    member.type,
-                    referent)) {
-
-                std::uint64_t stored = 0;
-
-                if (!read_reference_slot(
-                        target,
-                        stored)) {
-
-                    return fixed_direct_materialization_result::
-                        incompatible_abi;
-                }
-
-                if (runtime_address(
-                        stored) ||
-                    is_pending_link(
-                        stored)) {
-
-                    continue;
-                }
-
-                std::uint64_t value_target = 0;
-
-                const auto resolved =
-                    resolve_reference_member(
-                        handle,
-                        base,
-                        link_object,
-                        local,
-                        target,
-                        value_target);
-
-                if (resolved !=
-                    fixed_direct_materialization_result::
-                        success) {
-
-                    return resolved;
-                }
-
-                const auto written =
-                    write_address(
-                        target,
-                        value_target);
-
-                if (written !=
-                    fixed_direct_materialization_result::
-                        success) {
-
-                    return written;
-                }
-
-                continue;
-            }
-
-            const auto materialized =
-                normal_value(
-                    member.type,
-                    construction,
-                    target,
-                    {});
-
-            if (materialized !=
-                fixed_direct_materialization_result::
-                    success) {
-
-                return materialized;
-            }
-        }
-
-        return fixed_direct_materialization_result::
-            success;
-    }
-
-    [[nodiscard]] fixed_direct_materialization_result
     normal_record(
         type_handle handle,
         std::byte* base,
@@ -2655,196 +3092,95 @@ private:
             ++telemetry->normal_record_calls;
         }
 
-        const auto initialized = normal_record_members(handle, base, link_object);
-        if (initialized != fixed_direct_materialization_result::success) { return initialized; }
-        if (!handle || handle.value() > constructor_plans.size()) { return fixed_direct_materialization_result::invalid_input; }
-        auto& defaults = constructor_plans[handle.value() - 1];
-        if (!defaults.ready) {
-        if (telemetry != nullptr) {
-            ++telemetry->constructor_plan_builds;
-        }
-        defaults.begin = constructor_fields.size();
-        const auto owner = project.identity(handle);
-        std::size_t first = 0, last = project.constructor_default_count();
-        while (first < last) {
-            const auto middle = first + (last - first) / 2;
-            constructor_default entry;
-            if (!project.constructor_default_at(middle, entry)) {
-                return fixed_direct_materialization_result::invalid_input;
-            }
-            if (entry.owner.value() < owner.value()) { first = middle + 1; }
-            else { last = middle; }
-        }
-        for (; first < project.constructor_default_count(); ++first) {
-            constructor_default entry;
-            if (!project.constructor_default_at(first, entry)) {
-                return fixed_direct_materialization_result::invalid_input;
-            }
-            if (entry.owner != owner) { break; }
-            constructor_path_reader path{project.string(entry.path)};
-            auto record = handle;
-            auto* destination = base;
-            type_ref target_type;
-            while (!path.remaining.empty()) {
-                std::string_view field;
-                std::uint64_t index;
-                if (!path.next(field, index)) {
-                    return fixed_direct_materialization_result::invalid_input;
-                }
-                if (field.empty()) {
-                    derived_type_record array;
-                    runtime_value_layout child;
-                    if (!project.derived(target_type, array) ||
-                        array.kind != derived_type_kind::bounded_array || index >= array.payload ||
-                        !layout.value(array.child, child) ||
-                        (child.size != 0 && index > (std::numeric_limits<std::size_t>::max)() / child.size)) {
-                        return fixed_direct_materialization_result::invalid_input;
-                    }
-                    const auto offset = index * child.size;
-                    if (!value_fits(static_cast<std::uint64_t>(destination - runtime.data()), offset)) {
-                        return fixed_direct_materialization_result::invalid_input;
-                    }
-                    destination += static_cast<std::size_t>(offset);
-                    target_type = array.child;
-                    continue;
-                }
-                if (target_type && !project.named(target_type, record)) {
-                    return fixed_direct_materialization_result::invalid_input;
-                }
-                const auto name = project.find_string(field);
-                const auto local = project.find_member(record, name);
-                type_entry type;
-                member_record member;
-                record_offset offset = 0;
-                if (!name || !local || !project.type(record, type) ||
-                    !project.member_at(type.members.begin + local.value(), member) ||
-                    !layout.member_offset(type.members.begin + local.value(), offset)) {
-                    return fixed_direct_materialization_result::invalid_input;
-                }
-                destination += static_cast<std::size_t>(offset);
-                target_type = member.type;
-            }
-            if (target_type.kind() != type_ref_kind::intrinsic) {
-                return fixed_direct_materialization_result::invalid_input;
-            }
-            try { constructor_fields.push_back({static_cast<std::size_t>(destination - base), target_type, entry.value}); }
-            catch (...) { return fixed_direct_materialization_result::failed; }
-        }
-        defaults.count = constructor_fields.size() - defaults.begin;
-        defaults.ready = true;
-
-        if (telemetry != nullptr) {
-            telemetry->constructor_defaults_cached +=
-                defaults.count;
-        }
-        }
-
-        if (telemetry != nullptr) {
-            telemetry->constructor_defaults_applied +=
-                defaults.count;
-        }
-
-        for (std::size_t i = 0; i < defaults.count; ++i) {
-            const auto& field = constructor_fields[defaults.begin + i];
-            const auto written = normal_value(field.type, field.value, base + field.offset, {});
-            if (written != fixed_direct_materialization_result::success) { return written; }
-        }
-        return fixed_direct_materialization_result::success;
-    }
-
-    [[nodiscard]] fixed_direct_materialization_result
-    normal_record_members(
-        type_handle handle,
-        std::byte* base,
-        object_handle link_object) noexcept {
-
-        auto* record =
+        auto* type =
             plan(
                 handle);
 
-        if (record == nullptr) {
+        if (type == nullptr ||
+            type->state !=
+                runtime_type_plan_state::ready) {
+
             return fixed_direct_materialization_result::
                 invalid_input;
         }
 
-        switch (record->state) {
-        case record_plan_state::ready:
-            return normal_record_planned(
-                handle,
-                base,
-                link_object,
-                *record);
-
-        case record_plan_state::ready_bases: {
-            const auto bases_materialized =
-                normal_bases(
-                    handle,
+        if (type->base_count != 0) {
+            const auto bases =
+                execute_bases(
+                    *type,
                     base,
                     link_object);
 
-            if (bases_materialized !=
+            if (bases !=
                 fixed_direct_materialization_result::
                     success) {
 
-                return bases_materialized;
+                return bases;
             }
+        }
 
-            return normal_record_planned(
+        const auto members =
+            execute_type_plan(
                 handle,
                 base,
                 link_object,
-                *record);
+                *type);
+
+        if (members !=
+            fixed_direct_materialization_result::
+                success) {
+
+            return members;
         }
 
-        case record_plan_state::seen: {
-            const auto prepared =
-                prepare_record_plan(
-                    handle,
-                    *record);
+        const auto begin =
+            static_cast<std::size_t>(
+                type->constructor_begin);
 
-            if (prepared !=
+        if (begin >
+                constructor_fields.size() ||
+            type->constructor_count >
+                constructor_fields.size() -
+                    begin) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        if (telemetry != nullptr) {
+            telemetry->constructor_defaults_applied +=
+                type->constructor_count;
+        }
+
+        for (std::uint32_t local = 0;
+             local <
+                 type->constructor_count;
+             ++local) {
+
+            const auto& field =
+                constructor_fields[
+                    begin +
+                    local];
+
+            const auto written =
+                normal_value(
+                    field.type,
+                    field.value,
+                    base +
+                        static_cast<std::size_t>(
+                            field.offset),
+                    {});
+
+            if (written !=
                 fixed_direct_materialization_result::
                     success) {
 
-                return prepared;
+                return written;
             }
-
-            if (record->state ==
-                record_plan_state::ready_bases) {
-
-                const auto bases_materialized =
-                    normal_bases(
-                        handle,
-                        base,
-                        link_object);
-
-                if (bases_materialized !=
-                    fixed_direct_materialization_result::
-                        success) {
-
-                    return bases_materialized;
-                }
-            }
-
-            return normal_record_planned(
-                handle,
-                base,
-                link_object,
-                *record);
-        }
-
-        case record_plan_state::empty:
-            record->state =
-                record_plan_state::seen;
-
-            return normal_record_unplanned(
-                handle,
-                base,
-                link_object);
         }
 
         return fixed_direct_materialization_result::
-            invalid_input;
+            success;
     }
 
     struct reference_state final {
@@ -3429,7 +3765,7 @@ private:
                 referent);
 
         const auto observed =
-            observe_endpoint_plan(
+            require_endpoint_plan(
                 record_type_value,
                 record.members.count);
 
@@ -4487,6 +4823,11 @@ private:
                         target);
             }
             else {
+                if (telemetry != nullptr) {
+                    ++telemetry->
+                        unplanned_reference_fallbacks;
+                }
+
                 if (current_metadata.ready) {
                     std::uint64_t consumed = 0;
                     bool completed = false;
@@ -5059,20 +5400,25 @@ private:
     std::span<std::byte> runtime;
     fixed_direct_materialization_telemetry* telemetry = nullptr;
     std::vector<std::uintptr_t> resolution_path;
-    std::vector<record_plan> record_plans;
+
+    // Construction-only prepared Runtime model. It is discarded with this
+    // materializer after SHM publication and never enters resident Project.
+    std::vector<runtime_type_plan> type_plans;
+    std::vector<runtime_object_plan> object_plans;
+
     std::vector<zero_construction_state>
         zero_construction_states;
+
+    std::vector<planned_base> planned_bases;
     std::vector<planned_member> planned_members;
 
     // Sparse execution sidecar. Values are type-local member indices, so the
-    // dense plan remains the metadata source for endpoint/reference lookup
-    // while hot object construction skips action::none members.
+    // dense member plan remains available for reference endpoint resolution.
     std::vector<std::uint32_t>
         active_member_locals;
-    struct constructor_plan { std::size_t begin = 0, count = 0; bool ready = false; };
-    struct constructor_field { std::size_t offset; type_ref type; construction_value value; };
-    std::vector<constructor_plan> constructor_plans;
-    std::vector<constructor_field> constructor_fields;
+
+    std::vector<constructor_field>
+        constructor_fields;
 
     // PASS 1 owns target validation. PASS 2 reuses the exact validated SHM
     // slot without repeating endpoint resolution. Pending-link identity lives
