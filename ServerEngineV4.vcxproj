@@ -110,6 +110,9 @@
     <ClCompile Include="server_engine\project\project.cpp" />
     <ClCompile Include="server_engine\project\ic\ic_catalog.cpp" />
     <ClCompile Include="server_engine\project\abi\abi_layout.cpp" />
+    <ClCompile Include="server_engine\project\shm\shm_layout.cpp" />
+    <ClCompile Include="server_engine\project\shm\shm_materializer.cpp" />
+    <ClCompile Include="server_engine\project\shm\shm_sparse.cpp" />
     <ClCompile Include="server_engine\project\runtime\runtime_layout.cpp" />
     <ClCompile Include="server_engine\project\runtime\runtime_query.cpp" />
     <ClCompile Include="server_engine\project\runtime\runtime_ic.cpp" />
@@ -217,6 +220,9 @@
     <ClInclude Include="server_engine\project\project.hpp" />
     <ClInclude Include="server_engine\project\ic\ic_catalog.hpp" />
     <ClInclude Include="server_engine\project\abi\abi_layout.hpp" />
+    <ClInclude Include="server_engine\project\shm\shm_layout.hpp" />
+    <ClInclude Include="server_engine\project\shm\shm_materializer.hpp" />
+    <ClInclude Include="server_engine\project\shm\shm_sparse.hpp" />
     <ClInclude Include="server_engine\project\runtime\runtime_layout.hpp" />
     <ClInclude Include="server_engine\project\runtime\runtime_system.hpp" />
     <ClInclude Include="server_engine\project\runtime\runtime_query.hpp" />

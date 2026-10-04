@@ -341,6 +341,14 @@ public:
         std::size_t index,
         base_record& output) const noexcept;
 
+    // Direct graph_identity_index slot read: semantic WHO -> physical WHERE.
+    // This is not a hash/name search and allocates nothing.
+    [[nodiscard]] type_handle type_location(
+        identity_ref identity) const noexcept;
+
+    [[nodiscard]] type_handle type_location(
+        type_ref type) const noexcept;
+
     [[nodiscard]] type_handle find_type(
         identity_ref identity) const noexcept;
 
@@ -427,6 +435,10 @@ public:
 
         return identity(handle);
     }
+
+    // Direct graph_identity_index slot read for object WHO -> WHERE.
+    [[nodiscard]] object_handle object_location(
+        identity_ref identity) const noexcept;
 
     [[nodiscard]] object_handle find_object(
         identity_ref identity) const noexcept;

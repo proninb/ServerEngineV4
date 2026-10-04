@@ -2004,7 +2004,7 @@ bool compiled_project_view::base_at(
         output.reserved == 0;
 }
 
-type_handle compiled_project_view::find_type(
+type_handle compiled_project_view::type_location(
     identity_ref identity_value) const noexcept {
 
     if (!identity_valid(
@@ -2045,6 +2045,29 @@ type_handle compiled_project_view::find_type(
             identity_value
         ? handle
         : type_handle{};
+}
+
+type_handle compiled_project_view::type_location(
+    type_ref type_value) const noexcept {
+
+    if (!type_value ||
+        type_value.kind() !=
+            type_ref_kind::named) {
+
+        return {};
+    }
+
+    return type_location(
+        identity_ref::make(
+            type_value.payload(),
+            identity_kind::type));
+}
+
+type_handle compiled_project_view::find_type(
+    identity_ref identity_value) const noexcept {
+
+    return type_location(
+        identity_value);
 }
 
 type_handle compiled_project_view::find_type_lineage(
@@ -2701,7 +2724,7 @@ identity_ref compiled_project_view::identity(
         read_u32(record));
 }
 
-object_handle compiled_project_view::find_object(
+object_handle compiled_project_view::object_location(
     identity_ref identity_value) const noexcept {
 
     if (!identity_valid(
@@ -2742,6 +2765,13 @@ object_handle compiled_project_view::find_object(
             identity_value
         ? handle
         : object_handle{};
+}
+
+object_handle compiled_project_view::find_object(
+    identity_ref identity_value) const noexcept {
+
+    return object_location(
+        identity_value);
 }
 
 object_handle compiled_project_view::find_object_lineage(

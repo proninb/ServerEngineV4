@@ -66,6 +66,9 @@ add_executable(ServerEngineV4
     server_engine/project/project.cpp
     server_engine/project/ic/ic_catalog.cpp
     server_engine/project/abi/abi_layout.cpp
+    server_engine/project/shm/shm_layout.cpp
+    server_engine/project/shm/shm_materializer.cpp
+    server_engine/project/shm/shm_sparse.cpp
     server_engine/project/runtime/runtime_layout.cpp
     server_engine/project/runtime/runtime_query.cpp
     server_engine/project/runtime/runtime_ic.cpp
@@ -223,6 +226,18 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
     endif()
 
     add_executable(
+        ServerEngineV4ShmLayoutBenchmark
+        benchmarks/shm_layout_benchmark.cpp
+        ${SERVER_ENGINE_V4_BENCHMARK_SOURCES}
+    )
+
+    target_include_directories(
+        ServerEngineV4ShmLayoutBenchmark
+        PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+
+    add_executable(
         ServerEngineV4RuntimeBenchmark
         benchmarks/runtime_benchmark.cpp
         ${SERVER_ENGINE_V4_BENCHMARK_SOURCES}
@@ -247,6 +262,17 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
 
     if(WIN32)
         target_link_libraries(
+            ServerEngineV4ShmLayoutBenchmark
+            PRIVATE
+            Psapi
+            bcrypt
+            crypt32
+            ncrypt
+            winhttp
+            ws2_32
+        )
+
+        target_link_libraries(
             ServerEngineV4RuntimeBenchmark
             PRIVATE
             Psapi
@@ -267,6 +293,20 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
             ws2_32
         )
     else()
+        target_link_libraries(
+            ServerEngineV4ShmLayoutBenchmark
+            PRIVATE
+            Threads::Threads
+        )
+
+        if(NOT APPLE)
+            target_link_libraries(
+                ServerEngineV4ShmLayoutBenchmark
+                PRIVATE
+                rt
+            )
+        endif()
+
         target_link_libraries(
             ServerEngineV4RuntimeBenchmark
             PRIVATE
@@ -294,6 +334,13 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
 
     if(MSVC)
         target_compile_options(
+            ServerEngineV4ShmLayoutBenchmark
+            PRIVATE
+            /W4
+            /permissive-
+        )
+
+        target_compile_options(
             ServerEngineV4RuntimeBenchmark
             PRIVATE
             /W4
@@ -306,6 +353,14 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
             /permissive-
         )
     else()
+        target_compile_options(
+            ServerEngineV4ShmLayoutBenchmark
+            PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+
         target_compile_options(
             ServerEngineV4RuntimeBenchmark
             PRIVATE
