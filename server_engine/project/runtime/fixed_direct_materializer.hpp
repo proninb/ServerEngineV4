@@ -73,6 +73,12 @@ struct fixed_direct_materialization_profile final {
     std::uint64_t plan_reference_members = 0;
     std::uint64_t plan_materialize_members = 0;
 
+    std::uint64_t fused_ops_built = 0;
+    std::uint64_t fused_inlined_programs = 0;
+    std::uint64_t fused_shared_calls_built = 0;
+    std::uint64_t fused_program_calls = 0;
+    std::uint64_t fused_op_visits = 0;
+
     std::uint64_t array_calls = 0;
     std::uint64_t array_elements_visited = 0;
     std::uint64_t zero_array_calls = 0;

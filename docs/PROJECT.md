@@ -130,6 +130,35 @@ default destinations. The object plan owns the object handle/type/construction
 and final Runtime offset. Runtime object execution must not lazily build type
 plans from Graph metadata.
 
+`runtime_type_plan` owns a bounded leaf-fused physical execution program.
+Planning classifies each direct base/by-value child structurally:
+
+```text
+terminal child
+    no direct bases
+    no active direct by-value record child
+        -> inline its physical leaf ops once into the parent TYPE
+
+non-terminal child
+        -> emit one shared CALL to the child type program
+```
+
+Fusion therefore stops after one terminal structural edge. It never builds a
+transitive closure of a nested type tree. This preserves reusable type programs
+and native C++ recursion for non-terminal structure while removing the hottest
+terminal record transitions.
+
+Reference leaf ops retain the owning record handle, owning-record base offset,
+local member index, and optional direct source offset required to preserve
+member-binding semantics. Base subobjects preserve the top Project-object
+context; a direct by-value member clears it exactly as the previous
+`normal_value(..., {})` path did.
+
+Bounded arrays remain compact value/repeat execution and are never expanded by
+element count. Diagnostic profile counters `fused_ops_built`,
+`fused_inlined_programs`, `fused_shared_calls_built`, and `fused_op_visits`
+expose both the construction-only plan-size cost and Runtime execution work.
+
 Global construction barriers remain explicit:
 
 ```text

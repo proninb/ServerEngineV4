@@ -573,6 +573,16 @@ int main(
             << runtime_profile.materializer.plan_reference_members
             << ",plan_materialize_members="
             << runtime_profile.materializer.plan_materialize_members
+            << ",fused_ops_built="
+            << runtime_profile.materializer.fused_ops_built
+            << ",fused_inlined_programs="
+            << runtime_profile.materializer.fused_inlined_programs
+            << ",fused_shared_calls_built="
+            << runtime_profile.materializer.fused_shared_calls_built
+            << ",fused_program_calls="
+            << runtime_profile.materializer.fused_program_calls
+            << ",fused_op_visits="
+            << runtime_profile.materializer.fused_op_visits
             << ",array_calls="
             << runtime_profile.materializer.array_calls
             << ",array_elements_visited="
