@@ -264,6 +264,7 @@ private:
         std::size_t stores = 0;
         std::size_t children = 0;
         std::size_t repeats = 0;
+        std::size_t post_stores = 0;
     };
 
     [[nodiscard]] std::vector<cache_slot>&
@@ -288,6 +289,7 @@ private:
             output.stores.size(),
             output.children.size(),
             output.repeats.size(),
+            output.post_stores.size(),
         };
     }
 
@@ -346,7 +348,11 @@ private:
             !make_range(
                 begin.repeats,
                 output.repeats.size(),
-                api.repeats)) {
+                api.repeats) ||
+            !make_range(
+                begin.post_stores,
+                output.post_stores.size(),
+                api.post_stores)) {
             return shm_type_batch_result::overflow;
         }
 
@@ -355,7 +361,8 @@ private:
             api.object_references.count == 0 &&
             api.stores.count == 0 &&
             api.children.count == 0 &&
-            api.repeats.count == 0) {
+            api.repeats.count == 0 &&
+            api.post_stores.count == 0) {
             return shm_type_batch_result::success;
         }
 
@@ -555,7 +562,8 @@ private:
     }
 
     template <typename T>
-    [[nodiscard]] shm_type_batch_result append_store(
+    [[nodiscard]] shm_type_batch_result append_store_to(
+        std::vector<shm_type_batch::store_operation>& operations,
         shm_record_offset target,
         T value) {
 
@@ -577,7 +585,7 @@ private:
 
         output.constants.push_back(constant);
 
-        output.stores.push_back({
+        operations.push_back({
             target,
             static_cast<std::uint32_t>(
                 output.constants.size() - 1),
@@ -586,6 +594,28 @@ private:
         });
 
         return shm_type_batch_result::success;
+    }
+
+    template <typename T>
+    [[nodiscard]] shm_type_batch_result append_store(
+        shm_record_offset target,
+        T value) {
+
+        return append_store_to(
+            output.stores,
+            target,
+            value);
+    }
+
+    template <typename T>
+    [[nodiscard]] shm_type_batch_result append_post_store(
+        shm_record_offset target,
+        T value) {
+
+        return append_store_to(
+            output.post_stores,
+            target,
+            value);
     }
 
     [[nodiscard]] shm_type_batch_result append_repeat(
@@ -764,6 +794,425 @@ private:
         }
 
         return shm_type_batch_result::invalid_input;
+    }
+
+    template <typename T>
+    [[nodiscard]] shm_type_batch_result
+    append_constructor_integer(
+        shm_record_offset target,
+        construction_value construction) {
+
+        T value{};
+
+        if (!integer_value(
+                construction,
+                value)) {
+
+            return shm_type_batch_result::invalid_input;
+        }
+
+        return append_post_store(
+            target,
+            value);
+    }
+
+    template <typename T>
+    [[nodiscard]] shm_type_batch_result
+    append_constructor_real(
+        shm_record_offset target,
+        construction_value construction) {
+
+        T value{};
+
+        switch (construction.kind) {
+        case construction_kind::zero:
+            break;
+
+        case construction_kind::signed_integer:
+            value =
+                static_cast<T>(
+                    std::bit_cast<std::int64_t>(
+                        construction.bits()));
+            break;
+
+        case construction_kind::unsigned_integer:
+            value =
+                static_cast<T>(
+                    construction.bits());
+            break;
+
+        case construction_kind::real:
+            value =
+                static_cast<T>(
+                    std::bit_cast<double>(
+                        construction.bits()));
+            break;
+
+        case construction_kind::member_binding:
+        case construction_kind::object_binding:
+        case construction_kind::unsupported:
+            return shm_type_batch_result::invalid_input;
+        }
+
+        return append_post_store(
+            target,
+            value);
+    }
+
+    [[nodiscard]] shm_type_batch_result
+    append_constructor_intrinsic(
+        shm_record_offset target,
+        intrinsic_type type,
+        construction_value construction) {
+
+        switch (type) {
+        case intrinsic_type::bool_type: {
+            bool value = false;
+
+            switch (construction.kind) {
+            case construction_kind::zero:
+                break;
+
+            case construction_kind::signed_integer:
+                value =
+                    std::bit_cast<std::int64_t>(
+                        construction.bits()) != 0;
+                break;
+
+            case construction_kind::unsigned_integer:
+                value =
+                    construction.bits() != 0;
+                break;
+
+            case construction_kind::real:
+                value =
+                    std::bit_cast<double>(
+                        construction.bits()) != 0.0;
+                break;
+
+            case construction_kind::member_binding:
+            case construction_kind::object_binding:
+            case construction_kind::unsupported:
+                return shm_type_batch_result::invalid_input;
+            }
+
+            return append_post_store(
+                target,
+                value);
+        }
+
+        case intrinsic_type::char_type:
+            return append_constructor_integer<char>(
+                target, construction);
+        case intrinsic_type::signed_char:
+            return append_constructor_integer<signed char>(
+                target, construction);
+        case intrinsic_type::unsigned_char:
+            return append_constructor_integer<unsigned char>(
+                target, construction);
+        case intrinsic_type::wchar_type:
+            return append_constructor_integer<wchar_t>(
+                target, construction);
+        case intrinsic_type::char8_type:
+            return append_constructor_integer<char8_t>(
+                target, construction);
+        case intrinsic_type::char16_type:
+            return append_constructor_integer<char16_t>(
+                target, construction);
+        case intrinsic_type::char32_type:
+            return append_constructor_integer<char32_t>(
+                target, construction);
+        case intrinsic_type::signed_short:
+            return append_constructor_integer<short>(
+                target, construction);
+        case intrinsic_type::unsigned_short:
+            return append_constructor_integer<unsigned short>(
+                target, construction);
+        case intrinsic_type::signed_int:
+            return append_constructor_integer<int>(
+                target, construction);
+        case intrinsic_type::unsigned_int:
+            return append_constructor_integer<unsigned int>(
+                target, construction);
+        case intrinsic_type::signed_long:
+            return append_constructor_integer<long>(
+                target, construction);
+        case intrinsic_type::unsigned_long:
+            return append_constructor_integer<unsigned long>(
+                target, construction);
+        case intrinsic_type::signed_long_long:
+            return append_constructor_integer<long long>(
+                target, construction);
+        case intrinsic_type::unsigned_long_long:
+            return append_constructor_integer<unsigned long long>(
+                target, construction);
+
+        case intrinsic_type::float_type:
+            return append_constructor_real<float>(
+                target, construction);
+        case intrinsic_type::double_type:
+            return append_constructor_real<double>(
+                target, construction);
+        case intrinsic_type::long_double_type:
+            return append_constructor_real<long double>(
+                target, construction);
+
+        case intrinsic_type::nullptr_type: {
+            if (!zero_pointer_construction(
+                    construction)) {
+
+                return shm_type_batch_result::invalid_input;
+            }
+
+            abi_properties properties;
+
+            if (!abi_layout_properties(
+                    abi.target,
+                    properties)) {
+
+                return shm_type_batch_result::invalid_input;
+            }
+
+            if (properties.pointer_size == 4) {
+                return append_post_store(
+                    target,
+                    std::uint32_t{0});
+            }
+
+            if (properties.pointer_size == 8) {
+                return append_post_store(
+                    target,
+                    std::uint64_t{0});
+            }
+
+            return shm_type_batch_result::incompatible_abi;
+        }
+
+        case intrinsic_type::void_type:
+            return shm_type_batch_result::unsupported_type;
+
+        case intrinsic_type::none:
+            return shm_type_batch_result::invalid_input;
+        }
+
+        return shm_type_batch_result::invalid_input;
+    }
+
+    [[nodiscard]] shm_type_batch_result
+    append_constructor_defaults(
+        type_handle handle) {
+
+        const auto owner =
+            project.identity(
+                handle);
+
+        shm_value_layout root_layout;
+
+        if (!owner ||
+            !layout.type(
+                handle,
+                root_layout)) {
+
+            return shm_type_batch_result::invalid_input;
+        }
+
+        std::size_t first = 0;
+        std::size_t last =
+            project.constructor_default_count();
+
+        while (first < last) {
+            const auto middle =
+                first +
+                (last - first) / 2;
+
+            constructor_default entry;
+
+            if (!project.constructor_default_at(
+                    middle,
+                    entry)) {
+
+                return shm_type_batch_result::invalid_input;
+            }
+
+            if (entry.owner.value() <
+                owner.value()) {
+
+                first =
+                    middle + 1;
+            }
+            else {
+                last =
+                    middle;
+            }
+        }
+
+        for (;
+             first <
+                 project.constructor_default_count();
+             ++first) {
+
+            constructor_default entry;
+
+            if (!project.constructor_default_at(
+                    first,
+                    entry)) {
+
+                return shm_type_batch_result::invalid_input;
+            }
+
+            if (entry.owner != owner) {
+                break;
+            }
+
+            constructor_path_reader path{
+                project.string(
+                    entry.path)};
+
+            auto record =
+                handle;
+
+            shm_offset destination = 0;
+            type_ref target_type{};
+
+            while (!path.remaining.empty()) {
+                std::string_view field;
+                std::uint64_t index = 0;
+
+                if (!path.next(
+                        field,
+                        index)) {
+
+                    return shm_type_batch_result::invalid_input;
+                }
+
+                if (field.empty()) {
+                    derived_type_record array;
+                    shm_value_layout child;
+
+                    if (!project.derived(
+                            target_type,
+                            array) ||
+                        array.kind !=
+                            derived_type_kind::
+                                bounded_array ||
+                        index >=
+                            array.payload ||
+                        !value_layout(
+                            array.child,
+                            child) ||
+                        (child.size != 0 &&
+                         index >
+                            (std::numeric_limits<
+                                shm_offset>::max)() /
+                                child.size)) {
+
+                        return shm_type_batch_result::invalid_input;
+                    }
+
+                    const auto delta =
+                        index *
+                        child.size;
+
+                    if (destination >
+                            root_layout.size ||
+                        delta >
+                            root_layout.size -
+                                destination) {
+
+                        return shm_type_batch_result::invalid_input;
+                    }
+
+                    destination += delta;
+                    target_type =
+                        array.child;
+
+                    continue;
+                }
+
+                if (target_type &&
+                    !project.named(
+                        target_type,
+                        record)) {
+
+                    return shm_type_batch_result::invalid_input;
+                }
+
+                const auto name =
+                    project.find_string(
+                        field);
+
+                const auto local =
+                    project.find_member(
+                        record,
+                        name);
+
+                type_entry type;
+                member_record member;
+                shm_record_offset offset = 0;
+
+                if (!name ||
+                    !local ||
+                    !project.type(
+                        record,
+                        type) ||
+                    !project.member_at(
+                        static_cast<std::size_t>(
+                            type.members.begin) +
+                            local.value(),
+                        member) ||
+                    !layout.member_offset(
+                        static_cast<std::size_t>(
+                            type.members.begin) +
+                            local.value(),
+                        offset) ||
+                    destination >
+                        root_layout.size ||
+                    static_cast<shm_offset>(
+                        offset) >
+                        root_layout.size -
+                            destination) {
+
+                    return shm_type_batch_result::invalid_input;
+                }
+
+                destination +=
+                    static_cast<shm_offset>(
+                        offset);
+
+                target_type =
+                    member.type;
+            }
+
+            if (target_type.kind() !=
+                    type_ref_kind::intrinsic ||
+                destination >=
+                    static_cast<shm_offset>(
+                        (std::numeric_limits<
+                            shm_record_offset>::max)())) {
+
+                return shm_type_batch_result::invalid_input;
+            }
+
+            const auto appended =
+                append_constructor_intrinsic(
+                    static_cast<shm_record_offset>(
+                        destination),
+                    static_cast<intrinsic_type>(
+                        target_type.payload()),
+                    entry.value);
+
+            if (appended !=
+                shm_type_batch_result::success) {
+
+                return appended;
+            }
+
+            if (telemetry != nullptr) {
+                ++telemetry->constructor_defaults;
+            }
+        }
+
+        return shm_type_batch_result::success;
     }
 
     [[nodiscard]] bool value_layout(
@@ -977,7 +1426,8 @@ private:
                 type_api - 1];
 
         if (api.children.count != 0 ||
-            api.repeats.count != 0) {
+            api.repeats.count != 0 ||
+            api.post_stores.count != 0) {
 
             return false;
         }
@@ -1230,7 +1680,11 @@ private:
             !valid_inline_range(
                 api.repeats,
                 output.repeats.size()) ||
-            api.repeats.count != 0) {
+            !valid_inline_range(
+                api.post_stores,
+                output.post_stores.size()) ||
+            api.repeats.count != 0 ||
+            api.post_stores.count != 0) {
 
             return false;
         }
@@ -2247,6 +2701,19 @@ private:
             }
         }
 
+        if (mode == type_batch_mode::defaults) {
+            const auto constructors =
+                append_constructor_defaults(
+                    handle);
+
+            if (constructors !=
+                shm_type_batch_result::success) {
+
+                slot = {};
+                return constructors;
+            }
+        }
+
         std::uint32_t result_api = 0;
         const auto finished =
             finish_api(
@@ -2684,6 +3151,9 @@ private:
             sizeof(shm_type_batch::object_reference);
         telemetry->store_bytes =
             output.stores.size() *
+            sizeof(shm_type_batch::store_operation);
+        telemetry->post_store_bytes =
+            output.post_stores.size() *
             sizeof(shm_type_batch::store_operation);
         telemetry->child_bytes =
             output.children.size() *
@@ -3133,7 +3603,10 @@ private:
                 area.children.size()) ||
             !valid_range(
                 api.repeats,
-                area.repeats.size())) {
+                area.repeats.size()) ||
+            !valid_range(
+                api.post_stores,
+                area.post_stores.size())) {
             return shm_type_batch_result::invalid_input;
         }
 
@@ -3401,6 +3874,42 @@ private:
             }
         }
 
+        for (const auto root : roots) {
+            if (root >= area.layout_size ||
+                relative_base >
+                    area.layout_size - root) {
+
+                return shm_type_batch_result::invalid_input;
+            }
+
+            const auto base_offset =
+                root + relative_base;
+
+            for (std::uint32_t index = 0;
+                 index < api.post_stores.count;
+                 ++index) {
+
+                const auto result =
+                    execute_store(
+                        area.post_stores[
+                            static_cast<std::size_t>(
+                                api.post_stores.begin) +
+                            index],
+                        base_offset);
+
+                if (result !=
+                    shm_type_batch_result::success) {
+
+                    return result;
+                }
+
+                if (telemetry != nullptr) {
+                    ++telemetry->
+                        constructor_default_writes;
+                }
+            }
+        }
+
         return shm_type_batch_result::success;
     }
 
@@ -3435,7 +3944,10 @@ private:
                 area.children.size()) ||
             !valid_range(
                 api.repeats,
-                area.repeats.size())) {
+                area.repeats.size()) ||
+            !valid_range(
+                api.post_stores,
+                area.post_stores.size())) {
             return shm_type_batch_result::invalid_input;
         }
 
@@ -3686,6 +4198,30 @@ private:
             }
         }
 
+        for (std::uint32_t index = 0;
+             index < api.post_stores.count;
+             ++index) {
+
+            const auto result =
+                execute_store(
+                    area.post_stores[
+                        static_cast<std::size_t>(
+                            api.post_stores.begin) +
+                        index],
+                    base_offset);
+
+            if (result !=
+                shm_type_batch_result::success) {
+
+                return result;
+            }
+
+            if (telemetry != nullptr) {
+                ++telemetry->
+                    constructor_default_writes;
+            }
+        }
+
         return shm_type_batch_result::success;
     }
 
@@ -3705,6 +4241,7 @@ std::size_t shm_type_batch::resident_bytes() const noexcept {
         absolute_references.size() * sizeof(absolute_reference) +
         object_references.size() * sizeof(object_reference) +
         stores.size() * sizeof(store_operation) +
+        post_stores.size() * sizeof(store_operation) +
         children.size() * sizeof(child_operation) +
         repeats.size() * sizeof(repeat_operation) +
         constants.size() * sizeof(constants.front()) +
@@ -3725,6 +4262,7 @@ void shm_type_batch::reset() noexcept {
     absolute_references.clear();
     object_references.clear();
     stores.clear();
+    post_stores.clear();
     children.clear();
     repeats.clear();
     constants.clear();

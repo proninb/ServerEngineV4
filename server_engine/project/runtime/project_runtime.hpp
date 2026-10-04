@@ -8,6 +8,7 @@
 #pragma once
 
 #include "../project.hpp"
+#include "../shm/shm_runtime_v2.hpp"
 #include "fixed_direct_materializer.hpp"
 
 #include "../../configuration/server_configuration.hpp"
@@ -30,6 +31,24 @@ struct project_runtime_telemetry final {
     std::uint64_t materialization_ns = 0;
     std::uint64_t runtime_bytes = 0;
     std::uint64_t shm_bytes = 0;
+
+    // RUNTIME-V2-RESIDENT-01.
+    // Exactly one construction path is selected for one publication.
+    bool runtime_v2 = false;
+    std::uint8_t reserved[7]{};
+    std::uint64_t runtime_v2_prepare_ns = 0;
+    std::uint64_t runtime_v2_metadata_bytes = 0;
+
+    // Explicit compatibility-gate counters. Non-zero means a semantic phase
+    // not yet migrated to shm_layout/V2 required the legacy constructor.
+    std::uint64_t runtime_v2_constructor_defaults = 0;
+    std::uint64_t runtime_v2_blocking_links = 0;
+    std::uint64_t runtime_v2_blocking_initializations = 0;
+
+    shm_runtime_v2_prepare_telemetry runtime_v2_prepare{};
+    shm_runtime_v2_execute_telemetry runtime_v2_canonical{};
+    shm_runtime_v2_execute_telemetry runtime_v2_objects{};
+
     fixed_direct_materialization_telemetry materializer{};
 };
 

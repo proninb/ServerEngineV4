@@ -20,6 +20,8 @@
 
 namespace cw::server {
 
+class shm_layout;
+
 enum class runtime_layout_result : std::uint8_t {
     success = 0,
     invalid_input,
@@ -96,7 +98,21 @@ private:
     std::vector<record_offset> base_offsets;
 
     friend class runtime_layout;
+
+    friend bool prepare_runtime_bindings(
+        const compiled_project_view&,
+        const shm_layout&,
+        const server_abi_configuration&,
+        std::uint64_t,
+        runtime_binding_index&) noexcept;
 };
+
+[[nodiscard]] bool prepare_runtime_bindings(
+    const compiled_project_view& project,
+    const shm_layout& layout,
+    const server_abi_configuration& abi,
+    std::uint64_t target_base_address,
+    runtime_binding_index& output) noexcept;
 
 // Construction-only dense layout workspace.
 //

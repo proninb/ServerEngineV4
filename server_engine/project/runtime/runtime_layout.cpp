@@ -2039,9 +2039,18 @@ bool runtime_binding_index::object_offset(
         return false;
     }
 
-    output_value =
-        object_offsets[object.value() - 1];
+    const auto stored =
+        object_offsets[
+            object.value() - 1];
 
+    if (stored ==
+        (std::numeric_limits<
+            runtime_offset>::max)()) {
+
+        return false;
+    }
+
+    output_value = stored;
     return true;
 }
 

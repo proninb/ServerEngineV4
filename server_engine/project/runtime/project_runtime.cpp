@@ -4,6 +4,8 @@
 #include "runtime_layout.hpp"
 
 #include "../construction/execution_lanes.hpp"
+#include "../shm/shm_layout.hpp"
+#include "../shm/shm_runtime_v2.hpp"
 
 #include "../../diagnostics/diagnostic_builder.hpp"
 #include "../../diagnostics/diagnostic_descriptor.hpp"
@@ -19,6 +21,224 @@
 #include <utility>
 
 namespace cw::server {
+
+bool prepare_runtime_bindings(
+    const compiled_project_view& project,
+    const shm_layout& layout,
+    const server_abi_configuration& abi,
+    std::uint64_t target_base_address,
+    runtime_binding_index& output) noexcept {
+
+    output = runtime_binding_index{};
+
+    if (!project.valid() ||
+        layout.target() != abi.target) {
+
+        return false;
+    }
+
+    abi_properties properties;
+
+    if (!abi_layout_properties(
+            abi.target,
+            properties) ||
+        (properties.reference_size != 4 &&
+         properties.reference_size != 8)) {
+
+        return false;
+    }
+
+    const auto mask =
+        properties.reference_size == 4
+        ? static_cast<std::uint64_t>(
+            (std::numeric_limits<
+                std::uint32_t>::max)())
+        : (std::numeric_limits<
+            std::uint64_t>::max)();
+
+    if (target_base_address > mask ||
+        (layout.size() != 0 &&
+         layout.size() - 1 >
+             mask - target_base_address)) {
+
+        return false;
+    }
+
+    runtime_binding_index next;
+
+    const auto intrinsic_size =
+        [&](intrinsic_type type,
+            std::uint8_t& size) noexcept {
+
+            size = 0;
+
+            const auto windows =
+                abi.target ==
+                    abi_target::windows_x86 ||
+                abi.target ==
+                    abi_target::windows_x64;
+
+            switch (type) {
+            case intrinsic_type::bool_type:
+            case intrinsic_type::char_type:
+            case intrinsic_type::signed_char:
+            case intrinsic_type::unsigned_char:
+            case intrinsic_type::char8_type:
+                size = 1;
+                return true;
+
+            case intrinsic_type::wchar_type:
+                size = windows ? 2 : 4;
+                return true;
+
+            case intrinsic_type::char16_type:
+            case intrinsic_type::signed_short:
+            case intrinsic_type::unsigned_short:
+                size = 2;
+                return true;
+
+            case intrinsic_type::char32_type:
+            case intrinsic_type::signed_int:
+            case intrinsic_type::unsigned_int:
+            case intrinsic_type::float_type:
+                size = 4;
+                return true;
+
+            case intrinsic_type::signed_long:
+            case intrinsic_type::unsigned_long:
+                size = windows ? 4 : 8;
+                return true;
+
+            case intrinsic_type::signed_long_long:
+            case intrinsic_type::unsigned_long_long:
+            case intrinsic_type::double_type:
+                size = 8;
+                return true;
+
+            case intrinsic_type::long_double_type:
+                size = windows ? 8 : 16;
+                return true;
+
+            case intrinsic_type::nullptr_type:
+                size = properties.pointer_size;
+                return size != 0;
+
+            case intrinsic_type::void_type:
+            case intrinsic_type::none:
+                return false;
+            }
+
+            return false;
+        };
+
+    try {
+        next.object_offsets.assign(
+            project.object_slot_count(),
+            (std::numeric_limits<
+                runtime_offset>::max)());
+
+        next.member_offsets.assign(
+            project.member_count(),
+            (std::numeric_limits<
+                record_offset>::max)());
+
+        next.base_offsets.assign(
+            project.base_count(),
+            (std::numeric_limits<
+                record_offset>::max)());
+    }
+    catch (...) {
+        return false;
+    }
+
+    for (std::size_t index = 0;
+         index < project.object_slot_count();
+         ++index) {
+
+        const auto object =
+            project.object_at(index);
+
+        if (!object) {
+            continue;
+        }
+
+        shm_offset offset = 0;
+
+        if (!layout.object_offset(
+                object,
+                offset)) {
+
+            return false;
+        }
+
+        next.object_offsets[index] =
+            static_cast<runtime_offset>(
+                offset);
+    }
+
+    for (std::size_t index = 0;
+         index < project.member_count();
+         ++index) {
+
+        shm_record_offset offset = 0;
+
+        if (layout.member_offset(
+                index,
+                offset)) {
+
+            next.member_offsets[index] =
+                static_cast<record_offset>(
+                    offset);
+        }
+    }
+
+    for (std::size_t index = 0;
+         index < project.base_count();
+         ++index) {
+
+        shm_record_offset offset = 0;
+
+        if (layout.base_offset(
+                index,
+                offset)) {
+
+            next.base_offsets[index] =
+                static_cast<record_offset>(
+                    offset);
+        }
+    }
+
+    for (std::size_t index = 1;
+         index <
+             runtime_binding_index::
+                 intrinsic_slot_count;
+         ++index) {
+
+        const auto type =
+            static_cast<intrinsic_type>(
+                index);
+
+        std::uint8_t size = 0;
+
+        if (intrinsic_size(
+                type,
+                size)) {
+
+            next.intrinsic_sizes[index] =
+                size;
+        }
+    }
+
+    next.target_base_address_value =
+        target_base_address;
+
+    next.reference_size_value =
+        properties.reference_size;
+
+    output = std::move(next);
+    return true;
+}
+
 namespace {
 
 [[nodiscard]] bool has_reserved_system_object(
@@ -73,6 +293,57 @@ layout_failure_detail(
     }
 
     return "Runtime layout preparation failed";
+}
+
+[[nodiscard]] constexpr std::string_view
+shm_layout_failure_detail(
+    shm_layout_result result) noexcept {
+
+    switch (result) {
+    case shm_layout_result::success:
+        return "SHM Runtime V2 layout prepared successfully";
+
+    case shm_layout_result::invalid_input:
+        return "compiled.bin cannot produce a valid SHM Runtime V2 layout";
+
+    case shm_layout_result::unsupported_type:
+        return "SHM Runtime V2 layout contains an unsupported native type";
+
+    case shm_layout_result::overflow:
+        return "SHM Runtime V2 layout size or alignment overflowed";
+
+    case shm_layout_result::failed:
+        return "SHM Runtime V2 layout workspace allocation failed";
+    }
+
+    return "SHM Runtime V2 layout preparation failed";
+}
+
+[[nodiscard]] constexpr std::string_view
+runtime_v2_failure_detail(
+    shm_runtime_v2_result result) noexcept {
+
+    switch (result) {
+    case shm_runtime_v2_result::success:
+        return "SHM Runtime V2 materialized successfully";
+
+    case shm_runtime_v2_result::invalid_input:
+        return "Compiled Runtime V2 construction data is not materializable";
+
+    case shm_runtime_v2_result::unsupported_type:
+        return "Runtime V2 contains a type not supported by FIXED_DIRECT materialization";
+
+    case shm_runtime_v2_result::incompatible_abi:
+        return "Server process/compiler representation cannot encode configured Runtime V2 ABI";
+
+    case shm_runtime_v2_result::overflow:
+        return "Runtime V2 preparation or materialization overflowed";
+
+    case shm_runtime_v2_result::failed:
+        return "Runtime V2 physical metadata allocation failed";
+    }
+
+    return "SHM Runtime V2 operation failed";
 }
 
 [[nodiscard]] constexpr std::string_view
@@ -417,50 +688,187 @@ server_status create_resident_project(
         return server_status::project_runtime_failed;
     }
 
-    runtime_layout layout;
+    // RUNTIME-V2-RESIDENT-01:
+    // V2 is production-selected only when every semantic construction phase
+    // represented by the old materializer is already covered by V2.
+    const auto constructor_defaults =
+        compiled.constructor_default_count();
+
+    const auto blocking_links =
+        compiled.live_link_count();
+
+    const auto blocking_initializations =
+        compiled.initialization_count();
+
+    const auto use_runtime_v2 =
+        blocking_links == 0 &&
+        blocking_initializations == 0;
+
+    if (telemetry != nullptr) {
+        telemetry->runtime_v2 =
+            use_runtime_v2;
+
+        telemetry->
+            runtime_v2_constructor_defaults =
+                constructor_defaults;
+
+        telemetry->runtime_v2_blocking_links =
+            blocking_links;
+
+        telemetry->
+            runtime_v2_blocking_initializations =
+                blocking_initializations;
+    }
+
+    runtime_layout legacy_layout;
+    shm_layout v2_layout;
+    shm_runtime_v2 v2_runtime;
+
+    std::uint64_t runtime_size = 0;
 
     const auto layout_started =
         clock_type::now();
 
-    const auto prepared =
-        prepare_runtime_layout(
-            compiled,
-            settings.abi,
-            layout);
+    if (use_runtime_v2) {
+        const auto prepared =
+            prepare_shm_layout(
+                compiled,
+                settings.abi,
+                v2_layout);
 
-    const auto layout_finished =
-        clock_type::now();
+        const auto layout_finished =
+            clock_type::now();
 
-    if (telemetry != nullptr) {
-        telemetry->layout_ns =
-            elapsed_ns(
-                layout_started,
-                layout_finished);
+        if (telemetry != nullptr) {
+            telemetry->layout_ns =
+                elapsed_ns(
+                    layout_started,
+                    layout_finished);
+        }
 
-        telemetry->runtime_bytes =
-            layout.size();
+        if (prepared !=
+            shm_layout_result::success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_runtime_failed,
+                    operation)
+                    .file(project_path)
+                    .detail(
+                        shm_layout_failure_detail(
+                            prepared))
+                    .build());
+
+            return prepared ==
+                    shm_layout_result::
+                        unsupported_type
+                ? server_status::unsupported
+                : server_status::
+                    project_runtime_failed;
+        }
+
+        runtime_size =
+            v2_layout.size();
+
+        const auto prepare_started =
+            clock_type::now();
+
+        const auto prepared_runtime =
+            prepare_shm_runtime_v2(
+                compiled,
+                settings.abi,
+                v2_layout,
+                v2_runtime,
+                telemetry != nullptr
+                    ? &telemetry->
+                        runtime_v2_prepare
+                    : nullptr);
+
+        const auto prepare_finished =
+            clock_type::now();
+
+        if (telemetry != nullptr) {
+            telemetry->runtime_v2_prepare_ns =
+                elapsed_ns(
+                    prepare_started,
+                    prepare_finished);
+
+            telemetry->runtime_v2_metadata_bytes =
+                static_cast<std::uint64_t>(
+                    v2_runtime.resident_bytes());
+        }
+
+        if (prepared_runtime !=
+            shm_runtime_v2_result::success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_runtime_failed,
+                    operation)
+                    .file(project_path)
+                    .detail(
+                        runtime_v2_failure_detail(
+                            prepared_runtime))
+                    .build());
+
+            return prepared_runtime ==
+                        shm_runtime_v2_result::
+                            unsupported_type ||
+                    prepared_runtime ==
+                        shm_runtime_v2_result::
+                            incompatible_abi
+                ? server_status::unsupported
+                : server_status::
+                    project_runtime_failed;
+        }
+    }
+    else {
+        const auto prepared =
+            prepare_runtime_layout(
+                compiled,
+                settings.abi,
+                legacy_layout);
+
+        const auto layout_finished =
+            clock_type::now();
+
+        if (telemetry != nullptr) {
+            telemetry->layout_ns =
+                elapsed_ns(
+                    layout_started,
+                    layout_finished);
+        }
+
+        if (prepared !=
+            runtime_layout_result::success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_runtime_failed,
+                    operation)
+                    .file(project_path)
+                    .detail(
+                        layout_failure_detail(
+                            prepared))
+                    .build());
+
+            return server_status::
+                project_runtime_failed;
+        }
+
+        runtime_size =
+            legacy_layout.size();
     }
 
-    if (prepared !=
-        runtime_layout_result::success) {
-
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_runtime_failed,
-                operation)
-                .file(project_path)
-                .detail(
-                    layout_failure_detail(
-                        prepared))
-                .build());
-
-        return server_status::project_runtime_failed;
+    if (telemetry != nullptr) {
+        telemetry->runtime_bytes =
+            runtime_size;
     }
 
     if (!fixed_direct_target_range_compatible(
             settings.abi,
             settings.shm.fixed_base_address,
-            layout.size())) {
+            runtime_size)) {
 
         diagnostics.emit(
             diagnostic(
@@ -477,7 +885,7 @@ server_status create_resident_project(
     std::size_t mapping_size = 0;
 
     if (!runtime_mapping_size(
-            layout.size(),
+            runtime_size,
             fixed_shared_memory::
                 size_alignment(),
             mapping_size)) {
@@ -587,7 +995,7 @@ server_status create_resident_project(
 
     const auto logical_size =
         static_cast<std::size_t>(
-            layout.size());
+            runtime_size);
 
     const auto pretouch_lanes =
         runtime_pretouch(
@@ -611,19 +1019,143 @@ server_status create_resident_project(
     const auto materialization_started =
         clock_type::now();
 
-    const auto materialized =
-        materialize_fixed_direct_zeroed(
-            compiled,
-            layout,
-            settings.abi,
-            settings.shm.fixed_base_address,
-            shared_memory.bytes(),
-            telemetry != nullptr
-                ? &telemetry->materializer
-                : nullptr,
-            profile != nullptr
-                ? &profile->materializer
-                : nullptr);
+    if (use_runtime_v2) {
+        const auto canonical_started =
+            clock_type::now();
+
+        const auto canonical =
+            materialize_shm_runtime_v2_canonical(
+                v2_runtime,
+                settings.abi,
+                v2_layout,
+                shared_memory.bytes(),
+                telemetry != nullptr
+                    ? &telemetry->
+                        runtime_v2_canonical
+                    : nullptr);
+
+        const auto canonical_finished =
+            clock_type::now();
+
+        if (telemetry != nullptr) {
+            telemetry->materializer.canonical_ns =
+                elapsed_ns(
+                    canonical_started,
+                    canonical_finished);
+        }
+
+        if (canonical !=
+            shm_runtime_v2_result::success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_runtime_failed,
+                    operation)
+                    .file(project_path)
+                    .detail(
+                        runtime_v2_failure_detail(
+                            canonical))
+                    .build());
+
+            return canonical ==
+                        shm_runtime_v2_result::
+                            unsupported_type ||
+                    canonical ==
+                        shm_runtime_v2_result::
+                            incompatible_abi
+                ? server_status::unsupported
+                : server_status::
+                    project_runtime_failed;
+        }
+
+        const auto objects_started =
+            clock_type::now();
+
+        const auto objects =
+            materialize_shm_runtime_v2_objects(
+                v2_runtime,
+                settings.abi,
+                v2_layout,
+                shared_memory.bytes(),
+                telemetry != nullptr
+                    ? &telemetry->
+                        runtime_v2_objects
+                    : nullptr);
+
+        const auto objects_finished =
+            clock_type::now();
+
+        if (telemetry != nullptr) {
+            telemetry->materializer.objects_ns =
+                elapsed_ns(
+                    objects_started,
+                    objects_finished);
+        }
+
+        if (objects !=
+            shm_runtime_v2_result::success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_runtime_failed,
+                    operation)
+                    .file(project_path)
+                    .detail(
+                        runtime_v2_failure_detail(
+                            objects))
+                    .build());
+
+            return objects ==
+                        shm_runtime_v2_result::
+                            unsupported_type ||
+                    objects ==
+                        shm_runtime_v2_result::
+                            incompatible_abi
+                ? server_status::unsupported
+                : server_status::
+                    project_runtime_failed;
+        }
+    }
+    else {
+        const auto materialized =
+            materialize_fixed_direct_zeroed(
+                compiled,
+                legacy_layout,
+                settings.abi,
+                settings.shm.fixed_base_address,
+                shared_memory.bytes(),
+                telemetry != nullptr
+                    ? &telemetry->materializer
+                    : nullptr,
+                profile != nullptr
+                    ? &profile->materializer
+                    : nullptr);
+
+        if (materialized !=
+            fixed_direct_materialization_result::
+                success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_runtime_failed,
+                    operation)
+                    .file(project_path)
+                    .detail(
+                        materialization_failure_detail(
+                            materialized))
+                    .build());
+
+            return materialized ==
+                    fixed_direct_materialization_result::
+                        incompatible_abi ||
+                materialized ==
+                    fixed_direct_materialization_result::
+                        unsupported_type
+                ? server_status::unsupported
+                : server_status::
+                    project_runtime_failed;
+        }
+    }
 
     const auto materialization_finished =
         clock_type::now();
@@ -635,37 +1167,21 @@ server_status create_resident_project(
                 materialization_finished);
     }
 
-    if (materialized !=
-        fixed_direct_materialization_result::success) {
-
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_runtime_failed,
-                operation)
-                .file(project_path)
-                .detail(
-                    materialization_failure_detail(
-                        materialized))
-                .build());
-
-        return materialized ==
-                fixed_direct_materialization_result::
-                    incompatible_abi ||
-            materialized ==
-                fixed_direct_materialization_result::
-                    unsupported_type
-            ? server_status::unsupported
-            : server_status::project_runtime_failed;
-    }
-
-    const auto runtime_size =
-        layout.size();
-
     runtime_binding_index bindings;
 
-    if (!layout.release_bindings(
+    const auto bindings_ready =
+        use_runtime_v2
+        ? prepare_runtime_bindings(
+            compiled,
+            v2_layout,
+            settings.abi,
+            settings.shm.fixed_base_address,
+            bindings)
+        : legacy_layout.release_bindings(
             bindings,
-            settings.shm.fixed_base_address)) {
+            settings.shm.fixed_base_address);
+
+    if (!bindings_ready) {
 
         diagnostics.emit(
             diagnostic(

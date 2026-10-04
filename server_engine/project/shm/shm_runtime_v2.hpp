@@ -9,8 +9,9 @@
  * identity_ref is consumed during prepare only. The hot materializer receives
  * no G/project, semantic identity, hash/map lookup, or generic VM program.
  *
- * This is intentionally not yet wired into create_resident_project():
- * resident Runtime publication still needs a V2 runtime_binding_index bridge.
+ * This is wired into create_resident_project() through the resident V2
+ * publication bridge. Constructor defaults are part of the Type API physical
+ * model; static links and per-object initializations remain later cold phases.
  */
 #pragma once
 

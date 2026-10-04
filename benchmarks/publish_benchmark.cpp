@@ -481,6 +481,24 @@ int main(
         mode == benchmark_mode::audit) {
 
         std::cout
+            << ",runtime_v2="
+            << static_cast<unsigned>(
+                runtime_telemetry.runtime_v2)
+            << ",runtime_v2_prepare_ms="
+            << ns_to_ms(
+                runtime_telemetry.runtime_v2_prepare_ns)
+            << ",runtime_v2_metadata_bytes="
+            << runtime_telemetry.
+                runtime_v2_metadata_bytes
+            << ",runtime_v2_constructor_defaults="
+            << runtime_telemetry.
+                runtime_v2_constructor_defaults
+            << ",runtime_v2_blocking_links="
+            << runtime_telemetry.
+                runtime_v2_blocking_links
+            << ",runtime_v2_blocking_initializations="
+            << runtime_telemetry.
+                runtime_v2_blocking_initializations
             << ",runtime_layout_ms="
             << ns_to_ms(
                 runtime_telemetry.layout_ns)

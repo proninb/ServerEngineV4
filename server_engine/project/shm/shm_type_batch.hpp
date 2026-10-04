@@ -47,6 +47,7 @@ struct shm_type_batch_prepare_telemetry final {
     std::uint64_t absolute_references = 0;
     std::uint64_t object_references = 0;
     std::uint64_t stores = 0;
+    std::uint64_t constructor_defaults = 0;
     std::uint64_t children = 0;
     std::uint64_t repeats = 0;
     std::uint64_t object_groups = 0;
@@ -80,6 +81,7 @@ struct shm_type_batch_prepare_telemetry final {
     std::uint64_t absolute_reference_bytes = 0;
     std::uint64_t object_reference_bytes = 0;
     std::uint64_t store_bytes = 0;
+    std::uint64_t post_store_bytes = 0;
     std::uint64_t child_bytes = 0;
     std::uint64_t repeat_bytes = 0;
     std::uint64_t constant_bytes = 0;
@@ -104,6 +106,7 @@ struct shm_type_batch_execute_telemetry final {
     std::uint64_t absolute_reference_writes = 0;
     std::uint64_t object_reference_writes = 0;
     std::uint64_t store_writes = 0;
+    std::uint64_t constructor_default_writes = 0;
 
     std::uint64_t batch_api_applications = 0;
     std::uint64_t child_visits = 0;
@@ -151,9 +154,13 @@ private:
         range stores{};
         range children{};
         range repeats{};
+
+        // Constructor-default scalar writes execute only after all child/base
+        // APIs and repeats for this record have completed.
+        range post_stores{};
     };
 
-    static_assert(sizeof(type_api) == 48);
+    static_assert(sizeof(type_api) == 56);
 
     struct relative_reference final {
         shm_record_offset target = 0;
@@ -234,6 +241,7 @@ private:
     std::vector<absolute_reference> absolute_references;
     std::vector<object_reference> object_references;
     std::vector<store_operation> stores;
+    std::vector<store_operation> post_stores;
     std::vector<child_operation> children;
     std::vector<repeat_operation> repeats;
     std::vector<std::array<std::byte, 16>> constants;

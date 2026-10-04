@@ -120,14 +120,33 @@ public:
         : project(project), abi(abi), output(output) {}
 
     [[nodiscard]] shm_layout_result build() noexcept {
-        for (std::size_t index = 0; index < project.object_count(); ++index) {
-            const auto handle = project.object_at(index);
+        for (std::size_t index = 0;
+             index < project.object_slot_count();
+             ++index) {
+
+            const auto handle =
+                project.object_at(index);
+
+            // Stable Graph WHERE may contain retired object slots.
+            if (!handle) {
+                continue;
+            }
+
             object_entry object;
             shm_value_layout value;
-            if (!handle || !project.object(handle, object)) {
+
+            if (!project.object(
+                    handle,
+                    object)) {
+
                 return shm_layout_result::invalid_input;
             }
-            const auto result = resolve(object.type, value);
+
+            const auto result =
+                resolve(
+                    object.type,
+                    value);
+
             if (result != shm_layout_result::success) {
                 return result;
             }
@@ -164,29 +183,71 @@ public:
             maximum_alignment = (std::max)(maximum_alignment, value.alignment);
         }
 
-        for (std::size_t index = 0; index < project.object_count(); ++index) {
-            const auto handle = project.object_at(index);
+        for (std::size_t index = 0;
+             index < project.object_slot_count();
+             ++index) {
+
+            const auto handle =
+                project.object_at(index);
+
+            // DELETE preserves WHO/WHERE lineage but owns no Runtime storage.
+            if (!handle) {
+                continue;
+            }
+
             object_entry object;
             shm_value_layout value;
-            if (!handle || !project.object(handle, object)) {
+
+            if (!project.object(
+                    handle,
+                    object)) {
+
                 return shm_layout_result::invalid_input;
             }
-            const auto result = resolve(object.type, value);
+
+            const auto result =
+                resolve(
+                    object.type,
+                    value);
+
             if (result != shm_layout_result::success) {
                 return result;
             }
+
             std::uint64_t aligned = 0;
-            if (!align_up(cursor, value.alignment, aligned)) {
+
+            if (!align_up(
+                    cursor,
+                    value.alignment,
+                    aligned)) {
+
                 return shm_layout_result::overflow;
             }
-            if (handle.value() == 0 || handle.value() > output.object_offsets.size()) {
+
+            if (handle.value() == 0 ||
+                handle.value() >
+                    output.object_offsets.size() ||
+                aligned >= invalid_shm_offset) {
+
                 return shm_layout_result::invalid_input;
             }
-            output.object_offsets[handle.value() - 1] = aligned;
-            if (!add_u64(aligned, value.size, cursor)) {
+
+            output.object_offsets[
+                handle.value() - 1] =
+                aligned;
+
+            if (!add_u64(
+                    aligned,
+                    value.size,
+                    cursor)) {
+
                 return shm_layout_result::overflow;
             }
-            maximum_alignment = (std::max)(maximum_alignment, value.alignment);
+
+            maximum_alignment =
+                (std::max)(
+                    maximum_alignment,
+                    value.alignment);
         }
 
         std::uint64_t final_size = 0;
@@ -700,10 +761,32 @@ bool shm_layout::base_offset(std::size_t index, shm_record_offset& value) const 
     value = base_offsets[index]; return true;
 }
 
-bool shm_layout::object_offset(object_handle object, shm_offset& value) const noexcept {
+bool shm_layout::object_offset(
+    object_handle object,
+    shm_offset& value) const noexcept {
+
     value = 0;
-    if (!prepared_value || !object || object.value() > object_offsets.size()) return false;
-    value = object_offsets[object.value() - 1]; return true;
+
+    if (!prepared_value ||
+        !object ||
+        object.value() >
+            object_offsets.size()) {
+
+        return false;
+    }
+
+    const auto stored =
+        object_offsets[
+            object.value() - 1];
+
+    if (stored == invalid_shm_offset ||
+        stored == pending_shm_offset) {
+
+        return false;
+    }
+
+    value = stored;
+    return true;
 }
 
 bool shm_layout::unconnected_offset(type_ref type, shm_offset& value) const noexcept {
@@ -741,7 +824,9 @@ shm_layout_result prepare_shm_layout(
         output.derived_slots.resize(project.derived_type_count());
         output.member_offsets.assign(project.member_count(), invalid_record_offset);
         output.base_offsets.assign(project.base_count(), invalid_record_offset);
-        output.object_offsets.resize(project.object_slot_count());
+        output.object_offsets.assign(
+            project.object_slot_count(),
+            invalid_shm_offset);
         output.unconnected_type_offsets.assign(project.identity_count(), invalid_shm_offset);
         output.unconnected_derived_offsets.assign(project.derived_type_count(), invalid_shm_offset);
     } catch (...) {

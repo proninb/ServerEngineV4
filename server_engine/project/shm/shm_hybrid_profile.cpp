@@ -459,6 +459,10 @@ private:
                 api.stores,
                 area.stores.size()) ||
             !valid_range(
+                api.post_stores,
+                area.post_stores.size()) ||
+            api.post_stores.count != 0 ||
+            !valid_range(
                 api.children,
                 area.children.size()) ||
             !valid_range(

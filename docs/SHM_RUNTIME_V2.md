@@ -836,3 +836,99 @@ The next production integration slice must construct the resident
 (`shm_layout` / Object WHERE / member offsets), then wire
 `create_resident_project()` to the single V2 path and discard construction-only
 V2 metadata after publication where possible.
+
+
+## RUNTIME-V2-RESIDENT-01
+
+`INLINE-64 + object-major` is now wired into the resident Project publication
+bridge as the first production Runtime V2 path.
+
+For a V2-complete image the lifecycle is:
+
+```text
+mmap compiled.bin
+    |
+    v
+prepare shm_layout
+    |
+    v
+prepare Runtime V2 (INLINE-64)
+    |
+    v
+create + pretouch FIXED_DIRECT SHM
+    |
+    +-> V2 canonical materialization
+    +-> V2 object-major materialization
+    |
+    v
+publish runtime_binding_index directly from shm_layout
+    |
+    v
+resident Project
+```
+
+The resident binding sidecar is derived from the same `shm_layout`; a second
+`runtime_layout` is not constructed for that publication.
+
+This slice deliberately does **not** claim semantics that Runtime V2 has not
+implemented yet. The old materializer also owns three later construction
+phases:
+
+- constructor-default records;
+- static Graph links;
+- per-object initializations.
+
+If any of those are present, publication selects the legacy compatibility path
+for the whole Runtime. The two physical layouts are never constructed together
+for one publication. Telemetry reports each blocker explicitly.
+
+This is a forward migration boundary, not the final dual-path architecture.
+The next resident slice must move those three cold phases onto `shm_layout` /
+Runtime V2, validate old-vs-new final SHM bytes, then remove the compatibility
+gate and old construction path from Project publication.
+
+Stable-WHERE object holes are valid in `shm_layout`: retired object slots retain
+their Graph WHERE lineage but receive no Runtime storage and cannot resolve
+through the resident binding index.
+
+
+## RUNTIME-V2-CONSTRUCTOR-02
+
+Constructor-default records are now part of Runtime V2.
+
+They are not emitted into the ordinary Type API `stores` range. A constructor
+override is semantically later than base/member construction and may overwrite
+a value produced by a child Type API, including an explicit zero override.
+Each Type API therefore has a separate `post_stores` range:
+
+```text
+Type API
+    references / ordinary stores
+    -> child/base APIs
+    -> repeats
+    -> post_stores       // constructor defaults
+```
+
+Persisted constructor paths are resolved during V2 prepare using the same
+`constructor_path_reader` grammar used by the legacy materializer. The final
+Runtime metadata contains only numeric record offsets and scalar constants.
+No path strings, names, hashes, semantic identities, or Graph lookup occur in
+the hot executor.
+
+A constructor-bearing Type API is deliberately excluded from leaf/subtree
+inlining in this slice. This preserves ordering without adding a VM or a new
+flattened per-object patch representation. Ordinary constructor-free types keep
+the accepted INLINE-64 behavior unchanged.
+
+The resident compatibility gate is reduced to:
+
+```text
+static Graph links
+per-object initializations
+```
+
+Constructor defaults no longer force legacy Runtime publication.
+
+Experimental Hybrid paths explicitly reject a constructor-bearing Type API
+until their flat representation gets an ordered post-store phase. They must
+never silently reorder constructor overrides.
