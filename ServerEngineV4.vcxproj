@@ -113,6 +113,11 @@
     <ClCompile Include="server_engine\project\shm\shm_layout.cpp" />
     <ClCompile Include="server_engine\project\shm\shm_materializer.cpp" />
     <ClCompile Include="server_engine\project\shm\shm_sparse.cpp" />
+    <ClCompile Include="server_engine\project\shm\shm_type_area.cpp" />
+    <ClCompile Include="server_engine\project\shm\shm_type_batch.cpp" />
+    <ClCompile Include="server_engine\project\shm\shm_runtime_v2.cpp" />
+    <ClCompile Include="server_engine\project\shm\shm_hybrid_profile.cpp" />
+    <ClCompile Include="server_engine\project\shm\shm_hybrid_04m.cpp" />
     <ClCompile Include="server_engine\project\runtime\runtime_layout.cpp" />
     <ClCompile Include="server_engine\project\runtime\runtime_query.cpp" />
     <ClCompile Include="server_engine\project\runtime\runtime_ic.cpp" />
@@ -223,6 +228,11 @@
     <ClInclude Include="server_engine\project\shm\shm_layout.hpp" />
     <ClInclude Include="server_engine\project\shm\shm_materializer.hpp" />
     <ClInclude Include="server_engine\project\shm\shm_sparse.hpp" />
+    <ClInclude Include="server_engine\project\shm\shm_type_area.hpp" />
+    <ClInclude Include="server_engine\project\shm\shm_type_batch.hpp" />
+    <ClInclude Include="server_engine\project\shm\shm_runtime_v2.hpp" />
+    <ClInclude Include="server_engine\project\shm\shm_hybrid_profile.hpp" />
+    <ClInclude Include="server_engine\project\shm\shm_hybrid_04m.hpp" />
     <ClInclude Include="server_engine\project\runtime\runtime_layout.hpp" />
     <ClInclude Include="server_engine\project\runtime\runtime_system.hpp" />
     <ClInclude Include="server_engine\project\runtime\runtime_query.hpp" />

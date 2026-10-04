@@ -14,6 +14,10 @@
 #include "project/shm/shm_layout.hpp"
 #include "project/shm/shm_materializer.hpp"
 #include "project/shm/shm_sparse.hpp"
+#include "project/shm/shm_type_area.hpp"
+#include "project/shm/shm_type_batch.hpp"
+#include "project/shm/shm_hybrid_profile.hpp"
+#include "project/shm/shm_hybrid_04m.hpp"
 #include "fixed_shared_memory.hpp"
 #include "read_only_file_mapping.hpp"
 
@@ -713,6 +717,352 @@ int main(
         return 6;
     }
 
+
+    cw::server::shm_sparse_call_profile
+        sparse_call_profile{};
+
+    const auto sparse_call_profile_result =
+        cw::server::profile_shm_sparse_calls(
+            sparse,
+            sparse_call_profile);
+
+    if (sparse_call_profile_result !=
+        cw::server::shm_sparse_result::success) {
+
+        std::cerr
+            << "Sparse SHM CALL profile failed: "
+            << static_cast<int>(
+                sparse_call_profile_result)
+            << '\n';
+
+        return 6;
+    }
+
+    if (sparse_call_profile.call_actions !=
+        sparse_prepare.call_actions) {
+
+        std::cerr
+            << "Sparse SHM CALL action profile mismatch"
+            << ",prepare="
+            << sparse_prepare.call_actions
+            << ",profile="
+            << sparse_call_profile.call_actions
+            << '\n';
+
+        return 6;
+    }
+
+
+    cw::server::shm_type_area type_area;
+    cw::server::shm_type_area_prepare_telemetry
+        type_area_prepare{};
+
+    const auto type_area_prepare_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_area_prepare_result =
+        cw::server::prepare_shm_type_area(
+            compiled,
+            settings.abi,
+            new_layout,
+            type_area,
+            &type_area_prepare);
+
+    const auto type_area_prepare_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_area_prepare_result !=
+        cw::server::shm_type_area_result::success) {
+
+        std::cerr
+            << "SHM Type Area prepare failed: "
+            << static_cast<int>(
+                type_area_prepare_result)
+            << '\n';
+
+        return 8;
+    }
+
+    if (type_area_prepare.type_apis !=
+            type_area_prepare.reachable_type_apis ||
+        type_area_prepare.prefinal_resident_bytes <
+            type_area_prepare.resident_bytes ||
+        type_area_prepare.reclaimed_bytes !=
+            type_area_prepare.prefinal_resident_bytes -
+            type_area_prepare.resident_bytes) {
+
+        std::cerr
+            << "SHM Type Area finalization invariant failed"
+            << ",prefinal_resident="
+            << type_area_prepare.prefinal_resident_bytes
+            << ",final_resident="
+            << type_area_prepare.resident_bytes
+            << ",reclaimed="
+            << type_area_prepare.reclaimed_bytes
+            << ",reachable_apis="
+            << type_area_prepare.reachable_type_apis
+            << ",final_apis="
+            << type_area_prepare.type_apis
+            << '\n';
+
+        return 8;
+    }
+
+
+    cw::server::shm_type_batch type_batch;
+    cw::server::shm_type_batch_prepare_telemetry
+        type_batch_prepare{};
+
+    const auto type_batch_prepare_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_batch_prepare_result =
+        cw::server::prepare_shm_type_batch(
+            compiled,
+            settings.abi,
+            new_layout,
+            type_batch,
+            &type_batch_prepare);
+
+    const auto type_batch_prepare_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_batch_prepare_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "SHM Type Batch prepare failed: "
+            << static_cast<int>(
+                type_batch_prepare_result)
+            << '\n';
+
+        return 9;
+    }
+
+
+    cw::server::shm_hybrid_profile hybrid_profile;
+
+    const auto hybrid_profile_started =
+        std::chrono::steady_clock::now();
+
+    const auto hybrid_profile_result =
+        cw::server::profile_shm_type_hybrid(
+            type_batch,
+            hybrid_profile);
+
+    const auto hybrid_profile_finished =
+        std::chrono::steady_clock::now();
+
+    if (hybrid_profile_result !=
+        cw::server::shm_hybrid_profile_result::success) {
+
+        std::cerr
+            << "SHM Hybrid profile failed: "
+            << static_cast<int>(
+                hybrid_profile_result)
+            << '\n';
+
+        return 10;
+    }
+
+
+    cw::server::shm_hybrid_04m hybrid_04m;
+    cw::server::shm_hybrid_04m_prepare_telemetry
+        hybrid_04m_prepare{};
+
+    const auto hybrid_04m_prepare_started =
+        std::chrono::steady_clock::now();
+
+    const auto hybrid_04m_prepare_result =
+        cw::server::prepare_shm_hybrid_04m(
+            type_batch,
+            hybrid_04m,
+            &hybrid_04m_prepare);
+
+    const auto hybrid_04m_prepare_finished =
+        std::chrono::steady_clock::now();
+
+    if (hybrid_04m_prepare_result !=
+        cw::server::shm_hybrid_04m_result::success) {
+
+        std::cerr
+            << "SHM Hybrid 4M prepare failed: "
+            << static_cast<int>(
+                hybrid_04m_prepare_result)
+            << '\n';
+
+        return 10;
+    }
+
+    if (hybrid_04m_prepare.flat_payload_bytes >
+            hybrid_04m_prepare.budget_bytes ||
+        hybrid_04m_prepare.total_runtime_metadata_bytes !=
+            type_batch_prepare.resident_bytes +
+                hybrid_04m_prepare.resident_bytes) {
+
+        std::cerr
+            << "SHM Hybrid 4M prepare invariant failed"
+            << ",budget="
+            << hybrid_04m_prepare.budget_bytes
+            << ",flat_payload="
+            << hybrid_04m_prepare.flat_payload_bytes
+            << ",base="
+            << type_batch_prepare.resident_bytes
+            << ",hybrid="
+            << hybrid_04m_prepare.resident_bytes
+            << ",total="
+            << hybrid_04m_prepare.total_runtime_metadata_bytes
+            << '\n';
+
+        return 10;
+    }
+
+
+    cw::server::shm_type_batch type_inline08;
+    cw::server::shm_type_batch_prepare_telemetry
+        type_inline08_prepare{};
+
+    const auto type_inline08_prepare_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_inline08_prepare_result =
+        cw::server::prepare_shm_type_batch_inline08(
+            compiled,
+            settings.abi,
+            new_layout,
+            type_inline08,
+            &type_inline08_prepare);
+
+    const auto type_inline08_prepare_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_inline08_prepare_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "SHM Type Inline08 prepare failed: "
+            << static_cast<int>(
+                type_inline08_prepare_result)
+            << '\n';
+
+        return 10;
+    }
+
+
+    cw::server::shm_type_batch type_subtree08;
+    cw::server::shm_type_batch_prepare_telemetry
+        type_subtree08_prepare{};
+
+    const auto type_subtree08_prepare_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_subtree08_prepare_result =
+        cw::server::prepare_shm_type_batch_subtree08(
+            compiled,
+            settings.abi,
+            new_layout,
+            type_subtree08,
+            &type_subtree08_prepare);
+
+    const auto type_subtree08_prepare_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_subtree08_prepare_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "SUBTREE-INLINE-08 prepare failed: "
+            << static_cast<int>(
+                type_subtree08_prepare_result)
+            << '\n';
+
+        return 13;
+    }
+
+
+    cw::server::shm_type_batch type_inline16;
+    cw::server::shm_type_batch type_inline32;
+    cw::server::shm_type_batch type_inline64;
+
+    cw::server::shm_type_batch_prepare_telemetry
+        type_inline16_prepare{};
+    cw::server::shm_type_batch_prepare_telemetry
+        type_inline32_prepare{};
+    cw::server::shm_type_batch_prepare_telemetry
+        type_inline64_prepare{};
+
+    const auto type_inline16_prepare_started =
+        std::chrono::steady_clock::now();
+    const auto type_inline16_prepare_result =
+        cw::server::prepare_shm_type_batch_inline16(
+            compiled,
+            settings.abi,
+            new_layout,
+            type_inline16,
+            &type_inline16_prepare);
+    const auto type_inline16_prepare_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_inline16_prepare_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "SHM Type Inline16 prepare failed: "
+            << static_cast<int>(
+                type_inline16_prepare_result)
+            << '\n';
+
+        return 14;
+    }
+
+    const auto type_inline32_prepare_started =
+        std::chrono::steady_clock::now();
+    const auto type_inline32_prepare_result =
+        cw::server::prepare_shm_type_batch_inline32(
+            compiled,
+            settings.abi,
+            new_layout,
+            type_inline32,
+            &type_inline32_prepare);
+    const auto type_inline32_prepare_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_inline32_prepare_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "SHM Type Inline32 prepare failed: "
+            << static_cast<int>(
+                type_inline32_prepare_result)
+            << '\n';
+
+        return 14;
+    }
+
+    const auto type_inline64_prepare_started =
+        std::chrono::steady_clock::now();
+    const auto type_inline64_prepare_result =
+        cw::server::prepare_shm_type_batch_inline64(
+            compiled,
+            settings.abi,
+            new_layout,
+            type_inline64,
+            &type_inline64_prepare);
+    const auto type_inline64_prepare_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_inline64_prepare_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "SHM Type Inline64 prepare failed: "
+            << static_cast<int>(
+                type_inline64_prepare_result)
+            << '\n';
+
+        return 14;
+    }
+
     const auto page_size =
         cw::server::fixed_shared_memory::
             size_alignment();
@@ -1025,7 +1375,11 @@ int main(
         sparse_pretouched_execute.store_writes !=
             materialization.scalar_writes ||
         sparse_pretouched_execute.action_visits !=
-            sparse_execute.action_visits) {
+            sparse_execute.action_visits ||
+        sparse_call_profile.call_visits !=
+            sparse_execute.call_visits ||
+        sparse_call_profile.call_visits !=
+            sparse_pretouched_execute.call_visits) {
 
         std::cerr
             << "Pretouched sparse SHM execution mismatch"
@@ -1035,9 +1389,1537 @@ int main(
             << ",store_actual=" << sparse_pretouched_execute.store_writes
             << ",action_visits_expected=" << sparse_execute.action_visits
             << ",action_visits_actual=" << sparse_pretouched_execute.action_visits
+            << ",call_visits_profile=" << sparse_call_profile.call_visits
+            << ",call_visits_fresh=" << sparse_execute.call_visits
+            << ",call_visits_pretouched=" << sparse_pretouched_execute.call_visits
             << '\n';
 
         return 7;
+    }
+
+
+    // SHM-TYPE-AREA-01:
+    // Measure the dense Type Area on a separately recreated, pretouched
+    // FIXED_DIRECT mapping. The timed executor has no G/project access and
+    // receives no identity_ref values.
+    shm.reset();
+
+    const auto type_area_shm_created =
+        shm.create(
+            settings.shm.name,
+            mapped_size,
+            static_cast<std::uintptr_t>(
+                settings.shm.fixed_base_address));
+
+    if (type_area_shm_created !=
+        cw::server::fixed_shared_memory_result::success) {
+
+        std::cerr
+            << "Cannot recreate fixed SHM for Type Area path: "
+            << static_cast<int>(
+                type_area_shm_created)
+            << '\n';
+
+        return 8;
+    }
+
+    logical_shm =
+        shm.bytes().first(
+            logical_size);
+
+    const auto type_area_pretouch_started =
+        std::chrono::steady_clock::now();
+
+    for (std::size_t offset = 0;
+         offset < logical_size;
+         offset += page_size) {
+
+        auto* page =
+            reinterpret_cast<volatile std::uint8_t*>(
+                logical_shm.data() + offset);
+
+        *page = 0;
+    }
+
+    const auto type_area_pretouch_finished =
+        std::chrono::steady_clock::now();
+
+    cw::server::shm_type_area_execute_telemetry
+        type_area_execute{};
+
+    const auto type_area_canonical_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_area_canonical_result =
+        cw::server::materialize_shm_type_area_canonical(
+            type_area,
+            settings.abi,
+            new_layout,
+            logical_shm,
+            &type_area_execute);
+
+    const auto type_area_canonical_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_area_canonical_result !=
+        cw::server::shm_type_area_result::success) {
+
+        std::cerr
+            << "SHM Type Area canonical failed: "
+            << static_cast<int>(
+                type_area_canonical_result)
+            << '\n';
+
+        return 8;
+    }
+
+    const auto type_area_objects_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_area_objects_result =
+        cw::server::materialize_shm_type_area_objects(
+            type_area,
+            settings.abi,
+            new_layout,
+            logical_shm,
+            &type_area_execute);
+
+    const auto type_area_objects_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_area_objects_result !=
+        cw::server::shm_type_area_result::success) {
+
+        std::cerr
+            << "SHM Type Area objects failed: "
+            << static_cast<int>(
+                type_area_objects_result)
+            << '\n';
+
+        return 8;
+    }
+
+    const auto expected_absolute_references =
+        materialization.canonical_references +
+        materialization.reference_unconnected;
+
+    if (type_area_execute.reference_writes !=
+            expected_reference_writes ||
+        type_area_execute.relative_reference_writes !=
+            materialization.reference_member_bindings ||
+        type_area_execute.absolute_reference_writes !=
+            expected_absolute_references ||
+        type_area_execute.object_reference_writes !=
+            materialization.reference_object_bindings ||
+        type_area_execute.store_writes !=
+            materialization.scalar_writes ||
+        type_area_execute.objects !=
+            materialization.objects) {
+
+        std::cerr
+            << "SHM Type Area physical write mismatch"
+            << ",reference_expected="
+            << expected_reference_writes
+            << ",reference_actual="
+            << type_area_execute.reference_writes
+            << ",relative_expected="
+            << materialization.reference_member_bindings
+            << ",relative_actual="
+            << type_area_execute.relative_reference_writes
+            << ",absolute_expected="
+            << expected_absolute_references
+            << ",absolute_actual="
+            << type_area_execute.absolute_reference_writes
+            << ",object_expected="
+            << materialization.reference_object_bindings
+            << ",object_actual="
+            << type_area_execute.object_reference_writes
+            << ",store_expected="
+            << materialization.scalar_writes
+            << ",store_actual="
+            << type_area_execute.store_writes
+            << ",objects_expected="
+            << materialization.objects
+            << ",objects_actual="
+            << type_area_execute.objects
+            << '\n';
+
+        return 8;
+    }
+
+
+    // SHM-TYPE-BATCH-01:
+    // Local Type APIs are retained once. Root objects are grouped by API and
+    // structural child traversal occurs once per fixed-size object batch.
+    shm.reset();
+
+    const auto type_batch_shm_created =
+        shm.create(
+            settings.shm.name,
+            mapped_size,
+            static_cast<std::uintptr_t>(
+                settings.shm.fixed_base_address));
+
+    if (type_batch_shm_created !=
+        cw::server::fixed_shared_memory_result::
+            success) {
+
+        std::cerr
+            << "Cannot recreate fixed SHM for Type Batch path: "
+            << static_cast<int>(
+                type_batch_shm_created)
+            << '\n';
+
+        return 9;
+    }
+
+    logical_shm =
+        shm.bytes().first(
+            logical_size);
+
+    const auto type_batch_pretouch_started =
+        std::chrono::steady_clock::now();
+
+    for (std::size_t offset = 0;
+         offset < logical_size;
+         offset += page_size) {
+
+        auto* page =
+            reinterpret_cast<volatile std::uint8_t*>(
+                logical_shm.data() + offset);
+
+        *page = 0;
+    }
+
+    const auto type_batch_pretouch_finished =
+        std::chrono::steady_clock::now();
+
+    cw::server::shm_type_batch_execute_telemetry
+        type_batch_execute{};
+
+    const auto type_batch_canonical_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_batch_canonical_result =
+        cw::server::materialize_shm_type_batch_canonical(
+            type_batch,
+            settings.abi,
+            new_layout,
+            logical_shm,
+            &type_batch_execute);
+
+    const auto type_batch_canonical_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_batch_canonical_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "SHM Type Batch canonical failed: "
+            << static_cast<int>(
+                type_batch_canonical_result)
+            << '\n';
+
+        return 9;
+    }
+
+    const auto type_batch_objects_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_batch_objects_result =
+        cw::server::materialize_shm_type_batch_objects(
+            type_batch,
+            settings.abi,
+            new_layout,
+            logical_shm,
+            &type_batch_execute);
+
+    const auto type_batch_objects_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_batch_objects_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "SHM Type Batch objects failed: "
+            << static_cast<int>(
+                type_batch_objects_result)
+            << '\n';
+
+        return 9;
+    }
+
+    if (type_batch_execute.reference_writes !=
+            expected_reference_writes ||
+        type_batch_execute.relative_reference_writes !=
+            materialization.reference_member_bindings ||
+        type_batch_execute.absolute_reference_writes !=
+            expected_absolute_references ||
+        type_batch_execute.object_reference_writes !=
+            materialization.reference_object_bindings ||
+        type_batch_execute.store_writes !=
+            materialization.scalar_writes ||
+        type_batch_execute.objects !=
+            materialization.objects) {
+
+        std::cerr
+            << "SHM Type Batch physical write mismatch"
+            << ",reference_expected="
+            << expected_reference_writes
+            << ",reference_actual="
+            << type_batch_execute.reference_writes
+            << ",relative_expected="
+            << materialization.reference_member_bindings
+            << ",relative_actual="
+            << type_batch_execute.relative_reference_writes
+            << ",absolute_expected="
+            << expected_absolute_references
+            << ",absolute_actual="
+            << type_batch_execute.absolute_reference_writes
+            << ",object_expected="
+            << materialization.reference_object_bindings
+            << ",object_actual="
+            << type_batch_execute.object_reference_writes
+            << ",store_expected="
+            << materialization.scalar_writes
+            << ",store_actual="
+            << type_batch_execute.store_writes
+            << ",objects_expected="
+            << materialization.objects
+            << ",objects_actual="
+            << type_batch_execute.objects
+            << '\n';
+
+        return 9;
+    }
+
+
+
+    struct hybrid_budget_measurement final {
+        std::uint64_t budget_bytes = 0;
+        double prepare_ms = 0.0;
+        double pretouch_ms = 0.0;
+        double canonical_ms = 0.0;
+        double objects_ms = 0.0;
+        cw::server::shm_hybrid_04m_prepare_telemetry prepare{};
+        cw::server::shm_hybrid_04m_execute_telemetry execute{};
+    };
+
+    const auto run_hybrid_budget =
+        [&](
+            std::uint64_t budget_bytes,
+            hybrid_budget_measurement& measurement)
+            -> bool {
+
+        measurement = {};
+        measurement.budget_bytes = budget_bytes;
+
+        cw::server::shm_hybrid_04m hybrid;
+
+        const auto prepare_started =
+            std::chrono::steady_clock::now();
+
+        const auto prepare_result =
+            cw::server::prepare_shm_hybrid_budget(
+                type_batch,
+                budget_bytes,
+                hybrid,
+                &measurement.prepare);
+
+        const auto prepare_finished =
+            std::chrono::steady_clock::now();
+
+        measurement.prepare_ms =
+            ms(prepare_finished - prepare_started);
+
+        if (prepare_result !=
+            cw::server::shm_hybrid_04m_result::success) {
+
+            std::cerr
+                << "SHM Hybrid budget prepare failed"
+                << ",budget=" << budget_bytes
+                << ",result="
+                << static_cast<int>(prepare_result)
+                << '\n';
+
+            return false;
+        }
+
+        if (measurement.prepare.budget_bytes !=
+                budget_bytes ||
+            measurement.prepare.flat_payload_bytes >
+                budget_bytes ||
+            measurement.prepare.total_runtime_metadata_bytes !=
+                type_batch_prepare.resident_bytes +
+                    measurement.prepare.resident_bytes) {
+
+            std::cerr
+                << "SHM Hybrid budget prepare invariant failed"
+                << ",budget=" << budget_bytes
+                << ",reported_budget="
+                << measurement.prepare.budget_bytes
+                << ",payload="
+                << measurement.prepare.flat_payload_bytes
+                << ",base="
+                << type_batch_prepare.resident_bytes
+                << ",hybrid="
+                << measurement.prepare.resident_bytes
+                << ",total="
+                << measurement.prepare.total_runtime_metadata_bytes
+                << '\n';
+
+            return false;
+        }
+
+        shm.reset();
+
+        const auto shm_created =
+            shm.create(
+                settings.shm.name,
+                mapped_size,
+                static_cast<std::uintptr_t>(
+                    settings.shm.fixed_base_address));
+
+        if (shm_created !=
+            cw::server::fixed_shared_memory_result::success) {
+
+            std::cerr
+                << "Cannot recreate fixed SHM for Hybrid budget"
+                << ",budget=" << budget_bytes
+                << ",result="
+                << static_cast<int>(shm_created)
+                << '\n';
+
+            return false;
+        }
+
+        logical_shm =
+            shm.bytes().first(
+                logical_size);
+
+        const auto pretouch_started =
+            std::chrono::steady_clock::now();
+
+        for (std::size_t offset = 0;
+             offset < logical_size;
+             offset += page_size) {
+
+            auto* page =
+                reinterpret_cast<volatile std::uint8_t*>(
+                    logical_shm.data() + offset);
+
+            *page = 0;
+        }
+
+        const auto pretouch_finished =
+            std::chrono::steady_clock::now();
+
+        measurement.pretouch_ms =
+            ms(pretouch_finished - pretouch_started);
+
+        cw::server::shm_type_batch_execute_telemetry
+            canonical_execute{};
+
+        const auto canonical_started =
+            std::chrono::steady_clock::now();
+
+        const auto canonical_result =
+            cw::server::materialize_shm_type_batch_canonical(
+                type_batch,
+                settings.abi,
+                new_layout,
+                logical_shm,
+                &canonical_execute);
+
+        const auto canonical_finished =
+            std::chrono::steady_clock::now();
+
+        measurement.canonical_ms =
+            ms(canonical_finished - canonical_started);
+
+        if (canonical_result !=
+            cw::server::shm_type_batch_result::success) {
+
+            std::cerr
+                << "SHM Hybrid budget canonical failed"
+                << ",budget=" << budget_bytes
+                << ",result="
+                << static_cast<int>(canonical_result)
+                << '\n';
+
+            return false;
+        }
+
+        const auto objects_started =
+            std::chrono::steady_clock::now();
+
+        const auto objects_result =
+            cw::server::materialize_shm_hybrid_04m_objects(
+                type_batch,
+                hybrid,
+                settings.abi,
+                new_layout,
+                logical_shm,
+                &measurement.execute);
+
+        const auto objects_finished =
+            std::chrono::steady_clock::now();
+
+        measurement.objects_ms =
+            ms(objects_finished - objects_started);
+
+        if (objects_result !=
+            cw::server::shm_hybrid_04m_result::success) {
+
+            std::cerr
+                << "SHM Hybrid budget objects failed"
+                << ",budget=" << budget_bytes
+                << ",result="
+                << static_cast<int>(objects_result)
+                << '\n';
+
+            return false;
+        }
+
+        if (canonical_execute.reference_writes !=
+                materialization.canonical_references ||
+            measurement.execute.reference_writes !=
+                materialization.references ||
+            measurement.execute.relative_reference_writes !=
+                materialization.reference_member_bindings ||
+            measurement.execute.absolute_reference_writes !=
+                materialization.reference_unconnected ||
+            measurement.execute.object_reference_writes !=
+                materialization.reference_object_bindings ||
+            measurement.execute.store_writes !=
+                materialization.scalar_writes ||
+            measurement.execute.objects !=
+                materialization.objects ||
+            measurement.execute.hot_object_roots !=
+                measurement.prepare.hot_object_roots ||
+            measurement.execute.cold_object_roots !=
+                measurement.prepare.cold_object_roots) {
+
+            std::cerr
+                << "SHM Hybrid budget physical write mismatch"
+                << ",budget=" << budget_bytes
+                << ",canonical_expected="
+                << materialization.canonical_references
+                << ",canonical_actual="
+                << canonical_execute.reference_writes
+                << ",object_refs_expected="
+                << materialization.references
+                << ",object_refs_actual="
+                << measurement.execute.reference_writes
+                << ",relative_expected="
+                << materialization.reference_member_bindings
+                << ",relative_actual="
+                << measurement.execute.relative_reference_writes
+                << ",absolute_expected="
+                << materialization.reference_unconnected
+                << ",absolute_actual="
+                << measurement.execute.absolute_reference_writes
+                << ",object_binding_expected="
+                << materialization.reference_object_bindings
+                << ",object_binding_actual="
+                << measurement.execute.object_reference_writes
+                << ",stores_expected="
+                << materialization.scalar_writes
+                << ",stores_actual="
+                << measurement.execute.store_writes
+                << ",objects_expected="
+                << materialization.objects
+                << ",objects_actual="
+                << measurement.execute.objects
+                << '\n';
+
+            return false;
+        }
+
+        return true;
+    };
+
+    hybrid_budget_measurement hybrid_sweep_01m;
+    hybrid_budget_measurement hybrid_sweep_02m;
+    hybrid_budget_measurement hybrid_sweep_08m;
+    hybrid_budget_measurement hybrid_sweep_16m;
+    hybrid_budget_measurement hybrid_sweep_32m;
+
+    if (!run_hybrid_budget(
+            1ull * 1024ull * 1024ull,
+            hybrid_sweep_01m) ||
+        !run_hybrid_budget(
+            2ull * 1024ull * 1024ull,
+            hybrid_sweep_02m) ||
+        !run_hybrid_budget(
+            8ull * 1024ull * 1024ull,
+            hybrid_sweep_08m) ||
+        !run_hybrid_budget(
+            16ull * 1024ull * 1024ull,
+            hybrid_sweep_16m) ||
+        !run_hybrid_budget(
+            32ull * 1024ull * 1024ull,
+            hybrid_sweep_32m)) {
+
+        return 11;
+    }
+
+    // SHM-HYBRID-04M-01:
+    // Canonical remains compact/local. Hot selected object roots use
+    // object-major flat APIs; cold roots retain local batched execution.
+    shm.reset();
+
+    const auto hybrid_04m_shm_created =
+        shm.create(
+            settings.shm.name,
+            mapped_size,
+            static_cast<std::uintptr_t>(
+                settings.shm.fixed_base_address));
+
+    if (hybrid_04m_shm_created !=
+        cw::server::fixed_shared_memory_result::
+            success) {
+
+        std::cerr
+            << "Cannot recreate fixed SHM for Hybrid 4M path: "
+            << static_cast<int>(
+                hybrid_04m_shm_created)
+            << '\n';
+
+        return 10;
+    }
+
+    logical_shm =
+        shm.bytes().first(
+            logical_size);
+
+    const auto hybrid_04m_pretouch_started =
+        std::chrono::steady_clock::now();
+
+    for (std::size_t offset = 0;
+         offset < logical_size;
+         offset += page_size) {
+
+        auto* page =
+            reinterpret_cast<volatile std::uint8_t*>(
+                logical_shm.data() + offset);
+
+        *page = 0;
+    }
+
+    const auto hybrid_04m_pretouch_finished =
+        std::chrono::steady_clock::now();
+
+    cw::server::shm_type_batch_execute_telemetry
+        hybrid_04m_canonical_execute{};
+
+    const auto hybrid_04m_canonical_started =
+        std::chrono::steady_clock::now();
+
+    const auto hybrid_04m_canonical_result =
+        cw::server::materialize_shm_type_batch_canonical(
+            type_batch,
+            settings.abi,
+            new_layout,
+            logical_shm,
+            &hybrid_04m_canonical_execute);
+
+    const auto hybrid_04m_canonical_finished =
+        std::chrono::steady_clock::now();
+
+    if (hybrid_04m_canonical_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "SHM Hybrid 4M canonical failed: "
+            << static_cast<int>(
+                hybrid_04m_canonical_result)
+            << '\n';
+
+        return 10;
+    }
+
+    cw::server::shm_hybrid_04m_execute_telemetry
+        hybrid_04m_execute{};
+
+    const auto hybrid_04m_objects_started =
+        std::chrono::steady_clock::now();
+
+    const auto hybrid_04m_objects_result =
+        cw::server::materialize_shm_hybrid_04m_objects(
+            type_batch,
+            hybrid_04m,
+            settings.abi,
+            new_layout,
+            logical_shm,
+            &hybrid_04m_execute);
+
+    const auto hybrid_04m_objects_finished =
+        std::chrono::steady_clock::now();
+
+    if (hybrid_04m_objects_result !=
+        cw::server::shm_hybrid_04m_result::success) {
+
+        std::cerr
+            << "SHM Hybrid 4M objects failed: "
+            << static_cast<int>(
+                hybrid_04m_objects_result)
+            << '\n';
+
+        return 10;
+    }
+
+    if (hybrid_04m_canonical_execute.reference_writes !=
+            materialization.canonical_references ||
+        hybrid_04m_execute.reference_writes !=
+            materialization.references ||
+        hybrid_04m_execute.relative_reference_writes !=
+            materialization.reference_member_bindings ||
+        hybrid_04m_execute.absolute_reference_writes !=
+            materialization.reference_unconnected ||
+        hybrid_04m_execute.object_reference_writes !=
+            materialization.reference_object_bindings ||
+        hybrid_04m_execute.store_writes !=
+            materialization.scalar_writes ||
+        hybrid_04m_execute.objects !=
+            materialization.objects ||
+        hybrid_04m_execute.hot_object_roots !=
+            hybrid_04m_prepare.hot_object_roots ||
+        hybrid_04m_execute.cold_object_roots !=
+            hybrid_04m_prepare.cold_object_roots) {
+
+        std::cerr
+            << "SHM Hybrid 4M physical write mismatch"
+            << ",canonical_expected="
+            << materialization.canonical_references
+            << ",canonical_actual="
+            << hybrid_04m_canonical_execute.reference_writes
+            << ",object_refs_expected="
+            << materialization.references
+            << ",object_refs_actual="
+            << hybrid_04m_execute.reference_writes
+            << ",relative_expected="
+            << materialization.reference_member_bindings
+            << ",relative_actual="
+            << hybrid_04m_execute.relative_reference_writes
+            << ",absolute_expected="
+            << materialization.reference_unconnected
+            << ",absolute_actual="
+            << hybrid_04m_execute.absolute_reference_writes
+            << ",object_binding_expected="
+            << materialization.reference_object_bindings
+            << ",object_binding_actual="
+            << hybrid_04m_execute.object_reference_writes
+            << ",stores_expected="
+            << materialization.scalar_writes
+            << ",stores_actual="
+            << hybrid_04m_execute.store_writes
+            << ",objects_expected="
+            << materialization.objects
+            << ",objects_actual="
+            << hybrid_04m_execute.objects
+            << ",hot_roots_expected="
+            << hybrid_04m_prepare.hot_object_roots
+            << ",hot_roots_actual="
+            << hybrid_04m_execute.hot_object_roots
+            << ",cold_roots_expected="
+            << hybrid_04m_prepare.cold_object_roots
+            << ",cold_roots_actual="
+            << hybrid_04m_execute.cold_object_roots
+            << '\n';
+
+        return 10;
+    }
+
+
+    // SHM-TYPE-INLINE-08-01:
+    // Same Type Batch executor, separately prepared image with small leaf
+    // child APIs fused bottom-up during prepare.
+    shm.reset();
+
+    const auto type_inline08_shm_created =
+        shm.create(
+            settings.shm.name,
+            mapped_size,
+            static_cast<std::uintptr_t>(
+                settings.shm.fixed_base_address));
+
+    if (type_inline08_shm_created !=
+        cw::server::fixed_shared_memory_result::
+            success) {
+
+        std::cerr
+            << "Cannot recreate fixed SHM for Type Inline08 path: "
+            << static_cast<int>(
+                type_inline08_shm_created)
+            << '\n';
+
+        return 10;
+    }
+
+    logical_shm =
+        shm.bytes().first(
+            logical_size);
+
+    const auto type_inline08_pretouch_started =
+        std::chrono::steady_clock::now();
+
+    for (std::size_t offset = 0;
+         offset < logical_size;
+         offset += page_size) {
+
+        auto* page =
+            reinterpret_cast<volatile std::uint8_t*>(
+                logical_shm.data() + offset);
+
+        *page = 0;
+    }
+
+    const auto type_inline08_pretouch_finished =
+        std::chrono::steady_clock::now();
+
+    cw::server::shm_type_batch_execute_telemetry
+        type_inline08_execute{};
+
+    const auto type_inline08_canonical_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_inline08_canonical_result =
+        cw::server::materialize_shm_type_batch_canonical(
+            type_inline08,
+            settings.abi,
+            new_layout,
+            logical_shm,
+            &type_inline08_execute);
+
+    const auto type_inline08_canonical_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_inline08_canonical_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "SHM Type Inline08 canonical failed: "
+            << static_cast<int>(
+                type_inline08_canonical_result)
+            << '\n';
+
+        return 10;
+    }
+
+    const auto type_inline08_objects_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_inline08_objects_result =
+        cw::server::materialize_shm_type_batch_objects(
+            type_inline08,
+            settings.abi,
+            new_layout,
+            logical_shm,
+            &type_inline08_execute);
+
+    const auto type_inline08_objects_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_inline08_objects_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "SHM Type Inline08 objects failed: "
+            << static_cast<int>(
+                type_inline08_objects_result)
+            << '\n';
+
+        return 10;
+    }
+
+    if (type_inline08_execute.reference_writes !=
+            expected_reference_writes ||
+        type_inline08_execute.relative_reference_writes !=
+            materialization.reference_member_bindings ||
+        type_inline08_execute.absolute_reference_writes !=
+            expected_absolute_references ||
+        type_inline08_execute.object_reference_writes !=
+            materialization.reference_object_bindings ||
+        type_inline08_execute.store_writes !=
+            materialization.scalar_writes ||
+        type_inline08_execute.objects !=
+            materialization.objects) {
+
+        std::cerr
+            << "SHM Type Inline08 physical write mismatch"
+            << ",reference_expected="
+            << expected_reference_writes
+            << ",reference_actual="
+            << type_inline08_execute.reference_writes
+            << ",relative_expected="
+            << materialization.reference_member_bindings
+            << ",relative_actual="
+            << type_inline08_execute.relative_reference_writes
+            << ",absolute_expected="
+            << expected_absolute_references
+            << ",absolute_actual="
+            << type_inline08_execute.absolute_reference_writes
+            << ",object_expected="
+            << materialization.reference_object_bindings
+            << ",object_actual="
+            << type_inline08_execute.object_reference_writes
+            << ",store_expected="
+            << materialization.scalar_writes
+            << ",store_actual="
+            << type_inline08_execute.store_writes
+            << ",objects_expected="
+            << materialization.objects
+            << ",objects_actual="
+            << type_inline08_execute.objects
+            << '\n';
+
+        return 10;
+    }
+
+
+    // SHM-TYPE-INLINE-08-OBJECT-MAJOR-01:
+    // Same INLINE-08 physical image; only object execution order changes.
+    shm.reset();
+
+    const auto type_inline08_object_major_shm_created =
+        shm.create(
+            settings.shm.name,
+            mapped_size,
+            static_cast<std::uintptr_t>(
+                settings.shm.fixed_base_address));
+
+    if (type_inline08_object_major_shm_created !=
+        cw::server::fixed_shared_memory_result::
+            success) {
+
+        std::cerr
+            << "Cannot recreate fixed SHM for INLINE-08 object-major path: "
+            << static_cast<int>(
+                type_inline08_object_major_shm_created)
+            << '\n';
+
+        return 12;
+    }
+
+    logical_shm =
+        shm.bytes().first(
+            logical_size);
+
+    const auto type_inline08_object_major_pretouch_started =
+        std::chrono::steady_clock::now();
+
+    for (std::size_t offset = 0;
+         offset < logical_size;
+         offset += page_size) {
+
+        auto* page =
+            reinterpret_cast<volatile std::uint8_t*>(
+                logical_shm.data() + offset);
+
+        *page = 0;
+    }
+
+    const auto type_inline08_object_major_pretouch_finished =
+        std::chrono::steady_clock::now();
+
+    cw::server::shm_type_batch_execute_telemetry
+        type_inline08_object_major_execute{};
+
+    const auto type_inline08_object_major_canonical_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_inline08_object_major_canonical_result =
+        cw::server::materialize_shm_type_batch_canonical(
+            type_inline08,
+            settings.abi,
+            new_layout,
+            logical_shm,
+            &type_inline08_object_major_execute);
+
+    const auto type_inline08_object_major_canonical_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_inline08_object_major_canonical_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "INLINE-08 object-major canonical failed: "
+            << static_cast<int>(
+                type_inline08_object_major_canonical_result)
+            << '\n';
+
+        return 12;
+    }
+
+    const auto type_inline08_object_major_objects_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_inline08_object_major_objects_result =
+        cw::server::
+            materialize_shm_type_batch_objects_object_major(
+                type_inline08,
+                settings.abi,
+                new_layout,
+                logical_shm,
+                &type_inline08_object_major_execute);
+
+    const auto type_inline08_object_major_objects_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_inline08_object_major_objects_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "INLINE-08 object-major objects failed: "
+            << static_cast<int>(
+                type_inline08_object_major_objects_result)
+            << '\n';
+
+        return 12;
+    }
+
+    if (type_inline08_object_major_execute.reference_writes !=
+            expected_reference_writes ||
+        type_inline08_object_major_execute.relative_reference_writes !=
+            materialization.reference_member_bindings ||
+        type_inline08_object_major_execute.absolute_reference_writes !=
+            expected_absolute_references ||
+        type_inline08_object_major_execute.object_reference_writes !=
+            materialization.reference_object_bindings ||
+        type_inline08_object_major_execute.store_writes !=
+            materialization.scalar_writes ||
+        type_inline08_object_major_execute.objects !=
+            materialization.objects) {
+
+        std::cerr
+            << "INLINE-08 object-major physical write mismatch"
+            << ",reference_expected="
+            << expected_reference_writes
+            << ",reference_actual="
+            << type_inline08_object_major_execute.reference_writes
+            << ",relative_expected="
+            << materialization.reference_member_bindings
+            << ",relative_actual="
+            << type_inline08_object_major_execute.relative_reference_writes
+            << ",absolute_expected="
+            << expected_absolute_references
+            << ",absolute_actual="
+            << type_inline08_object_major_execute.absolute_reference_writes
+            << ",object_expected="
+            << materialization.reference_object_bindings
+            << ",object_actual="
+            << type_inline08_object_major_execute.object_reference_writes
+            << ",store_expected="
+            << materialization.scalar_writes
+            << ",store_actual="
+            << type_inline08_object_major_execute.store_writes
+            << ",objects_expected="
+            << materialization.objects
+            << ",objects_actual="
+            << type_inline08_object_major_execute.objects
+            << '\n';
+
+        return 12;
+    }
+
+
+    shm.reset();
+
+    const auto type_subtree08_shm_created =
+        shm.create(
+            settings.shm.name,
+            mapped_size,
+            static_cast<std::uintptr_t>(
+                settings.shm.fixed_base_address));
+
+    if (type_subtree08_shm_created !=
+        cw::server::fixed_shared_memory_result::success) {
+
+        std::cerr
+            << "Cannot recreate fixed SHM for SUBTREE-INLINE-08: "
+            << static_cast<int>(
+                type_subtree08_shm_created)
+            << '\n';
+
+        return 13;
+    }
+
+    logical_shm =
+        shm.bytes().first(
+            logical_size);
+
+    const auto type_subtree08_pretouch_started =
+        std::chrono::steady_clock::now();
+
+    for (std::size_t offset = 0;
+         offset < logical_size;
+         offset += page_size) {
+
+        auto* page =
+            reinterpret_cast<volatile std::uint8_t*>(
+                logical_shm.data() + offset);
+
+        *page = 0;
+    }
+
+    const auto type_subtree08_pretouch_finished =
+        std::chrono::steady_clock::now();
+
+    cw::server::shm_type_batch_execute_telemetry
+        type_subtree08_execute{};
+
+    const auto type_subtree08_canonical_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_subtree08_canonical_result =
+        cw::server::materialize_shm_type_batch_canonical(
+            type_subtree08,
+            settings.abi,
+            new_layout,
+            logical_shm,
+            &type_subtree08_execute);
+
+    const auto type_subtree08_canonical_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_subtree08_canonical_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "SUBTREE-INLINE-08 canonical failed: "
+            << static_cast<int>(
+                type_subtree08_canonical_result)
+            << '\n';
+
+        return 13;
+    }
+
+    const auto type_subtree08_objects_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_subtree08_objects_result =
+        cw::server::materialize_shm_type_batch_objects_object_major(
+            type_subtree08,
+            settings.abi,
+            new_layout,
+            logical_shm,
+            &type_subtree08_execute);
+
+    const auto type_subtree08_objects_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_subtree08_objects_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "SUBTREE-INLINE-08 object-major objects failed: "
+            << static_cast<int>(
+                type_subtree08_objects_result)
+            << '\n';
+
+        return 13;
+    }
+
+    if (type_subtree08_execute.reference_writes !=
+            expected_reference_writes ||
+        type_subtree08_execute.relative_reference_writes !=
+            materialization.reference_member_bindings ||
+        type_subtree08_execute.absolute_reference_writes !=
+            expected_absolute_references ||
+        type_subtree08_execute.object_reference_writes !=
+            materialization.reference_object_bindings ||
+        type_subtree08_execute.store_writes !=
+            materialization.scalar_writes ||
+        type_subtree08_execute.objects !=
+            materialization.objects) {
+
+        std::cerr
+            << "SUBTREE-INLINE-08 physical write mismatch"
+            << '\n';
+
+        return 13;
+    }
+
+
+    shm.reset();
+
+    const auto type_inline16_object_major_shm_created =
+        shm.create(
+            settings.shm.name,
+            mapped_size,
+            static_cast<std::uintptr_t>(
+                settings.shm.fixed_base_address));
+
+    if (type_inline16_object_major_shm_created !=
+        cw::server::fixed_shared_memory_result::success) {
+
+        std::cerr
+            << "Cannot recreate fixed SHM for INLINE-16 object-major: "
+            << static_cast<int>(
+                type_inline16_object_major_shm_created)
+            << '\n';
+
+        return 14;
+    }
+
+    logical_shm =
+        shm.bytes().first(
+            logical_size);
+
+    const auto type_inline16_object_major_pretouch_started =
+        std::chrono::steady_clock::now();
+
+    for (std::size_t offset = 0;
+         offset < logical_size;
+         offset += page_size) {
+
+        auto* page =
+            reinterpret_cast<volatile std::uint8_t*>(
+                logical_shm.data() + offset);
+
+        *page = 0;
+    }
+
+    const auto type_inline16_object_major_pretouch_finished =
+        std::chrono::steady_clock::now();
+
+    cw::server::shm_type_batch_execute_telemetry
+        type_inline16_object_major_execute{};
+
+    const auto type_inline16_object_major_canonical_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_inline16_object_major_canonical_result =
+        cw::server::materialize_shm_type_batch_canonical(
+            type_inline16,
+            settings.abi,
+            new_layout,
+            logical_shm,
+            &type_inline16_object_major_execute);
+
+    const auto type_inline16_object_major_canonical_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_inline16_object_major_canonical_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "INLINE-16 object-major canonical failed: "
+            << static_cast<int>(
+                type_inline16_object_major_canonical_result)
+            << '\n';
+
+        return 14;
+    }
+
+    const auto type_inline16_object_major_objects_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_inline16_object_major_objects_result =
+        cw::server::
+            materialize_shm_type_batch_objects_object_major(
+                type_inline16,
+                settings.abi,
+                new_layout,
+                logical_shm,
+                &type_inline16_object_major_execute);
+
+    const auto type_inline16_object_major_objects_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_inline16_object_major_objects_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "INLINE-16 object-major objects failed: "
+            << static_cast<int>(
+                type_inline16_object_major_objects_result)
+            << '\n';
+
+        return 14;
+    }
+
+    if (type_inline16_object_major_execute.reference_writes !=
+            expected_reference_writes ||
+        type_inline16_object_major_execute.relative_reference_writes !=
+            materialization.reference_member_bindings ||
+        type_inline16_object_major_execute.absolute_reference_writes !=
+            expected_absolute_references ||
+        type_inline16_object_major_execute.object_reference_writes !=
+            materialization.reference_object_bindings ||
+        type_inline16_object_major_execute.store_writes !=
+            materialization.scalar_writes ||
+        type_inline16_object_major_execute.objects !=
+            materialization.objects) {
+
+        std::cerr
+            << "INLINE-16 object-major physical write mismatch"
+            << ",reference_expected="
+            << expected_reference_writes
+            << ",reference_actual="
+            << type_inline16_object_major_execute.reference_writes
+            << ",store_expected="
+            << materialization.scalar_writes
+            << ",store_actual="
+            << type_inline16_object_major_execute.store_writes
+            << '\n';
+
+        return 14;
+    }
+
+
+    shm.reset();
+
+    const auto type_inline32_object_major_shm_created =
+        shm.create(
+            settings.shm.name,
+            mapped_size,
+            static_cast<std::uintptr_t>(
+                settings.shm.fixed_base_address));
+
+    if (type_inline32_object_major_shm_created !=
+        cw::server::fixed_shared_memory_result::success) {
+
+        std::cerr
+            << "Cannot recreate fixed SHM for INLINE-32 object-major: "
+            << static_cast<int>(
+                type_inline32_object_major_shm_created)
+            << '\n';
+
+        return 14;
+    }
+
+    logical_shm =
+        shm.bytes().first(
+            logical_size);
+
+    const auto type_inline32_object_major_pretouch_started =
+        std::chrono::steady_clock::now();
+
+    for (std::size_t offset = 0;
+         offset < logical_size;
+         offset += page_size) {
+
+        auto* page =
+            reinterpret_cast<volatile std::uint8_t*>(
+                logical_shm.data() + offset);
+
+        *page = 0;
+    }
+
+    const auto type_inline32_object_major_pretouch_finished =
+        std::chrono::steady_clock::now();
+
+    cw::server::shm_type_batch_execute_telemetry
+        type_inline32_object_major_execute{};
+
+    const auto type_inline32_object_major_canonical_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_inline32_object_major_canonical_result =
+        cw::server::materialize_shm_type_batch_canonical(
+            type_inline32,
+            settings.abi,
+            new_layout,
+            logical_shm,
+            &type_inline32_object_major_execute);
+
+    const auto type_inline32_object_major_canonical_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_inline32_object_major_canonical_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "INLINE-32 object-major canonical failed: "
+            << static_cast<int>(
+                type_inline32_object_major_canonical_result)
+            << '\n';
+
+        return 14;
+    }
+
+    const auto type_inline32_object_major_objects_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_inline32_object_major_objects_result =
+        cw::server::
+            materialize_shm_type_batch_objects_object_major(
+                type_inline32,
+                settings.abi,
+                new_layout,
+                logical_shm,
+                &type_inline32_object_major_execute);
+
+    const auto type_inline32_object_major_objects_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_inline32_object_major_objects_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "INLINE-32 object-major objects failed: "
+            << static_cast<int>(
+                type_inline32_object_major_objects_result)
+            << '\n';
+
+        return 14;
+    }
+
+    if (type_inline32_object_major_execute.reference_writes !=
+            expected_reference_writes ||
+        type_inline32_object_major_execute.relative_reference_writes !=
+            materialization.reference_member_bindings ||
+        type_inline32_object_major_execute.absolute_reference_writes !=
+            expected_absolute_references ||
+        type_inline32_object_major_execute.object_reference_writes !=
+            materialization.reference_object_bindings ||
+        type_inline32_object_major_execute.store_writes !=
+            materialization.scalar_writes ||
+        type_inline32_object_major_execute.objects !=
+            materialization.objects) {
+
+        std::cerr
+            << "INLINE-32 object-major physical write mismatch"
+            << ",reference_expected="
+            << expected_reference_writes
+            << ",reference_actual="
+            << type_inline32_object_major_execute.reference_writes
+            << ",store_expected="
+            << materialization.scalar_writes
+            << ",store_actual="
+            << type_inline32_object_major_execute.store_writes
+            << '\n';
+
+        return 14;
+    }
+
+
+    shm.reset();
+
+    const auto type_inline64_object_major_shm_created =
+        shm.create(
+            settings.shm.name,
+            mapped_size,
+            static_cast<std::uintptr_t>(
+                settings.shm.fixed_base_address));
+
+    if (type_inline64_object_major_shm_created !=
+        cw::server::fixed_shared_memory_result::success) {
+
+        std::cerr
+            << "Cannot recreate fixed SHM for INLINE-64 object-major: "
+            << static_cast<int>(
+                type_inline64_object_major_shm_created)
+            << '\n';
+
+        return 14;
+    }
+
+    logical_shm =
+        shm.bytes().first(
+            logical_size);
+
+    const auto type_inline64_object_major_pretouch_started =
+        std::chrono::steady_clock::now();
+
+    for (std::size_t offset = 0;
+         offset < logical_size;
+         offset += page_size) {
+
+        auto* page =
+            reinterpret_cast<volatile std::uint8_t*>(
+                logical_shm.data() + offset);
+
+        *page = 0;
+    }
+
+    const auto type_inline64_object_major_pretouch_finished =
+        std::chrono::steady_clock::now();
+
+    cw::server::shm_type_batch_execute_telemetry
+        type_inline64_object_major_execute{};
+
+    const auto type_inline64_object_major_canonical_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_inline64_object_major_canonical_result =
+        cw::server::materialize_shm_type_batch_canonical(
+            type_inline64,
+            settings.abi,
+            new_layout,
+            logical_shm,
+            &type_inline64_object_major_execute);
+
+    const auto type_inline64_object_major_canonical_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_inline64_object_major_canonical_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "INLINE-64 object-major canonical failed: "
+            << static_cast<int>(
+                type_inline64_object_major_canonical_result)
+            << '\n';
+
+        return 14;
+    }
+
+    const auto type_inline64_object_major_objects_started =
+        std::chrono::steady_clock::now();
+
+    const auto type_inline64_object_major_objects_result =
+        cw::server::
+            materialize_shm_type_batch_objects_object_major(
+                type_inline64,
+                settings.abi,
+                new_layout,
+                logical_shm,
+                &type_inline64_object_major_execute);
+
+    const auto type_inline64_object_major_objects_finished =
+        std::chrono::steady_clock::now();
+
+    if (type_inline64_object_major_objects_result !=
+        cw::server::shm_type_batch_result::success) {
+
+        std::cerr
+            << "INLINE-64 object-major objects failed: "
+            << static_cast<int>(
+                type_inline64_object_major_objects_result)
+            << '\n';
+
+        return 14;
+    }
+
+    if (type_inline64_object_major_execute.reference_writes !=
+            expected_reference_writes ||
+        type_inline64_object_major_execute.relative_reference_writes !=
+            materialization.reference_member_bindings ||
+        type_inline64_object_major_execute.absolute_reference_writes !=
+            expected_absolute_references ||
+        type_inline64_object_major_execute.object_reference_writes !=
+            materialization.reference_object_bindings ||
+        type_inline64_object_major_execute.store_writes !=
+            materialization.scalar_writes ||
+        type_inline64_object_major_execute.objects !=
+            materialization.objects) {
+
+        std::cerr
+            << "INLINE-64 object-major physical write mismatch"
+            << ",reference_expected="
+            << expected_reference_writes
+            << ",reference_actual="
+            << type_inline64_object_major_execute.reference_writes
+            << ",store_expected="
+            << materialization.scalar_writes
+            << ",store_actual="
+            << type_inline64_object_major_execute.store_writes
+            << '\n';
+
+        return 14;
     }
 
     std::cout
@@ -1062,6 +2944,110 @@ int main(
         << ms(sparse_pretouched_canonical_finished - sparse_pretouched_canonical_started)
         << ",sparse_pretouched_objects_ms="
         << ms(sparse_pretouched_objects_finished - sparse_pretouched_objects_started)
+        << ",type_area_prepare_ms="
+        << ms(type_area_prepare_finished - type_area_prepare_started)
+        << ",type_area_pretouch_ms="
+        << ms(type_area_pretouch_finished - type_area_pretouch_started)
+        << ",type_area_canonical_ms="
+        << ms(type_area_canonical_finished - type_area_canonical_started)
+        << ",type_area_objects_ms="
+        << ms(type_area_objects_finished - type_area_objects_started)
+        << ",type_batch_prepare_ms="
+        << ms(type_batch_prepare_finished - type_batch_prepare_started)
+        << ",type_batch_pretouch_ms="
+        << ms(type_batch_pretouch_finished - type_batch_pretouch_started)
+        << ",type_batch_canonical_ms="
+        << ms(type_batch_canonical_finished - type_batch_canonical_started)
+        << ",type_batch_objects_ms="
+        << ms(type_batch_objects_finished - type_batch_objects_started)
+        << ",hybrid_profile_ms="
+        << ms(hybrid_profile_finished - hybrid_profile_started)
+        << ",hybrid_04m_prepare_ms="
+        << ms(hybrid_04m_prepare_finished - hybrid_04m_prepare_started)
+        << ",hybrid_04m_pretouch_ms="
+        << ms(hybrid_04m_pretouch_finished - hybrid_04m_pretouch_started)
+        << ",hybrid_04m_canonical_ms="
+        << ms(hybrid_04m_canonical_finished - hybrid_04m_canonical_started)
+        << ",hybrid_04m_objects_ms="
+        << ms(hybrid_04m_objects_finished - hybrid_04m_objects_started)
+        << ",hybrid_sweep_01m_prepare_ms=" << hybrid_sweep_01m.prepare_ms
+        << ",hybrid_sweep_01m_pretouch_ms=" << hybrid_sweep_01m.pretouch_ms
+        << ",hybrid_sweep_01m_canonical_ms=" << hybrid_sweep_01m.canonical_ms
+        << ",hybrid_sweep_01m_objects_ms=" << hybrid_sweep_01m.objects_ms
+        << ",hybrid_sweep_02m_prepare_ms=" << hybrid_sweep_02m.prepare_ms
+        << ",hybrid_sweep_02m_pretouch_ms=" << hybrid_sweep_02m.pretouch_ms
+        << ",hybrid_sweep_02m_canonical_ms=" << hybrid_sweep_02m.canonical_ms
+        << ",hybrid_sweep_02m_objects_ms=" << hybrid_sweep_02m.objects_ms
+        << ",hybrid_sweep_08m_prepare_ms=" << hybrid_sweep_08m.prepare_ms
+        << ",hybrid_sweep_08m_pretouch_ms=" << hybrid_sweep_08m.pretouch_ms
+        << ",hybrid_sweep_08m_canonical_ms=" << hybrid_sweep_08m.canonical_ms
+        << ",hybrid_sweep_08m_objects_ms=" << hybrid_sweep_08m.objects_ms
+        << ",hybrid_sweep_16m_prepare_ms=" << hybrid_sweep_16m.prepare_ms
+        << ",hybrid_sweep_16m_pretouch_ms=" << hybrid_sweep_16m.pretouch_ms
+        << ",hybrid_sweep_16m_canonical_ms=" << hybrid_sweep_16m.canonical_ms
+        << ",hybrid_sweep_16m_objects_ms=" << hybrid_sweep_16m.objects_ms
+        << ",hybrid_sweep_32m_prepare_ms=" << hybrid_sweep_32m.prepare_ms
+        << ",hybrid_sweep_32m_pretouch_ms=" << hybrid_sweep_32m.pretouch_ms
+        << ",hybrid_sweep_32m_canonical_ms=" << hybrid_sweep_32m.canonical_ms
+        << ",hybrid_sweep_32m_objects_ms=" << hybrid_sweep_32m.objects_ms
+        << ",type_inline08_prepare_ms="
+        << ms(type_inline08_prepare_finished - type_inline08_prepare_started)
+        << ",type_inline08_pretouch_ms="
+        << ms(type_inline08_pretouch_finished - type_inline08_pretouch_started)
+        << ",type_inline08_canonical_ms="
+        << ms(type_inline08_canonical_finished - type_inline08_canonical_started)
+        << ",type_inline08_objects_ms="
+        << ms(type_inline08_objects_finished - type_inline08_objects_started)
+        << ",type_inline08_object_major_pretouch_ms="
+        << ms(type_inline08_object_major_pretouch_finished -
+              type_inline08_object_major_pretouch_started)
+        << ",type_inline08_object_major_canonical_ms="
+        << ms(type_inline08_object_major_canonical_finished -
+              type_inline08_object_major_canonical_started)
+        << ",type_inline08_object_major_objects_ms="
+        << ms(type_inline08_object_major_objects_finished -
+              type_inline08_object_major_objects_started)
+        << ",type_subtree08_prepare_ms="
+        << ms(type_subtree08_prepare_finished - type_subtree08_prepare_started)
+        << ",type_subtree08_pretouch_ms="
+        << ms(type_subtree08_pretouch_finished - type_subtree08_pretouch_started)
+        << ",type_subtree08_canonical_ms="
+        << ms(type_subtree08_canonical_finished - type_subtree08_canonical_started)
+        << ",type_subtree08_objects_ms="
+        << ms(type_subtree08_objects_finished - type_subtree08_objects_started)
+        << ",type_inline16_prepare_ms="
+        << ms(type_inline16_prepare_finished - type_inline16_prepare_started)
+        << ",type_inline16_object_major_pretouch_ms="
+        << ms(type_inline16_object_major_pretouch_finished -
+              type_inline16_object_major_pretouch_started)
+        << ",type_inline16_object_major_canonical_ms="
+        << ms(type_inline16_object_major_canonical_finished -
+              type_inline16_object_major_canonical_started)
+        << ",type_inline16_object_major_objects_ms="
+        << ms(type_inline16_object_major_objects_finished -
+              type_inline16_object_major_objects_started)
+        << ",type_inline32_prepare_ms="
+        << ms(type_inline32_prepare_finished - type_inline32_prepare_started)
+        << ",type_inline32_object_major_pretouch_ms="
+        << ms(type_inline32_object_major_pretouch_finished -
+              type_inline32_object_major_pretouch_started)
+        << ",type_inline32_object_major_canonical_ms="
+        << ms(type_inline32_object_major_canonical_finished -
+              type_inline32_object_major_canonical_started)
+        << ",type_inline32_object_major_objects_ms="
+        << ms(type_inline32_object_major_objects_finished -
+              type_inline32_object_major_objects_started)
+        << ",type_inline64_prepare_ms="
+        << ms(type_inline64_prepare_finished - type_inline64_prepare_started)
+        << ",type_inline64_object_major_pretouch_ms="
+        << ms(type_inline64_object_major_pretouch_finished -
+              type_inline64_object_major_pretouch_started)
+        << ",type_inline64_object_major_canonical_ms="
+        << ms(type_inline64_object_major_canonical_finished -
+              type_inline64_object_major_canonical_started)
+        << ",type_inline64_object_major_objects_ms="
+        << ms(type_inline64_object_major_objects_finished -
+              type_inline64_object_major_objects_started)
         << ",runtime_bytes="
         << old_layout.size()
         << ",alignment="
@@ -1141,7 +3127,356 @@ int main(
         << ",sparse_pretouched_call_visits=" << sparse_pretouched_execute.call_visits
         << ",sparse_pretouched_repeat_visits=" << sparse_pretouched_execute.repeat_visits
         << ",sparse_pretouched_repeat_iterations=" << sparse_pretouched_execute.repeat_iterations
+        << ",sparse_profile_call_actions=" << sparse_call_profile.call_actions
+        << ",sparse_profile_call_actions_leaf=" << sparse_call_profile.call_actions_leaf
+        << ",sparse_profile_call_actions_contains_call=" << sparse_call_profile.call_actions_contains_call
+        << ",sparse_profile_call_actions_contains_repeat=" << sparse_call_profile.call_actions_contains_repeat
+        << ",sparse_profile_call_actions_child_1=" << sparse_call_profile.call_actions_by_child_size[0]
+        << ",sparse_profile_call_actions_child_2=" << sparse_call_profile.call_actions_by_child_size[1]
+        << ",sparse_profile_call_actions_child_3=" << sparse_call_profile.call_actions_by_child_size[2]
+        << ",sparse_profile_call_actions_child_4=" << sparse_call_profile.call_actions_by_child_size[3]
+        << ",sparse_profile_call_actions_child_5_8=" << sparse_call_profile.call_actions_by_child_size[4]
+        << ",sparse_profile_call_actions_child_9_16=" << sparse_call_profile.call_actions_by_child_size[5]
+        << ",sparse_profile_call_actions_child_gt16=" << sparse_call_profile.call_actions_by_child_size[6]
+        << ",sparse_profile_leaf_call_actions_child_1=" << sparse_call_profile.leaf_call_actions_by_child_size[0]
+        << ",sparse_profile_leaf_call_actions_child_2=" << sparse_call_profile.leaf_call_actions_by_child_size[1]
+        << ",sparse_profile_leaf_call_actions_child_3=" << sparse_call_profile.leaf_call_actions_by_child_size[2]
+        << ",sparse_profile_leaf_call_actions_child_4=" << sparse_call_profile.leaf_call_actions_by_child_size[3]
+        << ",sparse_profile_leaf_call_actions_child_5_8=" << sparse_call_profile.leaf_call_actions_by_child_size[4]
+        << ",sparse_profile_leaf_call_actions_child_9_16=" << sparse_call_profile.leaf_call_actions_by_child_size[5]
+        << ",sparse_profile_leaf_call_actions_child_gt16=" << sparse_call_profile.leaf_call_actions_by_child_size[6]
+        << ",sparse_profile_call_visits=" << sparse_call_profile.call_visits
+        << ",sparse_profile_call_visits_leaf=" << sparse_call_profile.call_visits_leaf
+        << ",sparse_profile_call_visits_contains_call=" << sparse_call_profile.call_visits_contains_call
+        << ",sparse_profile_call_visits_contains_repeat=" << sparse_call_profile.call_visits_contains_repeat
+        << ",sparse_profile_call_visits_child_1=" << sparse_call_profile.call_visits_by_child_size[0]
+        << ",sparse_profile_call_visits_child_2=" << sparse_call_profile.call_visits_by_child_size[1]
+        << ",sparse_profile_call_visits_child_3=" << sparse_call_profile.call_visits_by_child_size[2]
+        << ",sparse_profile_call_visits_child_4=" << sparse_call_profile.call_visits_by_child_size[3]
+        << ",sparse_profile_call_visits_child_5_8=" << sparse_call_profile.call_visits_by_child_size[4]
+        << ",sparse_profile_call_visits_child_9_16=" << sparse_call_profile.call_visits_by_child_size[5]
+        << ",sparse_profile_call_visits_child_gt16=" << sparse_call_profile.call_visits_by_child_size[6]
+        << ",sparse_profile_leaf_call_visits_child_1=" << sparse_call_profile.leaf_call_visits_by_child_size[0]
+        << ",sparse_profile_leaf_call_visits_child_2=" << sparse_call_profile.leaf_call_visits_by_child_size[1]
+        << ",sparse_profile_leaf_call_visits_child_3=" << sparse_call_profile.leaf_call_visits_by_child_size[2]
+        << ",sparse_profile_leaf_call_visits_child_4=" << sparse_call_profile.leaf_call_visits_by_child_size[3]
+        << ",sparse_profile_leaf_call_visits_child_5_8=" << sparse_call_profile.leaf_call_visits_by_child_size[4]
+        << ",sparse_profile_leaf_call_visits_child_9_16=" << sparse_call_profile.leaf_call_visits_by_child_size[5]
+        << ",sparse_profile_leaf_call_visits_child_gt16=" << sparse_call_profile.leaf_call_visits_by_child_size[6]
+        << ",type_area_prefinal_resident_bytes=" << type_area_prepare.prefinal_resident_bytes
+        << ",type_area_reclaimed_bytes=" << type_area_prepare.reclaimed_bytes
+        << ",type_area_prefinal_type_apis=" << type_area_prepare.prefinal_type_apis
+        << ",type_area_reachable_type_apis=" << type_area_prepare.reachable_type_apis
+        << ",type_area_discarded_type_apis=" << type_area_prepare.discarded_type_apis
+        << ",type_area_discarded_relative_refs=" << type_area_prepare.discarded_relative_references
+        << ",type_area_discarded_absolute_refs=" << type_area_prepare.discarded_absolute_references
+        << ",type_area_discarded_object_refs=" << type_area_prepare.discarded_object_references
+        << ",type_area_discarded_stores=" << type_area_prepare.discarded_stores
+        << ",type_area_discarded_repeats=" << type_area_prepare.discarded_repeats
+        << ",type_area_discarded_constants=" << type_area_prepare.discarded_constants
+        << ",type_area_resident_bytes=" << type_area_prepare.resident_bytes
+        << ",type_area_type_apis=" << type_area_prepare.type_apis
+        << ",type_area_named_types_prepared=" << type_area_prepare.named_types_prepared
+        << ",type_area_derived_types_prepared=" << type_area_prepare.derived_types_prepared
+        << ",type_area_canonical_roots=" << type_area_prepare.canonical_roots
+        << ",type_area_objects=" << type_area_prepare.objects
+        << ",type_area_object_patches=" << type_area_prepare.object_patches
+        << ",type_area_relative_refs=" << type_area_prepare.relative_references
+        << ",type_area_absolute_refs=" << type_area_prepare.absolute_references
+        << ",type_area_object_refs=" << type_area_prepare.object_references
+        << ",type_area_stores=" << type_area_prepare.stores
+        << ",type_area_repeats=" << type_area_prepare.repeats
+        << ",type_area_identity_resolutions=" << type_area_prepare.semantic_identity_resolutions
+        << ",type_area_object_binding_resolutions=" << type_area_prepare.object_binding_resolutions
+        << ",type_area_reference_chain_steps_resolved=" << type_area_prepare.reference_chain_steps_resolved
+        << ",type_area_flattened_api_copies=" << type_area_prepare.flattened_api_copies
+        << ",type_area_zero_ops_elided=" << type_area_prepare.zero_operations_elided
+        << ",type_area_type_api_bytes=" << type_area_prepare.type_api_bytes
+        << ",type_area_relative_ref_bytes=" << type_area_prepare.relative_reference_bytes
+        << ",type_area_absolute_ref_bytes=" << type_area_prepare.absolute_reference_bytes
+        << ",type_area_object_ref_bytes=" << type_area_prepare.object_reference_bytes
+        << ",type_area_store_bytes=" << type_area_prepare.store_bytes
+        << ",type_area_repeat_bytes=" << type_area_prepare.repeat_bytes
+        << ",type_area_constant_bytes=" << type_area_prepare.constant_bytes
+        << ",type_area_object_where_bytes=" << type_area_prepare.object_where_bytes
+        << ",type_area_object_runtime_bytes=" << type_area_prepare.object_runtime_bytes
+        << ",type_area_canonical_root_bytes=" << type_area_prepare.canonical_root_bytes
+        << ",type_area_object_patch_bytes=" << type_area_prepare.object_patch_bytes
+        << ",type_area_api_applications=" << type_area_execute.api_applications
+        << ",type_area_reference_writes=" << type_area_execute.reference_writes
+        << ",type_area_relative_reference_writes=" << type_area_execute.relative_reference_writes
+        << ",type_area_absolute_reference_writes=" << type_area_execute.absolute_reference_writes
+        << ",type_area_object_reference_writes=" << type_area_execute.object_reference_writes
+        << ",type_area_store_writes=" << type_area_execute.store_writes
+        << ",type_area_repeat_visits=" << type_area_execute.repeat_visits
+        << ",type_area_repeat_iterations=" << type_area_execute.repeat_iterations
+        << ",type_area_object_patch_writes=" << type_area_execute.object_patch_writes
+        << ",type_batch_resident_bytes=" << type_batch_prepare.resident_bytes
+        << ",type_batch_type_apis=" << type_batch_prepare.type_apis
+        << ",type_batch_named_types_prepared=" << type_batch_prepare.named_types_prepared
+        << ",type_batch_derived_types_prepared=" << type_batch_prepare.derived_types_prepared
+        << ",type_batch_canonical_roots=" << type_batch_prepare.canonical_roots
+        << ",type_batch_objects=" << type_batch_prepare.objects
+        << ",type_batch_object_patches=" << type_batch_prepare.object_patches
+        << ",type_batch_relative_refs=" << type_batch_prepare.relative_references
+        << ",type_batch_absolute_refs=" << type_batch_prepare.absolute_references
+        << ",type_batch_object_refs=" << type_batch_prepare.object_references
+        << ",type_batch_stores=" << type_batch_prepare.stores
+        << ",type_batch_children=" << type_batch_prepare.children
+        << ",type_batch_repeats=" << type_batch_prepare.repeats
+        << ",type_batch_object_groups=" << type_batch_prepare.object_groups
+        << ",type_batch_canonical_groups=" << type_batch_prepare.canonical_groups
+        << ",type_batch_grouped_object_roots=" << type_batch_prepare.grouped_object_roots
+        << ",type_batch_grouped_canonical_roots=" << type_batch_prepare.grouped_canonical_roots
+        << ",type_batch_batch_size=" << type_batch_prepare.batch_size
+        << ",type_batch_identity_resolutions=" << type_batch_prepare.semantic_identity_resolutions
+        << ",type_batch_object_binding_resolutions=" << type_batch_prepare.object_binding_resolutions
+        << ",type_batch_reference_chain_steps_resolved=" << type_batch_prepare.reference_chain_steps_resolved
+        << ",type_batch_child_edges=" << type_batch_prepare.child_edges
+        << ",type_batch_zero_ops_elided=" << type_batch_prepare.zero_operations_elided
+        << ",type_batch_type_api_bytes=" << type_batch_prepare.type_api_bytes
+        << ",type_batch_relative_ref_bytes=" << type_batch_prepare.relative_reference_bytes
+        << ",type_batch_absolute_ref_bytes=" << type_batch_prepare.absolute_reference_bytes
+        << ",type_batch_object_ref_bytes=" << type_batch_prepare.object_reference_bytes
+        << ",type_batch_store_bytes=" << type_batch_prepare.store_bytes
+        << ",type_batch_child_bytes=" << type_batch_prepare.child_bytes
+        << ",type_batch_repeat_bytes=" << type_batch_prepare.repeat_bytes
+        << ",type_batch_constant_bytes=" << type_batch_prepare.constant_bytes
+        << ",type_batch_object_where_bytes=" << type_batch_prepare.object_where_bytes
+        << ",type_batch_object_runtime_bytes=" << type_batch_prepare.object_runtime_bytes
+        << ",type_batch_canonical_root_bytes=" << type_batch_prepare.canonical_root_bytes
+        << ",type_batch_object_group_bytes=" << type_batch_prepare.object_group_bytes
+        << ",type_batch_object_group_offset_bytes=" << type_batch_prepare.object_group_offset_bytes
+        << ",type_batch_canonical_group_bytes=" << type_batch_prepare.canonical_group_bytes
+        << ",type_batch_canonical_group_offset_bytes=" << type_batch_prepare.canonical_group_offset_bytes
+        << ",type_batch_object_patch_bytes=" << type_batch_prepare.object_patch_bytes
+        << ",type_batch_api_applications=" << type_batch_execute.api_applications
+        << ",type_batch_batch_api_applications=" << type_batch_execute.batch_api_applications
+        << ",type_batch_child_visits=" << type_batch_execute.child_visits
+        << ",type_batch_reference_writes=" << type_batch_execute.reference_writes
+        << ",type_batch_relative_reference_writes=" << type_batch_execute.relative_reference_writes
+        << ",type_batch_absolute_reference_writes=" << type_batch_execute.absolute_reference_writes
+        << ",type_batch_object_reference_writes=" << type_batch_execute.object_reference_writes
+        << ",type_batch_store_writes=" << type_batch_execute.store_writes
+        << ",type_batch_repeat_visits=" << type_batch_execute.repeat_visits
+        << ",type_batch_repeat_iterations=" << type_batch_execute.repeat_iterations
+        << ",type_batch_object_batches=" << type_batch_execute.object_batches
+        << ",type_batch_canonical_batches=" << type_batch_execute.canonical_batches
+        << ",type_batch_object_patch_writes=" << type_batch_execute.object_patch_writes
+        << ",hybrid_object_groups=" << hybrid_profile.object_groups
+        << ",hybrid_object_roots=" << hybrid_profile.object_roots
+        << ",hybrid_candidate_type_apis=" << hybrid_profile.candidate_type_apis
+        << ",hybrid_singleton_groups=" << hybrid_profile.singleton_groups
+        << ",hybrid_groups_le_2=" << hybrid_profile.groups_le_2
+        << ",hybrid_groups_le_4=" << hybrid_profile.groups_le_4
+        << ",hybrid_groups_le_8=" << hybrid_profile.groups_le_8
+        << ",hybrid_groups_le_16=" << hybrid_profile.groups_le_16
+        << ",hybrid_groups_le_32=" << hybrid_profile.groups_le_32
+        << ",hybrid_groups_le_64=" << hybrid_profile.groups_le_64
+        << ",hybrid_groups_gt_64=" << hybrid_profile.groups_gt_64
+        << ",hybrid_max_group_roots=" << hybrid_profile.max_group_roots
+        << ",hybrid_all_candidate_flat_bytes=" << hybrid_profile.all_candidate_flat_bytes
+        << ",hybrid_all_weighted_child_visits=" << hybrid_profile.all_weighted_child_visits
+        << ",hybrid_all_batch_child_visits=" << hybrid_profile.all_batch_child_visits
+        << ",hybrid_1m_selected=" << hybrid_profile.budgets[0].selected_type_apis
+        << ",hybrid_1m_flat_bytes=" << hybrid_profile.budgets[0].flat_bytes
+        << ",hybrid_1m_object_roots=" << hybrid_profile.budgets[0].object_roots
+        << ",hybrid_1m_weighted_child_visits=" << hybrid_profile.budgets[0].weighted_child_visits
+        << ",hybrid_1m_batch_child_visits=" << hybrid_profile.budgets[0].batch_child_visits
+        << ",hybrid_4m_selected=" << hybrid_profile.budgets[1].selected_type_apis
+        << ",hybrid_4m_flat_bytes=" << hybrid_profile.budgets[1].flat_bytes
+        << ",hybrid_4m_object_roots=" << hybrid_profile.budgets[1].object_roots
+        << ",hybrid_4m_weighted_child_visits=" << hybrid_profile.budgets[1].weighted_child_visits
+        << ",hybrid_4m_batch_child_visits=" << hybrid_profile.budgets[1].batch_child_visits
+        << ",hybrid_8m_selected=" << hybrid_profile.budgets[2].selected_type_apis
+        << ",hybrid_8m_flat_bytes=" << hybrid_profile.budgets[2].flat_bytes
+        << ",hybrid_8m_object_roots=" << hybrid_profile.budgets[2].object_roots
+        << ",hybrid_8m_weighted_child_visits=" << hybrid_profile.budgets[2].weighted_child_visits
+        << ",hybrid_8m_batch_child_visits=" << hybrid_profile.budgets[2].batch_child_visits
+        << ",hybrid_16m_selected=" << hybrid_profile.budgets[3].selected_type_apis
+        << ",hybrid_16m_flat_bytes=" << hybrid_profile.budgets[3].flat_bytes
+        << ",hybrid_16m_object_roots=" << hybrid_profile.budgets[3].object_roots
+        << ",hybrid_16m_weighted_child_visits=" << hybrid_profile.budgets[3].weighted_child_visits
+        << ",hybrid_16m_batch_child_visits=" << hybrid_profile.budgets[3].batch_child_visits
+        << ",hybrid_32m_selected=" << hybrid_profile.budgets[4].selected_type_apis
+        << ",hybrid_32m_flat_bytes=" << hybrid_profile.budgets[4].flat_bytes
+        << ",hybrid_32m_object_roots=" << hybrid_profile.budgets[4].object_roots
+        << ",hybrid_32m_weighted_child_visits=" << hybrid_profile.budgets[4].weighted_child_visits
+        << ",hybrid_32m_batch_child_visits=" << hybrid_profile.budgets[4].batch_child_visits
+        << ",hybrid_64m_selected=" << hybrid_profile.budgets[5].selected_type_apis
+        << ",hybrid_64m_flat_bytes=" << hybrid_profile.budgets[5].flat_bytes
+        << ",hybrid_64m_object_roots=" << hybrid_profile.budgets[5].object_roots
+        << ",hybrid_64m_weighted_child_visits=" << hybrid_profile.budgets[5].weighted_child_visits
+        << ",hybrid_64m_batch_child_visits=" << hybrid_profile.budgets[5].batch_child_visits
+        << ",hybrid_04m_budget_bytes=" << hybrid_04m_prepare.budget_bytes
+        << ",hybrid_04m_candidate_type_apis=" << hybrid_04m_prepare.candidate_type_apis
+        << ",hybrid_04m_selected_type_apis=" << hybrid_04m_prepare.selected_type_apis
+        << ",hybrid_04m_hot_object_roots=" << hybrid_04m_prepare.hot_object_roots
+        << ",hybrid_04m_cold_object_roots=" << hybrid_04m_prepare.cold_object_roots
+        << ",hybrid_04m_selected_weighted_child_visits=" << hybrid_04m_prepare.selected_weighted_child_visits
+        << ",hybrid_04m_all_weighted_child_visits=" << hybrid_04m_prepare.all_weighted_child_visits
+        << ",hybrid_04m_selected_weighted_physical_writes=" << hybrid_04m_prepare.selected_weighted_physical_writes
+        << ",hybrid_04m_all_weighted_physical_writes=" << hybrid_04m_prepare.all_weighted_physical_writes
+        << ",hybrid_04m_selected_weighted_work=" << hybrid_04m_prepare.selected_weighted_work
+        << ",hybrid_04m_all_weighted_work=" << hybrid_04m_prepare.all_weighted_work
+        << ",hybrid_04m_flat_payload_bytes=" << hybrid_04m_prepare.flat_payload_bytes
+        << ",hybrid_04m_selection_map_bytes=" << hybrid_04m_prepare.selection_map_bytes
+        << ",hybrid_04m_resident_bytes=" << hybrid_04m_prepare.resident_bytes
+        << ",hybrid_04m_base_type_batch_bytes=" << hybrid_04m_prepare.base_type_batch_bytes
+        << ",hybrid_04m_total_runtime_metadata_bytes=" << hybrid_04m_prepare.total_runtime_metadata_bytes
+        << ",hybrid_04m_flat_apis=" << hybrid_04m_prepare.flat_apis
+        << ",hybrid_04m_flat_relative_refs=" << hybrid_04m_prepare.flat_relative_references
+        << ",hybrid_04m_flat_absolute_refs=" << hybrid_04m_prepare.flat_absolute_references
+        << ",hybrid_04m_flat_object_refs=" << hybrid_04m_prepare.flat_object_references
+        << ",hybrid_04m_flat_stores=" << hybrid_04m_prepare.flat_stores
+        << ",hybrid_04m_flat_repeats=" << hybrid_04m_prepare.flat_repeats
+        << ",hybrid_04m_flat_api_applications=" << hybrid_04m_execute.flat_api_applications
+        << ",hybrid_04m_local_batch_api_applications=" << hybrid_04m_execute.local_batch_api_applications
+        << ",hybrid_04m_local_child_visits=" << hybrid_04m_execute.local_child_visits
+        << ",hybrid_04m_cold_batches=" << hybrid_04m_execute.cold_batches
+        << ",hybrid_04m_reference_writes=" << hybrid_04m_execute.reference_writes
+        << ",hybrid_04m_relative_reference_writes=" << hybrid_04m_execute.relative_reference_writes
+        << ",hybrid_04m_absolute_reference_writes=" << hybrid_04m_execute.absolute_reference_writes
+        << ",hybrid_04m_object_reference_writes=" << hybrid_04m_execute.object_reference_writes
+        << ",hybrid_04m_store_writes=" << hybrid_04m_execute.store_writes
+        << ",hybrid_04m_repeat_visits=" << hybrid_04m_execute.repeat_visits
+        << ",hybrid_04m_repeat_iterations=" << hybrid_04m_execute.repeat_iterations
+        << ",hybrid_04m_object_patch_writes=" << hybrid_04m_execute.object_patch_writes
+        << ",hybrid_sweep_01m_selected=" << hybrid_sweep_01m.prepare.selected_type_apis
+        << ",hybrid_sweep_01m_hot_roots=" << hybrid_sweep_01m.prepare.hot_object_roots
+        << ",hybrid_sweep_01m_flat_bytes=" << hybrid_sweep_01m.prepare.flat_payload_bytes
+        << ",hybrid_sweep_01m_total_metadata_bytes=" << hybrid_sweep_01m.prepare.total_runtime_metadata_bytes
+        << ",hybrid_sweep_01m_selected_work=" << hybrid_sweep_01m.prepare.selected_weighted_work
+        << ",hybrid_sweep_02m_selected=" << hybrid_sweep_02m.prepare.selected_type_apis
+        << ",hybrid_sweep_02m_hot_roots=" << hybrid_sweep_02m.prepare.hot_object_roots
+        << ",hybrid_sweep_02m_flat_bytes=" << hybrid_sweep_02m.prepare.flat_payload_bytes
+        << ",hybrid_sweep_02m_total_metadata_bytes=" << hybrid_sweep_02m.prepare.total_runtime_metadata_bytes
+        << ",hybrid_sweep_02m_selected_work=" << hybrid_sweep_02m.prepare.selected_weighted_work
+        << ",hybrid_sweep_08m_selected=" << hybrid_sweep_08m.prepare.selected_type_apis
+        << ",hybrid_sweep_08m_hot_roots=" << hybrid_sweep_08m.prepare.hot_object_roots
+        << ",hybrid_sweep_08m_flat_bytes=" << hybrid_sweep_08m.prepare.flat_payload_bytes
+        << ",hybrid_sweep_08m_total_metadata_bytes=" << hybrid_sweep_08m.prepare.total_runtime_metadata_bytes
+        << ",hybrid_sweep_08m_selected_work=" << hybrid_sweep_08m.prepare.selected_weighted_work
+        << ",hybrid_sweep_16m_selected=" << hybrid_sweep_16m.prepare.selected_type_apis
+        << ",hybrid_sweep_16m_hot_roots=" << hybrid_sweep_16m.prepare.hot_object_roots
+        << ",hybrid_sweep_16m_flat_bytes=" << hybrid_sweep_16m.prepare.flat_payload_bytes
+        << ",hybrid_sweep_16m_total_metadata_bytes=" << hybrid_sweep_16m.prepare.total_runtime_metadata_bytes
+        << ",hybrid_sweep_16m_selected_work=" << hybrid_sweep_16m.prepare.selected_weighted_work
+        << ",hybrid_sweep_32m_selected=" << hybrid_sweep_32m.prepare.selected_type_apis
+        << ",hybrid_sweep_32m_hot_roots=" << hybrid_sweep_32m.prepare.hot_object_roots
+        << ",hybrid_sweep_32m_flat_bytes=" << hybrid_sweep_32m.prepare.flat_payload_bytes
+        << ",hybrid_sweep_32m_total_metadata_bytes=" << hybrid_sweep_32m.prepare.total_runtime_metadata_bytes
+        << ",hybrid_sweep_32m_selected_work=" << hybrid_sweep_32m.prepare.selected_weighted_work
+        << ",type_inline08_resident_bytes=" << type_inline08_prepare.resident_bytes
+        << ",type_inline08_type_apis=" << type_inline08_prepare.type_apis
+        << ",type_inline08_relative_refs=" << type_inline08_prepare.relative_references
+        << ",type_inline08_absolute_refs=" << type_inline08_prepare.absolute_references
+        << ",type_inline08_object_refs=" << type_inline08_prepare.object_references
+        << ",type_inline08_stores=" << type_inline08_prepare.stores
+        << ",type_inline08_children=" << type_inline08_prepare.children
+        << ",type_inline08_repeats=" << type_inline08_prepare.repeats
+        << ",type_inline08_leaf_limit=" << type_inline08_prepare.inline_leaf_limit
+        << ",type_inline08_leaf_children=" << type_inline08_prepare.inline_leaf_children
+        << ",type_inline08_leaf_operations=" << type_inline08_prepare.inline_leaf_operations
+        << ",type_inline08_leaf_relative_refs=" << type_inline08_prepare.inline_leaf_relative_references
+        << ",type_inline08_leaf_absolute_refs=" << type_inline08_prepare.inline_leaf_absolute_references
+        << ",type_inline08_leaf_object_refs=" << type_inline08_prepare.inline_leaf_object_references
+        << ",type_inline08_leaf_stores=" << type_inline08_prepare.inline_leaf_stores
+        << ",type_inline08_child_edges_retained=" << type_inline08_prepare.child_edges
+        << ",type_inline08_api_applications=" << type_inline08_execute.api_applications
+        << ",type_inline08_child_visits=" << type_inline08_execute.child_visits
+        << ",type_inline08_repeat_visits=" << type_inline08_execute.repeat_visits
+        << ",type_inline08_repeat_iterations=" << type_inline08_execute.repeat_iterations
+        << ",type_inline08_object_batches=" << type_inline08_execute.object_batches
+        << ",type_inline08_reference_writes=" << type_inline08_execute.reference_writes
+        << ",type_inline08_store_writes=" << type_inline08_execute.store_writes
+        << ",type_inline08_object_major_api_applications="
+        << type_inline08_object_major_execute.api_applications
+        << ",type_inline08_object_major_child_visits="
+        << type_inline08_object_major_execute.child_visits
+        << ",type_inline08_object_major_repeat_visits="
+        << type_inline08_object_major_execute.repeat_visits
+        << ",type_inline08_object_major_repeat_iterations="
+        << type_inline08_object_major_execute.repeat_iterations
+        << ",type_inline08_object_major_reference_writes="
+        << type_inline08_object_major_execute.reference_writes
+        << ",type_inline08_object_major_store_writes="
+        << type_inline08_object_major_execute.store_writes
+        << ",type_subtree08_resident_bytes=" << type_subtree08_prepare.resident_bytes
+        << ",type_subtree08_type_apis=" << type_subtree08_prepare.type_apis
+        << ",type_subtree08_relative_refs=" << type_subtree08_prepare.relative_references
+        << ",type_subtree08_absolute_refs=" << type_subtree08_prepare.absolute_references
+        << ",type_subtree08_object_refs=" << type_subtree08_prepare.object_references
+        << ",type_subtree08_stores=" << type_subtree08_prepare.stores
+        << ",type_subtree08_children=" << type_subtree08_prepare.children
+        << ",type_subtree08_repeats=" << type_subtree08_prepare.repeats
+        << ",type_subtree08_limit=" << type_subtree08_prepare.inline_subtree_limit
+        << ",type_subtree08_inlined_children=" << type_subtree08_prepare.inline_subtree_children
+        << ",type_subtree08_inlined_operations=" << type_subtree08_prepare.inline_subtree_operations
+        << ",type_subtree08_api_applications=" << type_subtree08_execute.api_applications
+        << ",type_subtree08_child_visits=" << type_subtree08_execute.child_visits
+        << ",type_subtree08_repeat_visits=" << type_subtree08_execute.repeat_visits
+        << ",type_subtree08_repeat_iterations=" << type_subtree08_execute.repeat_iterations
+        << ",type_subtree08_reference_writes=" << type_subtree08_execute.reference_writes
+        << ",type_subtree08_store_writes=" << type_subtree08_execute.store_writes
+        << ",type_inline16_resident_bytes="
+        << type_inline16_prepare.resident_bytes
+        << ",type_inline16_leaf_limit="
+        << type_inline16_prepare.inline_leaf_limit
+        << ",type_inline16_leaf_children="
+        << type_inline16_prepare.inline_leaf_children
+        << ",type_inline16_leaf_operations="
+        << type_inline16_prepare.inline_leaf_operations
+        << ",type_inline16_children="
+        << type_inline16_prepare.children
+        << ",type_inline16_object_major_api_applications="
+        << type_inline16_object_major_execute.api_applications
+        << ",type_inline16_object_major_child_visits="
+        << type_inline16_object_major_execute.child_visits
+        << ",type_inline16_object_major_repeat_visits="
+        << type_inline16_object_major_execute.repeat_visits
+        << ",type_inline16_object_major_repeat_iterations="
+        << type_inline16_object_major_execute.repeat_iterations
+
+        << ",type_inline32_resident_bytes="
+        << type_inline32_prepare.resident_bytes
+        << ",type_inline32_leaf_limit="
+        << type_inline32_prepare.inline_leaf_limit
+        << ",type_inline32_leaf_children="
+        << type_inline32_prepare.inline_leaf_children
+        << ",type_inline32_leaf_operations="
+        << type_inline32_prepare.inline_leaf_operations
+        << ",type_inline32_children="
+        << type_inline32_prepare.children
+        << ",type_inline32_object_major_api_applications="
+        << type_inline32_object_major_execute.api_applications
+        << ",type_inline32_object_major_child_visits="
+        << type_inline32_object_major_execute.child_visits
+        << ",type_inline32_object_major_repeat_visits="
+        << type_inline32_object_major_execute.repeat_visits
+        << ",type_inline32_object_major_repeat_iterations="
+        << type_inline32_object_major_execute.repeat_iterations
+
+        << ",type_inline64_resident_bytes="
+        << type_inline64_prepare.resident_bytes
+        << ",type_inline64_leaf_limit="
+        << type_inline64_prepare.inline_leaf_limit
+        << ",type_inline64_leaf_children="
+        << type_inline64_prepare.inline_leaf_children
+        << ",type_inline64_leaf_operations="
+        << type_inline64_prepare.inline_leaf_operations
+        << ",type_inline64_children="
+        << type_inline64_prepare.children
+        << ",type_inline64_object_major_api_applications="
+        << type_inline64_object_major_execute.api_applications
+        << ",type_inline64_object_major_child_visits="
+        << type_inline64_object_major_execute.child_visits
+        << ",type_inline64_object_major_repeat_visits="
+        << type_inline64_object_major_execute.repeat_visits
+        << ",type_inline64_object_major_repeat_iterations="
+        << type_inline64_object_major_execute.repeat_iterations
         << ",mismatches=0"
+
         << '\n';
 
     return 0;

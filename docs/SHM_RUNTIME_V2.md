@@ -192,3 +192,647 @@ this is `SYSTEM_INFO::dwPageSize`. Pretouch time is reported separately
 from sparse execution time. The second run must reproduce identical
 reference writes, scalar writes, and action visits. No sparse compiler or
 executor semantics are changed by this measurement slice.
+
+
+## SHM-SPARSE-CALL-PROFILE-01
+
+CALL optimization is gated by measurement rather than by copying the old
+Runtime fusion policy.
+
+The profiler analyzes the already prepared physical sparse graph; it does not
+instrument the timed executor and performs no SHM writes. Root execution counts
+are propagated analytically:
+
+```text
+root       -> child executions += 1
+CALL       -> child executions += parent executions
+REPEAT N   -> child executions += parent executions * N
+```
+
+Sparse child programs are emitted before their parents, so program starts are
+processed in descending action order. This produces exact Runtime CALL visit
+counts without executing every Runtime instance.
+
+CALL children are reported by direct action count:
+
+```text
+1
+2
+3
+4
+5..8
+9..16
+>16
+```
+
+and by direct shape:
+
+```text
+leaf              no CALL and no REPEAT in child
+contains CALL
+contains REPEAT
+```
+
+Both stored CALL actions and Runtime CALL visits are reported. Leaf counts are
+also broken down by size bucket so a future `SHM-SPARSE-FLAT-LEAF` threshold is
+selected from measured execution weight and retained-image growth.
+
+
+## SHM-TYPE-AREA-01
+
+This slice tests a different physical Runtime architecture in parallel with the
+accepted sparse path.
+
+`identity_ref` remains the canonical semantic WHO, but it is intentionally
+consumed only at the semantic -> physical prepare boundary:
+
+```text
+identity_ref
+    -> direct compiled G WHO -> WHERE
+    -> dense physical type/object slot
+```
+
+No `identity_ref` survives into the Type Area hot executor.
+
+Default Runtime discovery is object-driven:
+
+```text
+for each live Object:
+    ensure its Type API
+    publish Object slot -> SHM WHERE
+```
+
+Type dependencies are prepared once. Nested record and base APIs are flattened
+once into their owning Type API; there is no generic CALL instruction and no
+mixed opcode interpreter.
+
+The retained physical area is separated by operation kind:
+
+```text
+TypeApi[]
+RelativeRef[]
+AbsoluteRef[]
+ObjectRef[]
+Store[]
+Repeat[]
+ObjectWhere[]
+ObjectRuntime[]
+```
+
+`ObjectRef` stores an already-resolved `object_slot`, not `identity_ref` and
+not an absolute source address. The hot materializer performs only:
+
+```text
+object_slot -> ObjectWhere[slot] -> SHM address
+```
+
+This preserves the semantic/physical boundary while allowing object placement
+to change without resolving the semantic WHO again.
+
+`Repeat` is retained only for bounded arrays whose non-zero physical child API
+must execute repeatedly. Record/base composition does not use Repeat or CALL.
+
+Canonical `unconnected<T>` APIs are prepared after object-driven default Type
+discovery because canonical storage can introduce additional Runtime-only type
+requirements.
+
+API hashing and incremental Type Area reuse are intentionally out of scope for
+this slice. G remains semantic truth; Type Area is disposable physical Runtime
+state.
+
+The benchmark keeps the sparse path unchanged and measures Type Area on a
+separately recreated pretouched FIXED_DIRECT mapping. It requires exact
+agreement with the direct correctness oracle for:
+
+```text
+all reference writes
+relative/member-binding writes
+absolute/unconnected writes
+object-binding writes
+scalar writes
+live object count
+```
+
+
+## SHM-TYPE-AREA-FINALIZE-01
+
+The first Type Area prototype proved the hot execution model but retained
+builder-only flattened APIs. On UnitProXL that produced about 420 MB of
+resident physical metadata.
+
+The builder is still allowed to create expanded intermediate APIs. Before the
+Type Area is published, a finalization pass now derives the exact Runtime root
+set:
+
+```text
+ObjectRuntime.type_api
+CanonicalRoot.type_api
+```
+
+and follows only retained `Repeat.type_api` dependencies. Record/base
+composition is already flattened and therefore creates no final API edge.
+
+Finalization performs:
+
+```text
+mark reachable TypeApi
+    -> build old API -> final API remap
+    -> compact operation ranges
+    -> remap Repeat.type_api
+    -> compact referenced constants
+    -> remap ObjectRuntime / CanonicalRoot API ids
+    -> discard builder-only arrays
+```
+
+The hot executor is unchanged. No G access, semantic identity, hash lookup,
+generic CALL, or mixed opcode stream is introduced.
+
+This slice deliberately does not yet optimize the cost of constructing the
+temporary expanded builder image. Its first purpose is to measure how much of
+the 420 MB was builder-only state while preserving the ~115 ms Type Area
+execution shape. A later construction slice may avoid generating discarded
+intermediate payload in the first place.
+
+
+## SHM-TYPE-BATCH-01
+
+The flattened Type Area experiment proved the target hot execution cost
+(~115 ms object materialization on the UnitProXL workload), but expanded
+nested Type APIs to roughly 420 MB. FINALIZE-01 showed that this was not
+unreachable builder state: the duplication lived inside reachable parent APIs.
+
+TYPE-BATCH-01 changes the representation, not the physical semantics.
+
+Each Type API now retains only its local physical work:
+
+```text
+TypeApi[]
+    local RelativeRef range
+    local AbsoluteRef range
+    local ObjectRef range
+    local Store range
+    Child range
+    Repeat range
+```
+
+A nested record/base is represented once:
+
+```text
+Child {
+    target_offset,
+    child_type_api
+}
+```
+
+There is no flattened copy and no generic CALL opcode.
+
+The prepare boundary remains:
+
+```text
+identity_ref WHO
+    -> resolve once in G
+    -> type/object physical slot
+```
+
+No semantic identity survives into the hot executor. `object_binding` is
+resolved during prepare to `object_slot`; execution uses only:
+
+```text
+object_slot -> ObjectWhere[] -> SHM WHERE
+```
+
+After all local Type APIs and Object WHERE values are known, object roots and
+canonical roots are grouped by final Type API. The executor processes each
+group in fixed batches of 64 WHERE values:
+
+```text
+for Type group:
+    for batch[<=64]:
+        apply local API to all roots
+        traverse Child edges once for the batch
+        traverse Repeat edges once for the batch
+```
+
+Therefore structural type traversal is amortized across a batch instead of
+occurring once per object. Object-local memory writes remain exact and cannot
+be eliminated.
+
+This slice intentionally keeps object-specific construction as a separate
+patch layer and keeps bounded arrays as Repeat edges. No hash, API interning,
+generic VM, map, name lookup, or G traversal exists in the timed executor.
+
+The benchmark runs TYPE-BATCH on a separately recreated, pretouched
+FIXED_DIRECT mapping and requires exact agreement with the direct oracle for
+all reference classes, stores, and live object count.
+
+
+## SHM-HYBRID-PROFILE-01
+
+TYPE-BATCH-01 established the compact local Type representation (~8 MB) but
+did not improve execution over the sparse interpreter on UnitProXL. The fully
+flattened Type Area established the opposite point: ~115 ms execution at
+roughly 420 MB.
+
+HYBRID-PROFILE-01 is measurement-only. It does not alter any materializer.
+
+The profiler consumes only the prepared `shm_type_batch` image. For every
+object-root Type API it computes the exact record/base flattenable closure:
+
+```text
+local physical operations
++ all Child subtrees
+```
+
+`Repeat` targets are intentionally not recursively flattened. Arrays remain
+explicit Repeat edges, matching the proven Type Area architecture. Constants,
+ObjectWhere, and other shared Runtime state are not charged again.
+
+For each object-root Type API the profiler derives:
+
+```text
+flat_bytes
+object_root_count
+flattenable_child_visits_per_root
+
+weighted_benefit =
+    object_root_count * flattenable_child_visits_per_root
+
+current_batch_benefit =
+    ceil(object_root_count / 64) * flattenable_child_visits_per_root
+```
+
+Candidate APIs are ranked by `weighted_benefit / flat_bytes`. The benchmark
+reports greedy cumulative Pareto points for additional flat-memory budgets of:
+
+```text
++1 MiB
++4 MiB
++8 MiB
++16 MiB
++32 MiB
++64 MiB
+```
+
+Each point reports selected Type API count, bytes consumed, covered object
+roots, weighted Child visits removable by a future object-major flat path, and
+Child visits removable under the current batch execution policy.
+
+This slice exists only to choose a selective flatten policy from measured
+UnitProXL data. It introduces no hash, map, G lookup, identity lookup, or hot
+execution branch.
+
+
+## SHM-HYBRID-04M-01
+
+HYBRID-04M is the first execution experiment that combines the compact local
+Type Batch representation with a bounded object-major flat cache.
+
+The base Type Batch remains authoritative physical Runtime metadata:
+
+```text
+TypeBatch
+    TypeApi[]
+    Child[]
+    Repeat[]
+    ObjectWhere[]
+    ObjectRuntime[]
+```
+
+Hybrid is strictly additive and purely physical. It is prepared from the
+already-built Type Batch image and never reads G, names, `identity_ref`, or
+semantic state.
+
+The hot cache budget is 4 MiB of flat payload. Selection uses the measured
+object-major benefit/cost model:
+
+```text
+benefit = object_roots * flattenable Child visits
+cost    = flat physical API bytes
+score   = benefit / cost
+```
+
+Candidates are greedily selected by descending score under the fixed payload
+budget. The dense local-TypeApi -> flat-TypeApi map is small fixed overhead and
+is reported separately from the 4 MiB payload.
+
+A selected flat API recursively expands record/base `Child` edges exactly once:
+
+```text
+FlatApi[]
+FlatRelativeRef[]
+FlatAbsoluteRef[]
+FlatObjectRef[]
+FlatStore[]
+FlatRepeat[]
+```
+
+`FlatRepeat` deliberately points back to a local Type Batch API. Bounded arrays
+were excluded from the flatten benefit model and remain structural; this keeps
+the selective budget aligned with the profile and avoids silently expanding
+large arrays.
+
+Object execution is split before hot work:
+
+```text
+HOT selected roots:
+    original ObjectRuntime order
+    -> object-major flat execution
+
+COLD roots:
+    existing Type Batch groups
+    -> local batched execution
+
+Object-specific patches:
+    applied once after both paths
+```
+
+The Hybrid area does not duplicate Type Batch constants, ObjectWhere, objects,
+or cold root groups.
+
+The benchmark uses a separate pretouched FIXED_DIRECT mapping. Canonical
+construction stays on the compact Type Batch path. Object construction is
+validated independently against the direct oracle for member-binding,
+unconnected, object-binding, store and object counts. The UnitProXL workload's
+current `object_binding == 0` remains only a workload-specific observation;
+the Hybrid path implements object bindings generically through the already
+resolved object slot and `ObjectWhere[]`.
+
+
+## SHM-HYBRID-04M-WORK-01
+
+The first 4 MiB Hybrid selector ranked candidates only by:
+
+```text
+roots * flattenable_child_visits / flat_bytes
+```
+
+The measured Hybrid run reduced object materialization from the compact
+Type-Batch level (~226 ms) to ~189 ms while the remaining local child-visit
+count stayed high. This shows that the hot flat path gains from both structural
+elimination and object-major physical-write locality.
+
+WORK-01 keeps the representation, 4 MiB budget, prepare boundary, and executor
+unchanged. Only candidate ranking changes.
+
+For one candidate:
+
+```text
+physical_per_root =
+    flat_relative_refs
+  + flat_absolute_refs
+  + flat_object_refs
+  + flat_stores
+
+weighted_physical_writes =
+    roots * physical_per_root
+
+weighted_work =
+    roots * flattenable_child_visits
+  + weighted_physical_writes
+
+score =
+    weighted_work / flat_bytes
+```
+
+Repeats remain structural and are deliberately not credited as flat physical
+writes because the Hybrid flat representation still dispatches their child
+through the compact local Type API.
+
+This is an A/B selection-policy experiment at the same exact memory budget.
+No new Runtime representation, semantic lookup, hash, map, or hot-path branch
+is introduced.
+
+
+## SHM-HYBRID-BUDGET-SWEEP-01
+
+The 4 MiB Hybrid run proved that selective object-major flattening is useful,
+but one point cannot establish the memory/performance knee.
+
+This slice does not change Hybrid representation, WORK-01 ranking, or the hot
+executor. It only parameterizes the flat payload budget used by prepare:
+
+```text
+prepare_shm_hybrid_budget(base, budget_bytes, ...)
+```
+
+The existing `prepare_shm_hybrid_04m()` remains a compatibility wrapper for
+exactly 4 MiB.
+
+The benchmark measures the same physical Hybrid architecture at:
+
+```text
+1 MiB
+2 MiB
+4 MiB   (existing path)
+8 MiB
+16 MiB
+32 MiB
+```
+
+Every point uses a separately recreated and pretouched FIXED_DIRECT mapping.
+Canonical construction still uses the compact Type Batch; only Project object
+materialization is Hybrid.
+
+The sweep validates the exact physical write counts against the direct oracle
+for every additional budget point. This produces a real runtime
+memory/performance curve rather than extrapolating from the profile model.
+
+
+## SHM-TYPE-INLINE-08-01
+
+The hybrid budget sweep established that full root flattening reaches a sharp
+knee around 4 MiB but still leaves object materialization around ~190 ms.
+Increasing the hot root-flat budget to 32 MiB yields only a small additional
+gain. Therefore the next experiment targets the remaining structural cost
+inside the compact Type API itself rather than spending more root-flat memory.
+
+TYPE-INLINE-08 is a second prepare policy for the existing `shm_type_batch`
+representation and uses the exact same hot executor.
+
+When a child Type API is:
+
+```text
+leaf:
+    children == 0
+    repeats == 0
+
+small:
+    relative_refs
+  + absolute_refs
+  + object_refs
+  + stores
+  <= 8
+```
+
+the child edge is removed and those local physical operations are copied into
+the parent with the child record offset applied.
+
+Because dependency APIs are prepared before parents, this policy naturally
+cascades bottom-up: after its own small leaf children are fused, a type may
+itself become a small leaf and can then be fused into its parent.
+
+Arrays remain structural because any API containing `Repeat` is excluded.
+There is no generic CALL, VM, hash, map, name lookup, or semantic identity in
+the executor. `object_binding` remains resolved during prepare to object slot.
+
+TYPE-INLINE-08 is built as an independent `shm_type_batch`, so its
+`resident_bytes` is the actual standalone Runtime metadata cost, not a delta
+kept beside the baseline Type Batch.
+
+The benchmark executes the same `materialize_shm_type_batch_*` functions for
+both baseline and INLINE-08 images and requires exact physical-write equality
+against the direct construction oracle.
+
+
+## SHM-TYPE-INLINE-08-OBJECT-MAJOR-01
+
+This is an execution-order A/B experiment over exactly the same INLINE-08
+physical representation.
+
+The existing INLINE-08 executor is type-group/batch ordered:
+
+```text
+Type group
+    -> batch roots
+    -> API tree
+    -> writes across roots
+```
+
+The object-major measurement path is:
+
+```text
+Object
+    -> complete API tree
+    -> all physical writes for that Object
+    -> next Object
+```
+
+No Type API representation, inline policy, semantic resolution, object
+placement, or physical write semantics changes. Canonical construction remains
+on the existing batch path.
+
+The purpose is to isolate SHM write/cache locality from structural traversal
+cost. The hot object-major executor still has no G/project access,
+identity_ref, hash/map/name lookup, or generic opcode VM.
+
+
+## SHM-TYPE-SUBTREE-INLINE-08-01
+
+INLINE-08 proved that object-major execution over a partially inlined local
+Type Area is materially faster than type-group/batch execution over the same
+physical representation.
+
+Leaf-only INLINE-08 can fuse a leaf child with at most 8 physical writes. It
+cannot fuse a small structural chain when an intermediate wrapper still owns a
+Child edge.
+
+SUBTREE-INLINE-08 therefore inlines one complete Child subtree when the entire
+subtree:
+
+- contains no Repeat edge;
+- expands to at most 8 physical writes;
+- is dependency-first and acyclic.
+
+All copied operations are rebased to the parent record offset. The hot executor
+is unchanged and remains object-major. No semantic identity, G access,
+hash/map/name lookup, generic CALL, or opcode VM is introduced.
+
+
+## SHM-TYPE-INLINE-SWEEP-01
+
+INLINE-08 object-major and SUBTREE-INLINE-08 converged on essentially the same
+physical image and execution time. Bottom-up leaf inlining therefore already
+captures the useful <=8 subtree closure for the measured workload.
+
+This slice does not add another representation. It sweeps the same bottom-up
+leaf-inline policy at physical-operation thresholds:
+
+```text
+8   existing reference point
+16
+32
+64
+```
+
+All variants use the already accepted object-major executor:
+
+```text
+Object
+    -> complete prepared Type API tree
+    -> next Object
+```
+
+No semantic G access, identity_ref, hash/map/name lookup, generic CALL VM, or
+new Runtime addressing model is introduced. The experiment measures the real
+resident-memory / remaining-child-traversal / materialization-time Pareto curve
+between compact INLINE-08 and the full flattened Type Area.
+
+
+## SHM-TYPE-INLINE-64-FINAL-01
+
+The INLINE threshold sweep established the current Runtime V2 production
+candidate:
+
+```text
+prepare policy:  inline leaf <= 64 physical operations
+hot object path: object-major
+```
+
+On the UnitProXL workload this retained about 41.45 MB of Type metadata and
+reduced object materialization to about 127 ms, compared with about 234 ms for
+the compact structural Type Batch and about 121 ms for the 420 MB fully
+flattened Type Area.
+
+The production-candidate API is now isolated as:
+
+```text
+shm_runtime_v2
+prepare_shm_runtime_v2()
+materialize_shm_runtime_v2_canonical()
+materialize_shm_runtime_v2_objects()
+```
+
+`shm_runtime_v2` deliberately exposes no threshold/configuration knob.
+`64` is an implementation policy selected from measurement, not project
+semantics or user configuration.
+
+Internally the candidate reuses the validated Type Batch representation:
+
+```text
+prepare_shm_runtime_v2
+    -> INLINE-64 prepare
+    -> local TypeApi + selectively inlined leaf physical work
+
+materialize_shm_runtime_v2_objects
+    -> object-major executor
+```
+
+Experimental `local`, `INLINE-08/16/32`, SUBTREE-08, batch execution, Hybrid,
+and full Type Area remain benchmark/reference paths. They are not part of the
+candidate Runtime API.
+
+The semantic/physical contract remains:
+
+```text
+identity_ref = semantic WHO
+prepare      = resolve WHO once -> dense physical slot/offset
+hot runtime  = TypeApi/ObjectWhere/offset only
+```
+
+No `identity_ref`, G traversal, hash/map/name lookup, generic CALL VM, or
+runtime policy branch is introduced into the hot object executor.
+
+### Integration boundary
+
+This slice does **not** replace `create_resident_project()` yet.
+
+The existing resident Project path publishes `runtime_binding_index` from the
+old `runtime_layout`. Runtime Query / IC addressing therefore still depends on
+that construction pipeline. Replacing only the SHM materializer would create
+two physical Runtime descriptions and violate the one-Runtime-state goal.
+
+The next production integration slice must construct the resident
+`runtime_binding_index` directly from Runtime V2 physical data
+(`shm_layout` / Object WHERE / member offsets), then wire
+`create_resident_project()` to the single V2 path and discard construction-only
+V2 metadata after publication where possible.

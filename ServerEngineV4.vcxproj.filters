@@ -219,6 +219,21 @@
     <ClCompile Include="server_engine\project\shm\shm_sparse.cpp">
       <Filter>server_engine\project\shm</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\project\shm\shm_type_area.cpp">
+      <Filter>server_engine\project\shm</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\shm\shm_type_batch.cpp">
+      <Filter>server_engine\project\shm</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\shm\shm_runtime_v2.cpp">
+      <Filter>server_engine\project\shm</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\shm\shm_hybrid_profile.cpp">
+      <Filter>server_engine\project\shm</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\shm\shm_hybrid_04m.cpp">
+      <Filter>server_engine\project\shm</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\project\runtime\runtime_layout.cpp">
       <Filter>server_engine\project\runtime</Filter>
     </ClCompile>
@@ -546,6 +561,21 @@
       <Filter>server_engine\project\shm</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\shm\shm_sparse.hpp">
+      <Filter>server_engine\project\shm</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\shm\shm_type_area.hpp">
+      <Filter>server_engine\project\shm</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\shm\shm_type_batch.hpp">
+      <Filter>server_engine\project\shm</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\shm\shm_runtime_v2.hpp">
+      <Filter>server_engine\project\shm</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\shm\shm_hybrid_profile.hpp">
+      <Filter>server_engine\project\shm</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\shm\shm_hybrid_04m.hpp">
       <Filter>server_engine\project\shm</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\runtime\runtime_layout.hpp">

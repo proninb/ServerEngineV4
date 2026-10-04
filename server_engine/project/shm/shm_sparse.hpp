@@ -19,6 +19,7 @@ namespace cw::server {
 class compiled_project_view;
 class shm_sparse_builder;
 class shm_sparse_executor;
+class shm_sparse_call_profiler;
 
 enum class shm_sparse_result : std::uint8_t {
     success = 0,
@@ -69,6 +70,43 @@ struct shm_sparse_execute_telemetry final {
     std::uint64_t call_visits = 0;
     std::uint64_t repeat_visits = 0;
     std::uint64_t repeat_iterations = 0;
+};
+
+// Measurement-only description of CALL shape. Buckets are:
+//   [0] 1, [1] 2, [2] 3, [3] 4,
+//   [4] 5..8, [5] 9..16, [6] >16 child actions.
+struct shm_sparse_call_profile final {
+    static constexpr std::size_t child_size_bucket_count = 7;
+
+    std::uint64_t call_actions = 0;
+    std::uint64_t call_actions_leaf = 0;
+    std::uint64_t call_actions_contains_call = 0;
+    std::uint64_t call_actions_contains_repeat = 0;
+
+    std::array<
+        std::uint64_t,
+        child_size_bucket_count>
+        call_actions_by_child_size{};
+
+    std::array<
+        std::uint64_t,
+        child_size_bucket_count>
+        leaf_call_actions_by_child_size{};
+
+    std::uint64_t call_visits = 0;
+    std::uint64_t call_visits_leaf = 0;
+    std::uint64_t call_visits_contains_call = 0;
+    std::uint64_t call_visits_contains_repeat = 0;
+
+    std::array<
+        std::uint64_t,
+        child_size_bucket_count>
+        call_visits_by_child_size{};
+
+    std::array<
+        std::uint64_t,
+        child_size_bucket_count>
+        leaf_call_visits_by_child_size{};
 };
 
 class shm_sparse_types final {
@@ -156,6 +194,7 @@ private:
 
     friend class shm_sparse_builder;
     friend class shm_sparse_executor;
+    friend class shm_sparse_call_profiler;
 
     friend shm_sparse_result prepare_shm_sparse_types(
         const compiled_project_view&,
@@ -185,6 +224,11 @@ private:
     const shm_layout& layout,
     shm_sparse_types& output,
     shm_sparse_prepare_telemetry* telemetry = nullptr) noexcept;
+
+// Analyzes the prepared physical call graph without SHM writes.
+[[nodiscard]] shm_sparse_result profile_shm_sparse_calls(
+    const shm_sparse_types& sparse,
+    shm_sparse_call_profile& output) noexcept;
 
 // These executors do not access G/project data.
 [[nodiscard]] shm_sparse_result materialize_shm_sparse_canonical(

@@ -1963,6 +1963,597 @@ private:
     abi_properties properties{};
 };
 
+
+class shm_sparse_call_profiler final {
+public:
+    explicit shm_sparse_call_profiler(
+        const shm_sparse_types& sparse) noexcept
+        : sparse(sparse) {
+    }
+
+    [[nodiscard]] shm_sparse_result profile(
+        shm_sparse_call_profile& output) {
+
+        output = {};
+
+        if (!sparse.prepared_value) {
+            return shm_sparse_result::invalid_input;
+        }
+
+        if (sparse.actions.empty()) {
+            return
+                sparse.canonical_roots.empty() &&
+                sparse.object_roots.empty()
+                ? shm_sparse_result::success
+                : shm_sparse_result::invalid_input;
+        }
+
+        call_classes.assign(
+            sparse.actions.size(),
+            0);
+
+        program_lengths.assign(
+            sparse.actions.size(),
+            0);
+
+        program_executions.assign(
+            sparse.actions.size(),
+            0);
+
+        for (const auto& root :
+             sparse.canonical_roots) {
+
+            const auto registered =
+                register_root(root);
+
+            if (registered !=
+                shm_sparse_result::success) {
+
+                return registered;
+            }
+        }
+
+        for (const auto& root :
+             sparse.object_roots) {
+
+            const auto registered =
+                register_root(root);
+
+            if (registered !=
+                shm_sparse_result::success) {
+
+                return registered;
+            }
+        }
+
+        for (std::size_t index = 0;
+             index < sparse.actions.size();
+             ++index) {
+
+            const auto& action =
+                sparse.actions[index];
+
+            switch (action.kind) {
+            case shm_sparse_types::action_kind::call: {
+                const shm_sparse_types::program_range child{
+                    action.arg0,
+                    action.arg1,
+                };
+
+                const auto registered =
+                    register_program(child);
+
+                if (registered !=
+                    shm_sparse_result::success) {
+
+                    return registered;
+                }
+
+                std::uint8_t classification = 0;
+
+                const auto classified =
+                    classify_call(
+                        child,
+                        classification);
+
+                if (classified !=
+                    shm_sparse_result::success) {
+
+                    return classified;
+                }
+
+                call_classes[index] =
+                    classification;
+
+                ++output.call_actions;
+
+                const auto bucket =
+                    classification &
+                    bucket_mask;
+
+                ++output
+                    .call_actions_by_child_size[
+                        bucket];
+
+                if ((classification &
+                     leaf_flag) != 0) {
+
+                    ++output.call_actions_leaf;
+
+                    ++output
+                        .leaf_call_actions_by_child_size[
+                            bucket];
+                }
+
+                if ((classification &
+                     contains_call_flag) != 0) {
+
+                    ++output
+                        .call_actions_contains_call;
+                }
+
+                if ((classification &
+                     contains_repeat_flag) != 0) {
+
+                    ++output
+                        .call_actions_contains_repeat;
+                }
+
+                break;
+            }
+
+            case shm_sparse_types::action_kind::repeat: {
+                if (action.arg0 >=
+                    sparse.repeat_descriptors.size()) {
+
+                    return shm_sparse_result::
+                        invalid_input;
+                }
+
+                const auto& repeat =
+                    sparse.repeat_descriptors[
+                        action.arg0];
+
+                if (repeat.child.empty() ||
+                    repeat.stride == 0 ||
+                    repeat.count == 0) {
+
+                    return shm_sparse_result::
+                        invalid_input;
+                }
+
+                const auto registered =
+                    register_program(
+                        repeat.child);
+
+                if (registered !=
+                    shm_sparse_result::success) {
+
+                    return registered;
+                }
+
+                break;
+            }
+
+            case shm_sparse_types::action_kind::
+                reference_relative:
+            case shm_sparse_types::action_kind::
+                reference_absolute:
+            case shm_sparse_types::action_kind::store:
+                break;
+            }
+        }
+
+        // Child programs are finalized before their parent is emitted.
+        // Descending starts therefore propagate all parent executions first.
+        for (std::size_t next =
+                 sparse.actions.size();
+             next != 0;
+             --next) {
+
+            const auto begin =
+                next - 1;
+
+            const auto count =
+                program_lengths[begin];
+
+            if (count == 0) {
+                continue;
+            }
+
+            const auto executions =
+                program_executions[
+                    begin];
+
+            if (executions == 0) {
+                continue;
+            }
+
+            if (count >
+                sparse.actions.size() -
+                    begin) {
+
+                return shm_sparse_result::
+                    invalid_input;
+            }
+
+            const auto end =
+                begin + count;
+
+            for (std::size_t index = begin;
+                 index < end;
+                 ++index) {
+
+                const auto& action =
+                    sparse.actions[index];
+
+                if (action.kind ==
+                    shm_sparse_types::
+                        action_kind::call) {
+
+                    const shm_sparse_types::
+                        program_range child{
+                            action.arg0,
+                            action.arg1,
+                        };
+
+                    if (child.begin >= begin) {
+                        return shm_sparse_result::
+                            invalid_input;
+                    }
+
+                    const auto classification =
+                        call_classes[index];
+
+                    if ((classification &
+                         valid_flag) == 0) {
+
+                        return shm_sparse_result::
+                            invalid_input;
+                    }
+
+                    const auto bucket =
+                        classification &
+                        bucket_mask;
+
+                    if (!add(
+                            output.call_visits,
+                            executions) ||
+                        !add(
+                            output
+                                .call_visits_by_child_size[
+                                    bucket],
+                            executions)) {
+
+                        return shm_sparse_result::
+                            overflow;
+                    }
+
+                    if ((classification &
+                         leaf_flag) != 0) {
+
+                        if (!add(
+                                output
+                                    .call_visits_leaf,
+                                executions) ||
+                            !add(
+                                output
+                                    .leaf_call_visits_by_child_size[
+                                        bucket],
+                                executions)) {
+
+                            return shm_sparse_result::
+                                overflow;
+                        }
+                    }
+
+                    if ((classification &
+                         contains_call_flag) != 0 &&
+                        !add(
+                            output
+                                .call_visits_contains_call,
+                            executions)) {
+
+                        return shm_sparse_result::
+                            overflow;
+                    }
+
+                    if ((classification &
+                         contains_repeat_flag) != 0 &&
+                        !add(
+                            output
+                                .call_visits_contains_repeat,
+                            executions)) {
+
+                        return shm_sparse_result::
+                            overflow;
+                    }
+
+                    if (!add_execution(
+                            child.begin,
+                            executions)) {
+
+                        return shm_sparse_result::
+                            overflow;
+                    }
+
+                    continue;
+                }
+
+                if (action.kind ==
+                    shm_sparse_types::
+                        action_kind::repeat) {
+
+                    if (action.arg0 >=
+                        sparse.repeat_descriptors.size()) {
+
+                        return shm_sparse_result::
+                            invalid_input;
+                    }
+
+                    const auto& repeat =
+                        sparse.repeat_descriptors[
+                            action.arg0];
+
+                    if (repeat.child.begin >=
+                        begin) {
+
+                        return shm_sparse_result::
+                            invalid_input;
+                    }
+
+                    std::uint64_t child_executions = 0;
+
+                    if (!multiply(
+                            executions,
+                            repeat.count,
+                            child_executions) ||
+                        !add_execution(
+                            repeat.child.begin,
+                            child_executions)) {
+
+                        return shm_sparse_result::
+                            overflow;
+                    }
+                }
+            }
+        }
+
+        return shm_sparse_result::success;
+    }
+
+private:
+    static constexpr std::uint8_t
+        bucket_mask = 0x07;
+
+    static constexpr std::uint8_t
+        leaf_flag = 0x08;
+
+    static constexpr std::uint8_t
+        contains_call_flag = 0x10;
+
+    static constexpr std::uint8_t
+        contains_repeat_flag = 0x20;
+
+    static constexpr std::uint8_t
+        valid_flag = 0x80;
+
+    [[nodiscard]] static std::uint8_t
+    child_size_bucket(
+        std::uint32_t count) noexcept {
+
+        if (count <= 4) {
+            return static_cast<std::uint8_t>(
+                count - 1);
+        }
+
+        if (count <= 8) {
+            return 4;
+        }
+
+        if (count <= 16) {
+            return 5;
+        }
+
+        return 6;
+    }
+
+    [[nodiscard]] static bool add(
+        std::uint64_t& target,
+        std::uint64_t value) noexcept {
+
+        if (value >
+            (std::numeric_limits<
+                std::uint64_t>::max)() -
+                target) {
+
+            return false;
+        }
+
+        target += value;
+        return true;
+    }
+
+    [[nodiscard]] static bool multiply(
+        std::uint64_t left,
+        std::uint64_t right,
+        std::uint64_t& output) noexcept {
+
+        output = 0;
+
+        if (left == 0 ||
+            right == 0) {
+
+            return true;
+        }
+
+        if (left >
+            (std::numeric_limits<
+                std::uint64_t>::max)() /
+                right) {
+
+            return false;
+        }
+
+        output =
+            left * right;
+
+        return true;
+    }
+
+    [[nodiscard]] shm_sparse_result
+    register_program(
+        shm_sparse_types::program_range program) {
+
+        if (program.empty() ||
+            program.begin >=
+                sparse.actions.size() ||
+            program.count >
+                sparse.actions.size() -
+                    program.begin) {
+
+            return shm_sparse_result::
+                invalid_input;
+        }
+
+        auto& count =
+            program_lengths[
+                program.begin];
+
+        if (count == 0) {
+            count =
+                program.count;
+
+            return shm_sparse_result::success;
+        }
+
+        return count == program.count
+            ? shm_sparse_result::success
+            : shm_sparse_result::invalid_input;
+    }
+
+    [[nodiscard]] shm_sparse_result
+    register_root(
+        const shm_sparse_types::root& root) {
+
+        const auto registered =
+            register_program(
+                root.program);
+
+        if (registered !=
+            shm_sparse_result::success) {
+
+            return registered;
+        }
+
+        return add_execution(
+                   root.program.begin,
+                   1)
+            ? shm_sparse_result::success
+            : shm_sparse_result::overflow;
+    }
+
+    [[nodiscard]] bool add_execution(
+        std::uint32_t begin,
+        std::uint64_t value) noexcept {
+
+        if (begin >=
+            program_executions.size()) {
+
+            return false;
+        }
+
+        return add(
+            program_executions[begin],
+            value);
+    }
+
+    [[nodiscard]] shm_sparse_result
+    classify_call(
+        shm_sparse_types::program_range child,
+        std::uint8_t& output) const noexcept {
+
+        output = 0;
+
+        if (child.empty() ||
+            child.begin >=
+                sparse.actions.size() ||
+            child.count >
+                sparse.actions.size() -
+                    child.begin) {
+
+            return shm_sparse_result::
+                invalid_input;
+        }
+
+        bool contains_call = false;
+        bool contains_repeat = false;
+
+        const auto end =
+            static_cast<std::size_t>(
+                child.begin) +
+            child.count;
+
+        for (std::size_t index =
+                 child.begin;
+             index < end;
+             ++index) {
+
+            switch (sparse.actions[index].kind) {
+            case shm_sparse_types::action_kind::call:
+                contains_call = true;
+                break;
+
+            case shm_sparse_types::action_kind::repeat:
+                contains_repeat = true;
+                break;
+
+            case shm_sparse_types::action_kind::
+                reference_relative:
+            case shm_sparse_types::action_kind::
+                reference_absolute:
+            case shm_sparse_types::action_kind::store:
+                break;
+            }
+        }
+
+        output =
+            static_cast<std::uint8_t>(
+                valid_flag |
+                child_size_bucket(
+                    child.count));
+
+        if (!contains_call &&
+            !contains_repeat) {
+
+            output |= leaf_flag;
+        }
+
+        if (contains_call) {
+            output |=
+                contains_call_flag;
+        }
+
+        if (contains_repeat) {
+            output |=
+                contains_repeat_flag;
+        }
+
+        return shm_sparse_result::success;
+    }
+
+    const shm_sparse_types& sparse;
+
+    std::vector<std::uint8_t>
+        call_classes;
+
+    std::vector<std::uint32_t>
+        program_lengths;
+
+    std::vector<std::uint64_t>
+        program_executions;
+};
+
 std::size_t shm_sparse_types::resident_bytes() const noexcept {
 
     return
@@ -2013,6 +2604,26 @@ shm_sparse_result prepare_shm_sparse_types(
     }
     catch (...) {
         output.reset();
+        return shm_sparse_result::failed;
+    }
+}
+
+
+shm_sparse_result profile_shm_sparse_calls(
+    const shm_sparse_types& sparse,
+    shm_sparse_call_profile& output) noexcept {
+
+    output = {};
+
+    try {
+        shm_sparse_call_profiler profiler{
+            sparse};
+
+        return profiler.profile(
+            output);
+    }
+    catch (...) {
+        output = {};
         return shm_sparse_result::failed;
     }
 }
