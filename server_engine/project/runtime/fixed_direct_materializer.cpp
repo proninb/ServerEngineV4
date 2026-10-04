@@ -2712,6 +2712,7 @@ private:
         store_2,
         store_4,
         store_8,
+        store_12,
         store_16,
         value,
         constructor,
@@ -2742,7 +2743,7 @@ private:
         // generic_reference -> runtime_program_references index
         // store_1/2/4 -> target-native bytes inline in payload
         // store_8 -> runtime_program_constants_64 index
-        // store_16 -> runtime_program_constants_128 index
+        // store_12/16 -> runtime_program_constants_128 index
         // value -> residual planned_members index
         // constructor -> constructor_fields index
         // call -> child type slot + two flags above
@@ -3396,6 +3397,13 @@ private:
                     }
                     else if (
                         op.kind ==
+                            runtime_program_op_kind::store_12) {
+
+                        profile->
+                            program_physical_value_ops_built += 3;
+                    }
+                    else if (
+                        op.kind ==
                             runtime_program_op_kind::store_1 ||
                         op.kind ==
                             runtime_program_op_kind::store_2 ||
@@ -3884,6 +3892,187 @@ private:
     }
 
     [[nodiscard]] fixed_direct_materialization_result
+    compact_runtime_store_12(
+        std::size_t begin) noexcept {
+
+        if (begin >
+            runtime_program_ops.size()) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        const auto end =
+            runtime_program_ops.size();
+
+        const auto maximum =
+            static_cast<std::size_t>(
+                (std::numeric_limits<
+                    std::uint32_t>::max)());
+
+        auto read =
+            begin;
+
+        auto write =
+            begin;
+
+        try {
+            while (read < end) {
+                const auto& first =
+                    runtime_program_ops[
+                        read];
+
+                if (first.kind !=
+                    runtime_program_op_kind::store_4) {
+
+                    if (write != read) {
+                        runtime_program_ops[
+                            write] =
+                            first;
+                    }
+
+                    ++read;
+                    ++write;
+                    continue;
+                }
+
+                auto run_end =
+                    read + 1;
+
+                std::uint64_t expected_offset =
+                    static_cast<std::uint64_t>(
+                        first.target_offset) +
+                    4;
+
+                while (run_end < end) {
+                    const auto& next =
+                        runtime_program_ops[
+                            run_end];
+
+                    if (next.kind !=
+                            runtime_program_op_kind::store_4 ||
+                        static_cast<std::uint64_t>(
+                            next.target_offset) !=
+                            expected_offset) {
+
+                        break;
+                    }
+
+                    expected_offset +=
+                        4;
+
+                    ++run_end;
+                }
+
+                const auto run_count =
+                    run_end -
+                    read;
+
+                // STORE-12-01:
+                // Compact only the profiled exact maximal 4+4+4 shape.
+                // Longer/shorter runs remain byte-for-byte structurally
+                // unchanged; there is no generic block-write fusion.
+                if (run_count == 3) {
+                    if (runtime_program_constants_128.size() >
+                        maximum) {
+
+                        return fixed_direct_materialization_result::
+                            overflow;
+                    }
+
+                    const auto first_op =
+                        runtime_program_ops[
+                            read];
+
+                    const auto second_op =
+                        runtime_program_ops[
+                            read + 1];
+
+                    const auto third_op =
+                        runtime_program_ops[
+                            read + 2];
+
+                    std::byte bytes[16]{};
+
+                    std::memcpy(
+                        bytes,
+                        &first_op.payload,
+                        4);
+
+                    std::memcpy(
+                        bytes + 4,
+                        &second_op.payload,
+                        4);
+
+                    std::memcpy(
+                        bytes + 8,
+                        &third_op.payload,
+                        4);
+
+                    runtime_program_constant_128
+                        constant{};
+
+                    std::memcpy(
+                        &constant,
+                        bytes,
+                        sizeof(constant));
+
+                    const auto constant_index =
+                        static_cast<std::uint32_t>(
+                            runtime_program_constants_128.size());
+
+                    runtime_program_constants_128.push_back(
+                        constant);
+
+                    runtime_program_ops[
+                        write] = {
+                            first_op.target_offset,
+                            constant_index,
+                            runtime_program_op_kind::
+                                store_12,
+                            {},
+                        };
+
+                    if (profile != nullptr) {
+                        ++profile->
+                            program_constant_128_built;
+                    }
+
+                    read =
+                        run_end;
+
+                    ++write;
+                    continue;
+                }
+
+                while (read <
+                       run_end) {
+
+                    if (write != read) {
+                        runtime_program_ops[
+                            write] =
+                            runtime_program_ops[
+                                read];
+                    }
+
+                    ++read;
+                    ++write;
+                }
+            }
+
+            runtime_program_ops.resize(
+                write);
+        }
+        catch (...) {
+            return fixed_direct_materialization_result::
+                failed;
+        }
+
+        return fixed_direct_materialization_result::
+            success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
     prepare_runtime_program(
         type_handle handle,
         runtime_type_plan& output) noexcept {
@@ -4164,6 +4353,18 @@ private:
             rollback();
             return fixed_direct_materialization_result::
                 failed;
+        }
+
+        const auto compacted =
+            compact_runtime_store_12(
+                old_op_count);
+
+        if (compacted !=
+            fixed_direct_materialization_result::
+                success) {
+
+            rollback();
+            return compacted;
         }
 
         const auto count =
@@ -4918,6 +5119,30 @@ private:
                         planned_materialize_visits;
                     ++profile->
                         program_physical_value_visits;
+                }
+
+                break;
+
+            case runtime_program_op_kind::store_12:
+                if (op.payload >=
+                    runtime_program_constants_128.size()) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                std::memcpy(
+                    target,
+                    &runtime_program_constants_128[
+                        op.payload],
+                    12);
+
+                if (profile != nullptr) {
+                    profile->planned_member_visits += 3;
+                    profile->
+                        planned_materialize_visits += 3;
+                    profile->
+                        program_physical_value_visits += 3;
                 }
 
                 break;

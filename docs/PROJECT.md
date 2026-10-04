@@ -212,12 +212,22 @@ bytes are embedded directly in the 32-bit instruction payload; 8-byte and
 16-byte values use compact global constant sidecars. Terminal child inlining
 copies only the 12-byte operation and reuses the same constant entry.
 
+`STORE-12-01` adds one deliberately narrow physical compaction rule. After one
+TYPE program has been fully emitted but before its `program_count` is
+published, an exact maximal contiguous run of three `STORE_4` operations is
+replaced in place by one `STORE_12`. Its 12 target-native bytes reuse the
+existing 16-byte constant sidecar with the unused high four bytes zeroed. Only
+the current TYPE tail is compacted, so already-finalized child program slices
+are never moved. Runs of any other length or shape remain unchanged; there is
+no generic variable-size block-write opcode.
+
 Therefore the normal scalar path is:
 
 ```text
 G type + construction_value
     -> planning: validate/convert once
-    -> STORE_1 / STORE_2 / STORE_4 / STORE_8 / STORE_16
+    -> STORE_1 / STORE_2 / STORE_4 / STORE_8 / STORE_12 / STORE_16
+    -> exact 4+4+4 tail compaction where applicable
     -> execution: memcpy target-native bytes
 ```
 
