@@ -134,10 +134,13 @@ plans from Graph metadata.
 The structural policy remains:
 
 ```text
-terminal direct child
+physically empty child program
+    -> emit nothing
+
+terminal non-empty direct child
     -> inline leaf operations once into the parent TYPE
 
-non-terminal direct child
+non-terminal non-empty direct child
     -> one shared CALL
 
 bounded array
@@ -178,6 +181,13 @@ not on the shared-CALL hot path.
 packs its two execution flags into the remaining high bits of the 32-bit
 payload, so CALL needs no sidecar. Only the rare generic-reference resolver
 uses a cold 16-byte sidecar containing owning-record base/type/local metadata.
+
+A ready child whose compiled physical `program_count` is zero emits no CALL at
+all. This decision is made from the physical program, not from semantic type
+shape: a type may have bases or nested record members yet still compile to no
+Runtime writes after zero/no-op elimination. Child plans are prepared before
+their parents, so physically empty subtrees collapse bottom-up without
+transitive program fusion or duplicated instructions.
 
 This compact program is construction-only, is never persisted, and does not
 change G or Runtime ABI. Leaf fusion still stops after one terminal structural

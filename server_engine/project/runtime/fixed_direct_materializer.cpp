@@ -3071,6 +3071,31 @@ private:
                 invalid_input;
         }
 
+        const auto begin =
+            static_cast<std::size_t>(
+                child->program_begin);
+
+        if (begin >
+                runtime_program_ops.size() ||
+            child->program_count >
+                runtime_program_ops.size() -
+                    begin) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        // NOOP-CALL-ELISION-01:
+        // The compiled physical child program is authoritative for execution.
+        // A ready child with zero physical operations cannot write Runtime
+        // bytes, consume link_object, or require a structural CALL. Elide it
+        // before semantic terminal/non-terminal classification. Because child
+        // plans are prepared before parents, empty subtrees collapse bottom-up.
+        if (child->program_count == 0) {
+            return fixed_direct_materialization_result::
+                success;
+        }
+
         bool terminal = false;
 
         const auto classified =
