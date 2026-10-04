@@ -3,6 +3,8 @@
 #include "fixed_direct_materializer.hpp"
 #include "runtime_layout.hpp"
 
+#include "../construction/execution_lanes.hpp"
+
 #include "../../diagnostics/diagnostic_builder.hpp"
 #include "../../diagnostics/diagnostic_descriptor.hpp"
 #include "../../fixed_shared_memory.hpp"
@@ -12,6 +14,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <span>
 #include <string_view>
 #include <utility>
 
@@ -127,6 +130,159 @@ shared_memory_failure_detail(
     }
 
     return "Project SHM creation failed";
+}
+
+struct runtime_pretouch_job final {
+    std::span<std::byte> bytes;
+    std::size_t page_size = 0;
+    std::size_t page_count = 0;
+    std::size_t active_lanes = 1;
+};
+
+void runtime_pretouch_lane(
+    void* value,
+    std::size_t lane) noexcept {
+
+    auto& job =
+        *static_cast<runtime_pretouch_job*>(
+            value);
+
+    if (lane >=
+            job.active_lanes ||
+        job.active_lanes == 0 ||
+        job.page_size == 0) {
+
+        return;
+    }
+
+    const auto base_pages =
+        job.page_count /
+        job.active_lanes;
+
+    const auto remainder =
+        job.page_count %
+        job.active_lanes;
+
+    const auto preceding_extra =
+        lane < remainder
+        ? lane
+        : remainder;
+
+    const auto begin =
+        lane *
+            base_pages +
+        preceding_extra;
+
+    const auto count =
+        base_pages +
+        static_cast<std::size_t>(
+            lane < remainder);
+
+    const auto end =
+        begin + count;
+
+    for (auto page = begin;
+         page < end;
+         ++page) {
+
+        job.bytes[
+            page *
+            job.page_size] =
+                std::byte{0};
+    }
+}
+
+void runtime_pretouch_sequential(
+    std::span<std::byte> bytes,
+    std::size_t logical_size,
+    std::size_t page_size) noexcept {
+
+    for (std::size_t offset = 0;
+         offset < logical_size;
+         offset += page_size) {
+
+        bytes[offset] =
+            std::byte{0};
+    }
+}
+
+[[nodiscard]] std::size_t
+runtime_pretouch(
+    std::span<std::byte> bytes,
+    std::size_t logical_size,
+    std::size_t page_size) noexcept {
+
+    if (logical_size == 0) {
+        return 0;
+    }
+
+    const auto whole_pages =
+        logical_size /
+        page_size;
+
+    const auto page_count =
+        whole_pages +
+        static_cast<std::size_t>(
+            logical_size %
+                page_size !=
+            0);
+
+    const auto lane_capacity =
+        execution_lane_capacity();
+
+    const auto active_lanes =
+        page_count <
+            lane_capacity
+        ? page_count
+        : lane_capacity;
+
+    if (active_lanes <= 1) {
+        runtime_pretouch_sequential(
+            bytes,
+            logical_size,
+            page_size);
+
+        return 1;
+    }
+
+    execution_lanes lanes;
+
+    const auto started =
+        lanes.start(
+            active_lanes);
+
+    if (!succeeded(started)) {
+        runtime_pretouch_sequential(
+            bytes,
+            logical_size,
+            page_size);
+
+        return 1;
+    }
+
+    runtime_pretouch_job job{
+        bytes,
+        page_size,
+        page_count,
+        active_lanes,
+    };
+
+    const auto dispatched =
+        lanes.run(
+            active_lanes,
+            runtime_pretouch_lane,
+            &job);
+
+    if (!succeeded(dispatched)) {
+        runtime_pretouch_sequential(
+            bytes,
+            logical_size,
+            page_size);
+
+        return 1;
+    }
+
+    return active_lanes;
 }
 
 [[nodiscard]] bool runtime_mapping_size(
@@ -399,9 +555,13 @@ server_status create_resident_project(
     }
 
     // A brand-new mapping is logically zero, but leaving every page untouched
-    // pushes first-write faults into the sparse construction traversal. Prepare
-    // physical Runtime pages sequentially with one zero write per OS page.
-    // This establishes pages without streaming across every Runtime byte.
+    // pushes first-write faults into the sparse construction traversal.
+    //
+    // PARALLEL-PRETOUCH-01:
+    // Establish pages through the existing fixed execution-lane abstraction.
+    // Lanes own disjoint contiguous page ranges; there is no atomic page
+    // index, work queue, mutex, or per-page task object. One barrier completes
+    // before materialization starts.
     const auto page_size =
         fixed_shared_memory::
             size_alignment();
@@ -429,13 +589,11 @@ server_status create_resident_project(
         static_cast<std::size_t>(
             layout.size());
 
-    for (std::size_t offset = 0;
-         offset < logical_size;
-         offset += page_size) {
-
-        shared_bytes[offset] =
-            std::byte{0};
-    }
+    const auto pretouch_lanes =
+        runtime_pretouch(
+            shared_bytes,
+            logical_size,
+            page_size);
 
     const auto pretouch_finished =
         clock_type::now();
@@ -445,6 +603,9 @@ server_status create_resident_project(
             elapsed_ns(
                 pretouch_started,
                 pretouch_finished);
+
+        telemetry->shm_pretouch_lanes =
+            pretouch_lanes;
     }
 
     const auto materialization_started =

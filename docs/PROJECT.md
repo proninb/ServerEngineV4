@@ -239,7 +239,11 @@ FIXED_DIRECT storage preparation is explicit:
 ```text
 fixed_shared_memory::create()
     -> brand-new logically zero mapping
-    -> sequential pre-touch: one zero write per logical Runtime page
+    -> static parallel pre-touch: one zero write per logical Runtime page
+       execution_lanes
+       contiguous page range per lane
+       no mutex / atomic work index / task queue
+       one completion barrier
     -> materialize_fixed_direct_zeroed()
        no full Runtime memset
 
@@ -251,10 +255,14 @@ arbitrary/reused test buffer
 The zeroed materializer contract is about storage state, not OS provenance.
 Resident Project publication owns the `create()` + pre-touch sequence because
 it knows both the mapping provenance and OS page size. `open()` does not imply
-fresh storage. The pre-touch deliberately establishes pages sequentially before
-the sparse construction traversal without streaming writes across every Runtime
-byte. `project_runtime_telemetry::shm_pretouch_ns` measures this cost separately
-from `materializer.zero_ns`.
+fresh storage. Pre-touch partitions logical pages into fixed contiguous ranges
+over the existing cross-platform `execution_lanes`; lane zero is the caller
+thread and workers own the remaining ranges. Parallel setup/dispatch failure
+falls back to the original sequential page walk because pre-touch is an
+optimization, not a publication precondition. The zero writes are idempotent.
+`project_runtime_telemetry::shm_pretouch_ns` measures total pre-touch cost and
+`shm_pretouch_lanes` reports the actual lane count (`1` means sequential or
+fallback), separately from `materializer.zero_ns`.
 
 ### Runtime System prefix
 
