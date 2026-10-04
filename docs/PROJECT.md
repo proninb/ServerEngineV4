@@ -214,6 +214,31 @@ non-physicalized forms such as compact array execution. The Runtime hot path
 does not repeatedly interpret `type_ref`, `construction_kind`, or intrinsic
 numeric-conversion semantics for physical scalar values.
 
+Canonical `unconnected<T>` construction is also planned physically. Runtime
+storage is guaranteed zero before the canonical barrier, so intrinsic values
+and pointers need no canonical write. Planning compiles only reference-bearing
+work into shared construction-only plans:
+
+```text
+unique type_ref
+    -> canonical_value_plan
+
+canonical_value_plan
+    REF_WRITE
+        target offset + pre-resolved native unconnected address
+    CALL
+        shared child canonical plan
+    ARRAY_CALL
+        count + stride + shared child canonical plan
+```
+
+Named and derived children share plans rather than being transitively flattened,
+and bounded arrays remain compact loops. Canonical execution dispatches native
+reference width once and performs no Graph or `runtime_layout` lookup. Semantic
+type/member traversal and unconnected-address resolution happen only during
+planning. Canonical plans are discarded with the materializer and are neither G
+nor persisted Runtime state.
+
 Global construction barriers remain explicit:
 
 ```text

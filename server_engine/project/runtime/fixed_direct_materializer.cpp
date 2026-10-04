@@ -366,46 +366,30 @@ public:
         const auto canonical_started =
             clock_type::now();
 
-        for (std::size_t index = 0;
-             index <
-                 layout.unconnected_count();
-             ++index) {
-
-            const auto type =
-                layout.unconnected_type(
-                    index);
-
-            std::uint64_t offset = 0;
-
-            if (!type ||
-                !layout.unconnected_offset(
-                    type,
-                    offset)) {
-
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
-
-            auto* target =
-                address(
-                    offset);
-
-            if (target == nullptr) {
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
-
-            const auto materialized =
-                canonical_value(
-                    type,
-                    target);
-
-            if (materialized !=
+        fixed_direct_materialization_result
+            canonical_materialized =
                 fixed_direct_materialization_result::
-                    success) {
+                    incompatible_abi;
 
-                return materialized;
-            }
+        // CANONICAL-PROGRAM-01:
+        // Storage is already zero. Execute only the preplanned native
+        // reference writes and structural CALL/ARRAY_CALL operations.
+        if (properties.reference_size == 4) {
+            canonical_materialized =
+                materialize_canonical_word<
+                    std::uint32_t>();
+        }
+        else if (properties.reference_size == 8) {
+            canonical_materialized =
+                materialize_canonical_word<
+                    std::uint64_t>();
+        }
+
+        if (canonical_materialized !=
+            fixed_direct_materialization_result::
+                success) {
+
+            return canonical_materialized;
         }
 
         const auto canonical_finished =
@@ -716,43 +700,325 @@ private:
         return fixed_direct_materialization_result::success;
     }
 
-    [[nodiscard]] fixed_direct_materialization_result
-    canonical_value(
+    enum class canonical_plan_state : std::uint8_t {
+        empty = 0,
+        preparing,
+        ready,
+    };
+
+    enum class canonical_program_op_kind : std::uint8_t {
+        reference = 0,
+        call,
+        array_call,
+    };
+
+    struct canonical_value_plan final {
+        std::uint32_t begin = 0;
+        std::uint32_t count = 0;
+        canonical_plan_state state =
+            canonical_plan_state::empty;
+        std::uint8_t reserved[3]{};
+    };
+
+    static_assert(sizeof(canonical_value_plan) == 12);
+
+    struct canonical_program_op final {
+        runtime_offset target_offset = 0;
+        std::uint32_t payload = 0;
+        canonical_program_op_kind kind =
+            canonical_program_op_kind::reference;
+        std::uint8_t reserved[3]{};
+    };
+
+    static_assert(sizeof(canonical_program_op) == 16);
+
+    struct canonical_array_call final {
+        std::uint32_t child_plan = 0;
+        std::uint32_t reserved = 0;
+        std::uint64_t count = 0;
+        runtime_offset stride = 0;
+    };
+
+    static_assert(sizeof(canonical_array_call) == 24);
+
+    struct canonical_root final {
+        runtime_offset offset = 0;
+        std::uint32_t plan = 0;
+        std::uint32_t reserved = 0;
+    };
+
+    static_assert(sizeof(canonical_root) == 16);
+
+    static constexpr std::uint32_t
+        invalid_canonical_plan =
+            (std::numeric_limits<
+                std::uint32_t>::max)();
+
+    [[nodiscard]] std::uint32_t*
+    canonical_plan_slot(
+        type_ref type) noexcept {
+
+        if (!type) {
+            return nullptr;
+        }
+
+        switch (type.kind()) {
+        case type_ref_kind::intrinsic:
+            if (type.payload() >=
+                canonical_intrinsic_plan_indices.size()) {
+
+                return nullptr;
+            }
+
+            return &canonical_intrinsic_plan_indices[
+                type.payload()];
+
+        case type_ref_kind::named: {
+            type_handle handle;
+
+            if (!project.named(
+                    type,
+                    handle) ||
+                !handle ||
+                handle.value() >
+                    canonical_named_plan_indices.size()) {
+
+                return nullptr;
+            }
+
+            return &canonical_named_plan_indices[
+                handle.value() - 1];
+        }
+
+        case type_ref_kind::derived:
+            if (type.payload() == 0 ||
+                type.payload() >
+                    canonical_derived_plan_indices.size()) {
+
+                return nullptr;
+            }
+
+            return &canonical_derived_plan_indices[
+                type.payload() - 1];
+
+        case type_ref_kind::invalid:
+            break;
+        }
+
+        return nullptr;
+    }
+
+    [[nodiscard]] bool
+    canonical_ready_plan(
         type_ref type,
-        std::byte* target) noexcept {
+        std::uint32_t& output) noexcept {
 
-        runtime_value_layout value;
+        output =
+            invalid_canonical_plan;
 
-        if (!layout.value(
+        auto* slot =
+            canonical_plan_slot(
+                type);
+
+        if (slot == nullptr ||
+            *slot ==
+                invalid_canonical_plan ||
+            *slot >=
+                canonical_value_plans.size() ||
+            canonical_value_plans[
+                *slot].state !=
+                canonical_plan_state::ready) {
+
+            return false;
+        }
+
+        output =
+            *slot;
+
+        return true;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    canonical_record_entry(
+        type_ref type,
+        type_handle& handle,
+        type_entry& record) noexcept {
+
+        handle = {};
+        record = {};
+
+        if (type.kind() !=
+                type_ref_kind::named ||
+            !project.named(
                 type,
-                value)) {
+                handle) ||
+            !handle ||
+            !project.type(
+                handle,
+                record) ||
+            !record.defined() ||
+            record.kind !=
+                graph_type_kind::record) {
 
             return fixed_direct_materialization_result::
                 invalid_input;
         }
 
+        if (record.record_kind ==
+            graph_record_kind::union_type) {
+
+            return fixed_direct_materialization_result::
+                unsupported_type;
+        }
+
+        if (record.record_kind !=
+                graph_record_kind::struct_type &&
+            record.record_kind !=
+                graph_record_kind::class_type) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        return fixed_direct_materialization_result::
+            success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    prepare_canonical_value_plan(
+        type_ref type,
+        std::uint32_t& output) noexcept;
+
+    [[nodiscard]] fixed_direct_materialization_result
+    prepare_canonical_dependencies(
+        type_ref type) noexcept {
+
         switch (type.kind()) {
         case type_ref_kind::intrinsic:
-            std::fill_n(
-                target,
-                static_cast<std::size_t>(
-                    value.size),
-                std::byte{0});
-
             return fixed_direct_materialization_result::
                 success;
 
         case type_ref_kind::named: {
             type_handle handle;
+            type_entry record;
 
-            return project.named(
-                       type,
-                       handle)
-                ? canonical_record(
+            const auto resolved =
+                canonical_record_entry(
+                    type,
                     handle,
-                    target)
-                : fixed_direct_materialization_result::
-                    invalid_input;
+                    record);
+
+            if (resolved !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return resolved;
+            }
+
+            for (std::uint32_t local = 0;
+                 local <
+                     record.bases.count;
+                 ++local) {
+
+                const auto global =
+                    static_cast<std::size_t>(
+                        record.bases.begin) +
+                    local;
+
+                base_record base;
+
+                if (!project.base_at(
+                        global,
+                        base)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                if (base.virtual_base()) {
+                    return fixed_direct_materialization_result::
+                        unsupported_type;
+                }
+
+                const auto child_handle =
+                    project.find_type(
+                        base.type);
+
+                if (!child_handle) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                const auto child_type =
+                    project.named(
+                        child_handle);
+
+                if (!child_type) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                std::uint32_t ignored = 0;
+
+                const auto prepared =
+                    prepare_canonical_value_plan(
+                        child_type,
+                        ignored);
+
+                if (prepared !=
+                    fixed_direct_materialization_result::
+                        success) {
+
+                    return prepared;
+                }
+            }
+
+            for (std::uint32_t local = 0;
+                 local <
+                     record.members.count;
+                 ++local) {
+
+                const auto global =
+                    static_cast<std::size_t>(
+                        record.members.begin) +
+                    local;
+
+                member_record member;
+
+                if (!project.member_at(
+                        global,
+                        member)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                type_ref referent;
+
+                if (reference_referent(
+                        member.type,
+                        referent)) {
+
+                    continue;
+                }
+
+                std::uint32_t ignored = 0;
+
+                const auto prepared =
+                    prepare_canonical_value_plan(
+                        member.type,
+                        ignored);
+
+                if (prepared !=
+                    fixed_direct_materialization_result::
+                        success) {
+
+                    return prepared;
+                }
+            }
+
+            return fixed_direct_materialization_result::
+                success;
         }
 
         case type_ref_kind::derived: {
@@ -768,46 +1034,19 @@ private:
 
             switch (derived.kind) {
             case derived_type_kind::const_qualified:
-            case derived_type_kind::volatile_qualified:
-                return canonical_value(
+            case derived_type_kind::volatile_qualified: {
+                std::uint32_t ignored = 0;
+
+                return prepare_canonical_value_plan(
                     derived.child,
-                    target);
+                    ignored);
+            }
 
             case derived_type_kind::pointer:
-                std::fill_n(
-                    target,
-                    static_cast<std::size_t>(
-                        value.size),
-                    std::byte{0});
-
+            case derived_type_kind::lvalue_reference:
+            case derived_type_kind::rvalue_reference:
                 return fixed_direct_materialization_result::
                     success;
-
-            case derived_type_kind::lvalue_reference:
-            case derived_type_kind::rvalue_reference: {
-                std::uint64_t offset = 0;
-
-                if (!layout.unconnected_offset(
-                        derived.child,
-                        offset)) {
-
-                    return fixed_direct_materialization_result::
-                        invalid_input;
-                }
-
-                const auto* value_target =
-                    address(
-                        offset);
-
-                if (value_target == nullptr) {
-                    return fixed_direct_materialization_result::
-                        invalid_input;
-                }
-
-                return write_address(
-                    target,
-                    target_address(value_target));
-            }
 
             case derived_type_kind::bounded_array: {
                 if (derived.payload == 0) {
@@ -815,39 +1054,11 @@ private:
                         invalid_input;
                 }
 
-                runtime_value_layout child;
+                std::uint32_t ignored = 0;
 
-                if (!layout.value(
-                        derived.child,
-                        child)) {
-
-                    return fixed_direct_materialization_result::
-                        invalid_input;
-                }
-
-                for (std::uint64_t index = 0;
-                     index <
-                         derived.payload;
-                     ++index) {
-
-                    const auto materialized =
-                        canonical_value(
-                            derived.child,
-                            target +
-                                static_cast<std::size_t>(
-                                    index *
-                                    child.size));
-
-                    if (materialized !=
-                        fixed_direct_materialization_result::
-                            success) {
-
-                        return materialized;
-                    }
-                }
-
-                return fixed_direct_materialization_result::
-                    success;
+                return prepare_canonical_value_plan(
+                    derived.child,
+                    ignored);
             }
 
             case derived_type_kind::unbounded_array:
@@ -867,59 +1078,719 @@ private:
     }
 
     [[nodiscard]] fixed_direct_materialization_result
-    canonical_bases(
-        const type_entry& type,
-        std::byte* base) noexcept {
+    append_canonical_reference(
+        runtime_offset target_offset,
+        type_ref referent) noexcept {
 
-        for (std::uint32_t local = 0;
-             local <
-                 type.bases.count;
-             ++local) {
+        runtime_offset source_offset = 0;
 
-            const auto global =
-                static_cast<std::size_t>(
-                    type.bases.begin) +
-                local;
+        if (!layout.unconnected_offset(
+                referent,
+                source_offset)) {
 
-            base_record base_record_value;
-            record_offset offset = 0;
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
 
-            if (!project.base_at(
-                    global,
-                    base_record_value)) {
+        const auto* source =
+            address(
+                source_offset);
+
+        if (source == nullptr) {
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        const auto native_source =
+            target_address(
+                source);
+
+        if (!runtime_address(
+                native_source)) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        if (native_source >
+            target_word_mask()) {
+
+            return fixed_direct_materialization_result::
+                overflow;
+        }
+
+        const auto maximum =
+            static_cast<std::size_t>(
+                (std::numeric_limits<
+                    std::uint32_t>::max)());
+
+        if (canonical_reference_addresses.size() >
+                maximum ||
+            canonical_program_ops.size() >
+                maximum) {
+
+            return fixed_direct_materialization_result::
+                overflow;
+        }
+
+        try {
+            const auto source_index =
+                static_cast<std::uint32_t>(
+                    canonical_reference_addresses.size());
+
+            canonical_reference_addresses.push_back(
+                native_source);
+
+            canonical_program_ops.push_back({
+                target_offset,
+                source_index,
+                canonical_program_op_kind::reference,
+                {},
+            });
+        }
+        catch (...) {
+            return fixed_direct_materialization_result::
+                failed;
+        }
+
+        return fixed_direct_materialization_result::
+            success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    append_canonical_call(
+        runtime_offset target_offset,
+        std::uint32_t child_plan) noexcept {
+
+        if (child_plan >=
+                canonical_value_plans.size() ||
+            canonical_value_plans[
+                child_plan].state !=
+                canonical_plan_state::ready) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        if (canonical_value_plans[
+                child_plan].count == 0) {
+
+            return fixed_direct_materialization_result::
+                success;
+        }
+
+        try {
+            canonical_program_ops.push_back({
+                target_offset,
+                child_plan,
+                canonical_program_op_kind::call,
+                {},
+            });
+        }
+        catch (...) {
+            return fixed_direct_materialization_result::
+                failed;
+        }
+
+        return fixed_direct_materialization_result::
+            success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    append_canonical_array(
+        runtime_offset target_offset,
+        std::uint32_t child_plan,
+        std::uint64_t count,
+        runtime_offset stride) noexcept {
+
+        if (count == 0 ||
+            stride == 0 ||
+            child_plan >=
+                canonical_value_plans.size() ||
+            canonical_value_plans[
+                child_plan].state !=
+                canonical_plan_state::ready) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        if (canonical_value_plans[
+                child_plan].count == 0) {
+
+            return fixed_direct_materialization_result::
+                success;
+        }
+
+        const auto maximum =
+            static_cast<std::size_t>(
+                (std::numeric_limits<
+                    std::uint32_t>::max)());
+
+        if (canonical_array_calls.size() >
+            maximum) {
+
+            return fixed_direct_materialization_result::
+                overflow;
+        }
+
+        try {
+            const auto array_index =
+                static_cast<std::uint32_t>(
+                    canonical_array_calls.size());
+
+            canonical_array_calls.push_back({
+                child_plan,
+                0,
+                count,
+                stride,
+            });
+
+            canonical_program_ops.push_back({
+                target_offset,
+                array_index,
+                canonical_program_op_kind::array_call,
+                {},
+            });
+        }
+        catch (...) {
+            return fixed_direct_materialization_result::
+                failed;
+        }
+
+        return fixed_direct_materialization_result::
+            success;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    append_canonical_ops(
+        type_ref type) noexcept {
+
+        switch (type.kind()) {
+        case type_ref_kind::intrinsic:
+            // Runtime storage is already zero before canonical execution.
+            return fixed_direct_materialization_result::
+                success;
+
+        case type_ref_kind::named: {
+            type_handle handle;
+            type_entry record;
+
+            const auto resolved =
+                canonical_record_entry(
+                    type,
+                    handle,
+                    record);
+
+            if (resolved !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return resolved;
+            }
+
+            for (std::uint32_t local = 0;
+                 local <
+                     record.bases.count;
+                 ++local) {
+
+                const auto global =
+                    static_cast<std::size_t>(
+                        record.bases.begin) +
+                    local;
+
+                base_record base;
+                record_offset offset = 0;
+
+                if (!project.base_at(
+                        global,
+                        base)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                if (base.virtual_base()) {
+                    return fixed_direct_materialization_result::
+                        unsupported_type;
+                }
+
+                if (!layout.base_offset(
+                        global,
+                        offset)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                const auto child_handle =
+                    project.find_type(
+                        base.type);
+
+                if (!child_handle) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                const auto child_type =
+                    project.named(
+                        child_handle);
+
+                std::uint32_t child_plan = 0;
+
+                if (!child_type ||
+                    !canonical_ready_plan(
+                        child_type,
+                        child_plan)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                const auto appended =
+                    append_canonical_call(
+                        offset,
+                        child_plan);
+
+                if (appended !=
+                    fixed_direct_materialization_result::
+                        success) {
+
+                    return appended;
+                }
+            }
+
+            for (std::uint32_t local = 0;
+                 local <
+                     record.members.count;
+                 ++local) {
+
+                const auto global =
+                    static_cast<std::size_t>(
+                        record.members.begin) +
+                    local;
+
+                member_record member;
+                record_offset offset = 0;
+
+                if (!project.member_at(
+                        global,
+                        member) ||
+                    !layout.member_offset(
+                        global,
+                        offset)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                type_ref referent;
+
+                if (reference_referent(
+                        member.type,
+                        referent)) {
+
+                    const auto appended =
+                        append_canonical_reference(
+                            offset,
+                            referent);
+
+                    if (appended !=
+                        fixed_direct_materialization_result::
+                            success) {
+
+                        return appended;
+                    }
+
+                    continue;
+                }
+
+                std::uint32_t child_plan = 0;
+
+                if (!canonical_ready_plan(
+                        member.type,
+                        child_plan)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                const auto appended =
+                    append_canonical_call(
+                        offset,
+                        child_plan);
+
+                if (appended !=
+                    fixed_direct_materialization_result::
+                        success) {
+
+                    return appended;
+                }
+            }
+
+            return fixed_direct_materialization_result::
+                success;
+        }
+
+        case type_ref_kind::derived: {
+            derived_type_record derived;
+
+            if (!project.derived(
+                    type,
+                    derived)) {
 
                 return fixed_direct_materialization_result::
                     invalid_input;
             }
 
-            if (base_record_value.virtual_base()) {
+            switch (derived.kind) {
+            case derived_type_kind::const_qualified:
+            case derived_type_kind::volatile_qualified: {
+                std::uint32_t child_plan = 0;
+
+                if (!canonical_ready_plan(
+                        derived.child,
+                        child_plan)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                return append_canonical_call(
+                    0,
+                    child_plan);
+            }
+
+            case derived_type_kind::pointer:
+                return fixed_direct_materialization_result::
+                    success;
+
+            case derived_type_kind::lvalue_reference:
+            case derived_type_kind::rvalue_reference:
+                return append_canonical_reference(
+                    0,
+                    derived.child);
+
+            case derived_type_kind::bounded_array: {
+                if (derived.payload == 0) {
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                std::uint32_t child_plan = 0;
+
+                if (!canonical_ready_plan(
+                        derived.child,
+                        child_plan)) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                if (canonical_value_plans[
+                        child_plan].count == 0) {
+
+                    return fixed_direct_materialization_result::
+                        success;
+                }
+
+                runtime_value_layout child;
+
+                if (!layout.value(
+                        derived.child,
+                        child) ||
+                    child.size == 0) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                return derived.payload == 1
+                    ? append_canonical_call(
+                        0,
+                        child_plan)
+                    : append_canonical_array(
+                        0,
+                        child_plan,
+                        derived.payload,
+                        child.size);
+            }
+
+            case derived_type_kind::unbounded_array:
                 return fixed_direct_materialization_result::
                     unsupported_type;
             }
 
-            if (!layout.base_offset(
-                    global,
-                    offset)) {
+            break;
+        }
+
+        case type_ref_kind::invalid:
+            break;
+        }
+
+        return fixed_direct_materialization_result::
+            invalid_input;
+    }
+
+    [[nodiscard]] fixed_direct_materialization_result
+    prepare_canonical_program() noexcept {
+
+        try {
+            canonical_intrinsic_plan_indices.assign(
+                static_cast<std::size_t>(
+                    intrinsic_type::nullptr_type) +
+                    1,
+                invalid_canonical_plan);
+
+            canonical_named_plan_indices.assign(
+                project.type_slot_count(),
+                invalid_canonical_plan);
+
+            canonical_derived_plan_indices.assign(
+                project.derived_type_count(),
+                invalid_canonical_plan);
+
+            canonical_roots.reserve(
+                layout.unconnected_count());
+        }
+        catch (...) {
+            return fixed_direct_materialization_result::
+                failed;
+        }
+
+        for (std::size_t index = 0;
+             index <
+                 layout.unconnected_count();
+             ++index) {
+
+            const auto type =
+                layout.unconnected_type(
+                    index);
+
+            runtime_offset offset = 0;
+
+            if (!type ||
+                !layout.unconnected_offset(
+                    type,
+                    offset) ||
+                address(
+                    offset) == nullptr) {
 
                 return fixed_direct_materialization_result::
                     invalid_input;
             }
 
-            const auto base_handle =
-                project.find_type(
-                    base_record_value.type);
+            std::uint32_t plan_index = 0;
 
-            if (!base_handle) {
+            const auto prepared =
+                prepare_canonical_value_plan(
+                    type,
+                    plan_index);
+
+            if (prepared !=
+                fixed_direct_materialization_result::
+                    success) {
+
+                return prepared;
+            }
+
+            if (plan_index >=
+                    canonical_value_plans.size() ||
+                canonical_value_plans[
+                    plan_index].state !=
+                    canonical_plan_state::ready) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            if (canonical_value_plans[
+                    plan_index].count == 0) {
+
+                continue;
+            }
+
+            try {
+                canonical_roots.push_back({
+                    offset,
+                    plan_index,
+                    0,
+                });
+            }
+            catch (...) {
+                return fixed_direct_materialization_result::
+                    failed;
+            }
+        }
+
+        return fixed_direct_materialization_result::
+            success;
+    }
+
+    template <typename TargetWord>
+    [[nodiscard]] fixed_direct_materialization_result
+    execute_canonical_plan_word(
+        std::uint32_t plan_index,
+        std::byte* base) noexcept {
+
+        static_assert(
+            sizeof(TargetWord) == 4 ||
+            sizeof(TargetWord) == 8);
+
+        if (base == nullptr ||
+            plan_index >=
+                canonical_value_plans.size()) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        const auto& plan =
+            canonical_value_plans[
+                plan_index];
+
+        const auto begin =
+            static_cast<std::size_t>(
+                plan.begin);
+
+        if (plan.state !=
+                canonical_plan_state::ready ||
+            begin >
+                canonical_program_ops.size() ||
+            plan.count >
+                canonical_program_ops.size() -
+                    begin) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        for (std::uint32_t local = 0;
+             local <
+                 plan.count;
+             ++local) {
+
+            const auto& op =
+                canonical_program_ops[
+                    begin +
+                    local];
+
+            auto* target =
+                base +
+                static_cast<std::size_t>(
+                    op.target_offset);
+
+            switch (op.kind) {
+            case canonical_program_op_kind::reference: {
+                if (op.payload >=
+                    canonical_reference_addresses.size()) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                const auto narrowed =
+                    static_cast<TargetWord>(
+                        canonical_reference_addresses[
+                            op.payload]);
+
+                std::memcpy(
+                    target,
+                    &narrowed,
+                    sizeof(narrowed));
+
+                break;
+            }
+
+            case canonical_program_op_kind::call: {
+                const auto called =
+                    execute_canonical_plan_word<
+                        TargetWord>(
+                        op.payload,
+                        target);
+
+                if (called !=
+                    fixed_direct_materialization_result::
+                        success) {
+
+                    return called;
+                }
+
+                break;
+            }
+
+            case canonical_program_op_kind::array_call: {
+                if (op.payload >=
+                    canonical_array_calls.size()) {
+
+                    return fixed_direct_materialization_result::
+                        invalid_input;
+                }
+
+                const auto& array =
+                    canonical_array_calls[
+                        op.payload];
+
+                auto* element =
+                    target;
+
+                for (std::uint64_t index = 0;
+                     index <
+                         array.count;
+                     ++index) {
+
+                    const auto called =
+                        execute_canonical_plan_word<
+                            TargetWord>(
+                            array.child_plan,
+                            element);
+
+                    if (called !=
+                        fixed_direct_materialization_result::
+                            success) {
+
+                        return called;
+                    }
+
+                    element +=
+                        static_cast<std::size_t>(
+                            array.stride);
+                }
+
+                break;
+            }
+            }
+        }
+
+        return fixed_direct_materialization_result::
+            success;
+    }
+
+    template <typename TargetWord>
+    [[nodiscard]] fixed_direct_materialization_result
+    materialize_canonical_word() noexcept {
+
+        static_assert(
+            sizeof(TargetWord) == 4 ||
+            sizeof(TargetWord) == 8);
+
+        for (const auto& root :
+             canonical_roots) {
+
+            auto* target =
+                address(
+                    root.offset);
+
+            if (target == nullptr) {
                 return fixed_direct_materialization_result::
                     invalid_input;
             }
 
             const auto materialized =
-                canonical_record(
-                    base_handle,
-                    base +
-                        static_cast<std::size_t>(
-                            offset));
+                execute_canonical_plan_word<
+                    TargetWord>(
+                    root.plan,
+                    target);
 
             if (materialized !=
                 fixed_direct_materialization_result::
@@ -931,140 +1802,6 @@ private:
 
         return fixed_direct_materialization_result::
             success;
-    }
-
-    [[nodiscard]] fixed_direct_materialization_result
-    canonical_record(
-        type_handle handle,
-        std::byte* base) noexcept {
-
-        type_entry type;
-
-        if (!handle ||
-            !project.type(
-                handle,
-                type) ||
-            !type.defined() ||
-            type.kind !=
-                graph_type_kind::record) {
-
-            return fixed_direct_materialization_result::
-                invalid_input;
-        }
-
-        if (type.record_kind ==
-            graph_record_kind::union_type) {
-
-            return fixed_direct_materialization_result::
-                unsupported_type;
-        }
-
-        if (type.record_kind !=
-                graph_record_kind::struct_type &&
-            type.record_kind !=
-                graph_record_kind::class_type) {
-
-            return fixed_direct_materialization_result::
-                invalid_input;
-        }
-
-        if (type.bases.count != 0) {
-            const auto bases_materialized =
-                canonical_bases(
-                    type,
-                    base);
-
-            if (bases_materialized !=
-                fixed_direct_materialization_result::
-                    success) {
-
-                return bases_materialized;
-            }
-        }
-
-        for (std::uint32_t local = 0;
-             local <
-                 type.members.count;
-             ++local) {
-
-            const auto global =
-                static_cast<std::size_t>(
-                    type.members.begin) +
-                local;
-
-            member_record member;
-            record_offset offset = 0;
-
-            if (!project.member_at(
-                    global,
-                    member) ||
-                !layout.member_offset(
-                    global,
-                    offset)) {
-
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
-
-            auto* target =
-                base +
-                static_cast<std::size_t>(
-                    offset);
-
-            type_ref referent;
-
-            if (reference_referent(
-                    member.type,
-                    referent)) {
-
-                std::uint64_t sentinel = 0;
-
-                if (!layout.unconnected_offset(
-                        referent,
-                        sentinel)) {
-
-                    return fixed_direct_materialization_result::
-                        invalid_input;
-                }
-
-                const auto* value_target =
-                    address(
-                        sentinel);
-
-                if (value_target == nullptr) {
-                    return fixed_direct_materialization_result::
-                        invalid_input;
-                }
-
-                const auto written =
-                    write_address(
-                        target,
-                        target_address(value_target));
-
-                if (written !=
-                    fixed_direct_materialization_result::
-                        success) {
-
-                    return written;
-                }
-
-                continue;
-            }
-
-            const auto materialized =
-                canonical_value(
-                    member.type,
-                    target);
-
-            if (materialized !=
-                fixed_direct_materialization_result::
-                    success) {
-
-                return materialized;
-            }
-        }
-
-        return fixed_direct_materialization_result::success;
     }
 
     [[nodiscard]] fixed_direct_materialization_result
@@ -3913,8 +4650,7 @@ private:
             };
         }
 
-        return fixed_direct_materialization_result::
-            success;
+        return prepare_canonical_program();
     }
 
     [[nodiscard]] fixed_direct_materialization_result
@@ -6810,11 +7546,185 @@ private:
     std::vector<runtime_program_constant_128>
         runtime_program_constants_128;
 
+    // CANONICAL-PROGRAM-01 construction-only physical program.
+    std::vector<std::uint32_t>
+        canonical_intrinsic_plan_indices;
+
+    std::vector<std::uint32_t>
+        canonical_named_plan_indices;
+
+    std::vector<std::uint32_t>
+        canonical_derived_plan_indices;
+
+    std::vector<canonical_value_plan>
+        canonical_value_plans;
+
+    std::vector<canonical_program_op>
+        canonical_program_ops;
+
+    std::vector<std::uint64_t>
+        canonical_reference_addresses;
+
+    std::vector<canonical_array_call>
+        canonical_array_calls;
+
+    std::vector<canonical_root>
+        canonical_roots;
+
     // PASS 1 owns target validation. PASS 2 reuses the exact validated SHM
     // slot without repeating endpoint resolution. Pending-link identity lives
     // temporarily in the native reference slot itself.
     std::vector<std::byte*> link_target_slots;
 };
+
+[[nodiscard]] fixed_direct_materialization_result
+fixed_direct_materializer::prepare_canonical_value_plan(
+    type_ref type,
+    std::uint32_t& output) noexcept {
+
+        output =
+            invalid_canonical_plan;
+
+        auto* slot =
+            canonical_plan_slot(
+                type);
+
+        if (slot == nullptr) {
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        if (*slot !=
+            invalid_canonical_plan) {
+
+            if (*slot >=
+                canonical_value_plans.size()) {
+
+                return fixed_direct_materialization_result::
+                    invalid_input;
+            }
+
+            if (canonical_value_plans[
+                    *slot].state ==
+                canonical_plan_state::ready) {
+
+                output =
+                    *slot;
+
+                return fixed_direct_materialization_result::
+                    success;
+            }
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        runtime_value_layout value;
+
+        if (!layout.value(
+                type,
+                value)) {
+
+            return fixed_direct_materialization_result::
+                invalid_input;
+        }
+
+        const auto maximum =
+            static_cast<std::size_t>(
+                (std::numeric_limits<
+                    std::uint32_t>::max)());
+
+        if (canonical_value_plans.size() >
+            maximum) {
+
+            return fixed_direct_materialization_result::
+                overflow;
+        }
+
+        const auto index =
+            static_cast<std::uint32_t>(
+                canonical_value_plans.size());
+
+        try {
+            canonical_value_plans.push_back({
+                0,
+                0,
+                canonical_plan_state::preparing,
+                {},
+            });
+        }
+        catch (...) {
+            return fixed_direct_materialization_result::
+                failed;
+        }
+
+        *slot =
+            index;
+
+        const auto dependencies =
+            prepare_canonical_dependencies(
+                type);
+
+        if (dependencies !=
+            fixed_direct_materialization_result::
+                success) {
+
+            return dependencies;
+        }
+
+        const auto begin =
+            canonical_program_ops.size();
+
+        if (begin >
+            maximum) {
+
+            return fixed_direct_materialization_result::
+                overflow;
+        }
+
+        const auto appended =
+            append_canonical_ops(
+                type);
+
+        if (appended !=
+            fixed_direct_materialization_result::
+                success) {
+
+            return appended;
+        }
+
+        const auto count =
+            canonical_program_ops.size() -
+            begin;
+
+        if (count >
+            maximum) {
+
+            return fixed_direct_materialization_result::
+                overflow;
+        }
+
+        auto& plan =
+            canonical_value_plans[
+                index];
+
+        plan.begin =
+            static_cast<std::uint32_t>(
+                begin);
+
+        plan.count =
+            static_cast<std::uint32_t>(
+                count);
+
+        plan.state =
+            canonical_plan_state::ready;
+
+        output =
+            index;
+
+        return fixed_direct_materialization_result::
+            success;
+    }
 
 }
 
