@@ -161,9 +161,10 @@ payload              : 4
 opcode + reserved    : 4
 ```
 
-The three bytes after the opcode normally remain zero. A
-`DIRECT_REFERENCE_RUN_16` reuses them as a 24-bit logical reference count, so
-the run remains one 12-byte instruction and needs no sidecar.
+The three bytes after the opcode normally remain zero.
+`DIRECT_REFERENCE_RUN_16` reuses them as a 24-bit logical reference count.
+`CALL_REFERENCE_TAIL_16` uses the same three bytes for its implicit reference
+tail count. Both remain one 12-byte instruction and need no sidecar.
 
 `DIRECT_REFERENCE` stores only target/source record offsets. It does not read
 `planned_member` and does not convert a host pointer back to a Runtime offset.
@@ -193,6 +194,33 @@ preserved; every other nonzero state fails. The compaction therefore removes
 program dispatch/address-description repetition without weakening reference
 semantics.
 
+`CALL-REFERENCE-TAIL-16-01` adds a second deliberately narrow profiled rule.
+After `STORE_12` and `DIRECT_REFERENCE_RUN_16` compaction, only this exact
+two-operation physical shape is fused:
+
+```text
+CALL
+    member flag = 0
+    link-object flag = 1
+REFERENCE tail
+    target = CALL target + 48
+    source = CALL target + 56
+    stride = 16
+    count >= 1
+```
+
+The result is one `CALL_REFERENCE_TAIL_16`: `target_offset` remains the CALL
+target, `payload` remains the child type slot plus link-object flag, and the
+existing three reserved bytes store the 24-bit tail count. The +48/+56 offsets
+and +16 stride are opcode semantics, so there is no sidecar or generic shape
+descriptor.
+
+Execution preserves order exactly: execute the shared child program first, then
+apply the normal reference-slot state machine to every implicit tail slot.
+One-op child inlining may rebase this fused op 1:1; rebasing validates the final
+implicit target/source and clears the embedded link-object flag when the parent
+edge does not allow it. The shared child program itself is never flattened.
+
 Reference width is also an invariant of one materialization. Object
 construction dispatches once to a `uint32_t` or `uint64_t` compact-program
 executor. All shared `CALL` operations recurse directly within that same
@@ -213,10 +241,11 @@ Runtime writes after zero/no-op elimination. Child plans are prepared before
 their parents, so physically empty subtrees collapse bottom-up without
 transitive program fusion or duplicated instructions.
 
-A ready child whose physical program contains exactly one self-contained
-operation also does not need recursive CALL dispatch. The parent replaces its
+A ready child whose physical program contains exactly one directly rebasable
+operation also does not need an outer recursive CALL dispatch. The parent replaces its
 one CALL with that one rebased operation, so the hot instruction count remains
-exactly one instruction at that structural edge. Nested CALL remains shared.
+exactly one instruction at that structural edge. `CALL_REFERENCE_TAIL_16` keeps its embedded shared child CALL; a plain
+nested CALL remains shared.
 `GENERIC_REFERENCE` also remains shared in this rule because rebasing it would
 duplicate its cold resolver sidecar. This is not a fusion threshold and does
 not expand multi-operation child programs.
