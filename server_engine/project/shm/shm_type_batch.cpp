@@ -601,6 +601,51 @@ private:
         shm_record_offset target,
         T value) {
 
+        static_assert(std::is_trivially_copyable_v<T>);
+        static_assert(sizeof(T) <= 16);
+
+        // RUNTIME-SHM-ZERO-STORE-ELIDE-09D-08B:
+        // Ordinary scalar construction writes into fresh-zero FIXED_DIRECT
+        // object storage. Type Batch rejects unions, and link markers occupy
+        // reference slots rather than scalar-store slots. If the complete
+        // target-ABI object representation is already all zero, persisting a
+        // regular store would only replay bytes that are guaranteed to be
+        // zero. Elide it here, before the constant/store columns are built.
+        //
+        // Constructor post_stores intentionally do NOT use this rule: they
+        // execute after child/repeat construction and may be required to
+        // overwrite an earlier non-zero value with zero.
+        std::array<std::byte, 16> bytes{};
+
+        std::memcpy(
+            bytes.data(),
+            &value,
+            sizeof(T));
+
+        bool zero = true;
+
+        for (std::size_t index = 0;
+             index < sizeof(T);
+             ++index) {
+
+            if (bytes[index] !=
+                std::byte{0}) {
+
+                zero = false;
+                break;
+            }
+        }
+
+        if (zero) {
+            if (telemetry != nullptr) {
+                ++telemetry->
+                    zero_operations_elided;
+            }
+
+            return shm_type_batch_result::
+                success;
+        }
+
         return append_store_to(
             output.stores,
             target,

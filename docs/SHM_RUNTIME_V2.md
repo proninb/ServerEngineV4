@@ -1672,3 +1672,91 @@ slice.
 
 No compiled.bin format, PUBLISH encoding, SHM layout, Object partition,
 concurrency policy or Runtime lifecycle semantics change.
+
+## RUNTIME-SHM-ZERO-STORE-ELIDE-09D-08B
+
+09D-06 measured the Object store population on UnitProXL:
+
+```text
+total stores                         27,983,250
+zero stores                          27,448,644
+non-zero stores                         534,606
+```
+
+09D-07 then observed the target bytes immediately before every zero store:
+
+```text
+already zero                         27,448,644
+clears prior non-zero                         0
+```
+
+09D-08A independently reproduced the same execution-equivalent population from
+the immutable persisted Type program:
+
+```text
+static zero stores                   27,448,644
+proven safe                          27,448,644
+required                                      0
+unknown                                       0
+
+regular proven-safe zero stores      27,338,704
+constructor proven-safe zero stores     109,940
+```
+
+09D-08B promotes only the architecture-invariant **regular store** case to
+production.
+
+The Type Batch builder already rejects record unions. Ordinary scalar
+construction stores therefore own scalar member bytes in a fresh-zero
+FIXED_DIRECT object. Static-link target markers occupy reference slots, not
+ordinary scalar-store slots. If the complete target-ABI object representation
+of a regular scalar value is all zero, replaying that store cannot change the
+fresh object state.
+
+The builder now applies:
+
+```text
+append_store(target, value)
+
+    target-ABI bytes(value) all zero
+        -> do not append constant
+        -> do not append store_operation
+
+    otherwise
+        -> persist exactly as before
+```
+
+The check is PUBLISH-time only. No branch, zero test, lookup, side table or
+additional metadata is added to the Runtime executor.
+
+This also removes the corresponding unused constant record because elision
+occurs before `append_store_to()` creates either physical column entry.
+
+Constructor defaults deliberately remain separate and unchanged:
+
+```text
+post_stores
+```
+
+A constructor post-store executes after child/base/repeat construction and can
+legitimately clear a value written earlier. The measured 109,940 safe
+constructor-zero executions are therefore not generalized by this slice.
+
+The persisted path remains:
+
+```text
+PUBLISH / REBUILD
+    prepare INLINE-64 Type program
+        -> regular all-zero scalar stores omitted
+    -> compute exact Runtime Type tail counts
+    -> extend SAME compiled.bin
+    -> encode compact physical columns
+
+LOAD
+    mmap compiled.bin
+    -> execute persisted program directly
+```
+
+09D-08B changes neither Runtime phase order nor native reference/link behavior.
+A fresh REBUILD/PUBLISH is required before measuring LOAD because existing
+compiled.bin files still contain their previously persisted Type program.
