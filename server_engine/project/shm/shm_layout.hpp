@@ -15,6 +15,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace cw::server {
@@ -32,6 +33,26 @@ enum class shm_layout_result : std::uint8_t {
 
 using shm_offset = std::uint64_t;
 using shm_record_offset = std::uint32_t;
+
+inline constexpr std::size_t
+    shm_layout_intrinsic_slot_count =
+        static_cast<std::size_t>(
+            intrinsic_type::nullptr_type) + 1;
+
+struct shm_abi_value_record final {
+    std::uint64_t size = 0;
+    std::uint32_t alignment = 0;
+    std::uint32_t flags = 0;
+};
+
+static_assert(sizeof(shm_abi_value_record) == 16);
+
+inline constexpr std::uint32_t
+    shm_abi_value_ready_flag = 0x01u;
+
+inline constexpr std::uint32_t
+    shm_abi_value_empty_record_flag = 0x02u;
+
 
 struct shm_value_layout final {
     shm_offset size = 0;
@@ -80,11 +101,20 @@ public:
         shm_offset& output) const noexcept;
 
     [[nodiscard]] std::size_t unconnected_count() const noexcept {
-        return unconnected_types.size();
+        return persisted_view
+            ? persisted_unconnected_types.size()
+            : unconnected_types.size();
     }
 
     [[nodiscard]] type_ref unconnected_type(
         std::size_t index) const noexcept {
+
+        if (persisted_view) {
+            return index <
+                    persisted_unconnected_types.size()
+                ? persisted_unconnected_types[index]
+                : type_ref{};
+        }
 
         return index <
                 unconnected_types.size()
@@ -109,9 +139,6 @@ private:
 
     static_assert(sizeof(value_slot) == 16);
 
-    static constexpr std::size_t intrinsic_slot_count =
-        static_cast<std::size_t>(intrinsic_type::nullptr_type) + 1;
-
     void reset() noexcept;
 
     std::vector<value_slot> type_slots;
@@ -120,7 +147,7 @@ private:
     std::vector<shm_record_offset> base_offsets;
     std::vector<shm_offset> object_offsets;
 
-    std::array<shm_offset, intrinsic_slot_count>
+    std::array<shm_offset, shm_layout_intrinsic_slot_count>
         unconnected_intrinsic_offsets{};
 
     // Named type_ref payload is identity_ref.slot(), not type_handle.slot().
@@ -128,17 +155,65 @@ private:
     std::vector<shm_offset> unconnected_derived_offsets;
     std::vector<type_ref> unconnected_types;
 
+    // LOAD binds these directly to compiled.bin mmap columns. The owning
+    // vectors above are used only while PUBLISH/REBUILD derive a new layout.
+    std::span<const shm_abi_value_record> persisted_type_slots;
+    std::span<const shm_abi_value_record> persisted_derived_slots;
+    std::span<const shm_record_offset> persisted_member_offsets;
+    std::span<const shm_record_offset> persisted_base_offsets;
+    std::span<const shm_offset> persisted_object_offsets;
+    std::span<const shm_offset> persisted_unconnected_intrinsic_offsets;
+    std::span<const shm_offset> persisted_unconnected_type_offsets;
+    std::span<const shm_offset> persisted_unconnected_derived_offsets;
+    std::span<const type_ref> persisted_unconnected_types;
+
     abi_target target_value = abi_target::windows_x64;
     shm_offset size_value = 0;
     std::uint32_t alignment_value = 1;
     bool prepared_value = false;
+    bool persisted_view = false;
 
     friend class shm_layout_builder;
     friend shm_layout_result prepare_shm_layout(
         const compiled_project_view&,
         const server_abi_configuration&,
         shm_layout&) noexcept;
+    friend shm_layout_result encode_shm_layout_columns(
+        const shm_layout&,
+        const server_abi_configuration&,
+        std::span<std::byte>) noexcept;
+
+    friend shm_layout_result bind_shm_layout_columns(
+        const compiled_project_view&,
+        const server_abi_configuration&,
+        shm_layout&) noexcept;
+
+    // Transitional dead-code friendship for the superseded 08A serializer.
+    // Production LOAD/PUBLISH use the physical-column API above.
+    friend shm_layout_result encode_shm_layout_image(
+        const shm_layout&,
+        const server_abi_configuration&,
+        std::span<std::byte>) noexcept;
+
+    friend shm_layout_result load_shm_layout_image(
+        const compiled_project_view&,
+        const server_abi_configuration&,
+        std::span<const std::byte>,
+        shm_layout&) noexcept;
 };
+
+[[nodiscard]] bool shm_layout_columns_available(
+    const compiled_project_view& project) noexcept;
+
+[[nodiscard]] shm_layout_result encode_shm_layout_columns(
+    const shm_layout& layout,
+    const server_abi_configuration& abi,
+    std::span<std::byte> compiled_image) noexcept;
+
+[[nodiscard]] shm_layout_result bind_shm_layout_columns(
+    const compiled_project_view& project,
+    const server_abi_configuration& abi,
+    shm_layout& output) noexcept;
 
 [[nodiscard]] shm_layout_result prepare_shm_layout(
     const compiled_project_view& project,

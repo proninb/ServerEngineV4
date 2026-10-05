@@ -7336,6 +7336,147 @@ void test_fixed_direct_subobject_links(
         observed ==
             expected_source,
         "indexed target reference points directly at indexed source element");
+
+    // RUNTIME-V2-BENCH-07-FIX-01:
+    // The target object is an array of a named record. Runtime V2 endpoint
+    // compilation must resolve the named array element layout through
+    // compiled_project_view -> shm_layout::type(), not shm_layout::value().
+    shm_layout v2_layout;
+    shm_runtime_v2 v2_model;
+
+    if (!tests.expect(
+            prepare_shm_layout(
+                view,
+                abi,
+                v2_layout) ==
+                shm_layout_result::success &&
+            prepare_shm_runtime_v2(
+                view,
+                abi,
+                v2_layout,
+                v2_model) ==
+                shm_runtime_v2_result::success,
+            "prepare Runtime V2 indexed subobject link")) {
+
+        return;
+    }
+
+    std::vector<std::byte> v2_runtime;
+
+    try {
+        v2_runtime.assign(
+            static_cast<std::size_t>(
+                v2_layout.size()),
+            std::byte{0});
+    }
+    catch (...) {
+        tests.expect(
+            false,
+            "allocate Runtime V2 indexed subobject-link Runtime");
+        return;
+    }
+
+    if (!tests.expect(
+            materialize_shm_runtime_v2_canonical(
+                v2_model,
+                abi,
+                v2_layout,
+                v2_runtime) ==
+                shm_runtime_v2_result::success &&
+            mark_shm_runtime_v2_links(
+                v2_model,
+                abi,
+                v2_layout,
+                v2_runtime) ==
+                shm_runtime_v2_result::success &&
+            materialize_shm_runtime_v2_objects(
+                v2_model,
+                abi,
+                v2_layout,
+                v2_runtime) ==
+                shm_runtime_v2_result::success &&
+            materialize_shm_runtime_v2_links(
+                v2_model,
+                abi,
+                v2_layout,
+                v2_runtime) ==
+                shm_runtime_v2_result::success &&
+            materialize_shm_runtime_v2_initializations(
+                v2_model,
+                abi,
+                v2_layout,
+                v2_runtime) ==
+                shm_runtime_v2_result::success,
+            "materialize Runtime V2 indexed subobject link")) {
+
+        return;
+    }
+
+    type_entry v2_record;
+    shm_record_offset v2_values_offset = 0;
+    shm_record_offset v2_input_offset = 0;
+    shm_offset v2_source_offset = 0;
+    shm_offset v2_objects_offset = 0;
+    shm_value_layout v2_record_layout;
+
+    if (!tests.expect(
+            view.type(
+                type,
+                v2_record) &&
+            v2_layout.member_offset(
+                static_cast<std::size_t>(
+                    v2_record.members.begin) +
+                    values.value(),
+                v2_values_offset) &&
+            v2_layout.member_offset(
+                static_cast<std::size_t>(
+                    v2_record.members.begin) +
+                    input.value(),
+                v2_input_offset) &&
+            v2_layout.object_offset(
+                source,
+                v2_source_offset) &&
+            v2_layout.object_offset(
+                objects,
+                v2_objects_offset) &&
+            v2_layout.type(
+                type,
+                v2_record_layout),
+            "query Runtime V2 indexed subobject-link offsets")) {
+
+        return;
+    }
+
+    const auto v2_base =
+        reinterpret_cast<std::uintptr_t>(
+            v2_runtime.data());
+
+    const auto v2_expected_source =
+        v2_base +
+        static_cast<std::uintptr_t>(
+            v2_source_offset +
+            v2_values_offset +
+            2 *
+                sizeof(int));
+
+    const auto v2_target_slot_offset =
+        v2_objects_offset +
+        v2_record_layout.size +
+        v2_input_offset;
+
+    std::uintptr_t v2_observed = 0;
+
+    std::memcpy(
+        &v2_observed,
+        v2_runtime.data() +
+            static_cast<std::size_t>(
+                v2_target_slot_offset),
+        sizeof(v2_observed));
+
+    tests.expect(
+        v2_observed ==
+            v2_expected_source,
+        "Runtime V2 indexed target points directly at indexed source element");
 }
 
 void test_runtime_layout(

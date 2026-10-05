@@ -27,12 +27,12 @@ class graph_delta;
 class graph_dense_projection;
 class source_map_overlay_view;
 
-inline constexpr std::uint32_t compiled_project_format_version = 20;
+inline constexpr std::uint32_t compiled_project_format_version = 22;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;
 
-inline constexpr std::size_t compiled_project_directory_count = 33;
+inline constexpr std::size_t compiled_project_directory_count = 43;
 
 inline constexpr std::size_t
 compiled_project_directory_entry_size = 32;
@@ -79,6 +79,19 @@ enum class compiled_project_section : std::uint32_t {
     object_initializations = 31,
     object_initialization_target_index = 32,
     constructor_defaults = 33,
+
+    // Same-WHERE target-ABI physical columns. These are accelerators over the
+    // semantic Graph sections, not a second Runtime identity space.
+    runtime_abi_header = 34,
+    type_abi = 35,
+    derived_abi = 36,
+    member_abi = 37,
+    base_abi = 38,
+    object_abi = 39,
+    unconnected_intrinsic_abi = 40,
+    unconnected_type_abi = 41,
+    unconnected_derived_abi = 42,
+    unconnected_types = 43,
 };
 
 enum class compiled_project_image_result : std::uint8_t {
@@ -288,6 +301,12 @@ public:
     [[nodiscard]] std::size_t assign_count() const noexcept {
         return assign_count_value;
     }
+
+    // Exposes only target-ABI physical columns. The section WHERE is the
+    // same Graph WHERE as its semantic counterpart.
+    [[nodiscard]] std::span<const std::byte>
+    runtime_physical_section(
+        compiled_project_section kind) const noexcept;
 
     [[nodiscard]] std::string_view string(
         string_id id) const noexcept;
@@ -597,6 +616,13 @@ prepare_compiled_project_layout(const string_table &strings,
                                 const file_context &files,
                                 const source_map &sources,
                                 compiled_project_layout &output) noexcept;
+
+// Returns one writable target-ABI physical column after a structurally
+// valid bind. Semantic sections are deliberately rejected.
+[[nodiscard]] std::span<std::byte>
+compiled_project_runtime_physical_section(
+    std::span<std::byte> image,
+    compiled_project_section kind) noexcept;
 
 // Encodes directly into caller-owned bytes, including writable mmap pages.
 // layout must come from prepare_compiled_project_layout() for the same unchanged

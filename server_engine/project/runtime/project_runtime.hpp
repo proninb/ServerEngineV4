@@ -42,7 +42,8 @@ struct project_runtime_telemetry final {
     // RUNTIME-V2-RESIDENT-01.
     // Exactly one construction path is selected for one publication.
     bool runtime_v2 = false;
-    std::uint8_t reserved[7]{};
+    bool runtime_v2_persisted_layout = false;
+    std::uint8_t reserved[6]{};
     std::uint64_t runtime_v2_prepare_ns = 0;
 
     // Peak transient construction metadata. This memory is released before the

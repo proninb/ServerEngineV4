@@ -822,6 +822,16 @@ encode_build_compiled_project_image(
              compiled_project_section::object_initialization_target_index,
              compiled_project_section::source_roots,
              compiled_project_section::source_files,
+             compiled_project_section::runtime_abi_header,
+             compiled_project_section::type_abi,
+             compiled_project_section::derived_abi,
+             compiled_project_section::member_abi,
+             compiled_project_section::base_abi,
+             compiled_project_section::object_abi,
+             compiled_project_section::unconnected_intrinsic_abi,
+             compiled_project_section::unconnected_type_abi,
+             compiled_project_section::unconnected_derived_abi,
+             compiled_project_section::unconnected_types,
          }) {
 
         clear_section(

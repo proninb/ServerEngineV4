@@ -290,6 +290,31 @@ private:
                 output_type);
     }
 
+    [[nodiscard]] bool value_layout(
+        type_ref type,
+        shm_value_layout& value) const noexcept {
+
+        value = {};
+
+        if (type.kind() ==
+            type_ref_kind::named) {
+
+            type_handle handle;
+
+            return
+                project.named(
+                    type,
+                    handle) &&
+                layout.type(
+                    handle,
+                    value);
+        }
+
+        return layout.value(
+            type,
+            value);
+    }
+
     [[nodiscard]] shm_runtime_v2_result
     append_dereference(
         shm_runtime_v2::endpoint_program& program,
@@ -475,7 +500,7 @@ private:
                     bounded_array ||
             index >=
                 array.payload ||
-            !layout.value(
+            !value_layout(
                 array.child,
                 child) ||
             (child.size != 0 &&

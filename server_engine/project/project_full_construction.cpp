@@ -3,6 +3,7 @@
 #include "project_lifecycle_context.hpp"
 #include "project_configuration_manifest_store.hpp"
 #include "runtime/project_runtime.hpp"
+#include "shm/shm_layout.hpp"
 #include "assign/assign_input.hpp"
 #include "construction/execution_lanes.hpp"
 #include "frontend/source_discovery.hpp"
@@ -261,8 +262,36 @@ persist_compiled(
                 full_persistence_stage::encode);
     }
 
-    // Encoding already ends with a structural bind. Full semantic/CRC audit
-    // belongs to explicit artifact verification, not to every fresh publish.
+    compiled_project_view compiled;
+
+    if (compiled.bind(mapping.bytes()) !=
+        compiled_project_image_result::success) {
+        return persistence_invalid(
+            full_persistence_stage::validate);
+    }
+
+    shm_layout runtime_layout;
+
+    if (prepare_shm_layout(
+            compiled,
+            context.settings.abi,
+            runtime_layout) !=
+        shm_layout_result::success) {
+        return persistence_invalid(
+            full_persistence_stage::prepare);
+    }
+
+    if (encode_shm_layout_columns(
+            runtime_layout,
+            context.settings.abi,
+            mapping.bytes()) !=
+        shm_layout_result::success) {
+        return persistence_invalid(
+            full_persistence_stage::encode);
+    }
+
+    // Semantic cold audit remains explicit. LOAD validates the persisted ABI
+    // image header/counts before using it.
 
     if (mapping.flush() !=
         writable_file_mapping_result::success) {

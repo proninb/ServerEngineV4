@@ -27,6 +27,8 @@
 #include "project/runtime/runtime_ic_codec.hpp"
 #include "project/runtime/runtime_ic_reset.hpp"
 #include "project/runtime/runtime_ic_snapshot.hpp"
+#include "project/shm/shm_layout.hpp"
+#include "project/shm/shm_runtime_v2.hpp"
 #include "project/semantic/identity.hpp"
 #include "project/source/source_map.hpp"
 #include "project/string/string_table.hpp"
@@ -1585,6 +1587,645 @@ peak_working_set_bytes() noexcept {
 
 
 
+[[nodiscard]] bool validate_runtime_v2(
+    scenario_kind scenario,
+    const fixture_metadata& metadata,
+    const compiled_project_view& project,
+    const shm_layout& layout,
+    const fixed_shared_memory& memory) noexcept {
+
+    type_entry type;
+
+    if (!project.type(
+            metadata.type,
+            type)) {
+
+        return false;
+    }
+
+    shm_record_offset output_member_offset = 0;
+
+    if (!layout.member_offset(
+            static_cast<std::size_t>(
+                type.members.begin) +
+                metadata.output_member.value(),
+            output_member_offset)) {
+
+        return false;
+    }
+
+
+    if (scenario ==
+        scenario_kind::indexed_links) {
+
+        if (!metadata.target_type ||
+            !metadata.first_object ||
+            !metadata.last_object ||
+            metadata.element_count == 0) {
+
+            return false;
+        }
+
+        type_entry target_type;
+
+        shm_value_layout source_record;
+        shm_value_layout target_record;
+
+        shm_record_offset input_member_offset = 0;
+        shm_offset source_offset = 0;
+        shm_offset target_offset = 0;
+
+        if (!project.type(
+                metadata.target_type,
+                target_type) ||
+            !layout.type(
+                metadata.type,
+                source_record) ||
+            !layout.type(
+                metadata.target_type,
+                target_record) ||
+            !layout.member_offset(
+                static_cast<std::size_t>(
+                    target_type.members.begin) +
+                    metadata.input_member.value(),
+                input_member_offset) ||
+            !layout.object_offset(
+                metadata.first_object,
+                source_offset) ||
+            !layout.object_offset(
+                metadata.last_object,
+                target_offset)) {
+
+            return false;
+        }
+
+        const auto element =
+            metadata.element_count - 1;
+
+        if ((source_record.size != 0 &&
+             element >
+                (std::numeric_limits<std::uint64_t>::max)() /
+                    source_record.size) ||
+            (target_record.size != 0 &&
+             element >
+                (std::numeric_limits<std::uint64_t>::max)() /
+                    target_record.size)) {
+
+            return false;
+        }
+
+        const auto source_element =
+            element *
+            source_record.size;
+
+        const auto target_element =
+            element *
+            target_record.size;
+
+        if (source_offset >
+                (std::numeric_limits<std::uint64_t>::max)() -
+                    source_element ||
+            source_offset +
+                source_element >
+                    (std::numeric_limits<std::uint64_t>::max)() -
+                        output_member_offset -
+                        2 * sizeof(int) ||
+            target_offset >
+                (std::numeric_limits<std::uint64_t>::max)() -
+                    target_element ||
+            target_offset +
+                target_element >
+                    (std::numeric_limits<std::uint64_t>::max)() -
+                        input_member_offset) {
+
+            return false;
+        }
+
+        const auto expected =
+            memory.address() +
+            source_offset +
+            source_element +
+            output_member_offset +
+            2 * sizeof(int);
+
+        std::uintptr_t stored = 0;
+
+        return read_pointer(
+                   memory,
+                   target_offset +
+                       target_element +
+                       input_member_offset,
+                   stored) &&
+            stored ==
+                expected;
+    }
+
+    if (scenario ==
+        scenario_kind::chain) {
+
+        shm_offset object_offset = 0;
+        shm_record_offset reference_offset = 0;
+
+        if (!layout.object_offset(
+                metadata.first_object,
+                object_offset) ||
+            !layout.member_offset(
+                static_cast<std::size_t>(
+                    type.members.begin) +
+                    metadata.first_reference.value(),
+                reference_offset)) {
+
+            return false;
+        }
+
+        std::uintptr_t stored = 0;
+
+        return read_pointer(
+                   memory,
+                   object_offset +
+                       reference_offset,
+                   stored) &&
+            stored ==
+                memory.address() +
+                    object_offset +
+                    output_member_offset;
+    }
+
+    shm_offset last_offset = 0;
+    shm_record_offset input_member_offset = 0;
+
+    if (!layout.object_offset(
+            metadata.last_object,
+            last_offset) ||
+        !layout.member_offset(
+            static_cast<std::size_t>(
+                type.members.begin) +
+                metadata.input_member.value(),
+            input_member_offset)) {
+
+        return false;
+    }
+
+    std::uintptr_t stored = 0;
+
+    if (!read_pointer(
+            memory,
+            last_offset +
+                input_member_offset,
+            stored)) {
+
+        return false;
+    }
+
+    if (scenario ==
+        scenario_kind::objects) {
+
+        return stored ==
+            memory.address() +
+                last_offset +
+                output_member_offset;
+    }
+
+    shm_offset previous_offset = 0;
+
+    if (!metadata.previous_object ||
+        !layout.object_offset(
+            metadata.previous_object,
+            previous_offset)) {
+
+        return false;
+    }
+
+    return stored ==
+        memory.address() +
+            previous_offset +
+            output_member_offset;
+}
+
+
+
+[[nodiscard]] int run_runtime_v2_kernel_benchmark(
+    scenario_kind scenario,
+    std::string_view scenario_name,
+    std::size_t count,
+    double setup_ms,
+    const fixture_image& fixture,
+    const compiled_project_view& project,
+    const server_abi_configuration& abi) {
+
+    using clock_type =
+        std::chrono::steady_clock;
+
+    const auto milliseconds =
+        [](auto begin, auto end) {
+            return std::chrono::duration<
+                double,
+                std::milli>{
+                    end - begin}
+                .count();
+        };
+
+    shm_layout layout;
+
+    const auto layout_started =
+        clock_type::now();
+
+    const auto layout_result =
+        prepare_shm_layout(
+            project,
+            abi,
+            layout);
+
+    const auto layout_finished =
+        clock_type::now();
+
+    if (layout_result !=
+        shm_layout_result::success) {
+
+        std::cerr
+            << "Runtime V2 SHM layout failed: "
+            << static_cast<int>(
+                layout_result)
+            << '\n';
+
+        return 1;
+    }
+
+    shm_runtime_v2 runtime;
+    shm_runtime_v2_prepare_telemetry
+        prepare_telemetry;
+
+    const auto prepare_started =
+        clock_type::now();
+
+    const auto prepared =
+        prepare_shm_runtime_v2(
+            project,
+            abi,
+            layout,
+            runtime,
+            &prepare_telemetry);
+
+    const auto prepare_finished =
+        clock_type::now();
+
+    if (prepared !=
+        shm_runtime_v2_result::success) {
+
+        std::cerr
+            << "Runtime V2 prepare failed: "
+            << static_cast<int>(
+                prepared)
+            << '\n';
+
+        return 1;
+    }
+
+    std::size_t mapping_size = 0;
+
+    if (!mapping_size_for(
+            layout.size(),
+            mapping_size)) {
+
+        std::cerr
+            << "Cannot page-align Runtime V2 size\n";
+
+        return 1;
+    }
+
+    fixed_shared_memory memory;
+
+    const auto name =
+        std::string{
+            "CW.ServerEngineV4.RuntimeV2Benchmark."} +
+        std::to_string(
+            process_id());
+
+    constexpr std::uintptr_t fixed_address =
+        0x0000020000000000ull;
+
+    const auto shm_started =
+        clock_type::now();
+
+    const auto created =
+        memory.create(
+            name,
+            mapping_size,
+            fixed_address);
+
+    const auto shm_finished =
+        clock_type::now();
+
+    if (created !=
+        fixed_shared_memory_result::success) {
+
+        std::cerr
+            << "Runtime V2 benchmark SHM create failed: "
+            << static_cast<int>(
+                created)
+            << '\n';
+
+        return 1;
+    }
+
+    shm_runtime_v2_execute_telemetry
+        canonical_telemetry;
+
+    shm_runtime_v2_execute_telemetry
+        object_telemetry;
+
+    shm_runtime_v2_link_telemetry
+        link_telemetry;
+
+    shm_runtime_v2_initialization_telemetry
+        initialization_telemetry;
+
+    const auto canonical_started =
+        clock_type::now();
+
+    const auto canonical =
+        materialize_shm_runtime_v2_canonical(
+            runtime,
+            abi,
+            layout,
+            memory.bytes(),
+            &canonical_telemetry);
+
+    const auto canonical_finished =
+        clock_type::now();
+
+    if (canonical !=
+        shm_runtime_v2_result::success) {
+
+        std::cerr
+            << "Runtime V2 canonical materialization failed: "
+            << static_cast<int>(
+                canonical)
+            << '\n';
+
+        return 1;
+    }
+
+    const auto mark_started =
+        clock_type::now();
+
+    const auto marked =
+        mark_shm_runtime_v2_links(
+            runtime,
+            abi,
+            layout,
+            memory.bytes(),
+            &link_telemetry);
+
+    const auto mark_finished =
+        clock_type::now();
+
+    if (marked !=
+        shm_runtime_v2_result::success) {
+
+        std::cerr
+            << "Runtime V2 link mark failed: "
+            << static_cast<int>(
+                marked)
+            << '\n';
+
+        return 1;
+    }
+
+    const auto objects_started =
+        clock_type::now();
+
+    const auto objects =
+        materialize_shm_runtime_v2_objects(
+            runtime,
+            abi,
+            layout,
+            memory.bytes(),
+            &object_telemetry);
+
+    const auto objects_finished =
+        clock_type::now();
+
+    if (objects !=
+        shm_runtime_v2_result::success) {
+
+        std::cerr
+            << "Runtime V2 object materialization failed: "
+            << static_cast<int>(
+                objects)
+            << '\n';
+
+        return 1;
+    }
+
+    const auto links_started =
+        clock_type::now();
+
+    const auto links =
+        materialize_shm_runtime_v2_links(
+            runtime,
+            abi,
+            layout,
+            memory.bytes(),
+            &link_telemetry);
+
+    const auto links_finished =
+        clock_type::now();
+
+    if (links !=
+        shm_runtime_v2_result::success) {
+
+        std::cerr
+            << "Runtime V2 link materialization failed: "
+            << static_cast<int>(
+                links)
+            << '\n';
+
+        return 1;
+    }
+
+    const auto initializations_started =
+        clock_type::now();
+
+    const auto initializations =
+        materialize_shm_runtime_v2_initializations(
+            runtime,
+            abi,
+            layout,
+            memory.bytes(),
+            &initialization_telemetry);
+
+    const auto initializations_finished =
+        clock_type::now();
+
+    if (initializations !=
+        shm_runtime_v2_result::success) {
+
+        std::cerr
+            << "Runtime V2 initialization materialization failed: "
+            << static_cast<int>(
+                initializations)
+            << '\n';
+
+        return 1;
+    }
+
+    if (!validate_runtime_v2(
+            scenario,
+            fixture.metadata,
+            project,
+            layout,
+            memory)) {
+
+        std::cerr
+            << "Runtime V2 reference validation failed\n";
+
+        return 3;
+    }
+
+    const auto layout_ms =
+        milliseconds(
+            layout_started,
+            layout_finished);
+
+    const auto prepare_ms =
+        milliseconds(
+            prepare_started,
+            prepare_finished);
+
+    const auto shm_ms =
+        milliseconds(
+            shm_started,
+            shm_finished);
+
+    const auto canonical_ms =
+        milliseconds(
+            canonical_started,
+            canonical_finished);
+
+    const auto links_mark_ms =
+        milliseconds(
+            mark_started,
+            mark_finished);
+
+    const auto objects_ms =
+        milliseconds(
+            objects_started,
+            objects_finished);
+
+    const auto links_ms =
+        milliseconds(
+            links_started,
+            links_finished);
+
+    const auto initializations_ms =
+        milliseconds(
+            initializations_started,
+            initializations_finished);
+
+    const auto materialize_ms =
+        canonical_ms +
+        links_mark_ms +
+        objects_ms +
+        links_ms +
+        initializations_ms;
+
+    const auto runtime_total_ms =
+        layout_ms +
+        prepare_ms +
+        shm_ms +
+        materialize_ms;
+
+    std::cout
+        << "benchmark=v2_kernel"
+        << ",scenario="
+        << scenario_name
+        << ",count="
+        << count
+        << ",setup_ms="
+        << setup_ms
+        << ",layout_ms="
+        << layout_ms
+        << ",prepare_ms="
+        << prepare_ms
+        << ",shm_create_ms="
+        << shm_ms
+        << ",canonical_ms="
+        << canonical_ms
+        << ",links_mark_ms="
+        << links_mark_ms
+        << ",objects_ms="
+        << objects_ms
+        << ",links_ms="
+        << links_ms
+        << ",initializations_ms="
+        << initializations_ms
+        << ",materialize_ms="
+        << materialize_ms
+        << ",runtime_total_ms="
+        << runtime_total_ms
+        << ",runtime_bytes="
+        << layout.size()
+        << ",mapping_bytes="
+        << mapping_size
+        << ",compiled_bytes="
+        << fixture.bytes.size()
+        << ",construction_bytes="
+        << runtime.construction_bytes()
+        << ",type_apis="
+        << prepare_telemetry.type_apis
+        << ",inline_leaf_operations="
+        << prepare_telemetry.
+            inline_leaf_operations
+        << ",inline_subtree_operations="
+        << prepare_telemetry.
+            inline_subtree_operations
+        << ",canonical_api_applications="
+        << canonical_telemetry.
+            api_applications
+        << ",object_api_applications="
+        << object_telemetry.
+            api_applications
+        << ",object_child_visits="
+        << object_telemetry.child_visits
+        << ",constructor_default_writes="
+        << object_telemetry.
+            constructor_default_writes
+        << ",links_prepared="
+        << link_telemetry.links_prepared
+        << ",links_resolved="
+        << link_telemetry.links_resolved
+        << ",link_recursive_resolutions="
+        << link_telemetry.
+            recursive_resolutions
+        << ",link_dereference_reads="
+        << link_telemetry.
+            dereference_reads
+        << ",initialization_writes="
+        << initialization_telemetry.writes
+        << ",initialization_dereference_reads="
+        << initialization_telemetry.
+            dereference_reads
+        << ",types="
+        << project.type_count()
+        << ",members="
+        << project.member_count()
+        << ",objects="
+        << project.object_count()
+        << ",links="
+        << project.link_count()
+        << ",endpoint_paths="
+        << project.endpoint_path_count()
+        << ",endpoint_path_steps="
+        << project.endpoint_path_step_count()
+        << ",peak_ws_bytes="
+        << peak_working_set_bytes()
+        << '\n';
+
+    return 0;
+}
+
+
 void usage() {
     std::cerr
         << "Usage:\n"
@@ -1593,6 +2234,9 @@ void usage() {
         << "  ServerEngineV4RuntimeBenchmark indexed_links <count>\n"
         << "  ServerEngineV4RuntimeBenchmark chain         <depth>\n"
         << "  ServerEngineV4RuntimeBenchmark many_types    <type-count>\n"
+        << "\n"
+        << "Final Runtime V2 kernel on the same fixtures:\n"
+        << "  ServerEngineV4RuntimeBenchmark <scenario> <count> v2\n"
         << "\n"
         << "Production IC SNAP benchmark:\n"
         << "  ServerEngineV4RuntimeBenchmark <scenario> <count> <iterations> snap_v2_only\n";
@@ -1604,7 +2248,9 @@ int main(
     int argc,
     char* argv[]) {
 
-    if (argc != 3 && argc != 5) {
+    if (argc != 3 &&
+        argc != 4 &&
+        argc != 5) {
 
         usage();
         return 2;
@@ -1678,6 +2324,38 @@ int main(
 
     const auto abi =
         native_abi();
+
+    const bool v2_kernel =
+        argc == 4 &&
+        std::string_view{argv[3]} == "v2";
+
+    if (argc == 4 &&
+        !v2_kernel) {
+
+        std::cerr
+            << "Unknown Runtime benchmark mode\n";
+
+        return 2;
+    }
+
+    if (v2_kernel) {
+        const auto setup_ms =
+            std::chrono::duration<
+                double,
+                std::milli>{
+                    setup_finished -
+                    setup_started}
+                .count();
+
+        return run_runtime_v2_kernel_benchmark(
+            scenario,
+            argv[1],
+            count,
+            setup_ms,
+            fixture,
+            project,
+            abi);
+    }
 
     const auto layout_started =
         std::chrono::steady_clock::now();
@@ -2018,7 +2696,8 @@ int main(
             materialize_finished);
 
     std::cout
-        << "scenario="
+        << "benchmark=legacy_kernel"
+        << ",scenario="
         << argv[1]
         << ",count="
         << count

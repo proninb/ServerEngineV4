@@ -1163,3 +1163,108 @@ reference benchmarks/tests.
 
 This keeps benchmark/reference code available without allowing it to become an
 accidental production dependency.
+
+
+## RUNTIME-V2-BENCH-07
+
+The existing Runtime fixture generator now supports a final Runtime V2 kernel
+mode:
+
+```text
+ServerEngineV4RuntimeBenchmark <scenario> <count> v2
+```
+
+It uses exactly the same encoded `compiled_project_view` fixtures as the legacy
+kernel benchmark:
+
+```text
+objects
+links
+indexed_links
+chain
+many_types
+```
+
+The V2 mode measures the accepted construction stages independently:
+
+```text
+shm_layout
+Runtime V2 prepare
+SHM create
+canonical
+link target mark
+object-major construction
+link materialization
+Source initializations
+```
+
+It also reports transient `construction_bytes`, INLINE-64 Type API shape and
+execution counters.
+
+This is deliberately a kernel A/B benchmark. It does not copy the production
+parallel pre-touch implementation into benchmark code. End-to-end resident
+publication, including production parallel pre-touch and binding-index
+publication, remains measured by `ServerEngineV4PublishBenchmark load`.
+
+The old two-argument `ServerEngineV4RuntimeBenchmark` mode remains the legacy
+reference kernel. Its output is now labelled `benchmark=legacy_kernel`.
+
+`benchmarks/run_runtime_v2_scale.ps1` runs the same scale matrix previously used
+by the legacy runtime benchmark and writes a new CSV. Existing
+`run_runtime_scale.ps1` is intentionally unchanged so historical legacy results
+remain reproducible.
+
+
+### BENCH-07 indexed-array endpoint correction
+
+The final V2 scale benchmark exposed a missing physical-layout resolution case
+for endpoint paths whose `array_index` traverses an array of a named record.
+
+`shm_layout::value(type_ref)` intentionally does not resolve `named` type_refs:
+their payload is semantic identity, not `type_handle`. Runtime V2 link prepare
+was incorrectly using that API to obtain the array element stride.
+
+The endpoint compiler now resolves named array elements as:
+
+```text
+type_ref(named)
+    -> compiled_project_view::named(...)
+    -> type_handle
+    -> shm_layout::type(...)
+```
+
+Non-named element types still use `shm_layout::value(...)`.
+
+The existing indexed-subobject fixture now executes both the legacy reference
+materializer and Runtime V2, and verifies that the final target native reference
+points at the same indexed source element.
+
+
+## RUNTIME-IMAGE-08A
+
+`compiled.bin` format v21 adds the final `runtime_abi_layout` section.
+PUBLISH and REBUILD derive the configured target-ABI SHM layout once and encode
+it directly into the same writable `compiled.bin` mmap. Only offsets, sizes and
+alignments are persisted; no native process pointer or SHM base address is stored.
+
+LOAD uses the persisted section when its ABI/pack and semantic cardinalities
+match, skipping `prepare_shm_layout()`. Benchmark output reports
+`runtime_v2_persisted_layout=1` for this path.
+
+A sparse BUILD mutation currently invalidates the section magic. LOAD then
+falls back to deriving layout from G. This preserves correctness until the
+following sparse Runtime-image slice patches the affected physical layout
+records directly.
+
+This is the first vertical cut toward:
+
+```text
+PUBLISH / REBUILD
+    G -> ABI layout -> Runtime construction representation -> compiled.bin
+
+LOAD
+    mmap -> allocate SHM -> physical replay
+```
+
+08A moves ABI layout. The following slice persists the Runtime V2 construction
+representation itself.

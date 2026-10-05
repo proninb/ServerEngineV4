@@ -583,6 +583,25 @@ void write_u64(
     switch (kind) {
     case compiled_project_section::constructor_defaults:
         return 24;
+
+    case compiled_project_section::runtime_abi_header:
+        return 64;
+
+    case compiled_project_section::type_abi:
+    case compiled_project_section::derived_abi:
+        return 16;
+
+    case compiled_project_section::member_abi:
+    case compiled_project_section::base_abi:
+    case compiled_project_section::unconnected_types:
+        return 4;
+
+    case compiled_project_section::object_abi:
+    case compiled_project_section::unconnected_intrinsic_abi:
+    case compiled_project_section::unconnected_type_abi:
+    case compiled_project_section::unconnected_derived_abi:
+        return 8;
+
     case compiled_project_section::string_core:
         return string_core_size;
 
@@ -5980,6 +5999,22 @@ compiled_project_layout::prepare_counts(
                 initialization_target_index_count,
             },
             {compiled_project_section::constructor_defaults, 24, counts.constructor_default_count},
+
+            // Physical Runtime columns share the semantic WHERE space.
+            {compiled_project_section::runtime_abi_header, 64, 1},
+            {compiled_project_section::type_abi, 16, counts.type_count},
+            {compiled_project_section::derived_abi, 16, counts.derived_count},
+            {compiled_project_section::member_abi, 4, counts.member_count},
+            {compiled_project_section::base_abi, 4, counts.base_count},
+            {compiled_project_section::object_abi, 8, counts.object_count},
+            {compiled_project_section::unconnected_intrinsic_abi, 8, 22},
+            {compiled_project_section::unconnected_type_abi, 8, counts.identity_count},
+            {compiled_project_section::unconnected_derived_abi, 8, counts.derived_count},
+            {
+                compiled_project_section::unconnected_types,
+                4,
+                22 + counts.identity_count + counts.derived_count,
+            },
         }};
 
     std::uint64_t cursor =
@@ -6255,6 +6290,23 @@ encode_compiled_project_image(const string_table &strings,
     clear_section(
         compiled_project_section::
             endpoint_path_index);
+
+    for (const auto kind :
+         {
+             compiled_project_section::runtime_abi_header,
+             compiled_project_section::type_abi,
+             compiled_project_section::derived_abi,
+             compiled_project_section::member_abi,
+             compiled_project_section::base_abi,
+             compiled_project_section::object_abi,
+             compiled_project_section::unconnected_intrinsic_abi,
+             compiled_project_section::unconnected_type_abi,
+             compiled_project_section::unconnected_derived_abi,
+             compiled_project_section::unconnected_types,
+         }) {
+
+        clear_section(kind);
+    }
 
     const auto count =
         [&](compiled_project_section kind) noexcept {
@@ -7968,6 +8020,81 @@ encode_compiled_project_image(const string_table &strings,
 
     return compiled_project_image_result::
         success;
+}
+
+std::span<const std::byte>
+compiled_project_view::runtime_physical_section(
+    compiled_project_section kind) const noexcept {
+
+    if (kind < compiled_project_section::runtime_abi_header ||
+        kind > compiled_project_section::unconnected_types) {
+        return {};
+    }
+
+    return section_bytes(kind);
+}
+
+std::span<std::byte>
+compiled_project_runtime_physical_section(
+    std::span<std::byte> image,
+    compiled_project_section kind) noexcept {
+
+    if (kind < compiled_project_section::runtime_abi_header ||
+        kind > compiled_project_section::unconnected_types) {
+        return {};
+    }
+
+    compiled_project_view validation;
+
+    if (validation.bind(
+            std::span<const std::byte>{
+                image.data(),
+                image.size()}) !=
+        compiled_project_image_result::success) {
+        return {};
+    }
+
+    const auto raw =
+        static_cast<std::uint32_t>(kind);
+
+    if (raw == 0 ||
+        raw > compiled_project_directory_count) {
+        return {};
+    }
+
+    const auto index =
+        static_cast<std::size_t>(raw - 1);
+
+    const auto* entry =
+        image.data() +
+        directory_offset +
+        index * compiled_project_directory_entry_size;
+
+    const auto record_size =
+        read_u32(entry + 4);
+
+    const auto offset =
+        read_u64(entry + 8);
+
+    const auto count =
+        read_u64(entry + 16);
+
+    std::uint64_t bytes = 0;
+
+    if (!multiply_u64(
+            count,
+            record_size,
+            bytes) ||
+        offset > image.size() ||
+        bytes >
+            image.size() -
+                static_cast<std::size_t>(offset)) {
+        return {};
+    }
+
+    return image.subspan(
+        static_cast<std::size_t>(offset),
+        static_cast<std::size_t>(bytes));
 }
 
 std::size_t compiled_project_view::source_file_count() const noexcept {

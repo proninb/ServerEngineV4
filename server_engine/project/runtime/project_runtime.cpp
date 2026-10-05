@@ -541,8 +541,17 @@ server_status create_resident_project(
     const auto layout_started =
         clock_type::now();
 
+    const auto use_persisted_layout =
+        shm_layout_columns_available(
+            compiled);
+
     const auto prepared =
-        prepare_shm_layout(
+        use_persisted_layout
+        ? bind_shm_layout_columns(
+            compiled,
+            settings.abi,
+            v2_layout)
+        : prepare_shm_layout(
             compiled,
             settings.abi,
             v2_layout);
@@ -555,6 +564,8 @@ server_status create_resident_project(
             elapsed_ns(
                 layout_started,
                 layout_finished);
+        telemetry->runtime_v2_persisted_layout =
+            use_persisted_layout;
     }
 
     if (prepared !=

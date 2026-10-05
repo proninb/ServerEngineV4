@@ -901,6 +901,24 @@ struct direct_object_write_state final {
             change,
             state.mapping->bytes());
 
+    if (applied ==
+            compiled_project_image_result::success) {
+        auto runtime_image =
+            compiled_project_runtime_physical_section(
+                state.mapping->bytes(),
+                compiled_project_section::
+                    runtime_abi_header);
+        if (!runtime_image.empty()) {
+            const auto clear =
+                (std::min)(runtime_image.size(), std::size_t{8});
+            std::fill(
+                runtime_image.begin(),
+                runtime_image.begin() +
+                    static_cast<std::ptrdiff_t>(clear),
+                std::byte{0});
+        }
+    }
+
     if (applied !=
         compiled_project_image_result::
             success) {
@@ -2393,6 +2411,24 @@ server_status build_project(
                 context.graph_changes,
                 context.compiled_write_mapping.
                     bytes());
+
+        if (applied ==
+                compiled_project_image_result::success) {
+            auto runtime_image =
+                compiled_project_runtime_physical_section(
+                    context.compiled_write_mapping.bytes(),
+                    compiled_project_section::
+                        runtime_abi_header);
+            if (!runtime_image.empty()) {
+                const auto clear =
+                    (std::min)(runtime_image.size(), std::size_t{8});
+                std::fill(
+                    runtime_image.begin(),
+                    runtime_image.begin() +
+                        static_cast<std::ptrdiff_t>(clear),
+                    std::byte{0});
+            }
+        }
 
         if (applied !=
                 compiled_project_image_result::
