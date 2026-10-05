@@ -10,6 +10,7 @@
 #include <cstring>
 #include <limits>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -229,6 +230,24 @@ public:
         if (result != shm_type_batch_result::success) {
             output.reset();
             return result;
+        }
+
+        // The persisted production program is final at this point. Share
+        // exact relative-reference programs across Type APIs without changing
+        // their record representation or Runtime execution path.
+        if (policy ==
+                type_batch_build_policy::
+                    inline_leaf_64) {
+
+            result =
+                canonicalize_relative_reference_programs();
+
+            if (result !=
+                shm_type_batch_result::success) {
+
+                output.reset();
+                return result;
+            }
         }
 
         result = validate_object_references();
@@ -2997,6 +3016,288 @@ private:
         return shm_type_batch_result::success;
     }
 
+[[nodiscard]] shm_type_batch_result
+    canonicalize_relative_reference_programs() {
+
+        // RUNTIME-SHM-REFERENCE-PROGRAM-CANONICALIZATION-09D-12:
+        // type_api already addresses its immutable relative-reference program
+        // through an independent {begin,count} range. Canonicalize exact
+        // duplicate programs once after final INLINE-64 construction. Runtime
+        // continues to execute the same {target,source} records directly.
+        if (output.relative_references.empty()) {
+            return shm_type_batch_result::success;
+        }
+
+        const auto original =
+            std::span<const shm_type_batch::relative_reference>{
+                output.relative_references.data(),
+                output.relative_references.size()};
+
+        std::vector<shm_type_batch::range>
+            original_ranges;
+
+        original_ranges.reserve(
+            output.type_apis.size());
+
+        for (const auto& api : output.type_apis) {
+            const auto range =
+                api.relative_references;
+
+            const auto begin =
+                static_cast<std::size_t>(
+                    range.begin);
+
+            const auto count =
+                static_cast<std::size_t>(
+                    range.count);
+
+            if (begin > original.size() ||
+                count > original.size() - begin) {
+
+                return shm_type_batch_result::
+                    invalid_input;
+            }
+
+            original_ranges.push_back(
+                range);
+        }
+
+        std::vector<shm_type_batch::relative_reference>
+            canonical;
+
+        canonical.reserve(
+            output.relative_references.size());
+
+        std::unordered_map<
+            std::uint64_t,
+            std::vector<shm_type_batch::range>>
+            buckets;
+
+        buckets.reserve(
+            output.type_apis.size());
+
+        const auto hash_program =
+            [&](shm_type_batch::range range) noexcept {
+
+                std::uint64_t hash =
+                    1469598103934665603ull;
+
+                const auto mix =
+                    [&hash](
+                        std::uint32_t value) noexcept {
+
+                        for (std::uint32_t byte = 0;
+                             byte < 4;
+                             ++byte) {
+
+                            hash ^=
+                                static_cast<std::uint8_t>(
+                                    value & 0xffu);
+
+                            hash *=
+                                1099511628211ull;
+
+                            value >>= 8;
+                        }
+                    };
+
+                mix(range.count);
+
+                for (std::uint32_t index = 0;
+                     index < range.count;
+                     ++index) {
+
+                    const auto& reference =
+                        original[
+                            static_cast<std::size_t>(
+                                range.begin) +
+                            index];
+
+                    mix(reference.target);
+                    mix(reference.source);
+                }
+
+                return hash;
+            };
+
+        const auto same_program =
+            [&](shm_type_batch::range candidate,
+                shm_type_batch::range source) noexcept {
+
+                if (candidate.count != source.count ||
+                    candidate.begin >
+                        canonical.size() ||
+                    candidate.count >
+                        canonical.size() -
+                            candidate.begin ||
+                    source.begin >
+                        original.size() ||
+                    source.count >
+                        original.size() -
+                            source.begin) {
+
+                    return false;
+                }
+
+                for (std::uint32_t index = 0;
+                     index < source.count;
+                     ++index) {
+
+                    const auto& left =
+                        canonical[
+                            static_cast<std::size_t>(
+                                candidate.begin) +
+                            index];
+
+                    const auto& right =
+                        original[
+                            static_cast<std::size_t>(
+                                source.begin) +
+                            index];
+
+                    if (left.target != right.target ||
+                        left.source != right.source) {
+
+                        return false;
+                    }
+                }
+
+                return true;
+            };
+
+        for (auto& api : output.type_apis) {
+            const auto source =
+                api.relative_references;
+
+            if (source.count == 0) {
+                api.relative_references = {};
+                continue;
+            }
+
+            const auto hash =
+                hash_program(
+                    source);
+
+            auto& candidates =
+                buckets[hash];
+
+            bool reused = false;
+
+            for (const auto candidate :
+                 candidates) {
+
+                if (same_program(
+                        candidate,
+                        source)) {
+
+                    api.relative_references =
+                        candidate;
+
+                    reused = true;
+                    break;
+                }
+            }
+
+            if (reused) {
+                continue;
+            }
+
+            const auto begin =
+                canonical.size();
+
+            canonical.insert(
+                canonical.end(),
+                original.begin() +
+                    static_cast<std::ptrdiff_t>(
+                        source.begin),
+                original.begin() +
+                    static_cast<std::ptrdiff_t>(
+                        source.begin) +
+                    source.count);
+
+            shm_type_batch::range range;
+
+            if (!make_range(
+                    begin,
+                    canonical.size(),
+                    range)) {
+
+                return shm_type_batch_result::
+                    overflow;
+            }
+
+            api.relative_references =
+                range;
+
+            candidates.push_back(
+                range);
+        }
+
+        // Transformation proof: every Type API must resolve to exactly the
+        // same relative-reference program as before canonicalization.
+        if (original_ranges.size() !=
+            output.type_apis.size()) {
+
+            return shm_type_batch_result::
+                invalid_input;
+        }
+
+        for (std::size_t api_index = 0;
+             api_index < output.type_apis.size();
+             ++api_index) {
+
+            const auto before =
+                original_ranges[api_index];
+
+            const auto after =
+                output.type_apis[
+                    api_index].
+                    relative_references;
+
+            if (before.count != after.count ||
+                after.begin >
+                    canonical.size() ||
+                after.count >
+                    canonical.size() -
+                        after.begin) {
+
+                return shm_type_batch_result::
+                    invalid_input;
+            }
+
+            for (std::uint32_t index = 0;
+                 index < before.count;
+                 ++index) {
+
+                const auto& left =
+                    original[
+                        static_cast<std::size_t>(
+                            before.begin) +
+                        index];
+
+                const auto& right =
+                    canonical[
+                        static_cast<std::size_t>(
+                            after.begin) +
+                        index];
+
+                if (left.target != right.target ||
+                    left.source != right.source) {
+
+                    return shm_type_batch_result::
+                        invalid_input;
+                }
+            }
+        }
+
+        output.relative_references =
+            std::move(canonical);
+
+        return shm_type_batch_result::
+            success;
+    }
+
+
     [[nodiscard]] shm_type_batch_result build_root_groups() {
 
         output.object_groups.clear();
@@ -4800,6 +5101,8 @@ attach_shm_type_batch_physical_columns(
         *telemetry = {};
         telemetry->type_apis =
             output.persisted_type_apis.size();
+        telemetry->relative_references =
+            output.persisted_relative_references.size();
         telemetry->objects =
             output.persisted_objects.size();
         telemetry->canonical_roots =

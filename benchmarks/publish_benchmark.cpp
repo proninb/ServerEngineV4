@@ -482,6 +482,9 @@ int main(
             << ",runtime_v2_metadata_bytes="
             << runtime_telemetry.
                 runtime_v2_metadata_bytes
+            << ",runtime_v2_relative_reference_records="
+            << runtime_telemetry.runtime_v2_prepare.
+                relative_references
             << ",runtime_v2_constructor_defaults="
             << runtime_telemetry.
                 runtime_v2_constructor_defaults

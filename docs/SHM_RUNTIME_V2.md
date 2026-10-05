@@ -1760,3 +1760,75 @@ LOAD
 09D-08B changes neither Runtime phase order nor native reference/link behavior.
 A fresh REBUILD/PUBLISH is required before measuring LOAD because existing
 compiled.bin files still contain their previously persisted Type program.
+
+## RUNTIME-SHM-REFERENCE-PROGRAM-CANONICALIZATION-09D-12
+
+09D-10A reduced each relative reference from `{target,source}` to
+`{target}+delta`, but the median Object phase regressed. Production therefore
+keeps the direct 8-byte pair representation.
+
+The 09D-11 diagnostic then found a different structural property:
+
+```text
+reachable relative-reference APIs              5,287
+unique exact relative-reference programs         154
+duplicate API program copies                    5,133
+
+reachable physical relative-reference records 1,263,229
+duplicate physical records                    1,205,064
+
+execution writes in duplicated programs      53,299,841
+total Object relative-reference writes       53,471,507
+```
+
+The existing Type API already stores a relative-reference program as an
+independent immutable range:
+
+```text
+type_api.relative_references = { begin, count }
+```
+
+Therefore exact program sharing requires no new Runtime representation.
+
+09D-12 runs after final INLINE-64 construction and before persisted Runtime
+Type counts are taken:
+
+```text
+PUBLISH / REBUILD
+    build final INLINE-64 Type APIs
+    -> canonicalize exact relative-reference programs
+    -> persist physical Runtime Type columns
+```
+
+For each non-empty program, the first exact sequence is copied into the
+canonical relative-reference column. Later Type APIs with identical
+`{target,source}` records reuse the same `{begin,count}`.
+
+The canonicalization hash is only a PUBLISH-time candidate accelerator.
+Every candidate match is compared record-for-record. Before replacing the
+original vector, a second full audit verifies that every Type API resolves to
+exactly the same program it had before canonicalization.
+
+The selection order is deterministic: Type APIs are processed in stable slot
+order and the first exact program becomes the canonical physical range.
+`unordered_map` iteration order is never used to determine output layout.
+
+Runtime remains unchanged:
+
+```text
+for reference in api.relative_references
+    write_reference(
+        base + reference.target,
+        base + reference.source)
+```
+
+There is no Runtime hash lookup, additional pointer indirection, arithmetic
+reconstruction, branch, LOAD copy or LOAD program rebuild.
+
+`compiled.bin` remains format v24. `type_api` remains 56 bytes.
+`relative_reference` remains 8 bytes. Only duplicate immutable records are no
+longer persisted multiple times.
+
+This optimization does not change Graph WHO/WHERE identity, Stable-WHERE,
+sparse BUILD semantics, FIXED_DIRECT SHM ABI, Object scheduling, link phase
+order or Runtime lifecycle behavior.
