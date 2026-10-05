@@ -688,21 +688,21 @@ server_status create_resident_project(
         return server_status::project_runtime_failed;
     }
 
-    // RUNTIME-V2-LINKS-03:
-    // Constructor defaults and static Graph links are physical Runtime V2
-    // construction phases. Per-object initializations remain the only
-    // compatibility gate in this slice.
+    // RUNTIME-V2-INITIALIZATIONS-04:
+    // Constructor defaults, static Graph links and Source scalar
+    // initializations are all physical Runtime V2 construction phases.
     const auto constructor_defaults =
         compiled.constructor_default_count();
 
     const auto link_count =
         compiled.live_link_count();
 
-    const auto blocking_initializations =
+    const auto initialization_count =
         compiled.initialization_count();
 
-    const auto use_runtime_v2 =
-        blocking_initializations == 0;
+    // Final semantic compatibility gate removed. Keep the legacy source branch
+    // for this validation checkpoint only; it is no longer selectable.
+    const auto use_runtime_v2 = true;
 
     if (telemetry != nullptr) {
         telemetry->runtime_v2 =
@@ -716,8 +716,8 @@ server_status create_resident_project(
             link_count;
 
         telemetry->
-            runtime_v2_blocking_initializations =
-                blocking_initializations;
+            runtime_v2_initialization_count =
+                initialization_count;
     }
 
     runtime_layout legacy_layout;
@@ -816,6 +816,33 @@ server_status create_resident_project(
                 static_cast<std::uint64_t>(
                     v2_runtime.
                         link_dereference_count());
+
+            telemetry->
+                runtime_v2_initialization_dereferences =
+                    static_cast<std::uint64_t>(
+                        v2_runtime.
+                            initialization_dereference_count());
+
+            telemetry->
+                runtime_v2_initializations.
+                    initializations_prepared =
+                static_cast<std::uint64_t>(
+                    v2_runtime.
+                        initialization_count());
+
+            telemetry->
+                runtime_v2_initializations.
+                    endpoint_programs =
+                static_cast<std::uint64_t>(
+                    v2_runtime.
+                        initialization_count());
+
+            telemetry->
+                runtime_v2_initializations.
+                    dereference_steps =
+                static_cast<std::uint64_t>(
+                    v2_runtime.
+                        initialization_dereference_count());
         }
 
         if (prepared_runtime !=
@@ -1227,6 +1254,56 @@ server_status create_resident_project(
                         shm_runtime_v2_result::
                             unsupported_type ||
                     links ==
+                        shm_runtime_v2_result::
+                            incompatible_abi
+                ? server_status::unsupported
+                : server_status::
+                    project_runtime_failed;
+        }
+
+        const auto initializations_started =
+            clock_type::now();
+
+        const auto initializations =
+            materialize_shm_runtime_v2_initializations(
+                v2_runtime,
+                settings.abi,
+                v2_layout,
+                shared_memory.bytes(),
+                telemetry != nullptr
+                    ? &telemetry->
+                        runtime_v2_initializations
+                    : nullptr);
+
+        const auto initializations_finished =
+            clock_type::now();
+
+        if (telemetry != nullptr) {
+            telemetry->
+                materializer.
+                    initializations_ns =
+                elapsed_ns(
+                    initializations_started,
+                    initializations_finished);
+        }
+
+        if (initializations !=
+            shm_runtime_v2_result::success) {
+
+            diagnostics.emit(
+                diagnostic(
+                    diagnostics::project_runtime_failed,
+                    operation)
+                    .file(project_path)
+                    .detail(
+                        runtime_v2_failure_detail(
+                            initializations))
+                    .build());
+
+            return initializations ==
+                        shm_runtime_v2_result::
+                            unsupported_type ||
+                    initializations ==
                         shm_runtime_v2_result::
                             incompatible_abi
                 ? server_status::unsupported

@@ -16,6 +16,7 @@
 
 #include "shm_type_batch.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -44,6 +45,15 @@ struct shm_runtime_v2_link_telemetry final {
     std::uint64_t targets_marked = 0;
     std::uint64_t links_resolved = 0;
     std::uint64_t recursive_resolutions = 0;
+    std::uint64_t dereference_reads = 0;
+};
+
+struct shm_runtime_v2_initialization_telemetry final {
+    std::uint64_t initializations_prepared = 0;
+    std::uint64_t endpoint_programs = 0;
+    std::uint64_t dereference_steps = 0;
+
+    std::uint64_t writes = 0;
     std::uint64_t dereference_reads = 0;
 };
 
@@ -81,13 +91,27 @@ public:
     }
 
     [[nodiscard]] std::size_t link_dereference_count() const noexcept {
-        return endpoint_dereferences.size();
+        return link_dereference_count_value;
+    }
+
+    [[nodiscard]] std::size_t initialization_count() const noexcept {
+        return initializations.size();
+    }
+
+    [[nodiscard]] std::size_t initialization_dereference_count() const noexcept {
+        return endpoint_dereferences.size() >=
+                link_dereference_count_value
+            ? endpoint_dereferences.size() -
+                link_dereference_count_value
+            : 0;
     }
 
     [[nodiscard]] std::size_t resident_bytes() const noexcept {
         return
             area.resident_bytes() +
             links.size() * sizeof(link_plan) +
+            initializations.size() *
+                sizeof(initialization_plan) +
             endpoint_dereferences.size() *
                 sizeof(shm_offset);
     }
@@ -128,17 +152,30 @@ private:
 
     static_assert(sizeof(link_plan) == 88);
 
+    struct initialization_plan final {
+        endpoint_program target{};
+        std::array<std::byte, 16> value{};
+
+        std::uint8_t size = 0;
+        std::uint8_t reserved[7]{};
+    };
+
+    static_assert(sizeof(initialization_plan) == 56);
+
     shm_type_batch area;
 
     // Stable Graph link WHERE -> physical plan. Dead Graph slots remain empty,
     // so ~link_handle remains a direct one-based index into this vector.
     std::vector<link_plan> links;
 
-    // Each word is the folded static displacement immediately before one
-    // native reference dereference.
+    // Source statements produce a dense final initialization list.
+    std::vector<initialization_plan> initializations;
+
+    // Shared physical endpoint bytecode for links and initializations.
     std::vector<shm_offset> endpoint_dereferences;
 
     std::size_t live_link_count_value = 0;
+    std::size_t link_dereference_count_value = 0;
 
     friend class shm_runtime_v2_link_builder;
     friend class shm_runtime_v2_link_executor;
@@ -182,6 +219,14 @@ private:
         const shm_layout&,
         std::span<std::byte>,
         shm_runtime_v2_link_telemetry*) noexcept;
+
+    friend shm_runtime_v2_result
+    materialize_shm_runtime_v2_initializations(
+        shm_runtime_v2&,
+        const server_abi_configuration&,
+        const shm_layout&,
+        std::span<std::byte>,
+        shm_runtime_v2_initialization_telemetry*) noexcept;
 };
 
 // Prepare resolves WHO / semantic endpoint paths once into physical Runtime
@@ -231,5 +276,15 @@ materialize_shm_runtime_v2_links(
     const shm_layout& layout,
     std::span<std::byte> shm,
     shm_runtime_v2_link_telemetry* telemetry = nullptr) noexcept;
+
+// Final construction phase. Source scalar initializations run after all static
+// links so endpoint programs may safely dereference linked native references.
+[[nodiscard]] shm_runtime_v2_result
+materialize_shm_runtime_v2_initializations(
+    shm_runtime_v2& runtime,
+    const server_abi_configuration& abi,
+    const shm_layout& layout,
+    std::span<std::byte> shm,
+    shm_runtime_v2_initialization_telemetry* telemetry = nullptr) noexcept;
 
 }

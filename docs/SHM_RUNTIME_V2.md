@@ -997,3 +997,49 @@ per-object initializations
 ```
 
 Static links no longer require `runtime_layout` or the legacy materializer.
+
+
+## RUNTIME-V2-INITIALIZATIONS-04
+
+Source scalar initializations are now the final native Runtime V2 construction
+phase.
+
+The complete semantic construction order is:
+
+```text
+canonical
+    -> mark static-link targets
+    -> object-major INLINE-64 construction
+       -> constructor post_stores
+    -> resolve/materialize static links
+    -> Source scalar initializations
+```
+
+Graph initialization metadata is consumed during V2 prepare. Each persisted
+initialization becomes one compact physical plan:
+
+```text
+initialization_plan
+    endpoint_program target
+    scalar bytes[<=16]
+    scalar size
+```
+
+The endpoint program is shared with the static-link implementation. Member,
+base and array-index segments are folded into physical offsets; dereference
+steps remain only where the final target depends on a native Runtime reference.
+
+Initialization execution therefore performs no Graph/name/hash/member lookup.
+It follows already-materialized native references, computes one target address,
+and copies one scalar payload.
+
+The scalar codec preserves the legacy FIXED_DIRECT rules for bool/integer/real,
+nullptr and pointer-zero construction. Reference targets, record targets,
+arrays, const-qualified targets and binding constructions fail closed.
+
+`create_resident_project()` no longer has a semantic compatibility condition:
+Runtime V2 is selected for projects containing constructor defaults, static
+links and Source scalar initializations. The legacy branch is intentionally
+left source-visible for this validation checkpoint only and is no longer
+selectable. After this slice passes, RUNTIME-V2-ONLY-05 removes that dead branch
+and its production dependency on runtime_layout/fixed_direct_materializer.

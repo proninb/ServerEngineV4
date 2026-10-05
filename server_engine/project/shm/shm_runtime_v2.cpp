@@ -3,11 +3,13 @@
 #include "../abi/abi_layout.hpp"
 #include "../persistence/compiled_project.hpp"
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <span>
+#include <type_traits>
 #include <utility>
 
 namespace cw::server {
@@ -16,9 +18,11 @@ class shm_runtime_v2_link_builder final {
 public:
     shm_runtime_v2_link_builder(
         const compiled_project_view& project,
+        const server_abi_configuration& abi,
         const shm_layout& layout,
         shm_runtime_v2& output) noexcept
         : project(project),
+          abi(abi),
           layout(layout),
           output(output) {
     }
@@ -26,8 +30,19 @@ public:
     [[nodiscard]] shm_runtime_v2_result build() {
 
         output.links.clear();
+        output.initializations.clear();
         output.endpoint_dereferences.clear();
         output.live_link_count_value = 0;
+        output.link_dereference_count_value = 0;
+
+        if (!host_compatible(
+                abi.target) ||
+            layout.target() !=
+                abi.target) {
+
+            return shm_runtime_v2_result::
+                incompatible_abi;
+        }
 
         output.links.resize(
             project.link_count());
@@ -102,15 +117,99 @@ public:
             ++output.live_link_count_value;
         }
 
-        return
-            output.live_link_count_value ==
-                project.live_link_count()
-            ? shm_runtime_v2_result::success
-            : shm_runtime_v2_result::
+        if (output.live_link_count_value !=
+            project.live_link_count()) {
+
+            return shm_runtime_v2_result::
                 invalid_input;
+        }
+
+        output.link_dereference_count_value =
+            output.endpoint_dereferences.size();
+
+        output.initializations.reserve(
+            project.initialization_count());
+
+        for (std::size_t index = 0;
+             index <
+                 project.initialization_count();
+             ++index) {
+
+            object_initialization_record
+                initialization;
+
+            if (!project.initialization_at(
+                    index,
+                    initialization)) {
+
+                return shm_runtime_v2_result::
+                    invalid_input;
+            }
+
+            shm_runtime_v2::
+                initialization_plan plan;
+
+            type_ref target_type;
+
+            const auto target =
+                compile_endpoint(
+                    initialization.target,
+                    plan.target,
+                    &target_type);
+
+            if (target !=
+                    shm_runtime_v2_result::
+                        success ||
+                plan.target.final_reference) {
+
+                return target ==
+                        shm_runtime_v2_result::
+                            success
+                    ? shm_runtime_v2_result::
+                        invalid_input
+                    : target;
+            }
+
+            const auto encoded =
+                encode_initialization(
+                    target_type,
+                    initialization.value,
+                    plan);
+
+            if (encoded !=
+                shm_runtime_v2_result::
+                    success) {
+
+                return encoded;
+            }
+
+            output.initializations.push_back(
+                plan);
+        }
+
+        return shm_runtime_v2_result::
+            success;
     }
 
 private:
+    [[nodiscard]] static bool host_compatible(
+        abi_target target) noexcept {
+
+#if defined(_WIN32)
+        if constexpr (sizeof(void*) == 8) {
+            return target ==
+                abi_target::windows_x64;
+        }
+        else {
+            return target ==
+                abi_target::windows_x86;
+        }
+#else
+        return sizeof(void*) == 8 &&
+            target ==
+                abi_target::posix_x64;
+#endif
+    }
     [[nodiscard]] bool add_offset(
         shm_offset& target,
         shm_offset value) const noexcept {
@@ -411,7 +510,8 @@ private:
     [[nodiscard]] shm_runtime_v2_result
     compile_endpoint(
         object_endpoint endpoint,
-        shm_runtime_v2::endpoint_program& program) {
+        shm_runtime_v2::endpoint_program& program,
+        type_ref* resolved_type = nullptr) {
 
         program = {};
 
@@ -604,11 +704,449 @@ private:
                 current_type,
                 ignored);
 
+        if (resolved_type != nullptr) {
+            *resolved_type =
+                current_type;
+        }
+
         return shm_runtime_v2_result::
             success;
     }
 
+    template <typename T>
+    [[nodiscard]] static bool integer_value(
+        construction_value construction,
+        T& value) noexcept {
+
+        static_assert(
+            std::is_integral_v<T>);
+
+        value = {};
+
+        if (construction.kind ==
+            construction_kind::zero) {
+
+            return true;
+        }
+
+        if (construction.kind ==
+            construction_kind::
+                signed_integer) {
+
+            const auto source =
+                std::bit_cast<std::int64_t>(
+                    construction.bits());
+
+            if constexpr (
+                std::is_signed_v<T>) {
+
+                if (source <
+                        static_cast<std::int64_t>(
+                            (std::numeric_limits<
+                                T>::min)()) ||
+                    source >
+                        static_cast<std::int64_t>(
+                            (std::numeric_limits<
+                                T>::max)())) {
+
+                    return false;
+                }
+            }
+            else {
+                if (source < 0 ||
+                    static_cast<std::uint64_t>(
+                        source) >
+                        static_cast<std::uint64_t>(
+                            (std::numeric_limits<
+                                T>::max)())) {
+
+                    return false;
+                }
+            }
+
+            value =
+                static_cast<T>(
+                    source);
+
+            return true;
+        }
+
+        if (construction.kind ==
+            construction_kind::
+                unsigned_integer) {
+
+            const auto source =
+                construction.bits();
+
+            if (source >
+                static_cast<std::uint64_t>(
+                    (std::numeric_limits<
+                        T>::max)())) {
+
+                return false;
+            }
+
+            value =
+                static_cast<T>(
+                    source);
+
+            return true;
+        }
+
+        return false;
+    }
+
+    template <typename T>
+    [[nodiscard]] static
+    shm_runtime_v2_result encode_native(
+        const T& value,
+        shm_runtime_v2::
+            initialization_plan& plan) noexcept {
+
+        static_assert(
+            std::is_trivially_copyable_v<T>);
+        static_assert(sizeof(T) <= 16);
+
+        plan.value = {};
+        std::memcpy(
+            plan.value.data(),
+            &value,
+            sizeof(T));
+
+        plan.size =
+            static_cast<std::uint8_t>(
+                sizeof(T));
+
+        return shm_runtime_v2_result::
+            success;
+    }
+
+    template <typename T>
+    [[nodiscard]] static
+    shm_runtime_v2_result encode_integer(
+        construction_value construction,
+        shm_runtime_v2::
+            initialization_plan& plan) noexcept {
+
+        T value{};
+
+        return integer_value(
+                   construction,
+                   value)
+            ? encode_native(
+                value,
+                plan)
+            : shm_runtime_v2_result::
+                invalid_input;
+    }
+
+    template <typename T>
+    [[nodiscard]] static
+    shm_runtime_v2_result encode_real(
+        construction_value construction,
+        shm_runtime_v2::
+            initialization_plan& plan) noexcept {
+
+        T value{};
+
+        switch (construction.kind) {
+        case construction_kind::zero:
+            break;
+
+        case construction_kind::
+            signed_integer:
+            value =
+                static_cast<T>(
+                    std::bit_cast<std::int64_t>(
+                        construction.bits()));
+            break;
+
+        case construction_kind::
+            unsigned_integer:
+            value =
+                static_cast<T>(
+                    construction.bits());
+            break;
+
+        case construction_kind::real:
+            value =
+                static_cast<T>(
+                    std::bit_cast<double>(
+                        construction.bits()));
+            break;
+
+        case construction_kind::
+            member_binding:
+        case construction_kind::
+            object_binding:
+        case construction_kind::
+            unsupported:
+            return shm_runtime_v2_result::
+                invalid_input;
+        }
+
+        return encode_native(
+            value,
+            plan);
+    }
+
+    [[nodiscard]] static bool
+    zero_pointer_construction(
+        construction_value construction) noexcept {
+
+        if (construction.kind ==
+            construction_kind::zero) {
+
+            return true;
+        }
+
+        if (construction.kind ==
+                construction_kind::
+                    signed_integer ||
+            construction.kind ==
+                construction_kind::
+                    unsigned_integer) {
+
+            return construction.bits() == 0;
+        }
+
+        return false;
+    }
+
+    [[nodiscard]] shm_runtime_v2_result
+    encode_pointer_zero(
+        construction_value construction,
+        shm_runtime_v2::
+            initialization_plan& plan) const noexcept {
+
+        if (!zero_pointer_construction(
+                construction)) {
+
+            return shm_runtime_v2_result::
+                invalid_input;
+        }
+
+        abi_properties properties;
+
+        if (!abi_layout_properties(
+                abi.target,
+                properties) ||
+            (properties.pointer_size != 4 &&
+             properties.pointer_size != 8)) {
+
+            return shm_runtime_v2_result::
+                incompatible_abi;
+        }
+
+        plan.value = {};
+        plan.size =
+            properties.pointer_size;
+
+        return shm_runtime_v2_result::
+            success;
+    }
+
+    [[nodiscard]] shm_runtime_v2_result
+    encode_initialization(
+        type_ref type,
+        construction_value construction,
+        shm_runtime_v2::
+            initialization_plan& plan) const noexcept {
+
+        derived_type_record derived;
+
+        for (;;) {
+            if (!project.derived(
+                    type,
+                    derived)) {
+
+                break;
+            }
+
+            if (derived.kind ==
+                derived_type_kind::
+                    const_qualified) {
+
+                return shm_runtime_v2_result::
+                    invalid_input;
+            }
+
+            if (derived.kind ==
+                derived_type_kind::
+                    volatile_qualified) {
+
+                type =
+                    derived.child;
+
+                continue;
+            }
+
+            break;
+        }
+
+        if (type.kind() ==
+            type_ref_kind::intrinsic) {
+
+            switch (
+                static_cast<intrinsic_type>(
+                    type.payload())) {
+
+            case intrinsic_type::bool_type: {
+                bool value = false;
+
+                switch (construction.kind) {
+                case construction_kind::zero:
+                    break;
+
+                case construction_kind::
+                    signed_integer:
+                    value =
+                        std::bit_cast<
+                            std::int64_t>(
+                                construction.bits()) !=
+                        0;
+                    break;
+
+                case construction_kind::
+                    unsigned_integer:
+                    value =
+                        construction.bits() !=
+                        0;
+                    break;
+
+                case construction_kind::real:
+                    value =
+                        std::bit_cast<double>(
+                            construction.bits()) !=
+                        0.0;
+                    break;
+
+                case construction_kind::
+                    member_binding:
+                case construction_kind::
+                    object_binding:
+                case construction_kind::
+                    unsupported:
+                    return shm_runtime_v2_result::
+                        invalid_input;
+                }
+
+                return encode_native(
+                    value,
+                    plan);
+            }
+
+            case intrinsic_type::char_type:
+                return encode_integer<char>(
+                    construction,
+                    plan);
+            case intrinsic_type::signed_char:
+                return encode_integer<
+                    signed char>(
+                        construction,
+                        plan);
+            case intrinsic_type::unsigned_char:
+                return encode_integer<
+                    unsigned char>(
+                        construction,
+                        plan);
+            case intrinsic_type::wchar_type:
+                return encode_integer<wchar_t>(
+                    construction,
+                    plan);
+            case intrinsic_type::char8_type:
+                return encode_integer<char8_t>(
+                    construction,
+                    plan);
+            case intrinsic_type::char16_type:
+                return encode_integer<char16_t>(
+                    construction,
+                    plan);
+            case intrinsic_type::char32_type:
+                return encode_integer<char32_t>(
+                    construction,
+                    plan);
+            case intrinsic_type::signed_short:
+                return encode_integer<short>(
+                    construction,
+                    plan);
+            case intrinsic_type::unsigned_short:
+                return encode_integer<
+                    unsigned short>(
+                        construction,
+                        plan);
+            case intrinsic_type::signed_int:
+                return encode_integer<int>(
+                    construction,
+                    plan);
+            case intrinsic_type::unsigned_int:
+                return encode_integer<
+                    unsigned int>(
+                        construction,
+                        plan);
+            case intrinsic_type::signed_long:
+                return encode_integer<long>(
+                    construction,
+                    plan);
+            case intrinsic_type::unsigned_long:
+                return encode_integer<
+                    unsigned long>(
+                        construction,
+                        plan);
+            case intrinsic_type::signed_long_long:
+                return encode_integer<
+                    long long>(
+                        construction,
+                        plan);
+            case intrinsic_type::unsigned_long_long:
+                return encode_integer<
+                    unsigned long long>(
+                        construction,
+                        plan);
+            case intrinsic_type::float_type:
+                return encode_real<float>(
+                    construction,
+                    plan);
+            case intrinsic_type::double_type:
+                return encode_real<double>(
+                    construction,
+                    plan);
+            case intrinsic_type::long_double_type:
+                return encode_real<long double>(
+                    construction,
+                    plan);
+            case intrinsic_type::nullptr_type:
+                return encode_pointer_zero(
+                    construction,
+                    plan);
+            case intrinsic_type::void_type:
+                return shm_runtime_v2_result::
+                    unsupported_type;
+            case intrinsic_type::none:
+                return shm_runtime_v2_result::
+                    invalid_input;
+            }
+        }
+
+        if (type.kind() ==
+            type_ref_kind::derived &&
+            project.derived(
+                type,
+                derived) &&
+            derived.kind ==
+                derived_type_kind::pointer) {
+
+            return encode_pointer_zero(
+                construction,
+                plan);
+        }
+
+        return shm_runtime_v2_result::
+            invalid_input;
+    }
+
     const compiled_project_view& project;
+    const server_abi_configuration& abi;
     const shm_layout& layout;
     shm_runtime_v2& output;
 };
@@ -621,12 +1159,16 @@ public:
         const server_abi_configuration& abi,
         const shm_layout& layout,
         std::span<std::byte> shm,
-        shm_runtime_v2_link_telemetry* telemetry) noexcept
+        shm_runtime_v2_link_telemetry* telemetry,
+        shm_runtime_v2_initialization_telemetry*
+            initialization_telemetry = nullptr) noexcept
         : runtime(runtime),
           abi(abi),
           layout(layout),
           shm(shm),
-          telemetry(telemetry) {
+          telemetry(telemetry),
+          initialization_telemetry(
+              initialization_telemetry) {
     }
 
     [[nodiscard]] shm_runtime_v2_result mark() noexcept {
@@ -764,6 +1306,91 @@ public:
                     success) {
 
                 return resolved;
+            }
+        }
+
+        return shm_runtime_v2_result::
+            success;
+    }
+
+    [[nodiscard]] shm_runtime_v2_result
+    materialize_initializations() noexcept {
+
+        const auto valid =
+            validate();
+
+        if (valid !=
+            shm_runtime_v2_result::success) {
+
+            return valid;
+        }
+
+        if (initialization_telemetry != nullptr) {
+            initialization_telemetry->
+                initializations_prepared =
+                    runtime.initializations.size();
+
+            initialization_telemetry->
+                endpoint_programs =
+                    runtime.initializations.size();
+
+            initialization_telemetry->
+                dereference_steps =
+                    runtime.
+                        initialization_dereference_count();
+        }
+
+        for (const auto& initialization :
+             runtime.initializations) {
+
+            if (initialization.size == 0 ||
+                initialization.size >
+                    initialization.value.size() ||
+                initialization.target.
+                    final_reference) {
+
+                return shm_runtime_v2_result::
+                    invalid_input;
+            }
+
+            shm_offset target = 0;
+
+            const auto located =
+                endpoint_position(
+                    initialization.target,
+                    false,
+                    target);
+
+            if (located !=
+                    shm_runtime_v2_result::
+                        success ||
+                target >
+                    layout.size() ||
+                static_cast<shm_offset>(
+                    initialization.size) >
+                    layout.size() -
+                        target) {
+
+                return located ==
+                        shm_runtime_v2_result::
+                            success
+                    ? shm_runtime_v2_result::
+                        invalid_input
+                    : located;
+            }
+
+            std::memcpy(
+                shm.data() +
+                    static_cast<std::size_t>(
+                        target),
+                initialization.value.data(),
+                initialization.size);
+
+            if (initialization_telemetry !=
+                nullptr) {
+
+                ++initialization_telemetry->
+                    writes;
             }
         }
 
@@ -1166,6 +1793,13 @@ private:
                     dereference_reads;
             }
 
+            if (initialization_telemetry !=
+                nullptr) {
+
+                ++initialization_telemetry->
+                    dereference_reads;
+            }
+
             if (runtime_address(
                     word)) {
 
@@ -1416,6 +2050,8 @@ private:
     const shm_layout& layout;
     std::span<std::byte> shm;
     shm_runtime_v2_link_telemetry* telemetry = nullptr;
+    shm_runtime_v2_initialization_telemetry*
+        initialization_telemetry = nullptr;
 
     abi_properties properties{};
     std::uint64_t base_address = 0;
@@ -1462,6 +2098,7 @@ shm_runtime_v2_result prepare_shm_runtime_v2(
     try {
         shm_runtime_v2_link_builder builder{
             project,
+            abi,
             layout,
             output,
         };
@@ -1568,6 +2205,29 @@ materialize_shm_runtime_v2_links(
     };
 
     return executor.materialize();
+}
+
+shm_runtime_v2_result
+materialize_shm_runtime_v2_initializations(
+    shm_runtime_v2& runtime,
+    const server_abi_configuration& abi,
+    const shm_layout& layout,
+    std::span<std::byte> shm,
+    shm_runtime_v2_initialization_telemetry*
+        telemetry) noexcept {
+
+    shm_runtime_v2_link_executor executor{
+        runtime,
+        abi,
+        layout,
+        shm,
+        nullptr,
+        telemetry,
+    };
+
+    return
+        executor.
+            materialize_initializations();
 }
 
 }

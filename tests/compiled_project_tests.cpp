@@ -296,6 +296,214 @@ void test_nested_defaults_persistence(test_state& tests) {
             actual.matrix[1][0] == 0 && actual.matrix[1][1] == 0,
             "persisted multidimensional and record-array defaults preserve neighboring elements");
     }
+
+    // RUNTIME-V2-INITIALIZATIONS-04:
+    // Re-run the rich fixture through the full V2 ordering:
+    // canonical -> mark links -> objects -> links -> initializations.
+    shm_layout v2_layout;
+    shm_runtime_v2 v2_model;
+
+    if (!tests.expect(
+            prepare_shm_layout(
+                view,
+                abi,
+                v2_layout) ==
+                shm_layout_result::success &&
+            prepare_shm_runtime_v2(
+                view,
+                abi,
+                v2_layout,
+                v2_model) ==
+                shm_runtime_v2_result::success,
+            "prepare Runtime V2 nested/default/link/initialization fixture")) {
+
+        return;
+    }
+
+    std::vector<std::byte> v2_runtime(
+        static_cast<std::size_t>(
+            v2_layout.size()),
+        std::byte{0});
+
+    shm_runtime_v2_initialization_telemetry
+        v2_initialization_telemetry;
+
+    if (!tests.expect(
+            materialize_shm_runtime_v2_canonical(
+                v2_model,
+                abi,
+                v2_layout,
+                v2_runtime) ==
+                shm_runtime_v2_result::success &&
+            mark_shm_runtime_v2_links(
+                v2_model,
+                abi,
+                v2_layout,
+                v2_runtime) ==
+                shm_runtime_v2_result::success &&
+            materialize_shm_runtime_v2_objects(
+                v2_model,
+                abi,
+                v2_layout,
+                v2_runtime) ==
+                shm_runtime_v2_result::success &&
+            materialize_shm_runtime_v2_links(
+                v2_model,
+                abi,
+                v2_layout,
+                v2_runtime) ==
+                shm_runtime_v2_result::success &&
+            materialize_shm_runtime_v2_initializations(
+                v2_model,
+                abi,
+                v2_layout,
+                v2_runtime,
+                &v2_initialization_telemetry) ==
+                shm_runtime_v2_result::success,
+            "materialize complete Runtime V2 semantic construction pipeline")) {
+
+        return;
+    }
+
+    const auto scalar_object =
+        view.find_object(
+            scalar_id);
+
+    const auto alias_object =
+        view.find_object(
+            alias_id);
+
+    const auto instance_object =
+        view.find_object(
+            identity(
+                "instance",
+                identity_kind::object));
+
+    shm_offset scalar_where = 0;
+    shm_offset alias_where = 0;
+    shm_offset instance_where = 0;
+
+    type_entry v2_owner;
+    type_entry v2_leaf;
+
+    const auto v2_owner_handle =
+        view.find_type(
+            owner_id);
+
+    const auto v2_leaf_handle =
+        view.find_type(
+            leaf_id);
+
+    const auto p_index =
+        view.find_member(
+            v2_owner_handle,
+            name("p"));
+
+    const auto other_index =
+        view.find_member(
+            v2_owner_handle,
+            name("other"));
+
+    const auto value_index =
+        view.find_member(
+            v2_leaf_handle,
+            name("value"));
+
+    shm_record_offset p_where = 0;
+    shm_record_offset other_where = 0;
+    shm_record_offset value_where = 0;
+
+    if (!tests.expect(
+            scalar_object &&
+            alias_object &&
+            instance_object &&
+            v2_layout.object_offset(
+                scalar_object,
+                scalar_where) &&
+            v2_layout.object_offset(
+                alias_object,
+                alias_where) &&
+            v2_layout.object_offset(
+                instance_object,
+                instance_where) &&
+            view.type(
+                v2_owner_handle,
+                v2_owner) &&
+            view.type(
+                v2_leaf_handle,
+                v2_leaf) &&
+            p_index &&
+            other_index &&
+            value_index &&
+            v2_layout.member_offset(
+                static_cast<std::size_t>(
+                    v2_owner.members.begin) +
+                    p_index.value(),
+                p_where) &&
+            v2_layout.member_offset(
+                static_cast<std::size_t>(
+                    v2_owner.members.begin) +
+                    other_index.value(),
+                other_where) &&
+            v2_layout.member_offset(
+                static_cast<std::size_t>(
+                    v2_leaf.members.begin) +
+                    value_index.value(),
+                value_where),
+            "locate Runtime V2 semantic construction values")) {
+
+        return;
+    }
+
+    int v2_scalar = 0;
+    int v2_default = 0;
+    int v2_through_reference = 0;
+    std::uintptr_t v2_alias = 0;
+
+    std::memcpy(
+        &v2_scalar,
+        v2_runtime.data() +
+            static_cast<std::size_t>(
+                scalar_where),
+        sizeof(v2_scalar));
+
+    std::memcpy(
+        &v2_alias,
+        v2_runtime.data() +
+            static_cast<std::size_t>(
+                alias_where),
+        sizeof(v2_alias));
+
+    std::memcpy(
+        &v2_default,
+        v2_runtime.data() +
+            static_cast<std::size_t>(
+                instance_where +
+                p_where +
+                value_where),
+        sizeof(v2_default));
+
+    std::memcpy(
+        &v2_through_reference,
+        v2_runtime.data() +
+            static_cast<std::size_t>(
+                instance_where +
+                other_where +
+                value_where),
+        sizeof(v2_through_reference));
+
+    tests.expect(
+        v2_scalar == 73 &&
+        v2_alias ==
+            reinterpret_cast<std::uintptr_t>(
+                v2_runtime.data() +
+                static_cast<std::size_t>(
+                    scalar_where)) &&
+        v2_default == 42 &&
+        v2_through_reference == 19 &&
+        v2_initialization_telemetry.writes ==
+            view.initialization_count(),
+        "Runtime V2 preserves constructor/link/initialization ordering");
 }
 
 void test_class_abi_persistence(

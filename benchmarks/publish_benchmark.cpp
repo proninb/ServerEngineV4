@@ -514,9 +514,18 @@ int main(
             << ",runtime_v2_pending_link_preserves="
             << runtime_telemetry.
                 runtime_v2_objects.pending_link_preserves
-            << ",runtime_v2_blocking_initializations="
+            << ",runtime_v2_initialization_count="
             << runtime_telemetry.
-                runtime_v2_blocking_initializations
+                runtime_v2_initialization_count
+            << ",runtime_v2_initialization_dereferences="
+            << runtime_telemetry.
+                runtime_v2_initialization_dereferences
+            << ",runtime_v2_initialization_writes="
+            << runtime_telemetry.
+                runtime_v2_initializations.writes
+            << ",runtime_v2_initialization_dereference_reads="
+            << runtime_telemetry.
+                runtime_v2_initializations.dereference_reads
             << ",runtime_layout_ms="
             << ns_to_ms(
                 runtime_telemetry.layout_ns)
