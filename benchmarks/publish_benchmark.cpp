@@ -529,6 +529,8 @@ int main(
                 runtime_telemetry.shm_pretouch_ns)
             << ",shm_pretouch_lanes="
             << runtime_telemetry.shm_pretouch_lanes
+            << ",runtime_v2_object_lanes="
+            << runtime_telemetry.runtime_v2_object_lanes
             << ",materialization_ms="
             << ns_to_ms(
                 runtime_telemetry.materialization_ns)

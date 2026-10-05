@@ -1472,3 +1472,38 @@ mmap compiled.bin
 
 `prepare_shm_type_batch_inline64()` remains the semantic compiler for
 PUBLISH/tests, but is no longer called by production LOAD.
+
+## RUNTIME-SHM-PARALLEL-OBJECTS-09C-02A
+
+The no-pre-touch experiment was rejected by measurement: removing the 24-lane
+page establishment pass moved first-touch faults into the mostly serial
+object-major executor and approximately doubled LOAD time. Parallel pre-touch
+therefore remains part of the production path.
+
+Object construction is now partitioned into disjoint top-level Object ranges:
+
+```text
+canonical
+-> mark static-link targets
+-> parallel Object ranges
+-> barrier
+-> resolve links
+-> source initializations
+```
+
+Each lane executes the existing INLINE-64 object-major program. Cross-object
+references only write an address into the current Object and do not require the
+referenced Object to have already executed. Static-link target markers are
+installed before the Object phase and preserved by the normal reference-write
+logic.
+
+Lane telemetry is private during execution and reduced after the barrier, so
+the hot Object path adds no mutex or atomic telemetry updates.
+
+This first A/B slice deliberately uses a separate worker pool for Object
+construction; `objects_ms` therefore includes worker creation overhead.
+`runtime_v2_object_lanes` exposes the actual fan-out.
+
+No persisted format, PUBLISH encoding, BUILD semantics or FIXED_DIRECT ABI
+contract changes in this slice.
+

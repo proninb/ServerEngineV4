@@ -3393,14 +3393,50 @@ public:
     [[nodiscard]] shm_type_batch_result
     objects_object_major() noexcept {
 
+        return objects_object_major_range(
+            0,
+            object_records.size());
+    }
+
+    [[nodiscard]] shm_type_batch_result
+    objects_object_major_range(
+        std::size_t object_begin,
+        std::size_t object_count) noexcept {
+
         const auto valid = validate();
-        if (valid != shm_type_batch_result::success) {
+
+        if (valid !=
+            shm_type_batch_result::success) {
+
             return valid;
         }
 
-        for (const auto& object : object_records) {
-            if (object.offset >= area.layout_size) {
-                return shm_type_batch_result::invalid_input;
+        if (object_begin >
+                object_records.size() ||
+            object_count >
+                object_records.size() -
+                    object_begin) {
+
+            return shm_type_batch_result::
+                invalid_input;
+        }
+
+        const auto object_end =
+            object_begin +
+            object_count;
+
+        for (std::size_t index = object_begin;
+             index < object_end;
+             ++index) {
+
+            const auto& object =
+                object_records[index];
+
+            if (object.offset >=
+                area.layout_size) {
+
+                return shm_type_batch_result::
+                    invalid_input;
             }
 
             if (object.type_api != 0) {
@@ -3410,7 +3446,9 @@ public:
                         object.offset);
 
                 if (result !=
-                    shm_type_batch_result::success) {
+                    shm_type_batch_result::
+                        success) {
+
                     return result;
                 }
             }
@@ -3418,7 +3456,9 @@ public:
             if (object.patch != 0) {
                 if (object.patch >
                     object_patches.size()) {
-                    return shm_type_batch_result::invalid_input;
+
+                    return shm_type_batch_result::
+                        invalid_input;
                 }
 
                 const auto result =
@@ -3428,22 +3468,26 @@ public:
                         object.offset);
 
                 if (result !=
-                    shm_type_batch_result::success) {
+                    shm_type_batch_result::
+                        success) {
+
                     return result;
                 }
 
                 if (telemetry != nullptr) {
-                    ++telemetry->object_patch_writes;
+                    ++telemetry->
+                        object_patch_writes;
                 }
             }
         }
 
         if (telemetry != nullptr) {
             telemetry->objects =
-                object_records.size();
+                object_count;
         }
 
-        return shm_type_batch_result::success;
+        return shm_type_batch_result::
+            success;
     }
 
 
@@ -4951,6 +4995,30 @@ materialize_shm_type_batch_objects_object_major(
     };
 
     return executor.objects_object_major();
+}
+
+
+shm_type_batch_result
+materialize_shm_type_batch_objects_object_major_range(
+    const shm_type_batch& area,
+    const server_abi_configuration& abi,
+    const shm_layout& layout,
+    std::span<std::byte> shm,
+    std::size_t object_begin,
+    std::size_t object_count,
+    shm_type_batch_execute_telemetry* telemetry) noexcept {
+
+    shm_type_batch_executor executor{
+        area,
+        abi,
+        layout,
+        shm,
+        telemetry,
+    };
+
+    return executor.objects_object_major_range(
+        object_begin,
+        object_count);
 }
 
 

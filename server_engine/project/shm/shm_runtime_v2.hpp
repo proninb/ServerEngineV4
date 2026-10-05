@@ -356,6 +356,16 @@ private:
         shm_runtime_v2_execute_telemetry*) noexcept;
 
     friend shm_runtime_v2_result
+    materialize_shm_runtime_v2_objects_range(
+        const shm_runtime_v2&,
+        const server_abi_configuration&,
+        const shm_layout&,
+        std::span<std::byte>,
+        std::size_t,
+        std::size_t,
+        shm_runtime_v2_execute_telemetry*) noexcept;
+
+    friend shm_runtime_v2_result
     materialize_shm_runtime_v2_links(
         shm_runtime_v2&,
         const server_abi_configuration&,
@@ -435,6 +445,16 @@ materialize_shm_runtime_v2_objects(
     const server_abi_configuration& abi,
     const shm_layout& layout,
     std::span<std::byte> shm,
+    shm_runtime_v2_execute_telemetry* telemetry = nullptr) noexcept;
+
+[[nodiscard]] shm_runtime_v2_result
+materialize_shm_runtime_v2_objects_range(
+    const shm_runtime_v2& runtime,
+    const server_abi_configuration& abi,
+    const shm_layout& layout,
+    std::span<std::byte> shm,
+    std::size_t object_begin,
+    std::size_t object_count,
     shm_runtime_v2_execute_telemetry* telemetry = nullptr) noexcept;
 
 // Static-link pass 2. Sources are resolved from physical endpoint programs.

@@ -20,6 +20,7 @@
 #include <span>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace cw::server {
 
@@ -377,6 +378,225 @@ runtime_pretouch(
     }
 
     return active_lanes;
+}
+
+void add_runtime_object_telemetry(
+    shm_runtime_v2_execute_telemetry& target,
+    const shm_runtime_v2_execute_telemetry& source) noexcept {
+
+    target.api_applications += source.api_applications;
+    target.canonical_roots += source.canonical_roots;
+    target.objects += source.objects;
+    target.reference_writes += source.reference_writes;
+    target.relative_reference_writes +=
+        source.relative_reference_writes;
+    target.absolute_reference_writes +=
+        source.absolute_reference_writes;
+    target.object_reference_writes +=
+        source.object_reference_writes;
+    target.store_writes += source.store_writes;
+    target.constructor_default_writes +=
+        source.constructor_default_writes;
+    target.pending_link_preserves +=
+        source.pending_link_preserves;
+    target.batch_api_applications +=
+        source.batch_api_applications;
+    target.child_visits += source.child_visits;
+    target.repeat_visits += source.repeat_visits;
+    target.repeat_iterations += source.repeat_iterations;
+    target.object_batches += source.object_batches;
+    target.canonical_batches += source.canonical_batches;
+    target.object_patch_writes +=
+        source.object_patch_writes;
+}
+
+struct runtime_object_job final {
+    const shm_runtime_v2* runtime = nullptr;
+    const server_abi_configuration* abi = nullptr;
+    const shm_layout* layout = nullptr;
+    std::span<std::byte> shm;
+    std::size_t object_count = 0;
+    std::size_t active_lanes = 1;
+    std::span<shm_runtime_v2_result> results;
+    std::span<shm_runtime_v2_execute_telemetry> telemetry;
+};
+
+void runtime_object_lane(
+    void* value,
+    std::size_t lane) noexcept {
+
+    auto& job =
+        *static_cast<runtime_object_job*>(
+            value);
+
+    if (lane >=
+            job.active_lanes ||
+        job.active_lanes == 0) {
+
+        return;
+    }
+
+    const auto base =
+        job.object_count /
+        job.active_lanes;
+
+    const auto remainder =
+        job.object_count %
+        job.active_lanes;
+
+    const auto preceding_extra =
+        lane < remainder
+        ? lane
+        : remainder;
+
+    const auto begin =
+        lane *
+            base +
+        preceding_extra;
+
+    const auto count =
+        base +
+        static_cast<std::size_t>(
+            lane < remainder);
+
+    job.results[lane] =
+        materialize_shm_runtime_v2_objects_range(
+            *job.runtime,
+            *job.abi,
+            *job.layout,
+            job.shm,
+            begin,
+            count,
+            &job.telemetry[lane]);
+}
+
+[[nodiscard]] shm_runtime_v2_result
+runtime_materialize_objects_parallel(
+    const shm_runtime_v2& runtime,
+    const server_abi_configuration& abi,
+    const shm_layout& layout,
+    std::span<std::byte> shm,
+    shm_runtime_v2_execute_telemetry* telemetry,
+    std::size_t& lanes_used) noexcept {
+
+    lanes_used = 1;
+
+    if (telemetry != nullptr) {
+        *telemetry = {};
+    }
+
+    const auto object_count =
+        runtime.object_count();
+
+    const auto capacity =
+        execution_lane_capacity();
+
+    const auto active_lanes =
+        object_count <
+            capacity
+        ? object_count
+        : capacity;
+
+    if (active_lanes <= 1) {
+        return materialize_shm_runtime_v2_objects(
+            runtime,
+            abi,
+            layout,
+            shm,
+            telemetry);
+    }
+
+    try {
+        std::vector<shm_runtime_v2_result>
+            results(
+                active_lanes,
+                shm_runtime_v2_result::success);
+
+        std::vector<shm_runtime_v2_execute_telemetry>
+            lane_telemetry(
+                active_lanes);
+
+        execution_lanes lanes;
+
+        if (!succeeded(
+                lanes.start(
+                    active_lanes))) {
+
+            return materialize_shm_runtime_v2_objects(
+                runtime,
+                abi,
+                layout,
+                shm,
+                telemetry);
+        }
+
+        runtime_object_job job{
+            &runtime,
+            &abi,
+            &layout,
+            shm,
+            object_count,
+            active_lanes,
+            results,
+            lane_telemetry,
+        };
+
+        if (!succeeded(
+                lanes.run(
+                    active_lanes,
+                    runtime_object_lane,
+                    &job))) {
+
+            if (telemetry != nullptr) {
+                *telemetry = {};
+            }
+
+            return materialize_shm_runtime_v2_objects(
+                runtime,
+                abi,
+                layout,
+                shm,
+                telemetry);
+        }
+
+        for (const auto result :
+             results) {
+
+            if (result !=
+                shm_runtime_v2_result::success) {
+
+                return result;
+            }
+        }
+
+        if (telemetry != nullptr) {
+            for (const auto& value :
+                 lane_telemetry) {
+
+                add_runtime_object_telemetry(
+                    *telemetry,
+                    value);
+            }
+        }
+
+        lanes_used =
+            active_lanes;
+
+        return shm_runtime_v2_result::
+            success;
+    }
+    catch (...) {
+        if (telemetry != nullptr) {
+            *telemetry = {};
+        }
+
+        return materialize_shm_runtime_v2_objects(
+            runtime,
+            abi,
+            layout,
+            shm,
+            telemetry);
+    }
 }
 
 [[nodiscard]] bool runtime_mapping_size(
@@ -921,8 +1141,10 @@ server_status create_resident_project(
     const auto objects_started =
         clock_type::now();
 
+    std::size_t object_lanes = 1;
+
     const auto objects =
-        materialize_shm_runtime_v2_objects(
+        runtime_materialize_objects_parallel(
             v2_runtime,
             settings.abi,
             v2_layout,
@@ -930,7 +1152,8 @@ server_status create_resident_project(
             telemetry != nullptr
                 ? &telemetry->
                     runtime_v2_objects
-                : nullptr);
+                : nullptr,
+            object_lanes);
 
     const auto objects_finished =
         clock_type::now();
@@ -940,6 +1163,9 @@ server_status create_resident_project(
             elapsed_ns(
                 objects_started,
                 objects_finished);
+
+        telemetry->runtime_v2_object_lanes =
+            object_lanes;
     }
 
     if (objects !=

@@ -591,4 +591,14 @@ materialize_shm_type_batch_objects_object_major(
     std::span<std::byte> shm,
     shm_type_batch_execute_telemetry* telemetry = nullptr) noexcept;
 
+[[nodiscard]] shm_type_batch_result
+materialize_shm_type_batch_objects_object_major_range(
+    const shm_type_batch& area,
+    const server_abi_configuration& abi,
+    const shm_layout& layout,
+    std::span<std::byte> shm,
+    std::size_t object_begin,
+    std::size_t object_count,
+    shm_type_batch_execute_telemetry* telemetry = nullptr) noexcept;
+
 }

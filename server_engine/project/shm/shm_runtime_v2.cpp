@@ -3398,6 +3398,27 @@ materialize_shm_runtime_v2_objects(
 }
 
 shm_runtime_v2_result
+materialize_shm_runtime_v2_objects_range(
+    const shm_runtime_v2& runtime,
+    const server_abi_configuration& abi,
+    const shm_layout& layout,
+    std::span<std::byte> shm,
+    std::size_t object_begin,
+    std::size_t object_count,
+    shm_runtime_v2_execute_telemetry* telemetry) noexcept {
+
+    return
+        materialize_shm_type_batch_objects_object_major_range(
+            runtime.area,
+            abi,
+            layout,
+            shm,
+            object_begin,
+            object_count,
+            telemetry);
+}
+
+shm_runtime_v2_result
 materialize_shm_runtime_v2_links(
     shm_runtime_v2& runtime,
     const server_abi_configuration& abi,
