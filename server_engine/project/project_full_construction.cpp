@@ -4,6 +4,7 @@
 #include "project_configuration_manifest_store.hpp"
 #include "runtime/project_runtime.hpp"
 #include "shm/shm_layout.hpp"
+#include "shm/shm_runtime_v2.hpp"
 #include "assign/assign_input.hpp"
 #include "construction/execution_lanes.hpp"
 #include "frontend/source_discovery.hpp"
@@ -286,6 +287,16 @@ persist_compiled(
             context.settings.abi,
             mapping.bytes()) !=
         shm_layout_result::success) {
+        return persistence_invalid(
+            full_persistence_stage::encode);
+    }
+
+    if (encode_shm_runtime_v2_physical_columns(
+            compiled,
+            context.settings.abi,
+            runtime_layout,
+            mapping.bytes()) !=
+        shm_runtime_v2_result::success) {
         return persistence_invalid(
             full_persistence_stage::encode);
     }

@@ -183,9 +183,8 @@ private:
         const server_abi_configuration&,
         std::span<std::byte>) noexcept;
 
-    friend shm_layout_result bind_shm_layout_columns(
+    friend void attach_shm_layout_columns(
         const compiled_project_view&,
-        const server_abi_configuration&,
         shm_layout&) noexcept;
 
     // Transitional dead-code friendship for the superseded 08A serializer.
@@ -202,17 +201,14 @@ private:
         shm_layout&) noexcept;
 };
 
-[[nodiscard]] bool shm_layout_columns_available(
-    const compiled_project_view& project) noexcept;
-
 [[nodiscard]] shm_layout_result encode_shm_layout_columns(
     const shm_layout& layout,
     const server_abi_configuration& abi,
     std::span<std::byte> compiled_image) noexcept;
 
-[[nodiscard]] shm_layout_result bind_shm_layout_columns(
+// Trusted LOAD view attachment: pointer/span setup only.
+void attach_shm_layout_columns(
     const compiled_project_view& project,
-    const server_abi_configuration& abi,
     shm_layout& output) noexcept;
 
 [[nodiscard]] shm_layout_result prepare_shm_layout(

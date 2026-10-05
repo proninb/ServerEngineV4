@@ -89,25 +89,8 @@ server_status load_project(
 
     compiled_project_view compiled;
 
-    const auto bound =
-        compiled.bind(
-            mapping.bytes());
-
-    if (bound !=
-        compiled_project_image_result::success) {
-
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_compiled_invalid,
-                operation)
-                .file(layout.compiled)
-                .detail(
-                    "compiled.bin structural bind failed")
-                .build());
-
-        return server_status::
-            project_artifact_invalid;
-    }
+    compiled.attach(
+        mapping.bytes());
 
     return create_resident_project(
         project_path,

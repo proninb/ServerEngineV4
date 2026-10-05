@@ -473,6 +473,9 @@ int main(
             << ",runtime_v2_persisted_layout="
             << static_cast<unsigned>(
                 runtime_telemetry.runtime_v2_persisted_layout)
+            << ",runtime_v2_persisted_execution="
+            << static_cast<unsigned>(
+                runtime_telemetry.runtime_v2_persisted_execution)
             << ",runtime_v2_prepare_ms="
             << ns_to_ms(
                 runtime_telemetry.runtime_v2_prepare_ns)

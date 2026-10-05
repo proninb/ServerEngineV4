@@ -3,6 +3,7 @@
 #include "../abi/abi_layout.hpp"
 #include "../persistence/compiled_project.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -1177,6 +1178,714 @@ private:
 };
 
 
+namespace {
+
+constexpr std::array<std::byte, 8>
+    shm_runtime_v2_execution_magic{
+        std::byte{'S'}, std::byte{'E'}, std::byte{'R'}, std::byte{'V'},
+        std::byte{'2'}, std::byte{'E'}, std::byte{'X'}, std::byte{'1'},
+    };
+
+constexpr std::uint32_t
+    shm_runtime_v2_execution_version = 1;
+
+struct shm_runtime_v2_execution_header final {
+    std::array<std::byte, 8> magic{};
+    std::uint32_t version = 0;
+    std::uint32_t reserved0 = 0;
+
+    std::uint64_t live_links = 0;
+    std::uint64_t link_dereferences = 0;
+    std::uint64_t initializations = 0;
+    std::uint64_t endpoint_programs = 0;
+    std::uint64_t endpoint_dereferences = 0;
+    std::uint64_t reserved1 = 0;
+};
+
+static_assert(
+    sizeof(shm_runtime_v2_execution_header) == 64);
+
+template <typename T>
+[[nodiscard]] bool runtime_const_records(
+    std::span<const std::byte> bytes,
+    std::span<const T>& output) noexcept {
+
+    output = {};
+
+    if (bytes.size() % sizeof(T) != 0 ||
+        (bytes.data() != nullptr &&
+         reinterpret_cast<std::uintptr_t>(
+             bytes.data()) %
+             alignof(T) != 0)) {
+        return false;
+    }
+
+    output = {
+        reinterpret_cast<const T*>(
+            bytes.data()),
+        bytes.size() / sizeof(T),
+    };
+
+    return true;
+}
+
+template <typename T>
+[[nodiscard]] bool runtime_mutable_records(
+    std::span<std::byte> bytes,
+    std::span<T>& output) noexcept {
+
+    output = {};
+
+    if (bytes.size() % sizeof(T) != 0 ||
+        (bytes.data() != nullptr &&
+         reinterpret_cast<std::uintptr_t>(
+             bytes.data()) %
+             alignof(T) != 0)) {
+        return false;
+    }
+
+    output = {
+        reinterpret_cast<T*>(
+            bytes.data()),
+        bytes.size() / sizeof(T),
+    };
+
+    return true;
+}
+
+}
+
+std::size_t
+shm_runtime_v2::link_slot_count() const noexcept {
+
+    return persisted_physical_value
+        ? persisted_links.size()
+        : links.size();
+}
+
+bool shm_runtime_v2::link_program_at(
+    std::size_t index,
+    endpoint_program& source,
+    endpoint_program& target,
+    bool& live) const noexcept {
+
+    source = {};
+    target = {};
+    live = false;
+
+    if (!persisted_physical_value) {
+        if (index >= links.size()) {
+            return false;
+        }
+
+        const auto& plan =
+            links[index];
+
+        source = plan.source;
+        target = plan.target;
+        live = plan.live;
+        return true;
+    }
+
+    if (index >=
+        persisted_links.size()) {
+        return false;
+    }
+
+    const auto& physical =
+        persisted_links[index];
+
+    if ((physical.flags &
+            ~(shm_runtime_v2_physical_link_live |
+              shm_runtime_v2_physical_link_source_reference)) !=
+            0 ||
+        physical.reserved != 0) {
+        return false;
+    }
+
+    live =
+        (physical.flags &
+            shm_runtime_v2_physical_link_live) != 0;
+
+    if (!live) {
+        return
+            physical.source == 0 &&
+            physical.target == 0 &&
+            physical.source_program == 0 &&
+            physical.target_program == 0 &&
+            physical.flags == 0;
+    }
+
+    const auto decode =
+        [&](shm_offset direct,
+            std::uint32_t program_slot,
+            bool final_reference,
+            endpoint_program& output_program) noexcept {
+
+            output_program = {};
+            output_program.final_reference =
+                final_reference;
+
+            if (program_slot == 0) {
+                output_program.root =
+                    direct;
+                return true;
+            }
+
+            if (program_slot >
+                persisted_endpoint_programs.size()) {
+                return false;
+            }
+
+            const auto& program =
+                persisted_endpoint_programs[
+                    program_slot - 1];
+
+            output_program.root =
+                program.root;
+            output_program.tail =
+                program.tail;
+            output_program.dereference_begin =
+                program.dereference_begin;
+            output_program.dereference_count =
+                program.dereference_count;
+
+            return true;
+        };
+
+    return
+        decode(
+            physical.source,
+            physical.source_program,
+            (physical.flags &
+                shm_runtime_v2_physical_link_source_reference) != 0,
+            source) &&
+        decode(
+            physical.target,
+            physical.target_program,
+            true,
+            target);
+}
+
+shm_runtime_v2::link_state*
+shm_runtime_v2::link_state_at(
+    std::size_t index) noexcept {
+
+    if (persisted_physical_value) {
+        return index <
+                persisted_link_states.size()
+            ? &persisted_link_states[index]
+            : nullptr;
+    }
+
+    return index < links.size()
+        ? &links[index].state
+        : nullptr;
+}
+
+bool shm_runtime_v2::set_link_target_slot(
+    std::size_t index,
+    shm_offset value) noexcept {
+
+    if (persisted_physical_value) {
+        if (index >=
+            persisted_link_target_slots.size()) {
+            return false;
+        }
+
+        persisted_link_target_slots[index] =
+            value;
+
+        return true;
+    }
+
+    if (index >= links.size()) {
+        return false;
+    }
+
+    links[index].target_slot =
+        value;
+
+    return true;
+}
+
+bool shm_runtime_v2::link_target_slot_at(
+    std::size_t index,
+    shm_offset& value) const noexcept {
+
+    value = 0;
+
+    if (persisted_physical_value) {
+        if (index >=
+            persisted_link_target_slots.size()) {
+            return false;
+        }
+
+        value =
+            persisted_link_target_slots[index];
+
+        return true;
+    }
+
+    if (index >= links.size()) {
+        return false;
+    }
+
+    value =
+        links[index].target_slot;
+
+    return true;
+}
+
+bool shm_runtime_v2::initialization_program_at(
+    std::size_t index,
+    initialization_plan& value) const noexcept {
+
+    value = {};
+
+    if (!persisted_physical_value) {
+        if (index >= initializations.size()) {
+            return false;
+        }
+
+        value =
+            initializations[index];
+
+        return true;
+    }
+
+    if (index >=
+        persisted_initializations.size()) {
+        return false;
+    }
+
+    const auto& physical =
+        persisted_initializations[index];
+
+    if (physical.size == 0 ||
+        physical.size >
+            physical.value.size() ||
+        physical.reserved[0] != 0 ||
+        physical.reserved[1] != 0 ||
+        physical.reserved[2] != 0) {
+        return false;
+    }
+
+    value.value =
+        physical.value;
+    value.size =
+        physical.size;
+    value.target.final_reference =
+        false;
+
+    if (physical.target_program == 0) {
+        value.target.root =
+            physical.target;
+        return true;
+    }
+
+    if (physical.target_program >
+        persisted_endpoint_programs.size()) {
+        return false;
+    }
+
+    const auto& program =
+        persisted_endpoint_programs[
+            physical.target_program - 1];
+
+    value.target.root =
+        program.root;
+    value.target.tail =
+        program.tail;
+    value.target.dereference_begin =
+        program.dereference_begin;
+    value.target.dereference_count =
+        program.dereference_count;
+
+    return true;
+}
+
+std::size_t
+shm_runtime_v2::endpoint_dereference_count_total() const noexcept {
+
+    return persisted_physical_value
+        ? persisted_endpoint_dereferences.size()
+        : endpoint_dereferences.size();
+}
+
+bool shm_runtime_v2::endpoint_dereference_at(
+    std::size_t index,
+    shm_offset& value) const noexcept {
+
+    value = 0;
+
+    if (persisted_physical_value) {
+        if (index >=
+            persisted_endpoint_dereferences.size()) {
+            return false;
+        }
+
+        value =
+            persisted_endpoint_dereferences[index];
+
+        return true;
+    }
+
+    if (index >=
+        endpoint_dereferences.size()) {
+        return false;
+    }
+
+    value =
+        endpoint_dereferences[index];
+
+    return true;
+}
+
+shm_runtime_v2_result
+encode_shm_runtime_v2_physical_columns(
+    const compiled_project_view& project,
+    const server_abi_configuration& abi,
+    const shm_layout& layout,
+    std::span<std::byte> compiled_image) noexcept {
+
+    shm_runtime_v2 runtime;
+
+    try {
+        shm_runtime_v2_link_builder builder{
+            project,
+            abi,
+            layout,
+            runtime,
+        };
+
+        const auto built =
+            builder.build();
+
+        if (built !=
+            shm_runtime_v2_result::success) {
+            return built;
+        }
+    }
+    catch (...) {
+        return shm_runtime_v2_result::failed;
+    }
+
+    const auto section =
+        [&](compiled_project_section kind) noexcept {
+            return
+                compiled_project_runtime_physical_section(
+                    compiled_image,
+                    kind);
+        };
+
+    std::span<shm_runtime_v2_execution_header>
+        header;
+    std::span<shm_runtime_v2_physical_link>
+        links;
+    std::span<shm_runtime_v2_physical_initialization>
+        initializations;
+    std::span<shm_runtime_v2_physical_endpoint_program>
+        programs;
+    std::span<shm_offset>
+        dereferences;
+
+    if (!runtime_mutable_records(
+            section(
+                compiled_project_section::
+                    runtime_execution_header),
+            header) ||
+        header.size() != 1 ||
+        !runtime_mutable_records(
+            section(
+                compiled_project_section::
+                    link_runtime),
+            links) ||
+        links.size() !=
+            runtime.links.size() ||
+        !runtime_mutable_records(
+            section(
+                compiled_project_section::
+                    initialization_runtime),
+            initializations) ||
+        initializations.size() !=
+            runtime.initializations.size() ||
+        !runtime_mutable_records(
+            section(
+                compiled_project_section::
+                    runtime_endpoint_programs),
+            programs) ||
+        !runtime_mutable_records(
+            section(
+                compiled_project_section::
+                    runtime_endpoint_dereferences),
+            dereferences) ||
+        dereferences.size() !=
+            runtime.endpoint_dereferences.size()) {
+
+        return shm_runtime_v2_result::
+            invalid_input;
+    }
+
+    std::fill(
+        links.begin(),
+        links.end(),
+        shm_runtime_v2_physical_link{});
+
+    std::fill(
+        initializations.begin(),
+        initializations.end(),
+        shm_runtime_v2_physical_initialization{});
+
+    std::fill(
+        programs.begin(),
+        programs.end(),
+        shm_runtime_v2_physical_endpoint_program{});
+
+    std::copy(
+        runtime.endpoint_dereferences.begin(),
+        runtime.endpoint_dereferences.end(),
+        dereferences.begin());
+
+    std::size_t program_cursor = 0;
+
+    const auto encode_endpoint =
+        [&](const shm_runtime_v2::endpoint_program& input,
+            shm_offset& direct,
+            std::uint32_t& program_slot)
+            -> bool {
+
+            direct = 0;
+            program_slot = 0;
+
+            if (input.dereference_count == 0) {
+                if (input.root >=
+                        layout.size() ||
+                    input.tail >
+                        layout.size() -
+                            input.root) {
+                    return false;
+                }
+
+                const auto position =
+                    input.root +
+                    input.tail;
+
+                if (position >=
+                    layout.size()) {
+                    return false;
+                }
+
+                direct = position;
+                return true;
+            }
+
+            if (program_cursor >=
+                    programs.size() ||
+                input.dereference_begin >
+                    dereferences.size() ||
+                input.dereference_count >
+                    dereferences.size() -
+                        input.dereference_begin ||
+                program_cursor >=
+                    static_cast<std::size_t>(
+                        (std::numeric_limits<
+                            std::uint32_t>::max)())) {
+                return false;
+            }
+
+            programs[program_cursor] = {
+                input.root,
+                input.tail,
+                input.dereference_begin,
+                input.dereference_count,
+            };
+
+            program_slot =
+                static_cast<std::uint32_t>(
+                    program_cursor + 1);
+
+            ++program_cursor;
+
+            return true;
+        };
+
+    for (std::size_t index = 0;
+         index < runtime.links.size();
+         ++index) {
+
+        const auto& source =
+            runtime.links[index];
+
+        if (!source.live) {
+            continue;
+        }
+
+        auto& target =
+            links[index];
+
+        if (!encode_endpoint(
+                source.source,
+                target.source,
+                target.source_program) ||
+            !encode_endpoint(
+                source.target,
+                target.target,
+                target.target_program) ||
+            !source.target.final_reference) {
+
+            return shm_runtime_v2_result::
+                invalid_input;
+        }
+
+        target.flags =
+            shm_runtime_v2_physical_link_live;
+
+        if (source.source.final_reference) {
+            target.flags |=
+                shm_runtime_v2_physical_link_source_reference;
+        }
+    }
+
+    for (std::size_t index = 0;
+         index < runtime.initializations.size();
+         ++index) {
+
+        const auto& source =
+            runtime.initializations[index];
+
+        auto& target =
+            initializations[index];
+
+        if (source.target.final_reference ||
+            source.size == 0 ||
+            source.size >
+                source.value.size() ||
+            !encode_endpoint(
+                source.target,
+                target.target,
+                target.target_program)) {
+
+            return shm_runtime_v2_result::
+                invalid_input;
+        }
+
+        target.value =
+            source.value;
+        target.size =
+            source.size;
+    }
+
+    if (program_cursor !=
+        programs.size()) {
+        return shm_runtime_v2_result::
+            invalid_input;
+    }
+
+    header.front() = {};
+    header.front().magic =
+        shm_runtime_v2_execution_magic;
+    header.front().version =
+        shm_runtime_v2_execution_version;
+    header.front().live_links =
+        runtime.live_link_count_value;
+    header.front().link_dereferences =
+        runtime.link_dereference_count_value;
+    header.front().initializations =
+        runtime.initializations.size();
+    header.front().endpoint_programs =
+        programs.size();
+    header.front().endpoint_dereferences =
+        dereferences.size();
+
+    return shm_runtime_v2_result::success;
+}
+
+shm_runtime_v2_result
+attach_shm_runtime_v2_physical_columns(
+    const compiled_project_view& project,
+    shm_runtime_v2& output) noexcept {
+
+    const auto records =
+        []<typename T>(
+            std::span<const std::byte> bytes) noexcept {
+
+            return std::span<const T>{
+                reinterpret_cast<const T*>(
+                    bytes.data()),
+                bytes.size() /
+                    sizeof(T),
+            };
+        };
+
+    const auto header =
+        records.template operator()<
+            shm_runtime_v2_execution_header>(
+                project.runtime_physical_section(
+                    compiled_project_section::
+                        runtime_execution_header));
+
+    output.persisted_links =
+        records.template operator()<
+            shm_runtime_v2_physical_link>(
+                project.runtime_physical_section(
+                    compiled_project_section::
+                        link_runtime));
+
+    output.persisted_initializations =
+        records.template operator()<
+            shm_runtime_v2_physical_initialization>(
+                project.runtime_physical_section(
+                    compiled_project_section::
+                        initialization_runtime));
+
+    output.persisted_endpoint_programs =
+        records.template operator()<
+            shm_runtime_v2_physical_endpoint_program>(
+                project.runtime_physical_section(
+                    compiled_project_section::
+                        runtime_endpoint_programs));
+
+    output.persisted_endpoint_dereferences =
+        records.template operator()<
+            shm_offset>(
+                project.runtime_physical_section(
+                    compiled_project_section::
+                        runtime_endpoint_dereferences));
+
+    try {
+        output.persisted_link_states.assign(
+            output.persisted_links.size(),
+            shm_runtime_v2::
+                link_state::prepared);
+
+        output.persisted_link_target_slots.assign(
+            output.persisted_links.size(),
+            0);
+    }
+    catch (...) {
+        return shm_runtime_v2_result::
+            failed;
+    }
+
+    const auto& value =
+        header.front();
+
+    output.live_link_count_value =
+        static_cast<std::size_t>(
+            value.live_links);
+
+    output.link_dereference_count_value =
+        static_cast<std::size_t>(
+            value.link_dereferences);
+
+    output.persisted_physical_value = true;
+
+    return shm_runtime_v2_result::
+        success;
+}
+
+
 class shm_runtime_v2_link_executor final {
 public:
     shm_runtime_v2_link_executor(
@@ -1210,47 +1919,60 @@ public:
         publish_shape();
 
         for (std::size_t index = 0;
-             index < runtime.links.size();
+             index < runtime.link_slot_count();
              ++index) {
 
-            auto& plan =
-                runtime.links[index];
+            shm_runtime_v2::endpoint_program source;
+            shm_runtime_v2::endpoint_program target;
+            bool live = false;
 
-            if (!plan.live) {
+            if (!runtime.link_program_at(
+                    index,
+                    source,
+                    target,
+                    live)) {
+                return shm_runtime_v2_result::
+                    invalid_input;
+            }
+
+            if (!live) {
                 continue;
             }
 
-            if (plan.state !=
-                shm_runtime_v2::
-                    link_state::prepared ||
-                !plan.target.final_reference) {
+            auto* state =
+                runtime.link_state_at(
+                    index);
+
+            if (state == nullptr ||
+                *state !=
+                    shm_runtime_v2::
+                        link_state::prepared ||
+                !target.final_reference) {
 
                 return shm_runtime_v2_result::
                     invalid_input;
             }
 
-            shm_offset target = 0;
+            shm_offset target_slot = 0;
 
             const auto located =
                 endpoint_position(
-                    plan.target,
+                    target,
                     false,
-                    target);
+                    target_slot);
 
             if (located !=
                 shm_runtime_v2_result::
                     success) {
-
                 return located;
             }
 
             std::uint64_t stored = 0;
 
             if (!read_reference(
-                    target,
+                    target_slot,
                     stored) ||
                 stored != 0) {
-
                 return shm_runtime_v2_result::
                     invalid_input;
             }
@@ -1262,29 +1984,28 @@ public:
                 raw >
                     link_handle::
                         maximum_slot) {
-
                 return shm_runtime_v2_result::
                     invalid_input;
             }
 
             if (!write_word(
-                    target,
+                    target_slot,
                     pending_value(
                         static_cast<
                             std::uint32_t>(
                                 raw)))) {
-
                 return shm_runtime_v2_result::
                     incompatible_abi;
             }
 
-            plan.target_slot =
-                target;
+            if (!runtime.set_link_target_slot(
+                    index,
+                    target_slot)) {
+                return shm_runtime_v2_result::
+                    invalid_input;
+            }
 
-            plan.resolved_source =
-                invalid_offset();
-
-            plan.state =
+            *state =
                 shm_runtime_v2::
                     link_state::marked;
 
@@ -1312,10 +2033,23 @@ public:
         publish_shape();
 
         for (std::size_t index = 0;
-             index < runtime.links.size();
+             index < runtime.link_slot_count();
              ++index) {
 
-            if (!runtime.links[index].live) {
+            shm_runtime_v2::endpoint_program source;
+            shm_runtime_v2::endpoint_program target;
+            bool live = false;
+
+            if (!runtime.link_program_at(
+                    index,
+                    source,
+                    target,
+                    live)) {
+                return shm_runtime_v2_result::
+                    invalid_input;
+            }
+
+            if (!live) {
                 continue;
             }
 
@@ -1353,11 +2087,11 @@ public:
         if (initialization_telemetry != nullptr) {
             initialization_telemetry->
                 initializations_prepared =
-                    runtime.initializations.size();
+                    runtime.initialization_count();
 
             initialization_telemetry->
                 endpoint_programs =
-                    runtime.initializations.size();
+                    runtime.initialization_count();
 
             initialization_telemetry->
                 dereference_steps =
@@ -1365,10 +2099,17 @@ public:
                         initialization_dereference_count();
         }
 
-        for (const auto& initialization :
-             runtime.initializations) {
+        for (std::size_t index = 0;
+             index < runtime.initialization_count();
+             ++index) {
 
-            if (initialization.size == 0 ||
+            shm_runtime_v2::
+                initialization_plan initialization;
+
+            if (!runtime.initialization_program_at(
+                    index,
+                    initialization) ||
+                initialization.size == 0 ||
                 initialization.size >
                     initialization.value.size() ||
                 initialization.target.
@@ -1445,7 +2186,7 @@ private:
             runtime.live_link_count_value * 2;
 
         telemetry->dereference_steps =
-            runtime.endpoint_dereferences.size();
+            runtime.endpoint_dereference_count_total();
     }
 
     [[nodiscard]] shm_runtime_v2_result
@@ -1733,7 +2474,7 @@ private:
                 raw_link) ||
             raw_link == 0 ||
             raw_link >
-                runtime.links.size()) {
+                runtime.link_slot_count()) {
 
             return shm_runtime_v2_result::
                 invalid_input;
@@ -1758,16 +2499,16 @@ private:
 
         output_value = 0;
 
+        const auto dereference_count =
+            runtime.
+                endpoint_dereference_count_total();
+
         if (program.root >=
                 layout.size() ||
             program.dereference_begin >
-                runtime.
-                    endpoint_dereferences.
-                    size() ||
+                dereference_count ||
             program.dereference_count >
-                runtime.
-                    endpoint_dereferences.
-                    size() -
+                dereference_count -
                     program.
                         dereference_begin) {
 
@@ -1784,13 +2525,17 @@ private:
                      dereference_count;
              ++index) {
 
-            const auto delta =
-                runtime.
-                    endpoint_dereferences[
-                        static_cast<std::size_t>(
-                            program.
-                                dereference_begin) +
-                        index];
+            shm_offset delta = 0;
+
+            if (!runtime.endpoint_dereference_at(
+                    static_cast<std::size_t>(
+                        program.
+                            dereference_begin) +
+                        index,
+                    delta)) {
+                return shm_runtime_v2_result::
+                    invalid_input;
+            }
 
             shm_offset slot = 0;
 
@@ -1922,51 +2667,73 @@ private:
 
         output_value = 0;
 
-        if (index >=
-            runtime.links.size()) {
+        shm_runtime_v2::endpoint_program source;
+        shm_runtime_v2::endpoint_program target;
+        bool live = false;
 
+        if (!runtime.link_program_at(
+                index,
+                source,
+                target,
+                live) ||
+            !live) {
             return shm_runtime_v2_result::
                 invalid_input;
         }
 
-        auto& plan =
-            runtime.links[index];
+        auto* state =
+            runtime.link_state_at(
+                index);
 
-        if (!plan.live) {
+        if (state == nullptr) {
             return shm_runtime_v2_result::
                 invalid_input;
         }
 
-        if (plan.state ==
+        shm_offset target_slot = 0;
+
+        if (!runtime.link_target_slot_at(
+                index,
+                target_slot) ||
+            target_slot >=
+                layout.size()) {
+            return shm_runtime_v2_result::
+                invalid_input;
+        }
+
+        if (*state ==
             shm_runtime_v2::
                 link_state::resolved) {
 
-            if (plan.resolved_source ==
-                invalid_offset()) {
+            std::uint64_t stored = 0;
 
+            if (!read_reference(
+                    target_slot,
+                    stored) ||
+                !runtime_address(
+                    stored)) {
                 return shm_runtime_v2_result::
                     invalid_input;
             }
 
             output_value =
-                plan.resolved_source;
+                stored -
+                base_address;
 
             return shm_runtime_v2_result::
                 success;
         }
 
-        if (plan.state ==
+        if (*state ==
             shm_runtime_v2::
                 link_state::resolving) {
-
             return shm_runtime_v2_result::
                 invalid_input;
         }
 
-        if (plan.state !=
+        if (*state !=
             shm_runtime_v2::
                 link_state::marked) {
-
             return shm_runtime_v2_result::
                 invalid_input;
         }
@@ -1974,9 +2741,8 @@ private:
         std::uint64_t stored = 0;
 
         if (!read_reference(
-                plan.target_slot,
+                target_slot,
                 stored)) {
-
             return shm_runtime_v2_result::
                 invalid_input;
         }
@@ -1984,16 +2750,13 @@ private:
         if (runtime_address(
                 stored)) {
 
-            plan.resolved_source =
-                stored -
-                base_address;
-
-            plan.state =
+            *state =
                 shm_runtime_v2::
                     link_state::resolved;
 
             output_value =
-                plan.resolved_source;
+                stored -
+                base_address;
 
             return shm_runtime_v2_result::
                 success;
@@ -2006,44 +2769,43 @@ private:
                 raw_pending) ||
             raw_pending !=
                 index + 1) {
-
             return shm_runtime_v2_result::
                 invalid_input;
         }
 
-        plan.state =
+        *state =
             shm_runtime_v2::
                 link_state::resolving;
 
-        shm_offset source = 0;
+        shm_offset source_slot = 0;
 
         const auto resolved =
             source_position(
-                plan.source,
-                source);
+                source,
+                source_slot);
 
         if (resolved !=
             shm_runtime_v2_result::
                 success) {
 
-            plan.state =
+            *state =
                 shm_runtime_v2::
                     link_state::marked;
 
             return resolved;
         }
 
-        if (source >=
+        if (source_slot >=
                 layout.size() ||
-            source >
+            source_slot >
                 mask -
                     base_address ||
             !write_word(
-                plan.target_slot,
+                target_slot,
                 base_address +
-                    source)) {
+                    source_slot)) {
 
-            plan.state =
+            *state =
                 shm_runtime_v2::
                     link_state::marked;
 
@@ -2051,15 +2813,12 @@ private:
                 invalid_input;
         }
 
-        plan.resolved_source =
-            source;
-
-        plan.state =
+        *state =
             shm_runtime_v2::
                 link_state::resolved;
 
         output_value =
-            source;
+            source_slot;
 
         if (telemetry != nullptr) {
             ++telemetry->
@@ -2083,6 +2842,67 @@ private:
     std::uint64_t mask = 0;
 };
 
+
+
+shm_runtime_v2_result
+prepare_shm_runtime_v2_persisted(
+    const compiled_project_view& project,
+    const server_abi_configuration& abi,
+    const shm_layout& layout,
+    shm_runtime_v2& output,
+    shm_runtime_v2_prepare_telemetry* telemetry) noexcept {
+
+    output = shm_runtime_v2{};
+
+    const auto result =
+        prepare_shm_type_batch_inline64(
+            project,
+            abi,
+            layout,
+            output.area,
+            telemetry);
+
+    if (result ==
+            shm_type_batch_result::success &&
+        telemetry != nullptr &&
+        telemetry->inline_leaf_limit !=
+            shm_runtime_v2_inline_leaf_limit) {
+
+        output = shm_runtime_v2{};
+        *telemetry = {};
+        return shm_type_batch_result::
+            invalid_input;
+    }
+
+    if (result !=
+        shm_type_batch_result::success) {
+
+        output = shm_runtime_v2{};
+        return result;
+    }
+
+    const auto attached =
+        attach_shm_runtime_v2_physical_columns(
+            project,
+            output);
+
+    if (attached !=
+        shm_runtime_v2_result::
+            success) {
+
+        output =
+            shm_runtime_v2{};
+
+        if (telemetry != nullptr) {
+            *telemetry = {};
+        }
+
+        return attached;
+    }
+
+    return shm_runtime_v2_result::
+        success;
+}
 
 shm_runtime_v2_result prepare_shm_runtime_v2(
     const compiled_project_view& project,

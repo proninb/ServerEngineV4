@@ -540,6 +540,8 @@ prepare_build_compiled_project_layout(
                 files.size()),
             source_path_bytes,
             G.constructor_defaults.entries().size(),
+            0,
+            0,
         };
 
     return compiled_project_layout::
@@ -832,6 +834,11 @@ encode_build_compiled_project_image(
              compiled_project_section::unconnected_type_abi,
              compiled_project_section::unconnected_derived_abi,
              compiled_project_section::unconnected_types,
+             compiled_project_section::runtime_execution_header,
+             compiled_project_section::link_runtime,
+             compiled_project_section::initialization_runtime,
+             compiled_project_section::runtime_endpoint_programs,
+             compiled_project_section::runtime_endpoint_dereferences,
          }) {
 
         clear_section(

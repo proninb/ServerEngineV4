@@ -60,6 +60,54 @@ struct shm_runtime_v2_initialization_telemetry final {
 inline constexpr std::uint32_t
     shm_runtime_v2_inline_leaf_limit = 64;
 
+
+struct shm_runtime_v2_physical_endpoint_program final {
+    shm_offset root = 0;
+    shm_offset tail = 0;
+    std::uint32_t dereference_begin = 0;
+    std::uint32_t dereference_count = 0;
+};
+
+static_assert(
+    sizeof(shm_runtime_v2_physical_endpoint_program) == 24);
+
+inline constexpr std::uint32_t
+    shm_runtime_v2_physical_link_live = 0x01u;
+
+inline constexpr std::uint32_t
+    shm_runtime_v2_physical_link_source_reference = 0x02u;
+
+struct shm_runtime_v2_physical_link final {
+    // Direct position when the corresponding program slot is zero.
+    shm_offset source = 0;
+    shm_offset target = 0;
+
+    // One-based slots in runtime_endpoint_programs; zero means direct.
+    std::uint32_t source_program = 0;
+    std::uint32_t target_program = 0;
+
+    std::uint32_t flags = 0;
+    std::uint32_t reserved = 0;
+};
+
+static_assert(
+    sizeof(shm_runtime_v2_physical_link) == 32);
+
+struct shm_runtime_v2_physical_initialization final {
+    // Direct position when target_program is zero.
+    shm_offset target = 0;
+    std::array<std::byte, 16> value{};
+
+    // One-based slot in runtime_endpoint_programs; zero means direct.
+    std::uint32_t target_program = 0;
+
+    std::uint8_t size = 0;
+    std::uint8_t reserved[3]{};
+};
+
+static_assert(
+    sizeof(shm_runtime_v2_physical_initialization) == 32);
+
 class shm_runtime_v2 final {
 public:
     shm_runtime_v2() = default;
@@ -95,18 +143,37 @@ public:
     }
 
     [[nodiscard]] std::size_t initialization_count() const noexcept {
-        return initializations.size();
+        return persisted_physical_value
+            ? persisted_initializations.size()
+            : initializations.size();
     }
 
     [[nodiscard]] std::size_t initialization_dereference_count() const noexcept {
-        return endpoint_dereferences.size() >=
+        const auto total =
+            persisted_physical_value
+            ? persisted_endpoint_dereferences.size()
+            : endpoint_dereferences.size();
+
+        return total >=
                 link_dereference_count_value
-            ? endpoint_dereferences.size() -
+            ? total -
                 link_dereference_count_value
             : 0;
     }
 
+    [[nodiscard]] bool persisted_physical() const noexcept {
+        return persisted_physical_value;
+    }
+
     [[nodiscard]] std::size_t construction_bytes() const noexcept {
+        if (persisted_physical_value) {
+            return
+                area.resident_bytes() +
+                persisted_link_states.size() +
+                persisted_link_target_slots.size() *
+                    sizeof(shm_offset);
+        }
+
         return
             area.resident_bytes() +
             links.size() * sizeof(link_plan) +
@@ -177,8 +244,84 @@ private:
     std::size_t live_link_count_value = 0;
     std::size_t link_dereference_count_value = 0;
 
+
+    // Variant-C zero-copy execution columns. These spans point directly into
+    // compiled.bin and exist only during Runtime construction.
+    std::span<const shm_runtime_v2_physical_link>
+        persisted_links;
+    std::span<const shm_runtime_v2_physical_initialization>
+        persisted_initializations;
+    std::span<const shm_runtime_v2_physical_endpoint_program>
+        persisted_endpoint_programs;
+    std::span<const shm_offset>
+        persisted_endpoint_dereferences;
+
+    // Physical plans are immutable. Only dependency/cycle state is mutable.
+    std::vector<link_state> persisted_link_states;
+    std::vector<shm_offset> persisted_link_target_slots;
+
+    bool persisted_physical_value = false;
+
+    [[nodiscard]] std::size_t
+    link_slot_count() const noexcept;
+
+    [[nodiscard]] bool
+    link_program_at(
+        std::size_t index,
+        endpoint_program& source,
+        endpoint_program& target,
+        bool& live) const noexcept;
+
+    [[nodiscard]] link_state*
+    link_state_at(
+        std::size_t index) noexcept;
+
+    [[nodiscard]] bool
+    set_link_target_slot(
+        std::size_t index,
+        shm_offset value) noexcept;
+
+    [[nodiscard]] bool
+    link_target_slot_at(
+        std::size_t index,
+        shm_offset& value) const noexcept;
+
+    [[nodiscard]] bool
+    initialization_program_at(
+        std::size_t index,
+        initialization_plan& value) const noexcept;
+
+    [[nodiscard]] std::size_t
+    endpoint_dereference_count_total() const noexcept;
+
+    [[nodiscard]] bool
+    endpoint_dereference_at(
+        std::size_t index,
+        shm_offset& value) const noexcept;
+
     friend class shm_runtime_v2_link_builder;
     friend class shm_runtime_v2_link_executor;
+    friend shm_runtime_v2_result
+    prepare_shm_runtime_v2_persisted(
+        const compiled_project_view&,
+        const server_abi_configuration&,
+        const shm_layout&,
+        shm_runtime_v2&,
+        shm_runtime_v2_prepare_telemetry*) noexcept;
+
+
+
+    friend shm_runtime_v2_result
+    encode_shm_runtime_v2_physical_columns(
+        const compiled_project_view&,
+        const server_abi_configuration&,
+        const shm_layout&,
+        std::span<std::byte>) noexcept;
+
+    friend shm_runtime_v2_result
+    attach_shm_runtime_v2_physical_columns(
+        const compiled_project_view&,
+        shm_runtime_v2&) noexcept;
 
     friend shm_runtime_v2_result
     prepare_shm_runtime_v2(
@@ -229,8 +372,35 @@ private:
         shm_runtime_v2_initialization_telemetry*) noexcept;
 };
 
+
+// PUBLISH compiles links and source initializations once and encodes immutable
+// same-WHERE Runtime columns directly into compiled.bin.
+[[nodiscard]] shm_runtime_v2_result
+encode_shm_runtime_v2_physical_columns(
+    const compiled_project_view& project,
+    const server_abi_configuration& abi,
+    const shm_layout& layout,
+    std::span<std::byte> compiled_image) noexcept;
+
+// LOAD trusts the PUBLISH image. This attaches mmap spans and allocates only
+// the mutable link-resolution state. No record validation or semantic fallback.
+[[nodiscard]] shm_runtime_v2_result
+attach_shm_runtime_v2_physical_columns(
+    const compiled_project_view& project,
+    shm_runtime_v2& output) noexcept;
+
 // Prepare resolves WHO / semantic endpoint paths once into physical Runtime
 // object offsets and compact dereference programs.
+// Production LOAD path: prepare only the remaining Type/INLINE-64 area and
+// attach already-compiled physical link/initialization columns directly.
+[[nodiscard]] shm_runtime_v2_result
+prepare_shm_runtime_v2_persisted(
+    const compiled_project_view& project,
+    const server_abi_configuration& abi,
+    const shm_layout& layout,
+    shm_runtime_v2& output,
+    shm_runtime_v2_prepare_telemetry* telemetry = nullptr) noexcept;
+
 [[nodiscard]] shm_runtime_v2_result
 prepare_shm_runtime_v2(
     const compiled_project_view& project,

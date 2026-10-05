@@ -1268,3 +1268,120 @@ LOAD
 
 08A moves ABI layout. The following slice persists the Runtime V2 construction
 representation itself.
+
+
+## COMPILED-PHYSICAL-COLUMNS-09B-01
+
+Variant C extends the shared Graph WHERE-space to immutable Runtime execution
+columns:
+
+```text
+links[N]                  <-> link_runtime[N]
+object_initializations[N] <-> initialization_runtime[N]
+```
+
+Both common records are fixed 32-byte mmap-native columns. LOAD performs no
+copy/deserialization of these plans and introduces no Runtime identity space.
+
+Only endpoints containing an actual reference dereference allocate exception
+storage:
+
+```text
+runtime_endpoint_programs[]
+runtime_endpoint_dereferences[]
+```
+
+Their exact counts are computed from semantic endpoint paths before
+`compiled.bin` is created; no worst-case capacity is reserved.
+
+PUBLISH/REBUILD compile the link/initialization physical columns once after ABI
+columns are available. LOAD still prepares the INLINE-64 Type area, but binds
+links and initializations directly from mmap. The only per-LOAD mutable link
+metadata is `link_state[]`, required for dependency/cycle resolution.
+
+A semantic BUILD mutation invalidates both physical headers:
+
+```text
+runtime_abi_header
+runtime_execution_header
+```
+
+so BUILD remains correct while sparse physical-column patching is implemented
+later.
+
+The next slice moves Type/INLINE-64 operation ranges into the same physical
+column model.
+
+
+## PUBLISH-LOAD-DIRECT-09B-02
+
+The current production boundary is:
+
+```text
+PUBLISH
+    compile semantic G
+    -> compile physical ABI / Runtime columns
+    -> write compiled.bin
+
+LOAD
+    mmap compiled.bin
+    -> trusted non-owning views
+    -> allocate SHM
+    -> execute
+```
+
+`compiled.bin` is an internal ServerEngine image with one current schema.
+Normal LOAD therefore does not perform file-format or physical-image
+validation:
+
+```text
+no magic/version/endian checks
+no CRC checks
+no file-size/directory-shape validation
+no record-size validation
+no physical-record scans
+no semantic Runtime fallback
+no link/initialization recompilation
+```
+
+`compiled_project_view::bind()` and `verify_contents()` remain cold
+PUBLISH/test utilities. `load_project()` uses `compiled_project_view::attach()`.
+
+The former LOAD-side probe/validation APIs are removed from production:
+
+```text
+shm_layout_columns_available()
+bind_shm_layout_columns()
+shm_runtime_v2_physical_columns_available()
+bind_shm_runtime_v2_physical_columns()
+```
+
+LOAD directly attaches persisted ABI and Runtime execution spans. The Runtime
+execution attachment allocates only the mutable link-resolution state needed
+while constructing SHM.
+
+BUILD is intentionally outside this slice. BUILD is a separate incremental
+pipeline using its persisted build state; it is not a fallback mechanism for
+LOAD.
+
+The remaining compiler work on LOAD is INLINE-64 Type preparation. Persisting
+that Type execution image is the next Runtime slice.
+
+
+### 09B-02 API boundary correction
+
+`prepare_shm_runtime_v2()` remains the semantic Runtime compiler used by
+construction tests and compiler-side workflows. It is not the production LOAD
+entry point.
+
+Production LOAD uses:
+
+```text
+prepare_shm_runtime_v2_persisted()
+    -> prepare remaining Type/INLINE-64 area
+    -> attach persisted link/init execution columns
+```
+
+There is no link/initialization semantic fallback on LOAD. Keeping the semantic
+compiler API makes Runtime semantic correctness tests independent of
+persistence.

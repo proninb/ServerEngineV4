@@ -541,20 +541,9 @@ server_status create_resident_project(
     const auto layout_started =
         clock_type::now();
 
-    const auto use_persisted_layout =
-        shm_layout_columns_available(
-            compiled);
-
-    const auto prepared =
-        use_persisted_layout
-        ? bind_shm_layout_columns(
-            compiled,
-            settings.abi,
-            v2_layout)
-        : prepare_shm_layout(
-            compiled,
-            settings.abi,
-            v2_layout);
+    attach_shm_layout_columns(
+        compiled,
+        v2_layout);
 
     const auto layout_finished =
         clock_type::now();
@@ -564,29 +553,9 @@ server_status create_resident_project(
             elapsed_ns(
                 layout_started,
                 layout_finished);
+
         telemetry->runtime_v2_persisted_layout =
-            use_persisted_layout;
-    }
-
-    if (prepared !=
-        shm_layout_result::success) {
-
-        diagnostics.emit(
-            diagnostic(
-                diagnostics::project_runtime_failed,
-                operation)
-                .file(project_path)
-                .detail(
-                    shm_layout_failure_detail(
-                        prepared))
-                .build());
-
-        return prepared ==
-                shm_layout_result::
-                    unsupported_type
-            ? server_status::unsupported
-            : server_status::
-                project_runtime_failed;
+            true;
     }
 
     runtime_size =
@@ -596,7 +565,7 @@ server_status create_resident_project(
         clock_type::now();
 
     const auto prepared_runtime =
-        prepare_shm_runtime_v2(
+        prepare_shm_runtime_v2_persisted(
             compiled,
             settings.abi,
             v2_layout,
@@ -614,6 +583,9 @@ server_status create_resident_project(
             elapsed_ns(
                 prepare_started,
                 prepare_finished);
+
+        telemetry->runtime_v2_persisted_execution =
+            v2_runtime.persisted_physical();
 
         telemetry->runtime_v2_metadata_bytes =
             static_cast<std::uint64_t>(

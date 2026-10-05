@@ -27,12 +27,12 @@ class graph_delta;
 class graph_dense_projection;
 class source_map_overlay_view;
 
-inline constexpr std::uint32_t compiled_project_format_version = 22;
+inline constexpr std::uint32_t compiled_project_format_version = 23;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;
 
-inline constexpr std::size_t compiled_project_directory_count = 43;
+inline constexpr std::size_t compiled_project_directory_count = 48;
 
 inline constexpr std::size_t
 compiled_project_directory_entry_size = 32;
@@ -92,6 +92,14 @@ enum class compiled_project_section : std::uint32_t {
     unconnected_type_abi = 41,
     unconnected_derived_abi = 42,
     unconnected_types = 43,
+
+    // Same-WHERE Runtime execution columns. Fixed records remain 1:1 with
+    // Graph WHERE; only dereference endpoint programs use the variable tail.
+    runtime_execution_header = 44,
+    link_runtime = 45,
+    initialization_runtime = 46,
+    runtime_endpoint_programs = 47,
+    runtime_endpoint_dereferences = 48,
 };
 
 enum class compiled_project_image_result : std::uint8_t {
@@ -130,6 +138,8 @@ private:
         std::uint64_t source_file_count = 0;
         std::uint64_t source_path_bytes = 0;
         std::uint64_t constructor_default_count = 0;
+        std::uint64_t runtime_endpoint_program_count = 0;
+        std::uint64_t runtime_endpoint_dereference_count = 0;
     };
 
     [[nodiscard]] static compiled_project_image_result
@@ -206,14 +216,19 @@ public:
     [[nodiscard]] compiled_project_image_result bind(
         std::span<const std::byte> image) noexcept;
 
+    // Trusted current-format attachment used by LOAD.
+    // No format validation, CRC, semantic audit, deserialization or copy.
+    void attach(
+        std::span<const std::byte> image) noexcept;
+
     void reset() noexcept;
 
     [[nodiscard]] bool valid() const noexcept {
         return bytes.data() != nullptr;
     }
 
-    // Deep/cold integrity + semantic audit. bind() performs only the structural
-    // hot-path checks needed to create a safe mmap-native view.
+    // Deep/cold integrity + semantic audit. bind() is a cold verifier used by
+    // PUBLISH/tests. LOAD uses attach() and trusts the current internal image.
     [[nodiscard]] compiled_project_image_result
     verify_contents() const noexcept;
 

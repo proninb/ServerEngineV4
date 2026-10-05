@@ -909,25 +909,96 @@ bool shm_layout::object_offset(
     return true;
 }
 
-bool shm_layout::unconnected_offset(type_ref type, shm_offset& value) const noexcept {
+bool shm_layout::unconnected_offset(
+    type_ref type,
+    shm_offset& value) const noexcept {
+
     value = 0;
-    if (!prepared_value || !type) return false;
-    shm_offset stored = invalid_shm_offset;
+
+    if (!prepared_value ||
+        !type) {
+        return false;
+    }
+
+    shm_offset stored =
+        invalid_shm_offset;
+
     switch (type.kind()) {
-    case type_ref_kind::intrinsic:
-        if (type.payload() >= unconnected_intrinsic_offsets.size()) return false;
-        stored = unconnected_intrinsic_offsets[type.payload()]; break;
-    case type_ref_kind::named:
-        if (type.payload() == 0 || type.payload() > unconnected_type_offsets.size()) return false;
-        stored = unconnected_type_offsets[type.payload() - 1]; break;
-    case type_ref_kind::derived:
-        if (type.payload() == 0 || type.payload() > unconnected_derived_offsets.size()) return false;
-        stored = unconnected_derived_offsets[type.payload() - 1]; break;
+    case type_ref_kind::intrinsic: {
+        const auto values =
+            persisted_view
+            ? persisted_unconnected_intrinsic_offsets
+            : std::span<const shm_offset>{
+                unconnected_intrinsic_offsets.data(),
+                unconnected_intrinsic_offsets.size()};
+
+        if (type.payload() >=
+            values.size()) {
+            return false;
+        }
+
+        stored =
+            values[type.payload()];
+
+        break;
+    }
+
+    case type_ref_kind::named: {
+        const auto values =
+            persisted_view
+            ? persisted_unconnected_type_offsets
+            : std::span<const shm_offset>{
+                unconnected_type_offsets.data(),
+                unconnected_type_offsets.size()};
+
+        if (type.payload() == 0 ||
+            type.payload() >
+                values.size()) {
+            return false;
+        }
+
+        stored =
+            values[
+                type.payload() - 1];
+
+        break;
+    }
+
+    case type_ref_kind::derived: {
+        const auto values =
+            persisted_view
+            ? persisted_unconnected_derived_offsets
+            : std::span<const shm_offset>{
+                unconnected_derived_offsets.data(),
+                unconnected_derived_offsets.size()};
+
+        if (type.payload() == 0 ||
+            type.payload() >
+                values.size()) {
+            return false;
+        }
+
+        stored =
+            values[
+                type.payload() - 1];
+
+        break;
+    }
+
     case type_ref_kind::invalid:
         return false;
     }
-    if (stored == invalid_shm_offset || stored == pending_shm_offset) return false;
-    value = stored; return true;
+
+    if (stored ==
+            invalid_shm_offset ||
+        stored ==
+            pending_shm_offset) {
+        return false;
+    }
+
+    value = stored;
+
+    return true;
 }
 
 namespace {
@@ -1353,21 +1424,6 @@ template <typename T>
 
 }
 
-bool shm_layout_columns_available(
-    const compiled_project_view& project) noexcept {
-
-    std::span<const shm_abi_header_record> header;
-
-    return
-        column_records(
-            project.runtime_physical_section(
-                compiled_project_section::runtime_abi_header),
-            1,
-            header) &&
-        header.front().magic == shm_abi_column_magic &&
-        header.front().version == shm_abi_column_version;
-}
-
 shm_layout_result encode_shm_layout_columns(
     const shm_layout& layout,
     const server_abi_configuration& abi,
@@ -1546,142 +1602,115 @@ shm_layout_result encode_shm_layout_columns(
     return shm_layout_result::success;
 }
 
-shm_layout_result bind_shm_layout_columns(
+void attach_shm_layout_columns(
     const compiled_project_view& project,
-    const server_abi_configuration& abi,
     shm_layout& output) noexcept {
 
     output.reset();
 
-    if constexpr (std::endian::native != std::endian::little) {
-        return shm_layout_result::invalid_input;
-    }
+    const auto records =
+        []<typename T>(
+            std::span<const std::byte> bytes) noexcept {
 
-    std::span<const shm_abi_header_record> header;
-    std::span<const shm_abi_value_record> type_abi;
-    std::span<const shm_abi_value_record> derived_abi;
-
-    if (!project.valid() ||
-        !column_records(
-            project.runtime_physical_section(
-                compiled_project_section::runtime_abi_header),
-            1,
-            header) ||
-        !column_records(
-            project.runtime_physical_section(
-                compiled_project_section::type_abi),
-            project.type_slot_count(),
-            type_abi) ||
-        !column_records(
-            project.runtime_physical_section(
-                compiled_project_section::derived_abi),
-            project.derived_type_count(),
-            derived_abi) ||
-        !column_records(
-            project.runtime_physical_section(
-                compiled_project_section::member_abi),
-            project.member_count(),
-            output.persisted_member_offsets) ||
-        !column_records(
-            project.runtime_physical_section(
-                compiled_project_section::base_abi),
-            project.base_count(),
-            output.persisted_base_offsets) ||
-        !column_records(
-            project.runtime_physical_section(
-                compiled_project_section::object_abi),
-            project.object_slot_count(),
-            output.persisted_object_offsets) ||
-        !column_records(
-            project.runtime_physical_section(
-                compiled_project_section::unconnected_intrinsic_abi),
-            shm_layout_intrinsic_slot_count,
-            output.persisted_unconnected_intrinsic_offsets) ||
-        !column_records(
-            project.runtime_physical_section(
-                compiled_project_section::unconnected_type_abi),
-            project.identity_count(),
-            output.persisted_unconnected_type_offsets) ||
-        !column_records(
-            project.runtime_physical_section(
-                compiled_project_section::unconnected_derived_abi),
-            project.derived_type_count(),
-            output.persisted_unconnected_derived_offsets)) {
-
-        output.reset();
-        return shm_layout_result::invalid_input;
-    }
-
-    const auto& value = header.front();
-
-    const auto unconnected_capacity =
-        shm_layout_intrinsic_slot_count +
-        project.identity_count() +
-        project.derived_type_count();
-
-    std::span<const type_ref> all_unconnected_types;
-
-    if (value.magic != shm_abi_column_magic ||
-        value.version != shm_abi_column_version ||
-        value.target != static_cast<std::uint32_t>(abi.target) ||
-        value.pack != abi.pack ||
-        value.reserved0 != 0 ||
-        value.reserved1 != 0 ||
-        value.reserved2 != 0 ||
-        value.reserved3 != 0 ||
-        value.runtime_size == 0 ||
-        value.runtime_size >= invalid_shm_offset ||
-        value.runtime_alignment == 0 ||
-        (value.runtime_alignment &
-            (value.runtime_alignment - 1)) != 0 ||
-        value.unconnected_count > unconnected_capacity ||
-        !column_records(
-            project.runtime_physical_section(
-                compiled_project_section::unconnected_types),
-            unconnected_capacity,
-            all_unconnected_types)) {
-
-        output.reset();
-        return shm_layout_result::invalid_input;
-    }
-
-    const auto valid_values =
-        [](std::span<const shm_abi_value_record> values) noexcept {
-
-            for (const auto& record : values) {
-                if ((record.flags &
-                        ~(shm_abi_value_ready |
-                          shm_abi_value_empty_record)) != 0 ||
-                    ((record.flags & shm_abi_value_ready) != 0 &&
-                     (record.alignment == 0 ||
-                      (record.alignment &
-                          (record.alignment - 1)) != 0))) {
-                    return false;
-                }
-            }
-
-            return true;
+            return std::span<const T>{
+                reinterpret_cast<const T*>(
+                    bytes.data()),
+                bytes.size() /
+                    sizeof(T),
+            };
         };
 
-    if (!valid_values(type_abi) ||
-        !valid_values(derived_abi)) {
-        output.reset();
-        return shm_layout_result::invalid_input;
-    }
+    const auto header =
+        records.template operator()<
+            shm_abi_header_record>(
+                project.runtime_physical_section(
+                    compiled_project_section::
+                        runtime_abi_header));
 
-    output.persisted_type_slots = type_abi;
-    output.persisted_derived_slots = derived_abi;
-    output.persisted_unconnected_types =
-        all_unconnected_types.first(
-            value.unconnected_count);
+    output.persisted_type_slots =
+        records.template operator()<
+            shm_abi_value_record>(
+                project.runtime_physical_section(
+                    compiled_project_section::
+                        type_abi));
 
-    output.target_value = abi.target;
-    output.size_value = value.runtime_size;
-    output.alignment_value = value.runtime_alignment;
+    output.persisted_derived_slots =
+        records.template operator()<
+            shm_abi_value_record>(
+                project.runtime_physical_section(
+                    compiled_project_section::
+                        derived_abi));
+
+    output.persisted_member_offsets =
+        records.template operator()<
+            shm_record_offset>(
+                project.runtime_physical_section(
+                    compiled_project_section::
+                        member_abi));
+
+    output.persisted_base_offsets =
+        records.template operator()<
+            shm_record_offset>(
+                project.runtime_physical_section(
+                    compiled_project_section::
+                        base_abi));
+
+    output.persisted_object_offsets =
+        records.template operator()<
+            shm_offset>(
+                project.runtime_physical_section(
+                    compiled_project_section::
+                        object_abi));
+
+    output.persisted_unconnected_intrinsic_offsets =
+        records.template operator()<
+            shm_offset>(
+                project.runtime_physical_section(
+                    compiled_project_section::
+                        unconnected_intrinsic_abi));
+
+    output.persisted_unconnected_type_offsets =
+        records.template operator()<
+            shm_offset>(
+                project.runtime_physical_section(
+                    compiled_project_section::
+                        unconnected_type_abi));
+
+    output.persisted_unconnected_derived_offsets =
+        records.template operator()<
+            shm_offset>(
+                project.runtime_physical_section(
+                    compiled_project_section::
+                        unconnected_derived_abi));
+
+    const auto unconnected_types =
+        records.template operator()<
+            type_ref>(
+                project.runtime_physical_section(
+                    compiled_project_section::
+                        unconnected_types));
+
+    const auto& value =
+        header.front();
+
+    output.persisted_unconnected_types = {
+        unconnected_types.data(),
+        static_cast<std::size_t>(
+            value.unconnected_count),
+    };
+
+    output.target_value =
+        static_cast<abi_target>(
+            value.target);
+
+    output.size_value =
+        value.runtime_size;
+
+    output.alignment_value =
+        value.runtime_alignment;
+
     output.prepared_value = true;
     output.persisted_view = true;
-
-    return shm_layout_result::success;
 }
 
 shm_layout_result prepare_shm_layout(

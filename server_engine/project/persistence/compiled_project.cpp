@@ -600,7 +600,18 @@ void write_u64(
     case compiled_project_section::unconnected_intrinsic_abi:
     case compiled_project_section::unconnected_type_abi:
     case compiled_project_section::unconnected_derived_abi:
+    case compiled_project_section::runtime_endpoint_dereferences:
         return 8;
+
+    case compiled_project_section::runtime_execution_header:
+        return 64;
+
+    case compiled_project_section::link_runtime:
+    case compiled_project_section::initialization_runtime:
+        return 32;
+
+    case compiled_project_section::runtime_endpoint_programs:
+        return 24;
 
     case compiled_project_section::string_core:
         return string_core_size;
@@ -778,6 +789,94 @@ void compiled_project_view::reset() noexcept {
     live_object_count_value = 0;
     live_link_count_value = 0;
     assign_count_value = 0;
+}
+
+
+void compiled_project_view::attach(
+    std::span<const std::byte> image) noexcept {
+
+    bytes = image;
+
+    for (std::size_t index = 0;
+         index < compiled_project_directory_count;
+         ++index) {
+
+        const auto* entry =
+            image.data() +
+            directory_offset +
+            index *
+                compiled_project_directory_entry_size;
+
+        const auto offset =
+            read_u64(
+                entry + 8);
+
+        sections[index] = {
+            image.data() +
+                static_cast<std::size_t>(
+                    offset),
+            read_u64(
+                entry + 16),
+            read_u32(
+                entry + 4),
+            read_u64(
+                entry + 24),
+        };
+    }
+
+    string_count_value =
+        static_cast<std::size_t>(
+            read_u64(
+                image.data() +
+                header_string_count_offset));
+
+    identity_count_value =
+        static_cast<std::size_t>(
+            read_u64(
+                image.data() +
+                header_identity_count_offset));
+
+    type_count_value =
+        static_cast<std::size_t>(
+            section(
+                compiled_project_section::
+                    types).count);
+
+    object_count_value =
+        static_cast<std::size_t>(
+            section(
+                compiled_project_section::
+                    objects).count);
+
+    link_count_value =
+        static_cast<std::size_t>(
+            section(
+                compiled_project_section::
+                    links).count);
+
+    live_type_count_value =
+        static_cast<std::size_t>(
+            read_u64(
+                image.data() +
+                header_type_count_offset));
+
+    live_object_count_value =
+        static_cast<std::size_t>(
+            read_u64(
+                image.data() +
+                header_object_count_offset));
+
+    live_link_count_value =
+        static_cast<std::size_t>(
+            read_u64(
+                image.data() +
+                header_link_count_offset));
+
+    assign_count_value =
+        static_cast<std::size_t>(
+            read_u64(
+                image.data() +
+                header_assign_count_offset));
 }
 
 compiled_project_image_result
@@ -4595,13 +4694,13 @@ compiled_project_view::verify_contents() const noexcept {
             continue;
         }
 
-        const auto root =
+        const auto inheritance_root =
             type_at(index);
 
         type_entry root_type;
 
         if (!type(
-                root,
+                inheritance_root,
                 root_type)) {
 
             return compiled_project_image_result::
@@ -4616,7 +4715,7 @@ compiled_project_view::verify_contents() const noexcept {
         inheritance_state[index] = 1;
 
         inheritance_stack.push_back({
-            root,
+            inheritance_root,
             0,
         });
 
@@ -6015,6 +6114,25 @@ compiled_project_layout::prepare_counts(
                 4,
                 22 + counts.identity_count + counts.derived_count,
             },
+
+            // Variant-C execution columns.
+            {compiled_project_section::runtime_execution_header, 64, 1},
+            {compiled_project_section::link_runtime, 32, counts.link_count},
+            {
+                compiled_project_section::initialization_runtime,
+                32,
+                counts.initialization_count,
+            },
+            {
+                compiled_project_section::runtime_endpoint_programs,
+                24,
+                counts.runtime_endpoint_program_count,
+            },
+            {
+                compiled_project_section::runtime_endpoint_dereferences,
+                8,
+                counts.runtime_endpoint_dereference_count,
+            },
         }};
 
     std::uint64_t cursor =
@@ -6064,6 +6182,119 @@ compiled_project_layout::prepare_counts(
 
     return compiled_project_image_result::
         success;
+}
+
+
+namespace {
+
+struct runtime_execution_counts final {
+    std::uint64_t endpoint_programs = 0;
+    std::uint64_t dereferences = 0;
+};
+
+[[nodiscard]] bool add_runtime_execution_endpoint(
+    const graph& G,
+    object_endpoint endpoint,
+    runtime_execution_counts& counts) noexcept {
+
+    if (!endpoint.object ||
+        !endpoint.member) {
+        return false;
+    }
+
+    if (!endpoint.member.is_path()) {
+        return true;
+    }
+
+    endpoint_path_record path;
+
+    if (!G.endpoint_path(
+            endpoint.member.path(),
+            path)) {
+        return false;
+    }
+
+    const auto steps =
+        G.endpoint_path_steps(
+            endpoint.member.path());
+
+    if (steps.size() !=
+        path.steps.count) {
+        return false;
+    }
+
+    std::uint64_t dereferences = 0;
+
+    for (const auto& step : steps) {
+        if (step.kind ==
+            endpoint_path_step_kind::dereference) {
+
+            if (dereferences ==
+                (std::numeric_limits<
+                    std::uint64_t>::max)()) {
+                return false;
+            }
+
+            ++dereferences;
+        }
+    }
+
+    if (dereferences == 0) {
+        return true;
+    }
+
+    if (counts.endpoint_programs ==
+            (std::numeric_limits<
+                std::uint64_t>::max)() ||
+        dereferences >
+            (std::numeric_limits<
+                std::uint64_t>::max)() -
+                counts.dereferences) {
+        return false;
+    }
+
+    ++counts.endpoint_programs;
+    counts.dereferences +=
+        dereferences;
+
+    return true;
+}
+
+[[nodiscard]] bool prepare_runtime_execution_counts(
+    const graph& G,
+    runtime_execution_counts& counts) noexcept {
+
+    counts = {};
+
+    for (const auto& link :
+         G.link_entries()) {
+
+        if (!add_runtime_execution_endpoint(
+                G,
+                link.source,
+                counts) ||
+            !add_runtime_execution_endpoint(
+                G,
+                link.target,
+                counts)) {
+            return false;
+        }
+    }
+
+    for (const auto& initialization :
+         G.initialization_entries()) {
+
+        if (!add_runtime_execution_endpoint(
+                G,
+                initialization.target,
+                counts)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 }
 
 compiled_project_image_result
@@ -6131,6 +6362,15 @@ prepare_compiled_project_layout(
             length;
     }
 
+    runtime_execution_counts runtime_counts;
+
+    if (!prepare_runtime_execution_counts(
+            G,
+            runtime_counts)) {
+        return compiled_project_image_result::
+            invalid_state;
+    }
+
     const compiled_project_layout::
         preparation_counts counts{
             static_cast<std::uint64_t>(
@@ -6170,6 +6410,8 @@ prepare_compiled_project_layout(
                 files.size()),
             source_path_bytes,
             G.constructor_defaults.entries().size(),
+            runtime_counts.endpoint_programs,
+            runtime_counts.dereferences,
         };
 
     return compiled_project_layout::
@@ -6303,6 +6545,11 @@ encode_compiled_project_image(const string_table &strings,
              compiled_project_section::unconnected_type_abi,
              compiled_project_section::unconnected_derived_abi,
              compiled_project_section::unconnected_types,
+             compiled_project_section::runtime_execution_header,
+             compiled_project_section::link_runtime,
+             compiled_project_section::initialization_runtime,
+             compiled_project_section::runtime_endpoint_programs,
+             compiled_project_section::runtime_endpoint_dereferences,
          }) {
 
         clear_section(kind);
@@ -8027,7 +8274,7 @@ compiled_project_view::runtime_physical_section(
     compiled_project_section kind) const noexcept {
 
     if (kind < compiled_project_section::runtime_abi_header ||
-        kind > compiled_project_section::unconnected_types) {
+        kind > compiled_project_section::runtime_endpoint_dereferences) {
         return {};
     }
 
@@ -8040,7 +8287,7 @@ compiled_project_runtime_physical_section(
     compiled_project_section kind) noexcept {
 
     if (kind < compiled_project_section::runtime_abi_header ||
-        kind > compiled_project_section::unconnected_types) {
+        kind > compiled_project_section::runtime_endpoint_dereferences) {
         return {};
     }
 

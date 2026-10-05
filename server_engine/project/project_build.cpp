@@ -903,19 +903,30 @@ struct direct_object_write_state final {
 
     if (applied ==
             compiled_project_image_result::success) {
-        auto runtime_image =
-            compiled_project_runtime_physical_section(
-                state.mapping->bytes(),
-                compiled_project_section::
-                    runtime_abi_header);
-        if (!runtime_image.empty()) {
-            const auto clear =
-                (std::min)(runtime_image.size(), std::size_t{8});
-            std::fill(
-                runtime_image.begin(),
-                runtime_image.begin() +
-                    static_cast<std::ptrdiff_t>(clear),
-                std::byte{0});
+        for (const auto kind :
+             {
+                 compiled_project_section::runtime_abi_header,
+                 compiled_project_section::runtime_execution_header,
+             }) {
+
+            auto runtime_header =
+                compiled_project_runtime_physical_section(
+                    state.mapping->bytes(),
+                    kind);
+
+            if (!runtime_header.empty()) {
+                const auto clear =
+                    (std::min)(
+                        runtime_header.size(),
+                        std::size_t{8});
+
+                std::fill(
+                    runtime_header.begin(),
+                    runtime_header.begin() +
+                        static_cast<std::ptrdiff_t>(
+                            clear),
+                    std::byte{0});
+            }
         }
     }
 
@@ -2414,19 +2425,30 @@ server_status build_project(
 
         if (applied ==
                 compiled_project_image_result::success) {
-            auto runtime_image =
-                compiled_project_runtime_physical_section(
-                    context.compiled_write_mapping.bytes(),
-                    compiled_project_section::
-                        runtime_abi_header);
-            if (!runtime_image.empty()) {
-                const auto clear =
-                    (std::min)(runtime_image.size(), std::size_t{8});
-                std::fill(
-                    runtime_image.begin(),
-                    runtime_image.begin() +
-                        static_cast<std::ptrdiff_t>(clear),
-                    std::byte{0});
+            for (const auto kind :
+                 {
+                     compiled_project_section::runtime_abi_header,
+                     compiled_project_section::runtime_execution_header,
+                 }) {
+
+                auto runtime_header =
+                    compiled_project_runtime_physical_section(
+                        context.compiled_write_mapping.bytes(),
+                        kind);
+
+                if (!runtime_header.empty()) {
+                    const auto clear =
+                        (std::min)(
+                            runtime_header.size(),
+                            std::size_t{8});
+
+                    std::fill(
+                        runtime_header.begin(),
+                        runtime_header.begin() +
+                            static_cast<std::ptrdiff_t>(
+                                clear),
+                        std::byte{0});
+                }
             }
         }
 
