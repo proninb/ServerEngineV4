@@ -1918,36 +1918,136 @@ public:
 
         publish_shape();
 
-        for (std::size_t index = 0;
-             index < runtime.link_slot_count();
-             ++index) {
+        if (runtime.persisted_physical_value) {
+            for (std::size_t index = 0;
+                 index < runtime.persisted_links.size();
+                 ++index) {
 
-            shm_runtime_v2::endpoint_program source;
-            shm_runtime_v2::endpoint_program target;
-            bool live = false;
+                const auto& link =
+                    runtime.persisted_links[index];
 
-            if (!runtime.link_program_at(
-                    index,
-                    source,
-                    target,
-                    live)) {
-                return shm_runtime_v2_result::
-                    invalid_input;
+                if ((link.flags &
+                        shm_runtime_v2_physical_link_live) ==
+                    0) {
+                    continue;
+                }
+
+                auto& state =
+                    runtime.persisted_link_states[index];
+
+                if (state !=
+                    shm_runtime_v2::
+                        link_state::prepared) {
+
+                    return shm_runtime_v2_result::
+                        invalid_input;
+                }
+
+                shm_offset target_slot = 0;
+
+                if (link.target_program == 0) {
+                    target_slot =
+                        link.target;
+                }
+                else {
+                    const auto& physical_program =
+                        runtime.persisted_endpoint_programs[
+                            link.target_program - 1];
+
+                    shm_runtime_v2::
+                        endpoint_program target;
+
+                    target.root =
+                        physical_program.root;
+                    target.tail =
+                        physical_program.tail;
+                    target.dereference_begin =
+                        physical_program.dereference_begin;
+                    target.dereference_count =
+                        physical_program.dereference_count;
+                    target.final_reference =
+                        true;
+
+                    const auto located =
+                        endpoint_position(
+                            target,
+                            false,
+                            target_slot);
+
+                    if (located !=
+                        shm_runtime_v2_result::
+                            success) {
+                        return located;
+                    }
+                }
+
+                std::uint64_t stored = 0;
+
+                if (!read_reference(
+                        target_slot,
+                        stored) ||
+                    stored != 0) {
+
+                    return shm_runtime_v2_result::
+                        invalid_input;
+                }
+
+                const auto raw =
+                    index + 1;
+
+                if (raw == 0 ||
+                    raw >
+                        link_handle::
+                            maximum_slot) {
+
+                    return shm_runtime_v2_result::
+                        invalid_input;
+                }
+
+                if (!write_word(
+                        target_slot,
+                        pending_value(
+                            static_cast<
+                                std::uint32_t>(
+                                    raw)))) {
+
+                    return shm_runtime_v2_result::
+                        incompatible_abi;
+                }
+
+                runtime.persisted_link_target_slots[
+                    index] =
+                        target_slot;
+
+                state =
+                    shm_runtime_v2::
+                        link_state::marked;
+
+                if (telemetry != nullptr) {
+                    ++telemetry->
+                        targets_marked;
+                }
             }
 
-            if (!live) {
+            return shm_runtime_v2_result::
+                success;
+        }
+
+        for (std::size_t index = 0;
+             index < runtime.links.size();
+             ++index) {
+
+            auto& plan =
+                runtime.links[index];
+
+            if (!plan.live) {
                 continue;
             }
 
-            auto* state =
-                runtime.link_state_at(
-                    index);
-
-            if (state == nullptr ||
-                *state !=
+            if (plan.state !=
                     shm_runtime_v2::
                         link_state::prepared ||
-                !target.final_reference) {
+                !plan.target.final_reference) {
 
                 return shm_runtime_v2_result::
                     invalid_input;
@@ -1957,13 +2057,14 @@ public:
 
             const auto located =
                 endpoint_position(
-                    target,
+                    plan.target,
                     false,
                     target_slot);
 
             if (located !=
                 shm_runtime_v2_result::
                     success) {
+
                 return located;
             }
 
@@ -1973,6 +2074,7 @@ public:
                     target_slot,
                     stored) ||
                 stored != 0) {
+
                 return shm_runtime_v2_result::
                     invalid_input;
             }
@@ -1984,6 +2086,7 @@ public:
                 raw >
                     link_handle::
                         maximum_slot) {
+
                 return shm_runtime_v2_result::
                     invalid_input;
             }
@@ -1994,23 +2097,24 @@ public:
                         static_cast<
                             std::uint32_t>(
                                 raw)))) {
+
                 return shm_runtime_v2_result::
                     incompatible_abi;
             }
 
-            if (!runtime.set_link_target_slot(
-                    index,
-                    target_slot)) {
-                return shm_runtime_v2_result::
-                    invalid_input;
-            }
+            plan.target_slot =
+                target_slot;
 
-            *state =
+            plan.resolved_source =
+                invalid_offset();
+
+            plan.state =
                 shm_runtime_v2::
                     link_state::marked;
 
             if (telemetry != nullptr) {
-                ++telemetry->targets_marked;
+                ++telemetry->
+                    targets_marked;
             }
         }
 
@@ -2032,24 +2136,44 @@ public:
 
         publish_shape();
 
-        for (std::size_t index = 0;
-             index < runtime.link_slot_count();
-             ++index) {
+        if (runtime.persisted_physical_value) {
+            for (std::size_t index = 0;
+                 index < runtime.persisted_links.size();
+                 ++index) {
 
-            shm_runtime_v2::endpoint_program source;
-            shm_runtime_v2::endpoint_program target;
-            bool live = false;
+                const auto& link =
+                    runtime.persisted_links[index];
 
-            if (!runtime.link_program_at(
-                    index,
-                    source,
-                    target,
-                    live)) {
-                return shm_runtime_v2_result::
-                    invalid_input;
+                if ((link.flags &
+                        shm_runtime_v2_physical_link_live) ==
+                    0) {
+                    continue;
+                }
+
+                shm_offset ignored = 0;
+
+                const auto resolved =
+                    resolve_link(
+                        index,
+                        ignored);
+
+                if (resolved !=
+                    shm_runtime_v2_result::
+                        success) {
+
+                    return resolved;
+                }
             }
 
-            if (!live) {
+            return shm_runtime_v2_result::
+                success;
+        }
+
+        for (std::size_t index = 0;
+             index < runtime.links.size();
+             ++index) {
+
+            if (!runtime.links[index].live) {
                 continue;
             }
 
@@ -2099,17 +2223,83 @@ public:
                         initialization_dereference_count();
         }
 
-        for (std::size_t index = 0;
-             index < runtime.initialization_count();
-             ++index) {
+        if (runtime.persisted_physical_value) {
+            for (std::size_t index = 0;
+                 index <
+                    runtime.persisted_initializations.size();
+                 ++index) {
 
-            shm_runtime_v2::
-                initialization_plan initialization;
+                const auto& initialization =
+                    runtime.persisted_initializations[
+                        index];
 
-            if (!runtime.initialization_program_at(
-                    index,
-                    initialization) ||
-                initialization.size == 0 ||
+                if (initialization.target_program == 0) {
+                    std::memcpy(
+                        shm.data() +
+                            static_cast<std::size_t>(
+                                initialization.target),
+                        initialization.value.data(),
+                        initialization.size);
+
+                    if (initialization_telemetry !=
+                        nullptr) {
+
+                        ++initialization_telemetry->
+                            writes;
+                    }
+
+                    continue;
+                }
+
+                shm_runtime_v2::
+                    initialization_plan decoded;
+
+                if (!runtime.initialization_program_at(
+                        index,
+                        decoded)) {
+
+                    return shm_runtime_v2_result::
+                        invalid_input;
+                }
+
+                shm_offset target = 0;
+
+                const auto located =
+                    endpoint_position(
+                        decoded.target,
+                        false,
+                        target);
+
+                if (located !=
+                    shm_runtime_v2_result::
+                        success) {
+
+                    return located;
+                }
+
+                std::memcpy(
+                    shm.data() +
+                        static_cast<std::size_t>(
+                            target),
+                    decoded.value.data(),
+                    decoded.size);
+
+                if (initialization_telemetry !=
+                    nullptr) {
+
+                    ++initialization_telemetry->
+                        writes;
+                }
+            }
+
+            return shm_runtime_v2_result::
+                success;
+        }
+
+        for (const auto& initialization :
+             runtime.initializations) {
+
+            if (initialization.size == 0 ||
                 initialization.size >
                     initialization.value.size() ||
                 initialization.target.
@@ -2163,6 +2353,7 @@ public:
         return shm_runtime_v2_result::
             success;
     }
+
 
 private:
     [[nodiscard]] static constexpr
@@ -2661,11 +2852,197 @@ private:
     }
 
     [[nodiscard]] shm_runtime_v2_result
+    resolve_persisted_direct_link(
+        std::size_t index,
+        const shm_runtime_v2_physical_link& link,
+        shm_offset& output_value) noexcept {
+
+        output_value = 0;
+
+        auto& state =
+            runtime.persisted_link_states[
+                index];
+
+        const auto target_slot =
+            runtime.persisted_link_target_slots[
+                index];
+
+        if (state ==
+            shm_runtime_v2::
+                link_state::resolved) {
+
+            std::uint64_t stored = 0;
+
+            if (!read_reference(
+                    target_slot,
+                    stored) ||
+                !runtime_address(
+                    stored)) {
+
+                return shm_runtime_v2_result::
+                    invalid_input;
+            }
+
+            output_value =
+                stored -
+                base_address;
+
+            return shm_runtime_v2_result::
+                success;
+        }
+
+        if (state ==
+            shm_runtime_v2::
+                link_state::resolving) {
+
+            return shm_runtime_v2_result::
+                invalid_input;
+        }
+
+        if (state !=
+            shm_runtime_v2::
+                link_state::marked) {
+
+            return shm_runtime_v2_result::
+                invalid_input;
+        }
+
+        std::uint64_t stored = 0;
+
+        if (!read_reference(
+                target_slot,
+                stored)) {
+
+            return shm_runtime_v2_result::
+                invalid_input;
+        }
+
+        if (runtime_address(
+                stored)) {
+
+            state =
+                shm_runtime_v2::
+                    link_state::resolved;
+
+            output_value =
+                stored -
+                base_address;
+
+            return shm_runtime_v2_result::
+                success;
+        }
+
+        std::uint32_t raw_pending = 0;
+
+        if (!decode_pending(
+                stored,
+                raw_pending) ||
+            raw_pending !=
+                index + 1) {
+
+            return shm_runtime_v2_result::
+                invalid_input;
+        }
+
+        state =
+            shm_runtime_v2::
+                link_state::resolving;
+
+        shm_offset source_slot =
+            link.source;
+
+        if ((link.flags &
+                shm_runtime_v2_physical_link_source_reference) !=
+            0) {
+
+            std::uint64_t source_word = 0;
+
+            if (!read_reference(
+                    source_slot,
+                    source_word)) {
+
+                state =
+                    shm_runtime_v2::
+                        link_state::marked;
+
+                return shm_runtime_v2_result::
+                    invalid_input;
+            }
+
+            if (telemetry != nullptr) {
+                ++telemetry->
+                    dereference_reads;
+            }
+
+            const auto resolved =
+                reference_source(
+                    source_word,
+                    source_slot);
+
+            if (resolved !=
+                shm_runtime_v2_result::
+                    success) {
+
+                state =
+                    shm_runtime_v2::
+                        link_state::marked;
+
+                return resolved;
+            }
+        }
+
+        if (!write_word(
+                target_slot,
+                base_address +
+                    source_slot)) {
+
+            state =
+                shm_runtime_v2::
+                    link_state::marked;
+
+            return shm_runtime_v2_result::
+                invalid_input;
+        }
+
+        state =
+            shm_runtime_v2::
+                link_state::resolved;
+
+        output_value =
+            source_slot;
+
+        if (telemetry != nullptr) {
+            ++telemetry->
+                links_resolved;
+        }
+
+        return shm_runtime_v2_result::
+            success;
+    }
+
+    [[nodiscard]] shm_runtime_v2_result
     resolve_link(
         std::size_t index,
         shm_offset& output_value) noexcept {
 
         output_value = 0;
+
+
+        if (runtime.persisted_physical_value) {
+            const auto& physical =
+                runtime.persisted_links[
+                    index];
+
+            if (physical.source_program == 0 &&
+                physical.target_program == 0) {
+
+                return
+                    resolve_persisted_direct_link(
+                        index,
+                        physical,
+                        output_value);
+            }
+        }
 
         shm_runtime_v2::endpoint_program source;
         shm_runtime_v2::endpoint_program target;

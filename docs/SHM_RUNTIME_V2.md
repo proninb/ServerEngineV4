@@ -1385,3 +1385,34 @@ prepare_shm_runtime_v2_persisted()
 There is no link/initialization semantic fallback on LOAD. Keeping the semantic
 compiler API makes Runtime semantic correctness tests independent of
 persistence.
+
+
+## RUNTIME-V2-DIRECT-EXEC-09B-03A
+
+Persisted Runtime execution now has an explicit direct hot path.
+
+For a persisted link:
+
+```text
+source_program == 0 && target_program == 0
+    -> mark target directly from link_runtime.target
+    -> resolve source directly from link_runtime.source
+    -> preserve pending-link recursion/cycle state
+    -> no endpoint_program construction
+```
+
+`source_reference` still performs the required native reference read and may
+resolve a pending dependent link recursively. Complex endpoint programs remain
+the fallback only when a persisted program slot is non-zero.
+
+For persisted source initializations:
+
+```text
+target_program == 0
+    -> memcpy(SHM + target, value, size)
+```
+
+Only dereference-bearing initialization targets enter the endpoint interpreter.
+
+This slice does not change `compiled.bin` v23, PUBLISH encoding, BUILD, or the
+Type/INLINE-64 preparation boundary.
