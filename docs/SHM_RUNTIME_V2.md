@@ -1416,3 +1416,59 @@ Only dereference-bearing initialization targets enter the endpoint interpreter.
 
 This slice does not change `compiled.bin` v23, PUBLISH encoding, BUILD, or the
 Type/INLINE-64 preparation boundary.
+
+
+## RUNTIME-V2-PERSIST-TYPE-INLINE64-09B-03B
+
+PUBLISH now persists the selected INLINE-64 Type execution image itself.
+
+The persisted tail contains only executor state:
+
+```text
+type_apis
+relative_references
+absolute_references
+object_references
+stores
+post_stores
+children
+repeats
+constants
+object_where
+objects
+canonical_roots
+object_groups / offsets
+canonical_groups / offsets
+object_patches
+```
+
+Semantic/build caches (`identity_ref` maps, named/derived prepare caches and
+other builder state) are not persisted.
+
+The exact Type program size is known only after physical INLINE-64 compilation.
+PUBLISH therefore:
+
+```text
+encode base compiled.bin
+-> prepare SHM ABI layout
+-> compile INLINE-64 Type program once
+-> extend the SAME final compiled.bin mmap tail to exact size
+-> finalize Type section directory entries
+-> encode ABI + Type + link/init physical columns
+```
+
+No candidate `compiled.bin`, copy or second semantic Graph is introduced.
+
+Production LOAD becomes:
+
+```text
+mmap compiled.bin
+-> attach ABI spans
+-> attach Type execution spans
+-> attach link/init execution spans
+-> allocate/pretouch SHM
+-> execute
+```
+
+`prepare_shm_type_batch_inline64()` remains the semantic compiler for
+PUBLISH/tests, but is no longer called by production LOAD.

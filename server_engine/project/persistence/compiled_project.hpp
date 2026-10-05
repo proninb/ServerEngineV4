@@ -27,12 +27,12 @@ class graph_delta;
 class graph_dense_projection;
 class source_map_overlay_view;
 
-inline constexpr std::uint32_t compiled_project_format_version = 23;
+inline constexpr std::uint32_t compiled_project_format_version = 24;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;
 
-inline constexpr std::size_t compiled_project_directory_count = 48;
+inline constexpr std::size_t compiled_project_directory_count = 65;
 
 inline constexpr std::size_t
 compiled_project_directory_entry_size = 32;
@@ -100,6 +100,46 @@ enum class compiled_project_section : std::uint32_t {
     initialization_runtime = 46,
     runtime_endpoint_programs = 47,
     runtime_endpoint_dereferences = 48,
+
+    // Persisted INLINE-64 Type execution image. These are executable physical
+    // columns only; semantic identity/build caches are never persisted.
+    runtime_type_apis = 49,
+    runtime_type_relative_references = 50,
+    runtime_type_absolute_references = 51,
+    runtime_type_object_references = 52,
+    runtime_type_stores = 53,
+    runtime_type_post_stores = 54,
+    runtime_type_children = 55,
+    runtime_type_repeats = 56,
+    runtime_type_constants = 57,
+    runtime_type_object_where = 58,
+    runtime_type_objects = 59,
+    runtime_type_canonical_roots = 60,
+    runtime_type_object_groups = 61,
+    runtime_type_object_group_offsets = 62,
+    runtime_type_canonical_groups = 63,
+    runtime_type_canonical_group_offsets = 64,
+    runtime_type_object_patches = 65,
+};
+
+struct compiled_project_runtime_type_counts final {
+    std::uint64_t type_apis = 0;
+    std::uint64_t relative_references = 0;
+    std::uint64_t absolute_references = 0;
+    std::uint64_t object_references = 0;
+    std::uint64_t stores = 0;
+    std::uint64_t post_stores = 0;
+    std::uint64_t children = 0;
+    std::uint64_t repeats = 0;
+    std::uint64_t constants = 0;
+    std::uint64_t object_where = 0;
+    std::uint64_t objects = 0;
+    std::uint64_t canonical_roots = 0;
+    std::uint64_t object_groups = 0;
+    std::uint64_t object_group_offsets = 0;
+    std::uint64_t canonical_groups = 0;
+    std::uint64_t canonical_group_offsets = 0;
+    std::uint64_t object_patches = 0;
 };
 
 enum class compiled_project_image_result : std::uint8_t {
@@ -638,6 +678,20 @@ prepare_compiled_project_layout(const string_table &strings,
 compiled_project_runtime_physical_section(
     std::span<std::byte> image,
     compiled_project_section kind) noexcept;
+
+// PUBLISH-only append-tail preparation. The initial v24 image contains zero
+// counts for Type execution sections; after INLINE-64 compilation the same
+// final compiled.bin is extended and these directory entries are finalized.
+[[nodiscard]] compiled_project_image_result
+prepare_compiled_project_runtime_type_tail(
+    std::span<const std::byte> image,
+    const compiled_project_runtime_type_counts& counts,
+    std::size_t& final_size) noexcept;
+
+[[nodiscard]] compiled_project_image_result
+apply_compiled_project_runtime_type_tail(
+    const compiled_project_runtime_type_counts& counts,
+    std::span<std::byte> image) noexcept;
 
 // Encodes directly into caller-owned bytes, including writable mmap pages.
 // layout must come from prepare_compiled_project_layout() for the same unchanged

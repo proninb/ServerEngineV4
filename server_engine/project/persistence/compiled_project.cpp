@@ -613,6 +613,35 @@ void write_u64(
     case compiled_project_section::runtime_endpoint_programs:
         return 24;
 
+    case compiled_project_section::runtime_type_apis:
+        return 56;
+
+    case compiled_project_section::runtime_type_relative_references:
+    case compiled_project_section::runtime_type_object_references:
+    case compiled_project_section::runtime_type_children:
+        return 8;
+
+    case compiled_project_section::runtime_type_absolute_references:
+    case compiled_project_section::runtime_type_constants:
+    case compiled_project_section::runtime_type_objects:
+    case compiled_project_section::runtime_type_canonical_roots:
+        return 16;
+
+    case compiled_project_section::runtime_type_stores:
+    case compiled_project_section::runtime_type_post_stores:
+    case compiled_project_section::runtime_type_object_groups:
+    case compiled_project_section::runtime_type_canonical_groups:
+    case compiled_project_section::runtime_type_object_patches:
+        return 12;
+
+    case compiled_project_section::runtime_type_repeats:
+        return 24;
+
+    case compiled_project_section::runtime_type_object_where:
+    case compiled_project_section::runtime_type_object_group_offsets:
+    case compiled_project_section::runtime_type_canonical_group_offsets:
+        return 8;
+
     case compiled_project_section::string_core:
         return string_core_size;
 
@@ -6133,6 +6162,26 @@ compiled_project_layout::prepare_counts(
                 8,
                 counts.runtime_endpoint_dereference_count,
             },
+
+            // Type/INLINE-64 execution tail is sized only after PUBLISH has
+            // compiled the exact physical program.
+            {compiled_project_section::runtime_type_apis, 56, 0},
+            {compiled_project_section::runtime_type_relative_references, 8, 0},
+            {compiled_project_section::runtime_type_absolute_references, 16, 0},
+            {compiled_project_section::runtime_type_object_references, 8, 0},
+            {compiled_project_section::runtime_type_stores, 12, 0},
+            {compiled_project_section::runtime_type_post_stores, 12, 0},
+            {compiled_project_section::runtime_type_children, 8, 0},
+            {compiled_project_section::runtime_type_repeats, 24, 0},
+            {compiled_project_section::runtime_type_constants, 16, 0},
+            {compiled_project_section::runtime_type_object_where, 8, 0},
+            {compiled_project_section::runtime_type_objects, 16, 0},
+            {compiled_project_section::runtime_type_canonical_roots, 16, 0},
+            {compiled_project_section::runtime_type_object_groups, 12, 0},
+            {compiled_project_section::runtime_type_object_group_offsets, 8, 0},
+            {compiled_project_section::runtime_type_canonical_groups, 12, 0},
+            {compiled_project_section::runtime_type_canonical_group_offsets, 8, 0},
+            {compiled_project_section::runtime_type_object_patches, 12, 0},
         }};
 
     std::uint64_t cursor =
@@ -6550,6 +6599,23 @@ encode_compiled_project_image(const string_table &strings,
              compiled_project_section::initialization_runtime,
              compiled_project_section::runtime_endpoint_programs,
              compiled_project_section::runtime_endpoint_dereferences,
+             compiled_project_section::runtime_type_apis,
+             compiled_project_section::runtime_type_relative_references,
+             compiled_project_section::runtime_type_absolute_references,
+             compiled_project_section::runtime_type_object_references,
+             compiled_project_section::runtime_type_stores,
+             compiled_project_section::runtime_type_post_stores,
+             compiled_project_section::runtime_type_children,
+             compiled_project_section::runtime_type_repeats,
+             compiled_project_section::runtime_type_constants,
+             compiled_project_section::runtime_type_object_where,
+             compiled_project_section::runtime_type_objects,
+             compiled_project_section::runtime_type_canonical_roots,
+             compiled_project_section::runtime_type_object_groups,
+             compiled_project_section::runtime_type_object_group_offsets,
+             compiled_project_section::runtime_type_canonical_groups,
+             compiled_project_section::runtime_type_canonical_group_offsets,
+             compiled_project_section::runtime_type_object_patches,
          }) {
 
         clear_section(kind);
@@ -8269,12 +8335,250 @@ encode_compiled_project_image(const string_table &strings,
         success;
 }
 
+
+namespace {
+
+struct runtime_type_tail_spec final {
+    compiled_project_section kind{};
+    std::uint32_t record_size = 0;
+    std::uint64_t count = 0;
+};
+
+[[nodiscard]] std::array<runtime_type_tail_spec, 17>
+runtime_type_tail_specs(
+    const compiled_project_runtime_type_counts& counts) noexcept {
+
+    return {{
+        {compiled_project_section::runtime_type_apis, 56, counts.type_apis},
+        {compiled_project_section::runtime_type_relative_references, 8, counts.relative_references},
+        {compiled_project_section::runtime_type_absolute_references, 16, counts.absolute_references},
+        {compiled_project_section::runtime_type_object_references, 8, counts.object_references},
+        {compiled_project_section::runtime_type_stores, 12, counts.stores},
+        {compiled_project_section::runtime_type_post_stores, 12, counts.post_stores},
+        {compiled_project_section::runtime_type_children, 8, counts.children},
+        {compiled_project_section::runtime_type_repeats, 24, counts.repeats},
+        {compiled_project_section::runtime_type_constants, 16, counts.constants},
+        {compiled_project_section::runtime_type_object_where, 8, counts.object_where},
+        {compiled_project_section::runtime_type_objects, 16, counts.objects},
+        {compiled_project_section::runtime_type_canonical_roots, 16, counts.canonical_roots},
+        {compiled_project_section::runtime_type_object_groups, 12, counts.object_groups},
+        {compiled_project_section::runtime_type_object_group_offsets, 8, counts.object_group_offsets},
+        {compiled_project_section::runtime_type_canonical_groups, 12, counts.canonical_groups},
+        {compiled_project_section::runtime_type_canonical_group_offsets, 8, counts.canonical_group_offsets},
+        {compiled_project_section::runtime_type_object_patches, 12, counts.object_patches},
+    }};
+}
+
+}
+
+compiled_project_image_result
+prepare_compiled_project_runtime_type_tail(
+    std::span<const std::byte> image,
+    const compiled_project_runtime_type_counts& counts,
+    std::size_t& final_size) noexcept {
+
+    final_size = 0;
+
+    std::uint64_t cursor =
+        static_cast<std::uint64_t>(
+            image.size());
+
+    for (const auto& spec :
+         runtime_type_tail_specs(
+             counts)) {
+
+        std::uint64_t offset = 0;
+        std::uint64_t bytes = 0;
+
+        if (!align64(
+                cursor,
+                offset) ||
+            !multiply_u64(
+                spec.count,
+                spec.record_size,
+                bytes) ||
+            !add_u64(
+                offset,
+                bytes,
+                cursor)) {
+
+            return compiled_project_image_result::
+                failed;
+        }
+    }
+
+    if (cursor >
+        (std::numeric_limits<
+            std::size_t>::max)()) {
+
+        return compiled_project_image_result::
+            failed;
+    }
+
+    final_size =
+        static_cast<std::size_t>(
+            cursor);
+
+    return compiled_project_image_result::
+        success;
+}
+
+compiled_project_image_result
+apply_compiled_project_runtime_type_tail(
+    const compiled_project_runtime_type_counts& counts,
+    std::span<std::byte> image) noexcept {
+
+    if (image.empty()) {
+        return compiled_project_image_result::
+            invalid_state;
+    }
+
+    auto* base =
+        image.data();
+
+    const auto first_index =
+        section_index(
+            compiled_project_section::
+                runtime_type_apis);
+
+    auto* first_entry =
+        base +
+        directory_offset +
+        first_index *
+            compiled_project_directory_entry_size;
+
+    std::uint64_t cursor =
+        read_u64(
+            first_entry + 8);
+
+    if (cursor >
+        image.size()) {
+
+        return compiled_project_image_result::
+            invalid_state;
+    }
+
+    std::fill(
+        image.begin() +
+            static_cast<std::ptrdiff_t>(
+                cursor),
+        image.end(),
+        std::byte{0});
+
+    for (const auto& spec :
+         runtime_type_tail_specs(
+             counts)) {
+
+        std::uint64_t offset = 0;
+        std::uint64_t bytes = 0;
+        std::uint64_t end = 0;
+
+        if (!align64(
+                cursor,
+                offset) ||
+            !multiply_u64(
+                spec.count,
+                spec.record_size,
+                bytes) ||
+            !add_u64(
+                offset,
+                bytes,
+                end) ||
+            end >
+                image.size()) {
+
+            return compiled_project_image_result::
+                invalid_state;
+        }
+
+        const auto index =
+            section_index(
+                spec.kind);
+
+        auto* entry =
+            base +
+            directory_offset +
+            index *
+                compiled_project_directory_entry_size;
+
+        write_u32(
+            entry,
+            static_cast<std::uint32_t>(
+                spec.kind));
+
+        write_u32(
+            entry + 4,
+            spec.record_size);
+
+        write_u64(
+            entry + 8,
+            offset);
+
+        write_u64(
+            entry + 16,
+            spec.count);
+
+        write_u64(
+            entry + 24,
+            0);
+
+        cursor = end;
+    }
+
+    if (cursor !=
+        image.size()) {
+
+        return compiled_project_image_result::
+            invalid_state;
+    }
+
+    write_u64(
+        base + 40,
+        image.size());
+
+    write_u64(
+        base +
+            header_directory_crc_offset,
+        persistence_crc64(
+            std::span<const std::byte>{
+                base + directory_offset,
+                directory_bytes}));
+
+    std::array<
+        std::byte,
+        compiled_project_header_size>
+        header{};
+
+    std::memcpy(
+        header.data(),
+        base,
+        header.size());
+
+    write_u64(
+        header.data() +
+            header_crc_offset,
+        0);
+
+    write_u64(
+        base +
+            header_crc_offset,
+        persistence_crc64(
+            header));
+
+    compiled_project_view validation;
+
+    return validation.bind(
+        std::span<const std::byte>{
+            image.data(),
+            image.size()});
+}
+
 std::span<const std::byte>
 compiled_project_view::runtime_physical_section(
     compiled_project_section kind) const noexcept {
 
     if (kind < compiled_project_section::runtime_abi_header ||
-        kind > compiled_project_section::runtime_endpoint_dereferences) {
+        kind > compiled_project_section::runtime_type_object_patches) {
         return {};
     }
 
@@ -8287,7 +8591,7 @@ compiled_project_runtime_physical_section(
     compiled_project_section kind) noexcept {
 
     if (kind < compiled_project_section::runtime_abi_header ||
-        kind > compiled_project_section::runtime_endpoint_dereferences) {
+        kind > compiled_project_section::runtime_type_object_patches) {
         return {};
     }
 

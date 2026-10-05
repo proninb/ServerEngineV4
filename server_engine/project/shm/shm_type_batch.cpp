@@ -3223,7 +3223,24 @@ public:
           abi(abi),
           layout(layout),
           shm(shm),
-          telemetry(telemetry) {
+          telemetry(telemetry),
+          type_apis(area.type_apis_view()),
+          relative_references(area.relative_references_view()),
+          absolute_references(area.absolute_references_view()),
+          object_references(area.object_references_view()),
+          stores(area.stores_view()),
+          post_stores(area.post_stores_view()),
+          children(area.children_view()),
+          repeats(area.repeats_view()),
+          constants(area.constants_view()),
+          object_where(area.object_where_view()),
+          object_records(area.objects_view()),
+          canonical_roots(area.canonical_roots_view()),
+          object_groups(area.object_groups_view()),
+          object_group_offsets(area.object_group_offsets_view()),
+          canonical_groups(area.canonical_groups_view()),
+          canonical_group_offsets(area.canonical_group_offsets_view()),
+          object_patches(area.object_patches_view()) {
     }
 
     [[nodiscard]] shm_type_batch_result canonical() noexcept {
@@ -3232,10 +3249,10 @@ public:
             return valid;
         }
 
-        for (const auto& group : area.canonical_groups) {
+        for (const auto& group : canonical_groups) {
             if (!valid_group(
                     group,
-                    area.canonical_group_offsets.size())) {
+                    canonical_group_offsets.size())) {
                 return shm_type_batch_result::invalid_input;
             }
 
@@ -3261,7 +3278,7 @@ public:
                     apply_api_batch(
                         group.type_api,
                         std::span<const shm_offset>{
-                            area.canonical_group_offsets.data() +
+                            canonical_group_offsets.data() +
                                 position,
                             count},
                         0);
@@ -3279,7 +3296,7 @@ public:
 
         if (telemetry != nullptr) {
             telemetry->canonical_roots =
-                area.canonical_roots.size();
+                canonical_roots.size();
         }
 
         return shm_type_batch_result::success;
@@ -3291,10 +3308,10 @@ public:
             return valid;
         }
 
-        for (const auto& group : area.object_groups) {
+        for (const auto& group : object_groups) {
             if (!valid_group(
                     group,
-                    area.object_group_offsets.size())) {
+                    object_group_offsets.size())) {
                 return shm_type_batch_result::invalid_input;
             }
 
@@ -3320,7 +3337,7 @@ public:
                     apply_api_batch(
                         group.type_api,
                         std::span<const shm_offset>{
-                            area.object_group_offsets.data() +
+                            object_group_offsets.data() +
                                 position,
                             count},
                         0);
@@ -3338,19 +3355,19 @@ public:
 
         // Object-specific construction remains a separate physical patch
         // layer. It is intentionally not part of shared Type API state.
-        for (const auto& object : area.objects) {
+        for (const auto& object : object_records) {
             if (object.patch == 0) {
                 continue;
             }
 
             if (object.patch >
-                area.object_patches.size()) {
+                object_patches.size()) {
                 return shm_type_batch_result::invalid_input;
             }
 
             const auto result =
                 execute_store(
-                    area.object_patches[
+                    object_patches[
                         object.patch - 1],
                     object.offset);
 
@@ -3366,7 +3383,7 @@ public:
 
         if (telemetry != nullptr) {
             telemetry->objects =
-                area.objects.size();
+                object_records.size();
         }
 
         return shm_type_batch_result::success;
@@ -3381,7 +3398,7 @@ public:
             return valid;
         }
 
-        for (const auto& object : area.objects) {
+        for (const auto& object : object_records) {
             if (object.offset >= area.layout_size) {
                 return shm_type_batch_result::invalid_input;
             }
@@ -3400,13 +3417,13 @@ public:
 
             if (object.patch != 0) {
                 if (object.patch >
-                    area.object_patches.size()) {
+                    object_patches.size()) {
                     return shm_type_batch_result::invalid_input;
                 }
 
                 const auto result =
                     execute_store(
-                        area.object_patches[
+                        object_patches[
                             object.patch - 1],
                         object.offset);
 
@@ -3423,7 +3440,7 @@ public:
 
         if (telemetry != nullptr) {
             telemetry->objects =
-                area.objects.size();
+                object_records.size();
         }
 
         return shm_type_batch_result::success;
@@ -3490,7 +3507,7 @@ private:
 
         return
             group.type_api != 0 &&
-            group.type_api <= area.type_apis.size() &&
+            group.type_api <= type_apis.size() &&
             valid_range(
                 group.roots,
                 roots_size);
@@ -3600,7 +3617,7 @@ private:
 
         if (operation.size == 0 ||
             operation.size > 16 ||
-            operation.constant >= area.constants.size() ||
+            operation.constant >= constants.size() ||
             base_offset >= area.layout_size ||
             operation.target >
                 area.layout_size - base_offset ||
@@ -3614,7 +3631,7 @@ private:
             shm.data() +
                 static_cast<std::size_t>(
                     base_offset + operation.target),
-            area.constants[operation.constant].data(),
+            constants[operation.constant].data(),
             operation.size);
 
         if (telemetry != nullptr) {
@@ -3630,35 +3647,35 @@ private:
         shm_offset relative_base) noexcept {
 
         if (type_api == 0 ||
-            type_api > area.type_apis.size() ||
+            type_api > type_apis.size() ||
             roots.empty()) {
             return shm_type_batch_result::invalid_input;
         }
 
         const auto api =
-            area.type_apis[type_api - 1];
+            type_apis[type_api - 1];
 
         if (!valid_range(
                 api.relative_references,
-                area.relative_references.size()) ||
+                relative_references.size()) ||
             !valid_range(
                 api.absolute_references,
-                area.absolute_references.size()) ||
+                absolute_references.size()) ||
             !valid_range(
                 api.object_references,
-                area.object_references.size()) ||
+                object_references.size()) ||
             !valid_range(
                 api.stores,
-                area.stores.size()) ||
+                stores.size()) ||
             !valid_range(
                 api.children,
-                area.children.size()) ||
+                children.size()) ||
             !valid_range(
                 api.repeats,
-                area.repeats.size()) ||
+                repeats.size()) ||
             !valid_range(
                 api.post_stores,
-                area.post_stores.size())) {
+                post_stores.size())) {
             return shm_type_batch_result::invalid_input;
         }
 
@@ -3695,7 +3712,7 @@ private:
                  ++index) {
 
                 const auto& reference =
-                    area.relative_references[
+                    relative_references[
                         static_cast<std::size_t>(
                             api.relative_references.begin) +
                         index];
@@ -3730,7 +3747,7 @@ private:
                  ++index) {
 
                 const auto& reference =
-                    area.absolute_references[
+                    absolute_references[
                         static_cast<std::size_t>(
                             api.absolute_references.begin) +
                         index];
@@ -3767,7 +3784,7 @@ private:
                  ++index) {
 
                 const auto& reference =
-                    area.object_references[
+                    object_references[
                         static_cast<std::size_t>(
                             api.object_references.begin) +
                         index];
@@ -3776,12 +3793,12 @@ private:
                         area.layout_size - base_offset ||
                     reference.object_slot == 0 ||
                     reference.object_slot >
-                        area.object_where.size()) {
+                        object_where.size()) {
                     return shm_type_batch_result::invalid_input;
                 }
 
                 const auto source_offset =
-                    area.object_where[
+                    object_where[
                         reference.object_slot - 1];
 
                 if (source_offset == invalid_where() ||
@@ -3814,7 +3831,7 @@ private:
 
                 const auto result =
                     execute_store(
-                        area.stores[
+                        stores[
                             static_cast<std::size_t>(
                                 api.stores.begin) +
                             index],
@@ -3832,14 +3849,14 @@ private:
              ++index) {
 
             const auto& child =
-                area.children[
+                children[
                     static_cast<std::size_t>(
                         api.children.begin) +
                     index];
 
             if (child.type_api == 0 ||
                 child.type_api >
-                    area.type_apis.size() ||
+                    type_apis.size() ||
                 child.target >
                     (std::numeric_limits<
                         shm_offset>::max)() -
@@ -3869,14 +3886,14 @@ private:
              ++index) {
 
             const auto& repeat =
-                area.repeats[
+                repeats[
                     static_cast<std::size_t>(
                         api.repeats.begin) +
                     index];
 
             if (repeat.type_api == 0 ||
                 repeat.type_api >
-                    area.type_apis.size() ||
+                    type_apis.size() ||
                 repeat.stride == 0 ||
                 repeat.count == 0 ||
                 repeat.target >
@@ -3943,7 +3960,7 @@ private:
 
                 const auto result =
                     execute_store(
-                        area.post_stores[
+                        post_stores[
                             static_cast<std::size_t>(
                                 api.post_stores.begin) +
                             index],
@@ -3971,35 +3988,35 @@ private:
         shm_offset base_offset) noexcept {
 
         if (type_api == 0 ||
-            type_api > area.type_apis.size() ||
+            type_api > type_apis.size() ||
             base_offset >= area.layout_size) {
             return shm_type_batch_result::invalid_input;
         }
 
         const auto api =
-            area.type_apis[type_api - 1];
+            type_apis[type_api - 1];
 
         if (!valid_range(
                 api.relative_references,
-                area.relative_references.size()) ||
+                relative_references.size()) ||
             !valid_range(
                 api.absolute_references,
-                area.absolute_references.size()) ||
+                absolute_references.size()) ||
             !valid_range(
                 api.object_references,
-                area.object_references.size()) ||
+                object_references.size()) ||
             !valid_range(
                 api.stores,
-                area.stores.size()) ||
+                stores.size()) ||
             !valid_range(
                 api.children,
-                area.children.size()) ||
+                children.size()) ||
             !valid_range(
                 api.repeats,
-                area.repeats.size()) ||
+                repeats.size()) ||
             !valid_range(
                 api.post_stores,
-                area.post_stores.size())) {
+                post_stores.size())) {
             return shm_type_batch_result::invalid_input;
         }
 
@@ -4017,7 +4034,7 @@ private:
              ++index) {
 
             const auto& reference =
-                area.relative_references[
+                relative_references[
                     static_cast<std::size_t>(
                         api.relative_references.begin) +
                     index];
@@ -4051,7 +4068,7 @@ private:
              ++index) {
 
             const auto& reference =
-                area.absolute_references[
+                absolute_references[
                     static_cast<std::size_t>(
                         api.absolute_references.begin) +
                     index];
@@ -4087,7 +4104,7 @@ private:
              ++index) {
 
             const auto& reference =
-                area.object_references[
+                object_references[
                     static_cast<std::size_t>(
                         api.object_references.begin) +
                     index];
@@ -4096,12 +4113,12 @@ private:
                     area.layout_size - base_offset ||
                 reference.object_slot == 0 ||
                 reference.object_slot >
-                    area.object_where.size()) {
+                    object_where.size()) {
                 return shm_type_batch_result::invalid_input;
             }
 
             const auto source_offset =
-                area.object_where[
+                object_where[
                     reference.object_slot - 1];
 
             if (source_offset == invalid_where() ||
@@ -4134,7 +4151,7 @@ private:
 
             const auto result =
                 execute_store(
-                    area.stores[
+                    stores[
                         static_cast<std::size_t>(
                             api.stores.begin) +
                         index],
@@ -4151,14 +4168,14 @@ private:
              ++index) {
 
             const auto& child =
-                area.children[
+                children[
                     static_cast<std::size_t>(
                         api.children.begin) +
                     index];
 
             if (child.type_api == 0 ||
                 child.type_api >
-                    area.type_apis.size() ||
+                    type_apis.size() ||
                 child.target >
                     area.layout_size - base_offset) {
                 return shm_type_batch_result::invalid_input;
@@ -4192,14 +4209,14 @@ private:
              ++index) {
 
             const auto& repeat =
-                area.repeats[
+                repeats[
                     static_cast<std::size_t>(
                         api.repeats.begin) +
                     index];
 
             if (repeat.type_api == 0 ||
                 repeat.type_api >
-                    area.type_apis.size() ||
+                    type_apis.size() ||
                 repeat.stride == 0 ||
                 repeat.count == 0 ||
                 repeat.target >
@@ -4256,7 +4273,7 @@ private:
 
             const auto result =
                 execute_store(
-                    area.post_stores[
+                    post_stores[
                         static_cast<std::size_t>(
                             api.post_stores.begin) +
                         index],
@@ -4282,10 +4299,33 @@ private:
     const shm_layout& layout;
     std::span<std::byte> shm;
     shm_type_batch_execute_telemetry* telemetry = nullptr;
+
+    std::span<const shm_type_batch::type_api> type_apis;
+    std::span<const shm_type_batch::relative_reference> relative_references;
+    std::span<const shm_type_batch::absolute_reference> absolute_references;
+    std::span<const shm_type_batch::object_reference> object_references;
+    std::span<const shm_type_batch::store_operation> stores;
+    std::span<const shm_type_batch::store_operation> post_stores;
+    std::span<const shm_type_batch::child_operation> children;
+    std::span<const shm_type_batch::repeat_operation> repeats;
+    std::span<const std::array<std::byte, 16>> constants;
+    std::span<const shm_offset> object_where;
+    std::span<const shm_type_batch::object_runtime> object_records;
+    std::span<const shm_type_batch::canonical_root> canonical_roots;
+    std::span<const shm_type_batch::root_group> object_groups;
+    std::span<const shm_offset> object_group_offsets;
+    std::span<const shm_type_batch::root_group> canonical_groups;
+    std::span<const shm_offset> canonical_group_offsets;
+    std::span<const shm_type_batch::store_operation> object_patches;
+
     abi_properties properties{};
 };
 
 std::size_t shm_type_batch::resident_bytes() const noexcept {
+
+    if (persisted_view) {
+        return 0;
+    }
 
     return
         type_apis.size() * sizeof(type_api) +
@@ -4327,9 +4367,360 @@ void shm_type_batch::reset() noexcept {
     canonical_group_offsets.clear();
     object_patches.clear();
 
+    persisted_type_apis = {};
+    persisted_relative_references = {};
+    persisted_absolute_references = {};
+    persisted_object_references = {};
+    persisted_stores = {};
+    persisted_post_stores = {};
+    persisted_children = {};
+    persisted_repeats = {};
+    persisted_constants = {};
+    persisted_object_where = {};
+    persisted_objects = {};
+    persisted_canonical_roots = {};
+    persisted_object_groups = {};
+    persisted_object_group_offsets = {};
+    persisted_canonical_groups = {};
+    persisted_canonical_group_offsets = {};
+    persisted_object_patches = {};
+    persisted_view = false;
+
     target_value = abi_target::windows_x64;
     layout_size = 0;
     prepared_value = false;
+}
+
+
+namespace {
+
+template <typename T>
+[[nodiscard]] std::span<T>
+runtime_type_mutable_records(
+    std::span<std::byte> bytes) noexcept {
+
+    return {
+        reinterpret_cast<T*>(
+            bytes.data()),
+        bytes.size() /
+            sizeof(T),
+    };
+}
+
+template <typename T>
+[[nodiscard]] std::span<const T>
+runtime_type_records(
+    std::span<const std::byte> bytes) noexcept {
+
+    return {
+        reinterpret_cast<const T*>(
+            bytes.data()),
+        bytes.size() /
+            sizeof(T),
+    };
+}
+
+}
+
+void shm_type_batch_compiled_counts(
+    const shm_type_batch& area,
+    compiled_project_runtime_type_counts& output) noexcept {
+
+    output = {
+        area.type_apis.size(),
+        area.relative_references.size(),
+        area.absolute_references.size(),
+        area.object_references.size(),
+        area.stores.size(),
+        area.post_stores.size(),
+        area.children.size(),
+        area.repeats.size(),
+        area.constants.size(),
+        area.object_where.size(),
+        area.objects.size(),
+        area.canonical_roots.size(),
+        area.object_groups.size(),
+        area.object_group_offsets.size(),
+        area.canonical_groups.size(),
+        area.canonical_group_offsets.size(),
+        area.object_patches.size(),
+    };
+}
+
+shm_type_batch_result
+encode_shm_type_batch_physical_columns(
+    const shm_type_batch& area,
+    std::span<std::byte> compiled_image) noexcept {
+
+    if (!area.prepared_value ||
+        area.persisted_view) {
+
+        return shm_type_batch_result::
+            invalid_input;
+    }
+
+    const auto section =
+        [&](compiled_project_section kind) noexcept {
+            return
+                compiled_project_runtime_physical_section(
+                    compiled_image,
+                    kind);
+        };
+
+    const auto copy_column =
+        [&]<typename T>(
+            compiled_project_section kind,
+            const std::vector<T>& source) noexcept {
+
+            auto target =
+                runtime_type_mutable_records<T>(
+                    section(kind));
+
+            if (target.size() !=
+                source.size()) {
+
+                return false;
+            }
+
+            std::copy(
+                source.begin(),
+                source.end(),
+                target.begin());
+
+            return true;
+        };
+
+    return
+        copy_column(
+            compiled_project_section::
+                runtime_type_apis,
+            area.type_apis) &&
+        copy_column(
+            compiled_project_section::
+                runtime_type_relative_references,
+            area.relative_references) &&
+        copy_column(
+            compiled_project_section::
+                runtime_type_absolute_references,
+            area.absolute_references) &&
+        copy_column(
+            compiled_project_section::
+                runtime_type_object_references,
+            area.object_references) &&
+        copy_column(
+            compiled_project_section::
+                runtime_type_stores,
+            area.stores) &&
+        copy_column(
+            compiled_project_section::
+                runtime_type_post_stores,
+            area.post_stores) &&
+        copy_column(
+            compiled_project_section::
+                runtime_type_children,
+            area.children) &&
+        copy_column(
+            compiled_project_section::
+                runtime_type_repeats,
+            area.repeats) &&
+        copy_column(
+            compiled_project_section::
+                runtime_type_constants,
+            area.constants) &&
+        copy_column(
+            compiled_project_section::
+                runtime_type_object_where,
+            area.object_where) &&
+        copy_column(
+            compiled_project_section::
+                runtime_type_objects,
+            area.objects) &&
+        copy_column(
+            compiled_project_section::
+                runtime_type_canonical_roots,
+            area.canonical_roots) &&
+        copy_column(
+            compiled_project_section::
+                runtime_type_object_groups,
+            area.object_groups) &&
+        copy_column(
+            compiled_project_section::
+                runtime_type_object_group_offsets,
+            area.object_group_offsets) &&
+        copy_column(
+            compiled_project_section::
+                runtime_type_canonical_groups,
+            area.canonical_groups) &&
+        copy_column(
+            compiled_project_section::
+                runtime_type_canonical_group_offsets,
+            area.canonical_group_offsets) &&
+        copy_column(
+            compiled_project_section::
+                runtime_type_object_patches,
+            area.object_patches)
+        ? shm_type_batch_result::success
+        : shm_type_batch_result::invalid_input;
+}
+
+shm_type_batch_result
+attach_shm_type_batch_physical_columns(
+    const compiled_project_view& project,
+    const shm_layout& layout,
+    shm_type_batch& output,
+    shm_type_batch_prepare_telemetry* telemetry) noexcept {
+
+    output.reset();
+
+    const auto section =
+        [&](compiled_project_section kind) noexcept {
+            return
+                project.runtime_physical_section(
+                    kind);
+        };
+
+    output.persisted_type_apis =
+        runtime_type_records<
+            shm_type_batch::type_api>(
+                section(
+                    compiled_project_section::
+                        runtime_type_apis));
+
+    output.persisted_relative_references =
+        runtime_type_records<
+            shm_type_batch::relative_reference>(
+                section(
+                    compiled_project_section::
+                        runtime_type_relative_references));
+
+    output.persisted_absolute_references =
+        runtime_type_records<
+            shm_type_batch::absolute_reference>(
+                section(
+                    compiled_project_section::
+                        runtime_type_absolute_references));
+
+    output.persisted_object_references =
+        runtime_type_records<
+            shm_type_batch::object_reference>(
+                section(
+                    compiled_project_section::
+                        runtime_type_object_references));
+
+    output.persisted_stores =
+        runtime_type_records<
+            shm_type_batch::store_operation>(
+                section(
+                    compiled_project_section::
+                        runtime_type_stores));
+
+    output.persisted_post_stores =
+        runtime_type_records<
+            shm_type_batch::store_operation>(
+                section(
+                    compiled_project_section::
+                        runtime_type_post_stores));
+
+    output.persisted_children =
+        runtime_type_records<
+            shm_type_batch::child_operation>(
+                section(
+                    compiled_project_section::
+                        runtime_type_children));
+
+    output.persisted_repeats =
+        runtime_type_records<
+            shm_type_batch::repeat_operation>(
+                section(
+                    compiled_project_section::
+                        runtime_type_repeats));
+
+    output.persisted_constants =
+        runtime_type_records<
+            std::array<std::byte, 16>>(
+                section(
+                    compiled_project_section::
+                        runtime_type_constants));
+
+    output.persisted_object_where =
+        runtime_type_records<
+            shm_offset>(
+                section(
+                    compiled_project_section::
+                        runtime_type_object_where));
+
+    output.persisted_objects =
+        runtime_type_records<
+            shm_type_batch::object_runtime>(
+                section(
+                    compiled_project_section::
+                        runtime_type_objects));
+
+    output.persisted_canonical_roots =
+        runtime_type_records<
+            shm_type_batch::canonical_root>(
+                section(
+                    compiled_project_section::
+                        runtime_type_canonical_roots));
+
+    output.persisted_object_groups =
+        runtime_type_records<
+            shm_type_batch::root_group>(
+                section(
+                    compiled_project_section::
+                        runtime_type_object_groups));
+
+    output.persisted_object_group_offsets =
+        runtime_type_records<
+            shm_offset>(
+                section(
+                    compiled_project_section::
+                        runtime_type_object_group_offsets));
+
+    output.persisted_canonical_groups =
+        runtime_type_records<
+            shm_type_batch::root_group>(
+                section(
+                    compiled_project_section::
+                        runtime_type_canonical_groups));
+
+    output.persisted_canonical_group_offsets =
+        runtime_type_records<
+            shm_offset>(
+                section(
+                    compiled_project_section::
+                        runtime_type_canonical_group_offsets));
+
+    output.persisted_object_patches =
+        runtime_type_records<
+            shm_type_batch::store_operation>(
+                section(
+                    compiled_project_section::
+                        runtime_type_object_patches));
+
+    output.target_value =
+        layout.target();
+
+    output.layout_size =
+        layout.size();
+
+    output.persisted_view = true;
+    output.prepared_value = true;
+
+    if (telemetry != nullptr) {
+        *telemetry = {};
+        telemetry->type_apis =
+            output.persisted_type_apis.size();
+        telemetry->objects =
+            output.persisted_objects.size();
+        telemetry->canonical_roots =
+            output.persisted_canonical_roots.size();
+        telemetry->inline_leaf_limit = 64;
+        telemetry->resident_bytes = 0;
+    }
+
+    return shm_type_batch_result::
+        success;
 }
 
 shm_type_batch_result prepare_shm_type_batch(

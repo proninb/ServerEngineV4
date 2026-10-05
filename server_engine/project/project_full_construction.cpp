@@ -4,6 +4,7 @@
 #include "project_configuration_manifest_store.hpp"
 #include "runtime/project_runtime.hpp"
 #include "shm/shm_layout.hpp"
+#include "shm/shm_type_batch.hpp"
 #include "shm/shm_runtime_v2.hpp"
 #include "assign/assign_input.hpp"
 #include "construction/execution_lanes.hpp"
@@ -282,27 +283,85 @@ persist_compiled(
             full_persistence_stage::prepare);
     }
 
+    shm_type_batch runtime_type;
+
+    if (prepare_shm_type_batch_inline64(
+            compiled,
+            context.settings.abi,
+            runtime_layout,
+            runtime_type) !=
+        shm_type_batch_result::success) {
+
+        return persistence_invalid(
+            full_persistence_stage::prepare);
+    }
+
+    compiled_project_runtime_type_counts
+        runtime_type_counts;
+
+    shm_type_batch_compiled_counts(
+        runtime_type,
+        runtime_type_counts);
+
+    std::size_t final_compiled_size = 0;
+
+    if (prepare_compiled_project_runtime_type_tail(
+            mapping.bytes(),
+            runtime_type_counts,
+            final_compiled_size) !=
+        compiled_project_image_result::success) {
+
+        return persistence_invalid(
+            full_persistence_stage::prepare);
+    }
+
+    // Exact Type program size is known only after physical compilation.
+    // Extend/remap the SAME final compiled.bin; no candidate/copy is created.
+    compiled.reset();
+    mapping.reset();
+
+    if (mapping.open_existing(
+            paths.compiled,
+            final_compiled_size) !=
+        writable_file_mapping_result::success) {
+
+        return persistence_io_failure(
+            full_persistence_stage::create);
+    }
+
+    if (apply_compiled_project_runtime_type_tail(
+            runtime_type_counts,
+            mapping.bytes()) !=
+        compiled_project_image_result::success ||
+        compiled.bind(
+            mapping.bytes()) !=
+        compiled_project_image_result::success) {
+
+        return persistence_invalid(
+            full_persistence_stage::validate);
+    }
+
     if (encode_shm_layout_columns(
             runtime_layout,
             context.settings.abi,
             mapping.bytes()) !=
-        shm_layout_result::success) {
-        return persistence_invalid(
-            full_persistence_stage::encode);
-    }
-
-    if (encode_shm_runtime_v2_physical_columns(
+        shm_layout_result::success ||
+        encode_shm_type_batch_physical_columns(
+            runtime_type,
+            mapping.bytes()) !=
+        shm_type_batch_result::success ||
+        encode_shm_runtime_v2_physical_columns(
             compiled,
             context.settings.abi,
             runtime_layout,
             mapping.bytes()) !=
         shm_runtime_v2_result::success) {
+
         return persistence_invalid(
             full_persistence_stage::encode);
     }
 
-    // Semantic cold audit remains explicit. LOAD validates the persisted ABI
-    // image header/counts before using it.
+    // PUBLISH owns physical correctness. LOAD only attaches mmap views.
 
     if (mapping.flush() !=
         writable_file_mapping_result::success) {

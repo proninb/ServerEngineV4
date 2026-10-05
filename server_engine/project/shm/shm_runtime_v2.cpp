@@ -3232,24 +3232,11 @@ prepare_shm_runtime_v2_persisted(
     output = shm_runtime_v2{};
 
     const auto result =
-        prepare_shm_type_batch_inline64(
+        attach_shm_type_batch_physical_columns(
             project,
-            abi,
             layout,
             output.area,
             telemetry);
-
-    if (result ==
-            shm_type_batch_result::success &&
-        telemetry != nullptr &&
-        telemetry->inline_leaf_limit !=
-            shm_runtime_v2_inline_leaf_limit) {
-
-        output = shm_runtime_v2{};
-        *telemetry = {};
-        return shm_type_batch_result::
-            invalid_input;
-    }
 
     if (result !=
         shm_type_batch_result::success) {

@@ -19,6 +19,7 @@
 namespace cw::server {
 
 class compiled_project_view;
+struct compiled_project_runtime_type_counts;
 class shm_type_batch_builder;
 class shm_type_batch_executor;
 class shm_hybrid_profiler;
@@ -135,11 +136,11 @@ public:
     }
 
     [[nodiscard]] std::size_t type_api_count() const noexcept {
-        return type_apis.size();
+        return type_apis_view().size();
     }
 
     [[nodiscard]] std::size_t object_count() const noexcept {
-        return objects.size();
+        return objects_view().size();
     }
 
     [[nodiscard]] std::size_t resident_bytes() const noexcept;
@@ -258,6 +259,162 @@ private:
     std::vector<shm_offset> object_group_offsets;
     std::vector<root_group> canonical_groups;
     std::vector<shm_offset> canonical_group_offsets;
+    // PUBLISH/tests own the vectors above. Production LOAD points these
+    // spans directly into compiled.bin and allocates no Type execution copy.
+    std::span<const type_api> persisted_type_apis;
+    std::span<const relative_reference> persisted_relative_references;
+    std::span<const absolute_reference> persisted_absolute_references;
+    std::span<const object_reference> persisted_object_references;
+    std::span<const store_operation> persisted_stores;
+    std::span<const store_operation> persisted_post_stores;
+    std::span<const child_operation> persisted_children;
+    std::span<const repeat_operation> persisted_repeats;
+    std::span<const std::array<std::byte, 16>> persisted_constants;
+    std::span<const shm_offset> persisted_object_where;
+    std::span<const object_runtime> persisted_objects;
+    std::span<const canonical_root> persisted_canonical_roots;
+    std::span<const root_group> persisted_object_groups;
+    std::span<const shm_offset> persisted_object_group_offsets;
+    std::span<const root_group> persisted_canonical_groups;
+    std::span<const shm_offset> persisted_canonical_group_offsets;
+    std::span<const store_operation> persisted_object_patches;
+
+    bool persisted_view = false;
+
+    [[nodiscard]] std::span<const type_api> type_apis_view() const noexcept {
+        return persisted_view
+            ? persisted_type_apis
+            : std::span<const type_api>{type_apis.data(), type_apis.size()};
+    }
+
+    [[nodiscard]] std::span<const relative_reference>
+    relative_references_view() const noexcept {
+        return persisted_view
+            ? persisted_relative_references
+            : std::span<const relative_reference>{
+                relative_references.data(), relative_references.size()};
+    }
+
+    [[nodiscard]] std::span<const absolute_reference>
+    absolute_references_view() const noexcept {
+        return persisted_view
+            ? persisted_absolute_references
+            : std::span<const absolute_reference>{
+                absolute_references.data(), absolute_references.size()};
+    }
+
+    [[nodiscard]] std::span<const object_reference>
+    object_references_view() const noexcept {
+        return persisted_view
+            ? persisted_object_references
+            : std::span<const object_reference>{
+                object_references.data(), object_references.size()};
+    }
+
+    [[nodiscard]] std::span<const store_operation>
+    stores_view() const noexcept {
+        return persisted_view
+            ? persisted_stores
+            : std::span<const store_operation>{
+                stores.data(), stores.size()};
+    }
+
+    [[nodiscard]] std::span<const store_operation>
+    post_stores_view() const noexcept {
+        return persisted_view
+            ? persisted_post_stores
+            : std::span<const store_operation>{
+                post_stores.data(), post_stores.size()};
+    }
+
+    [[nodiscard]] std::span<const child_operation>
+    children_view() const noexcept {
+        return persisted_view
+            ? persisted_children
+            : std::span<const child_operation>{
+                children.data(), children.size()};
+    }
+
+    [[nodiscard]] std::span<const repeat_operation>
+    repeats_view() const noexcept {
+        return persisted_view
+            ? persisted_repeats
+            : std::span<const repeat_operation>{
+                repeats.data(), repeats.size()};
+    }
+
+    [[nodiscard]] std::span<const std::array<std::byte, 16>>
+    constants_view() const noexcept {
+        return persisted_view
+            ? persisted_constants
+            : std::span<const std::array<std::byte, 16>>{
+                constants.data(), constants.size()};
+    }
+
+    [[nodiscard]] std::span<const shm_offset>
+    object_where_view() const noexcept {
+        return persisted_view
+            ? persisted_object_where
+            : std::span<const shm_offset>{
+                object_where.data(), object_where.size()};
+    }
+
+    [[nodiscard]] std::span<const object_runtime>
+    objects_view() const noexcept {
+        return persisted_view
+            ? persisted_objects
+            : std::span<const object_runtime>{
+                objects.data(), objects.size()};
+    }
+
+    [[nodiscard]] std::span<const canonical_root>
+    canonical_roots_view() const noexcept {
+        return persisted_view
+            ? persisted_canonical_roots
+            : std::span<const canonical_root>{
+                canonical_roots.data(), canonical_roots.size()};
+    }
+
+    [[nodiscard]] std::span<const root_group>
+    object_groups_view() const noexcept {
+        return persisted_view
+            ? persisted_object_groups
+            : std::span<const root_group>{
+                object_groups.data(), object_groups.size()};
+    }
+
+    [[nodiscard]] std::span<const shm_offset>
+    object_group_offsets_view() const noexcept {
+        return persisted_view
+            ? persisted_object_group_offsets
+            : std::span<const shm_offset>{
+                object_group_offsets.data(), object_group_offsets.size()};
+    }
+
+    [[nodiscard]] std::span<const root_group>
+    canonical_groups_view() const noexcept {
+        return persisted_view
+            ? persisted_canonical_groups
+            : std::span<const root_group>{
+                canonical_groups.data(), canonical_groups.size()};
+    }
+
+    [[nodiscard]] std::span<const shm_offset>
+    canonical_group_offsets_view() const noexcept {
+        return persisted_view
+            ? persisted_canonical_group_offsets
+            : std::span<const shm_offset>{
+                canonical_group_offsets.data(), canonical_group_offsets.size()};
+    }
+
+    [[nodiscard]] std::span<const store_operation>
+    object_patches_view() const noexcept {
+        return persisted_view
+            ? persisted_object_patches
+            : std::span<const store_operation>{
+                object_patches.data(), object_patches.size()};
+    }
+
     std::vector<store_operation> object_patches;
 
     abi_target target_value = abi_target::windows_x64;
@@ -308,6 +465,22 @@ private:
     friend shm_type_batch_result prepare_shm_type_batch_inline64(
         const compiled_project_view&,
         const server_abi_configuration&,
+        const shm_layout&,
+        shm_type_batch&,
+        shm_type_batch_prepare_telemetry*) noexcept;
+
+    friend void shm_type_batch_compiled_counts(
+        const shm_type_batch&,
+        compiled_project_runtime_type_counts&) noexcept;
+
+    friend shm_type_batch_result
+    encode_shm_type_batch_physical_columns(
+        const shm_type_batch&,
+        std::span<std::byte>) noexcept;
+
+    friend shm_type_batch_result
+    attach_shm_type_batch_physical_columns(
+        const compiled_project_view&,
         const shm_layout&,
         shm_type_batch&,
         shm_type_batch_prepare_telemetry*) noexcept;
@@ -371,6 +544,23 @@ private:
 [[nodiscard]] shm_type_batch_result prepare_shm_type_batch_inline64(
     const compiled_project_view& project,
     const server_abi_configuration& abi,
+    const shm_layout& layout,
+    shm_type_batch& output,
+    shm_type_batch_prepare_telemetry* telemetry = nullptr) noexcept;
+
+// Persist/attach the already selected INLINE-64 executable representation.
+void shm_type_batch_compiled_counts(
+    const shm_type_batch& area,
+    compiled_project_runtime_type_counts& output) noexcept;
+
+[[nodiscard]] shm_type_batch_result
+encode_shm_type_batch_physical_columns(
+    const shm_type_batch& area,
+    std::span<std::byte> compiled_image) noexcept;
+
+[[nodiscard]] shm_type_batch_result
+attach_shm_type_batch_physical_columns(
+    const compiled_project_view& project,
     const shm_layout& layout,
     shm_type_batch& output,
     shm_type_batch_prepare_telemetry* telemetry = nullptr) noexcept;
