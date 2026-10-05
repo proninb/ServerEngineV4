@@ -1573,3 +1573,67 @@ Each lane owns private mark telemetry; counters are reduced after the barrier.
 No compiled.bin format, PUBLISH encoding, BUILD semantics or FIXED_DIRECT ABI
 contract changes in this slice.
 
+## RUNTIME-SHM-PRODUCTION-CLEANUP-09C-09
+
+The 09C-04 through 09C-08 diagnostics were temporary experiments and are not
+part of the production Runtime API or persisted format.
+
+Measured conclusions:
+
+```text
+Object partition:
+    equal contiguous live-Object ranges
+
+Object concurrency:
+    min(object_count, execution_lane_capacity())
+
+SHM pre-touch:
+    disabled
+
+Static-link target marking:
+    parallel direct-target marking by physical target range
+```
+
+Equal-physical-byte Object partition did not improve LOAD. Explicit Object-lane
+caps also did not improve the tested workload; throughput continued improving
+through the available execution-lane capacity.
+
+Production therefore keeps no Object lane override, hardware-specific constant,
+per-lane profiling vector, work-weight metadata, startup calibration or Server
+configuration field.
+
+No compiled.bin format, PUBLISH encoding, FIXED_DIRECT ABI, BUILD semantics or
+Runtime lifecycle contract changes in this cleanup.
+
+
+## RUNTIME-SHM-OBJECT-SCHEDULING-FINAL-09C-13
+
+The Object scheduling experiments are complete.
+
+Measured decisions:
+
+```text
+09C-05 equal physical-byte partition      -> reject
+09C-08 explicit Object lane caps          -> reject
+09C-10 coordinator precomputed ranges     -> reject
+09C-11/12 mmap boundary warmup            -> reject
+```
+
+The 09C-12 same-binary paired A/B showed no repeatable benefit from touching
+persisted `object_runtime` lane boundaries before worker launch.
+
+Production therefore keeps the pushed 09C-03 Object execution path unchanged:
+
+```text
+partition      = equal contiguous live-Object count
+range math     = worker-local begin/count
+concurrency    = min(object_count, execution_lane_capacity())
+SHM pre-touch  = disabled
+link marking   = parallel direct-target physical ranges
+```
+
+No Object lane override, startup calibration, per-lane profiling, work-weight
+metadata, precomputed range vector or mmap warmup remains in the Runtime API.
+
+No compiled.bin format, PUBLISH encoding, BUILD semantics, FIXED_DIRECT ABI or
+Runtime lifecycle contract changes in this finalization.
