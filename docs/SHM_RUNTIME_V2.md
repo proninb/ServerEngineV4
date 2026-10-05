@@ -1507,3 +1507,32 @@ construction; `objects_ms` therefore includes worker creation overhead.
 No persisted format, PUBLISH encoding, BUILD semantics or FIXED_DIRECT ABI
 contract changes in this slice.
 
+## RUNTIME-SHM-PARALLEL-OBJECTS-NO-PRETOUCH-09C-02B
+
+This A/B keeps the 09C-02A 24-lane Object executor unchanged and removes only
+the separate full-SHM pre-touch pass.
+
+The execution order remains:
+
+```text
+create zeroed FIXED_DIRECT SHM
+-> canonical
+-> mark static-link targets
+-> parallel Object ranges (first-touch happens here)
+-> barrier
+-> resolve links
+-> source initializations
+```
+
+This deliberately does not move or parallelize canonical/link marking. The
+experiment therefore measures one question only: whether the already-parallel
+Object executor can absorb page establishment more cheaply than the separate
+24-lane pre-touch pass.
+
+`shm_pretouch_ms` and `shm_pretouch_lanes` remain in telemetry for direct A/B
+comparison and report zero in this slice. `runtime_v2_object_lanes` continues
+to report the actual Object fan-out.
+
+No persisted format, PUBLISH encoding, Runtime execution image, BUILD
+semantics or FIXED_DIRECT ABI contract changes.
+
