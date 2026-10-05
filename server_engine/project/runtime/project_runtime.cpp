@@ -540,6 +540,11 @@ void runtime_object_lane(
         static_cast<std::size_t>(
             lane < remainder);
 
+    auto* const lane_telemetry =
+        job.telemetry.empty()
+        ? nullptr
+        : &job.telemetry[lane];
+
     job.results[lane] =
         materialize_shm_runtime_v2_objects_range(
             *job.runtime,
@@ -548,7 +553,7 @@ void runtime_object_lane(
             job.shm,
             begin,
             count,
-            &job.telemetry[lane]);
+            lane_telemetry);
 }
 
 [[nodiscard]] shm_runtime_v2_result
@@ -594,8 +599,12 @@ runtime_materialize_objects_parallel(
                 shm_runtime_v2_result::success);
 
         std::vector<shm_runtime_v2_execute_telemetry>
-            lane_telemetry(
+            lane_telemetry;
+
+        if (telemetry != nullptr) {
+            lane_telemetry.resize(
                 active_lanes);
+        }
 
         execution_lanes lanes;
 

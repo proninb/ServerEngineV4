@@ -1637,3 +1637,38 @@ metadata, precomputed range vector or mmap warmup remains in the Runtime API.
 
 No compiled.bin format, PUBLISH encoding, BUILD semantics, FIXED_DIRECT ABI or
 Runtime lifecycle contract changes in this finalization.
+
+
+## RUNTIME-SHM-OBJECT-TELEMETRY-PRODUCTION-09D-03
+
+The 09D-02 same-binary paired A/B did not show a repeatable Object-phase
+performance gain from disabling detailed Object execution telemetry. The
+measured difference was within run-to-run scheduler/system noise.
+
+However, the audit exposed a production ownership bug: the parallel Object
+helper allocated per-lane execute telemetry and passed non-null telemetry
+pointers to workers even when the caller did not request
+`project_runtime_telemetry`.
+
+09D-03 fixes that contract without adding a configuration or benchmark switch:
+
+```text
+project_runtime_telemetry == nullptr
+    -> no per-lane Object telemetry allocation
+    -> Object worker telemetry == nullptr
+
+project_runtime_telemetry != nullptr
+    -> allocate one telemetry record per active Object lane
+    -> collect and reduce detailed Object counters exactly as before
+```
+
+The normal Server LOAD path does not request `project_runtime_telemetry`, so it
+now performs no discarded Object counter collection. The benchmark still
+requests telemetry and therefore keeps all existing detailed counters and phase
+timings.
+
+09D-01 trusted validation removal remains rejected and is not part of this
+slice.
+
+No compiled.bin format, PUBLISH encoding, SHM layout, Object partition,
+concurrency policy or Runtime lifecycle semantics change.
