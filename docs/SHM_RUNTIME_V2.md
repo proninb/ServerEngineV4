@@ -1097,3 +1097,69 @@ reference/differential implementation while Runtime V2 stabilization continues.
 The legacy `load-profile` interface was removed because its counters described
 the old fixed_direct materializer rather than the production Runtime V2 path.
 Normal LOAD telemetry already exposes the V2 prepare/materialization phases.
+
+
+## RUNTIME-V2-AUDIT-06
+
+The Runtime V2 production boundary was audited after V2 became the only
+resident materializer.
+
+### Resident state
+
+`project` owns only:
+
+```text
+project_path
+compiled.bin read-only mapping
+compiled_project_view
+FIXED_DIRECT shared memory
+runtime_binding_index
+runtime_size
+IC catalog state
+```
+
+`shm_layout` and `shm_runtime_v2` are construction-local objects in
+`create_resident_project()` and never enter `project`.
+
+The INLINE-64 Type API, physical link plans, initialization plans and endpoint
+dereference programs are therefore transient construction metadata.
+
+After `runtime_binding_index` has been built, Runtime V2 now explicitly clears
+both `shm_runtime_v2` and `shm_layout` before allocating the resident `project`.
+This makes the construction/resident lifetime boundary physical rather than
+merely relying on function-scope destruction.
+
+`runtime_v2_metadata_bytes` remains a telemetry field for compatibility, but it
+measures peak transient construction metadata, not resident Project memory.
+
+### Production build boundary
+
+The production `ServerEngineV4` target now contains only the accepted SHM path:
+
+```text
+shm_layout
+shm_type_batch
+shm_runtime_v2
+runtime_binding
+```
+
+The following older/experimental implementations are no longer compiled into
+the production Server target:
+
+```text
+shm_materializer
+shm_sparse
+shm_type_area
+shm_hybrid_profile
+shm_hybrid_04m
+runtime_layout
+fixed_direct_materializer
+```
+
+The five SHM comparison implementations remain compiled explicitly by
+`ServerEngineV4ShmLayoutBenchmark`. `runtime_layout` and
+`fixed_direct_materializer` remain explicit dependencies only of the legacy
+reference benchmarks/tests.
+
+This keeps benchmark/reference code available without allowing it to become an
+accidental production dependency.

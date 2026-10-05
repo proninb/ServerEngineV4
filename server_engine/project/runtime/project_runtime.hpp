@@ -44,6 +44,9 @@ struct project_runtime_telemetry final {
     bool runtime_v2 = false;
     std::uint8_t reserved[7]{};
     std::uint64_t runtime_v2_prepare_ns = 0;
+
+    // Peak transient construction metadata. This memory is released before the
+    // resident Project object is allocated.
     std::uint64_t runtime_v2_metadata_bytes = 0;
 
     // Runtime V2 semantic construction inventory.

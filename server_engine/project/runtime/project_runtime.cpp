@@ -606,7 +606,7 @@ server_status create_resident_project(
 
         telemetry->runtime_v2_metadata_bytes =
             static_cast<std::uint64_t>(
-                v2_runtime.resident_bytes());
+                v2_runtime.construction_bytes());
 
         telemetry->
             runtime_v2_link_dereferences =
@@ -1116,6 +1116,12 @@ server_status create_resident_project(
 
         return server_status::project_runtime_failed;
     }
+
+    // Construction-only V2 metadata must not overlap the resident Project
+    // lifetime. runtime_size and runtime_binding_index are already detached
+    // from shm_layout / shm_runtime_v2 at this point.
+    v2_runtime = shm_runtime_v2{};
+    v2_layout = shm_layout{};
 
     try {
         output =

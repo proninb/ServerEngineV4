@@ -67,13 +67,8 @@ add_executable(ServerEngineV4
     server_engine/project/ic/ic_catalog.cpp
     server_engine/project/abi/abi_layout.cpp
     server_engine/project/shm/shm_layout.cpp
-    server_engine/project/shm/shm_materializer.cpp
-    server_engine/project/shm/shm_sparse.cpp
-    server_engine/project/shm/shm_type_area.cpp
     server_engine/project/shm/shm_type_batch.cpp
     server_engine/project/shm/shm_runtime_v2.cpp
-    server_engine/project/shm/shm_hybrid_profile.cpp
-    server_engine/project/shm/shm_hybrid_04m.cpp
     server_engine/project/runtime/runtime_binding.cpp
     server_engine/project/runtime/runtime_query.cpp
     server_engine/project/runtime/runtime_ic.cpp
@@ -233,6 +228,11 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
         ServerEngineV4ShmLayoutBenchmark
         benchmarks/shm_layout_benchmark.cpp
         server_engine/project/runtime/runtime_layout.cpp
+        server_engine/project/shm/shm_materializer.cpp
+        server_engine/project/shm/shm_sparse.cpp
+        server_engine/project/shm/shm_type_area.cpp
+        server_engine/project/shm/shm_hybrid_profile.cpp
+        server_engine/project/shm/shm_hybrid_04m.cpp
         ${SERVER_ENGINE_V4_BENCHMARK_SOURCES}
     )
 

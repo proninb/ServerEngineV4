@@ -106,7 +106,7 @@ public:
             : 0;
     }
 
-    [[nodiscard]] std::size_t resident_bytes() const noexcept {
+    [[nodiscard]] std::size_t construction_bytes() const noexcept {
         return
             area.resident_bytes() +
             links.size() * sizeof(link_plan) +
