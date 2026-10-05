@@ -74,13 +74,12 @@ add_executable(ServerEngineV4
     server_engine/project/shm/shm_runtime_v2.cpp
     server_engine/project/shm/shm_hybrid_profile.cpp
     server_engine/project/shm/shm_hybrid_04m.cpp
-    server_engine/project/runtime/runtime_layout.cpp
+    server_engine/project/runtime/runtime_binding.cpp
     server_engine/project/runtime/runtime_query.cpp
     server_engine/project/runtime/runtime_ic.cpp
     server_engine/project/runtime/runtime_ic_codec.cpp
     server_engine/project/runtime/runtime_ic_snapshot.cpp
     server_engine/project/runtime/runtime_ic_reset.cpp
-    server_engine/project/runtime/fixed_direct_materializer.cpp
     server_engine/project/runtime/project_runtime.cpp
     server_engine/project/string/string_table.cpp
     server_engine/project/semantic/identity.cpp
@@ -233,6 +232,7 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
     add_executable(
         ServerEngineV4ShmLayoutBenchmark
         benchmarks/shm_layout_benchmark.cpp
+        server_engine/project/runtime/runtime_layout.cpp
         ${SERVER_ENGINE_V4_BENCHMARK_SOURCES}
     )
 
@@ -245,12 +245,16 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
     add_executable(
         ServerEngineV4RuntimeBenchmark
         benchmarks/runtime_benchmark.cpp
+        server_engine/project/runtime/runtime_layout.cpp
+        server_engine/project/runtime/fixed_direct_materializer.cpp
         ${SERVER_ENGINE_V4_BENCHMARK_SOURCES}
     )
 # RUNTIME-LOOKUP-PROFILE-V1: benchmark-only target. Production code is unchanged.
     add_executable(
         ServerEngineV4RuntimeLookupBenchmark
         benchmarks/runtime_lookup_benchmark.cpp
+        server_engine/project/runtime/runtime_layout.cpp
+        server_engine/project/runtime/fixed_direct_materializer.cpp
         ${SERVER_ENGINE_V4_BENCHMARK_SOURCES}
     )
 
@@ -845,6 +849,7 @@ if(BUILD_TESTING)
         server_engine/project/shm/shm_layout.cpp
         server_engine/project/shm/shm_type_batch.cpp
         server_engine/project/shm/shm_runtime_v2.cpp
+        server_engine/project/runtime/runtime_binding.cpp
         server_engine/project/runtime/runtime_layout.cpp
         server_engine/project/runtime/runtime_query.cpp
         server_engine/project/runtime/runtime_ic.cpp

@@ -19,6 +19,9 @@ namespace cw::server {
 inline constexpr std::string_view
 runtime_system_object_name = "System";
 
+inline constexpr std::uint64_t
+runtime_system_offset = 0;
+
 struct runtime_system final {
     std::uint32_t state = 0;
     std::uint32_t flags = 0;

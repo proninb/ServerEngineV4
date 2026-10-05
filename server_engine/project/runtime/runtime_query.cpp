@@ -1,4 +1,5 @@
 #include "runtime_query.hpp"
+#include "runtime_system.hpp"
 
 #include <array>
 #include <cstddef>

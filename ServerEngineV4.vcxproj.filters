@@ -234,7 +234,7 @@
     <ClCompile Include="server_engine\project\shm\shm_hybrid_04m.cpp">
       <Filter>server_engine\project\shm</Filter>
     </ClCompile>
-    <ClCompile Include="server_engine\project\runtime\runtime_layout.cpp">
+    <ClCompile Include="server_engine\project\runtime\runtime_binding.cpp">
       <Filter>server_engine\project\runtime</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\project\runtime\runtime_query.cpp">
@@ -250,9 +250,6 @@
       <Filter>server_engine\project\runtime</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\project\runtime\runtime_ic_reset.cpp">
-      <Filter>server_engine\project\runtime</Filter>
-    </ClCompile>
-    <ClCompile Include="server_engine\project\runtime\fixed_direct_materializer.cpp">
       <Filter>server_engine\project\runtime</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\project\runtime\project_runtime.cpp">
@@ -578,7 +575,7 @@
     <ClInclude Include="server_engine\project\shm\shm_hybrid_04m.hpp">
       <Filter>server_engine\project\shm</Filter>
     </ClInclude>
-    <ClInclude Include="server_engine\project\runtime\runtime_layout.hpp">
+    <ClInclude Include="server_engine\project\runtime\runtime_binding.hpp">
       <Filter>server_engine\project\runtime</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\runtime\runtime_system.hpp">
@@ -597,9 +594,6 @@
       <Filter>server_engine\project\runtime</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\runtime\runtime_ic_reset.hpp">
-      <Filter>server_engine\project\runtime</Filter>
-    </ClInclude>
-    <ClInclude Include="server_engine\project\runtime\fixed_direct_materializer.hpp">
       <Filter>server_engine\project\runtime</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\runtime\project_runtime.hpp">

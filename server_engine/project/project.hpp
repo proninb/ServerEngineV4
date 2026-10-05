@@ -9,7 +9,8 @@
 
 #include "persistence/compiled_project.hpp"
 #include "ic/ic_catalog.hpp"
-#include "runtime/runtime_layout.hpp"
+#include "runtime/runtime_binding.hpp"
+#include "runtime/runtime_system.hpp"
 #include "../fixed_shared_memory.hpp"
 #include "../read_only_file_mapping.hpp"
 

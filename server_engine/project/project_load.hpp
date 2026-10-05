@@ -18,7 +18,6 @@
 namespace cw::server {
 
 struct project_runtime_telemetry;
-struct project_runtime_profile;
 
 [[nodiscard]] server_status load_project(
     const std::filesystem::path& project_path,
@@ -26,7 +25,6 @@ struct project_runtime_profile;
     operation_id operation,
     diagnostic_collection& diagnostics,
     std::unique_ptr<project>& output,
-    project_runtime_telemetry* telemetry = nullptr,
-    project_runtime_profile* profile = nullptr);
+    project_runtime_telemetry* telemetry = nullptr);
 
 }

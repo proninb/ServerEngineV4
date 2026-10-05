@@ -1,15 +1,14 @@
 /*
  * Resident Project Runtime publication.
  *
- * This is the one lifecycle bridge from an immutable compiled_project_view to
- * final Runtime storage ownership. runtime_layout is construction-only and is
- * discarded before the resident Project is returned.
+ * This is the one lifecycle bridge from immutable mmap-native compiled.bin to
+ * final Runtime V2 / FIXED_DIRECT SHM ownership. Construction metadata is
+ * transient; only runtime_binding_index remains resident beside G + SHM.
  */
 #pragma once
 
 #include "../project.hpp"
 #include "../shm/shm_runtime_v2.hpp"
-#include "fixed_direct_materializer.hpp"
 
 #include "../../configuration/server_configuration.hpp"
 #include "../../diagnostics/diagnostic_collection.hpp"
@@ -22,6 +21,14 @@
 #include <memory>
 
 namespace cw::server {
+
+struct project_runtime_phase_telemetry final {
+    std::uint64_t canonical_ns = 0;
+    std::uint64_t links_mark_ns = 0;
+    std::uint64_t objects_ns = 0;
+    std::uint64_t links_materialize_ns = 0;
+    std::uint64_t initializations_ns = 0;
+};
 
 struct project_runtime_telemetry final {
     std::uint64_t layout_ns = 0;
@@ -53,11 +60,7 @@ struct project_runtime_telemetry final {
     shm_runtime_v2_initialization_telemetry
         runtime_v2_initializations{};
 
-    fixed_direct_materialization_telemetry materializer{};
-};
-
-struct project_runtime_profile final {
-    fixed_direct_materialization_profile materializer{};
+    project_runtime_phase_telemetry phases{};
 };
 
 // Creates the final resident Project state for the configured Runtime/SHM mode.
@@ -71,7 +74,6 @@ struct project_runtime_profile final {
     read_only_file_mapping&& compiled_mapping,
     compiled_project_view compiled,
     std::unique_ptr<project>& output,
-    project_runtime_telemetry* telemetry = nullptr,
-    project_runtime_profile* profile = nullptr);
+    project_runtime_telemetry* telemetry = nullptr);
 
 }

@@ -20,8 +20,7 @@ server_status load_project(
     operation_id operation,
     diagnostic_collection& diagnostics,
     std::unique_ptr<project>& output,
-    project_runtime_telemetry* telemetry,
-    project_runtime_profile* profile) {
+    project_runtime_telemetry* telemetry) {
 
     output.reset();
 
@@ -118,8 +117,7 @@ server_status load_project(
         std::move(mapping),
         compiled,
         output,
-        telemetry,
-        profile);
+        telemetry);
 }
 
 }

@@ -1043,3 +1043,57 @@ links and Source scalar initializations. The legacy branch is intentionally
 left source-visible for this validation checkpoint only and is no longer
 selectable. After this slice passes, RUNTIME-V2-ONLY-05 removes that dead branch
 and its production dependency on runtime_layout/fixed_direct_materializer.
+
+
+## RUNTIME-V2-ONLY-05
+
+Resident Runtime publication is Runtime V2 only.
+
+The production path is now:
+
+```text
+mmap compiled.bin / G
+        |
+        v
+    shm_layout
+        |
+        v
+ Runtime V2 prepare
+        |
+        v
+ FIXED_DIRECT SHM
+   canonical
+   mark links
+   object-major construction
+   constructor post_stores
+   materialize links
+   Source initializations
+        |
+        v
+ runtime_binding_index
+        |
+        v
+ resident Project
+```
+
+There is no `use_runtime_v2` selector and no production fallback to
+`runtime_layout` / `fixed_direct_materializer`.
+
+`runtime_binding_index` has been split into `runtime_binding.hpp/.cpp`. It is a
+resident ABI address sidecar for Runtime Query and IC, not construction state.
+Production `project`, Runtime Query, and Runtime IC therefore no longer include
+`runtime_layout.hpp`.
+
+The production Server target no longer compiles:
+
+```text
+runtime_layout.cpp
+fixed_direct_materializer.cpp
+```
+
+Those files remain in the repository and in `ServerEngineV4Tests` only as a
+reference/differential implementation while Runtime V2 stabilization continues.
+
+The legacy `load-profile` interface was removed because its counters described
+the old fixed_direct materializer rather than the production Runtime V2 path.
+Normal LOAD telemetry already exposes the V2 prepare/materialization phases.
