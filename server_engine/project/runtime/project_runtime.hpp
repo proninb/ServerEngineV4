@@ -36,6 +36,7 @@ struct project_runtime_telemetry final {
     std::uint64_t shm_pretouch_ns = 0;
     std::uint64_t shm_pretouch_lanes = 0;
     std::uint64_t runtime_v2_object_lanes = 0;
+    std::uint64_t runtime_v2_link_mark_lanes = 0;
     std::uint64_t materialization_ns = 0;
     std::uint64_t runtime_bytes = 0;
     std::uint64_t shm_bytes = 0;

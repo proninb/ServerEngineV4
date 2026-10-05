@@ -1536,3 +1536,40 @@ to report the actual Object fan-out.
 No persisted format, PUBLISH encoding, Runtime execution image, BUILD
 semantics or FIXED_DIRECT ABI contract changes.
 
+## RUNTIME-SHM-PARALLEL-LINK-MARK-09C-03
+
+Static-link target marking now parallelizes persisted direct targets without
+introducing a target hash/map or LOAD-time alias validation.
+
+Graph already enforces one semantic binding per target endpoint. Runtime uses a
+stronger physical ownership rule for concurrency: lanes own disjoint ranges of
+the SHM target-address space, not link-index ranges.
+
+```text
+canonical
+-> parallel direct link marking by physical target range
+-> barrier
+-> serial complex/dereference target marking
+-> parallel Object construction
+-> barrier
+-> resolve links
+-> source initializations
+```
+
+A direct persisted link has `target_program == 0`, so its final physical target
+offset is already present in `link_runtime`. Identical/aliasing physical target
+offsets necessarily fall into the same lane and therefore cannot be written
+concurrently.
+
+Dereference-bearing targets are data-dependent and remain serial after the
+direct-target barrier. This preserves generic correctness without adding any
+new persisted metadata or LOAD validation. The production benchmark currently
+has zero link dereference targets, so its complete mark phase uses the parallel
+direct path.
+
+Each lane owns private mark telemetry; counters are reduced after the barrier.
+`runtime_v2_link_mark_lanes` reports the actual direct-mark fan-out.
+
+No compiled.bin format, PUBLISH encoding, BUILD semantics or FIXED_DIRECT ABI
+contract changes in this slice.
+

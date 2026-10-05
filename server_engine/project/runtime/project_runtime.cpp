@@ -227,6 +227,240 @@ shared_memory_failure_detail(
     return "Project SHM creation failed";
 }
 
+void add_runtime_link_mark_telemetry(
+    shm_runtime_v2_link_telemetry& target,
+    const shm_runtime_v2_link_telemetry& source) noexcept {
+
+    target.targets_marked +=
+        source.targets_marked;
+    target.dereference_reads +=
+        source.dereference_reads;
+}
+
+struct runtime_link_mark_job final {
+    shm_runtime_v2* runtime = nullptr;
+    const server_abi_configuration* abi = nullptr;
+    const shm_layout* layout = nullptr;
+    std::span<std::byte> shm;
+    shm_offset layout_size = 0;
+    std::size_t active_lanes = 1;
+    std::span<shm_runtime_v2_result> results;
+    std::span<shm_runtime_v2_link_telemetry> telemetry;
+};
+
+void runtime_link_mark_lane(
+    void* value,
+    std::size_t lane) noexcept {
+
+    auto& job =
+        *static_cast<runtime_link_mark_job*>(
+            value);
+
+    if (lane >=
+            job.active_lanes ||
+        job.active_lanes == 0) {
+
+        return;
+    }
+
+    const auto base =
+        job.layout_size /
+        static_cast<shm_offset>(
+            job.active_lanes);
+
+    const auto remainder =
+        job.layout_size %
+        static_cast<shm_offset>(
+            job.active_lanes);
+
+    const auto lane_value =
+        static_cast<shm_offset>(
+            lane);
+
+    const auto preceding_extra =
+        lane_value < remainder
+        ? lane_value
+        : remainder;
+
+    const auto begin =
+        lane_value *
+            base +
+        preceding_extra;
+
+    const auto count =
+        base +
+        static_cast<shm_offset>(
+            lane_value < remainder);
+
+    job.results[lane] =
+        mark_shm_runtime_v2_persisted_direct_target_range(
+            *job.runtime,
+            *job.abi,
+            *job.layout,
+            job.shm,
+            begin,
+            begin + count,
+            &job.telemetry[lane]);
+}
+
+[[nodiscard]] shm_runtime_v2_result
+runtime_mark_links_parallel(
+    shm_runtime_v2& runtime,
+    const server_abi_configuration& abi,
+    const shm_layout& layout,
+    std::span<std::byte> shm,
+    shm_runtime_v2_link_telemetry* telemetry,
+    std::size_t& lanes_used) noexcept {
+
+    lanes_used = 1;
+
+    if (telemetry != nullptr) {
+        *telemetry = {};
+    }
+
+    if (!runtime.persisted_physical() ||
+        runtime.link_count() == 0 ||
+        layout.size() == 0) {
+
+        return mark_shm_runtime_v2_links(
+            runtime,
+            abi,
+            layout,
+            shm,
+            telemetry);
+    }
+
+    const auto capacity =
+        execution_lane_capacity();
+
+    const auto active_lanes =
+        runtime.link_count() <
+            capacity
+        ? runtime.link_count()
+        : capacity;
+
+    if (active_lanes <= 1) {
+        return mark_shm_runtime_v2_links(
+            runtime,
+            abi,
+            layout,
+            shm,
+            telemetry);
+    }
+
+    try {
+        std::vector<shm_runtime_v2_result>
+            results(
+                active_lanes,
+                shm_runtime_v2_result::success);
+
+        std::vector<shm_runtime_v2_link_telemetry>
+            lane_telemetry(
+                active_lanes);
+
+        execution_lanes lanes;
+
+        if (!succeeded(
+                lanes.start(
+                    active_lanes))) {
+
+            return mark_shm_runtime_v2_links(
+                runtime,
+                abi,
+                layout,
+                shm,
+                telemetry);
+        }
+
+        runtime_link_mark_job job{
+            &runtime,
+            &abi,
+            &layout,
+            shm,
+            layout.size(),
+            active_lanes,
+            results,
+            lane_telemetry,
+        };
+
+        if (!succeeded(
+                lanes.run(
+                    active_lanes,
+                    runtime_link_mark_lane,
+                    &job))) {
+
+            return shm_runtime_v2_result::
+                failed;
+        }
+
+        for (const auto result :
+             results) {
+
+            if (result !=
+                shm_runtime_v2_result::success) {
+
+                return result;
+            }
+        }
+
+        shm_runtime_v2_link_telemetry
+            combined{};
+
+        for (const auto& value :
+             lane_telemetry) {
+
+            add_runtime_link_mark_telemetry(
+                combined,
+                value);
+        }
+
+        shm_runtime_v2_link_telemetry
+            complex{};
+
+        const auto complex_result =
+            mark_shm_runtime_v2_persisted_complex_targets(
+                runtime,
+                abi,
+                layout,
+                shm,
+                &complex);
+
+        if (complex_result !=
+            shm_runtime_v2_result::success) {
+
+            return complex_result;
+        }
+
+        add_runtime_link_mark_telemetry(
+            combined,
+            complex);
+
+        combined.links_prepared =
+            runtime.link_count();
+
+        combined.endpoint_programs =
+            runtime.link_endpoint_program_count();
+
+        combined.dereference_steps =
+            runtime.link_dereference_count();
+
+        if (telemetry != nullptr) {
+            *telemetry =
+                combined;
+        }
+
+        lanes_used =
+            active_lanes;
+
+        return shm_runtime_v2_result::
+            success;
+    }
+    catch (...) {
+        return shm_runtime_v2_result::
+            failed;
+    }
+}
+
 void add_runtime_object_telemetry(
     shm_runtime_v2_execute_telemetry& target,
     const shm_runtime_v2_execute_telemetry& source) noexcept {
@@ -894,8 +1128,10 @@ server_status create_resident_project(
     const auto links_mark_started =
         clock_type::now();
 
+    std::size_t link_mark_lanes = 1;
+
     const auto links_marked =
-        mark_shm_runtime_v2_links(
+        runtime_mark_links_parallel(
             v2_runtime,
             settings.abi,
             v2_layout,
@@ -903,7 +1139,8 @@ server_status create_resident_project(
             telemetry != nullptr
                 ? &telemetry->
                     runtime_v2_links
-                : nullptr);
+                : nullptr,
+            link_mark_lanes);
 
     const auto links_mark_finished =
         clock_type::now();
@@ -913,6 +1150,9 @@ server_status create_resident_project(
             elapsed_ns(
                 links_mark_started,
                 links_mark_finished);
+
+        telemetry->runtime_v2_link_mark_lanes =
+            link_mark_lanes;
     }
 
     if (links_marked !=

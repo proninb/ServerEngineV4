@@ -348,6 +348,24 @@ private:
         shm_runtime_v2_link_telemetry*) noexcept;
 
     friend shm_runtime_v2_result
+    mark_shm_runtime_v2_persisted_direct_target_range(
+        shm_runtime_v2&,
+        const server_abi_configuration&,
+        const shm_layout&,
+        std::span<std::byte>,
+        shm_offset,
+        shm_offset,
+        shm_runtime_v2_link_telemetry*) noexcept;
+
+    friend shm_runtime_v2_result
+    mark_shm_runtime_v2_persisted_complex_targets(
+        shm_runtime_v2&,
+        const server_abi_configuration&,
+        const shm_layout&,
+        std::span<std::byte>,
+        shm_runtime_v2_link_telemetry*) noexcept;
+
+    friend shm_runtime_v2_result
     materialize_shm_runtime_v2_objects(
         const shm_runtime_v2&,
         const server_abi_configuration&,
@@ -432,6 +450,30 @@ materialize_shm_runtime_v2_canonical(
 // construction. Object reference writes recognize/preserve these markers.
 [[nodiscard]] shm_runtime_v2_result
 mark_shm_runtime_v2_links(
+    shm_runtime_v2& runtime,
+    const server_abi_configuration& abi,
+    const shm_layout& layout,
+    std::span<std::byte> shm,
+    shm_runtime_v2_link_telemetry* telemetry = nullptr) noexcept;
+
+// Parallel-mark primitive for persisted direct targets. The caller partitions
+// the physical SHM target-address space into disjoint ranges; each physical
+// target slot therefore has exactly one owning lane even if semantic endpoints
+// could alias to the same storage.
+[[nodiscard]] shm_runtime_v2_result
+mark_shm_runtime_v2_persisted_direct_target_range(
+    shm_runtime_v2& runtime,
+    const server_abi_configuration& abi,
+    const shm_layout& layout,
+    std::span<std::byte> shm,
+    shm_offset target_begin,
+    shm_offset target_end,
+    shm_runtime_v2_link_telemetry* telemetry = nullptr) noexcept;
+
+// Dereference-bearing persisted targets remain serial after the direct-target
+// barrier because their final physical target is data-dependent.
+[[nodiscard]] shm_runtime_v2_result
+mark_shm_runtime_v2_persisted_complex_targets(
     shm_runtime_v2& runtime,
     const server_abi_configuration& abi,
     const shm_layout& layout,

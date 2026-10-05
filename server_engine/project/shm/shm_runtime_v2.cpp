@@ -2123,6 +2123,237 @@ public:
     }
 
     [[nodiscard]] shm_runtime_v2_result
+    mark_persisted_direct_target_range(
+        shm_offset target_begin,
+        shm_offset target_end) noexcept {
+
+        const auto valid =
+            validate();
+
+        if (valid !=
+                shm_runtime_v2_result::success ||
+            !runtime.persisted_physical_value ||
+            target_begin > target_end ||
+            target_end > layout.size()) {
+
+            return valid !=
+                    shm_runtime_v2_result::success
+                ? valid
+                : shm_runtime_v2_result::
+                    invalid_input;
+        }
+
+        for (std::size_t index = 0;
+             index < runtime.persisted_links.size();
+             ++index) {
+
+            const auto& link =
+                runtime.persisted_links[index];
+
+            if ((link.flags &
+                    shm_runtime_v2_physical_link_live) ==
+                    0 ||
+                link.target_program != 0 ||
+                link.target < target_begin ||
+                link.target >= target_end) {
+
+                continue;
+            }
+
+            auto& state =
+                runtime.persisted_link_states[
+                    index];
+
+            if (state !=
+                shm_runtime_v2::
+                    link_state::prepared) {
+
+                return shm_runtime_v2_result::
+                    invalid_input;
+            }
+
+            std::uint64_t stored = 0;
+
+            if (!read_reference(
+                    link.target,
+                    stored) ||
+                stored != 0) {
+
+                return shm_runtime_v2_result::
+                    invalid_input;
+            }
+
+            const auto raw =
+                index + 1;
+
+            if (raw == 0 ||
+                raw >
+                    link_handle::
+                        maximum_slot) {
+
+                return shm_runtime_v2_result::
+                    invalid_input;
+            }
+
+            if (!write_word(
+                    link.target,
+                    pending_value(
+                        static_cast<
+                            std::uint32_t>(
+                                raw)))) {
+
+                return shm_runtime_v2_result::
+                    incompatible_abi;
+            }
+
+            runtime.persisted_link_target_slots[
+                index] =
+                    link.target;
+
+            state =
+                shm_runtime_v2::
+                    link_state::marked;
+
+            if (telemetry != nullptr) {
+                ++telemetry->
+                    targets_marked;
+            }
+        }
+
+        return shm_runtime_v2_result::
+            success;
+    }
+
+    [[nodiscard]] shm_runtime_v2_result
+    mark_persisted_complex_targets() noexcept {
+
+        const auto valid =
+            validate();
+
+        if (valid !=
+                shm_runtime_v2_result::success ||
+            !runtime.persisted_physical_value) {
+
+            return valid !=
+                    shm_runtime_v2_result::success
+                ? valid
+                : shm_runtime_v2_result::
+                    invalid_input;
+        }
+
+        for (std::size_t index = 0;
+             index < runtime.persisted_links.size();
+             ++index) {
+
+            const auto& link =
+                runtime.persisted_links[index];
+
+            if ((link.flags &
+                    shm_runtime_v2_physical_link_live) ==
+                    0 ||
+                link.target_program == 0) {
+
+                continue;
+            }
+
+            auto& state =
+                runtime.persisted_link_states[
+                    index];
+
+            if (state !=
+                shm_runtime_v2::
+                    link_state::prepared) {
+
+                return shm_runtime_v2_result::
+                    invalid_input;
+            }
+
+            const auto& physical_program =
+                runtime.persisted_endpoint_programs[
+                    link.target_program - 1];
+
+            shm_runtime_v2::
+                endpoint_program target;
+
+            target.root =
+                physical_program.root;
+            target.tail =
+                physical_program.tail;
+            target.dereference_begin =
+                physical_program.dereference_begin;
+            target.dereference_count =
+                physical_program.dereference_count;
+            target.final_reference =
+                true;
+
+            shm_offset target_slot = 0;
+
+            const auto located =
+                endpoint_position(
+                    target,
+                    false,
+                    target_slot);
+
+            if (located !=
+                shm_runtime_v2_result::
+                    success) {
+
+                return located;
+            }
+
+            std::uint64_t stored = 0;
+
+            if (!read_reference(
+                    target_slot,
+                    stored) ||
+                stored != 0) {
+
+                return shm_runtime_v2_result::
+                    invalid_input;
+            }
+
+            const auto raw =
+                index + 1;
+
+            if (raw == 0 ||
+                raw >
+                    link_handle::
+                        maximum_slot) {
+
+                return shm_runtime_v2_result::
+                    invalid_input;
+            }
+
+            if (!write_word(
+                    target_slot,
+                    pending_value(
+                        static_cast<
+                            std::uint32_t>(
+                                raw)))) {
+
+                return shm_runtime_v2_result::
+                    incompatible_abi;
+            }
+
+            runtime.persisted_link_target_slots[
+                index] =
+                    target_slot;
+
+            state =
+                shm_runtime_v2::
+                    link_state::marked;
+
+            if (telemetry != nullptr) {
+                ++telemetry->
+                    targets_marked;
+            }
+        }
+
+        return shm_runtime_v2_result::
+            success;
+    }
+
+    [[nodiscard]] shm_runtime_v2_result
     materialize() noexcept {
 
         const auto valid =
@@ -3378,6 +3609,52 @@ mark_shm_runtime_v2_links(
     };
 
     return executor.mark();
+}
+
+shm_runtime_v2_result
+mark_shm_runtime_v2_persisted_direct_target_range(
+    shm_runtime_v2& runtime,
+    const server_abi_configuration& abi,
+    const shm_layout& layout,
+    std::span<std::byte> shm,
+    shm_offset target_begin,
+    shm_offset target_end,
+    shm_runtime_v2_link_telemetry* telemetry) noexcept {
+
+    shm_runtime_v2_link_executor executor{
+        runtime,
+        abi,
+        layout,
+        shm,
+        telemetry,
+    };
+
+    return
+        executor.
+            mark_persisted_direct_target_range(
+                target_begin,
+                target_end);
+}
+
+shm_runtime_v2_result
+mark_shm_runtime_v2_persisted_complex_targets(
+    shm_runtime_v2& runtime,
+    const server_abi_configuration& abi,
+    const shm_layout& layout,
+    std::span<std::byte> shm,
+    shm_runtime_v2_link_telemetry* telemetry) noexcept {
+
+    shm_runtime_v2_link_executor executor{
+        runtime,
+        abi,
+        layout,
+        shm,
+        telemetry,
+    };
+
+    return
+        executor.
+            mark_persisted_complex_targets();
 }
 
 shm_runtime_v2_result
