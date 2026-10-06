@@ -73,6 +73,18 @@ def prepare(book, destination, header, expand_sdk_byte=False):
         return {"name": path.stem, "type": "group", "children": children}
 
     sources = expand(book)
+    # New SDK exports model types separately from the main umbrella header.
+    # One root keeps pragma-once state shared across the entire Type domain.
+    model_names = {Path(record["path"]).stem[:-6].lower() + "_unity_pro_xl_model.h"
+                   for record in records if Path(record["path"]).stem.upper().endswith("_MODEL")}
+    models = sorted(path for path in (destination / "Types").glob("*_model.h")
+                    if path.name.lower() in model_names)
+    if models:
+        root_header = destination / "Types" / "unitproxl_project.h"
+        includes = [Path(header).name] + [path.name for path in models]
+        root_header.write_text("#pragma once\n" + "".join(
+            f"#include <{name}>\n" for name in includes), encoding="utf-8")
+        header = root_header.relative_to(destination).as_posix()
     configuration = {"version": 1, "name": book.stem,
                      "project": [{"name": "Types", "type": "group", "children": [
                          {"name": Path(header).name, "type": "header", "path": header}]}, sources],

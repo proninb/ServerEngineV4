@@ -318,6 +318,9 @@ private:
         const shm_layout&,
         std::span<std::byte>) noexcept;
 
+    friend shm_runtime_v2_result encode_shm_runtime_v2_physical_columns(
+        const shm_runtime_v2&, const shm_layout&, std::span<std::byte>) noexcept;
+
     friend shm_runtime_v2_result
     attach_shm_runtime_v2_physical_columns(
         const compiled_project_view&,
@@ -403,6 +406,18 @@ private:
 
 // PUBLISH compiles links and source initializations once and encodes immutable
 // same-WHERE Runtime columns directly into compiled.bin.
+// Preparation owns its output and reads only the stable Project/ABI views.
+[[nodiscard]] shm_runtime_v2_result prepare_shm_runtime_v2_physical_plan(
+    const compiled_project_view& project,
+    const server_abi_configuration& abi,
+    const shm_layout& layout,
+    shm_runtime_v2& output) noexcept;
+
+[[nodiscard]] shm_runtime_v2_result encode_shm_runtime_v2_physical_columns(
+    const shm_runtime_v2& runtime,
+    const shm_layout& layout,
+    std::span<std::byte> compiled_image) noexcept;
+
 [[nodiscard]] shm_runtime_v2_result
 encode_shm_runtime_v2_physical_columns(
     const compiled_project_view& project,

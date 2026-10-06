@@ -59,6 +59,32 @@ struct parser_warning final {
     std::string_view detail;
 };
 
+struct semantic_parse_telemetry final {
+    bool detailed_source = true;
+    std::uint64_t header_ns = 0;
+    std::uint64_t source_ns = 0;
+    std::uint64_t finalize_ns = 0;
+    std::uint64_t include_ns = 0;
+    std::uint64_t include_count = 0;
+    std::uint64_t include_lexical_ns = 0;
+    std::uint64_t prepared_include_count = 0;
+    std::uint64_t source_object_ns = 0;
+    std::uint64_t source_assignment_ns = 0;
+    std::uint64_t source_link_ns = 0;
+    std::uint64_t source_endpoint_ns = 0;
+    std::uint64_t source_member_ns = 0;
+    std::uint64_t source_member_lookups = 0;
+    std::uint64_t source_initialization_commit_ns = 0;
+    std::uint64_t source_link_commit_ns = 0;
+    std::uint64_t source_provenance_ns = 0;
+    std::uint64_t source_decode_ns = 0;
+    std::uint64_t source_intern_ns = 0;
+    std::uint64_t source_token_count = 0;
+    std::uint64_t source_identifier_count = 0;
+
+
+};
+
 [[nodiscard]] server_status parse_semantic_project(
     file_context& files,
     lexical_generation& lexical,
@@ -69,7 +95,8 @@ struct parser_warning final {
     graph& G,
     source_map& sources,
     parser_failure* failure = nullptr,
-    std::vector<parser_warning>* warnings = nullptr) noexcept;
+    std::vector<parser_warning>* warnings = nullptr,
+    semantic_parse_telemetry* telemetry = nullptr) noexcept;
 
 // Replays only selected BUILD semantic roots. Input roots must be unique and
 // ascending by file_id; execution is canonical Header pass first, then Source

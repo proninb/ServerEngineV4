@@ -9,7 +9,8 @@ server_status publish_project(
     const server_settings_configuration& settings,
     operation_id operation,
     diagnostic_collection& diagnostics,
-    std::unique_ptr<project>& output) {
+    std::unique_ptr<project>& output,
+    full_construction_telemetry* telemetry) {
 
     return construct_full_project(
         project_path,
@@ -17,7 +18,8 @@ server_status publish_project(
         full_construction_mode::publish,
         operation,
         diagnostics,
-        output);
+        output,
+        telemetry);
 }
 
 }

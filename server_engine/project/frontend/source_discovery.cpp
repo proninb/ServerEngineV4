@@ -109,6 +109,17 @@ public:
         const auto root_count =
             files.size();
 
+        std::size_t root_lexical_count = 0;
+        for (std::size_t i = 0; i < root_count; ++i) {
+            root_lexical_count += lexical_kind(files.kind(file_id{
+                static_cast<std::uint32_t>(i + 1)})) ? 1 : 0;
+        }
+        lane_capacity = (std::min)(root_lexical_count, execution_lane_capacity());
+        if (lane_capacity != 0) {
+            const auto started = workers.start(lane_capacity);
+            if (!succeeded(started)) return started;
+        }
+
         std::size_t lexical_file_count = 0;
         std::uint64_t lexical_weight = 0;
 
@@ -165,14 +176,6 @@ public:
             return reset;
         }
 
-        const auto started =
-            workers.start(
-                lane_capacity);
-
-        if (!succeeded(started)) {
-            return started;
-        }
-
         return lex_range(
             0,
             root_count,
@@ -181,6 +184,56 @@ public:
     }
 
 private:
+    struct acquisition_slot final {
+        file_acquire_job job;
+        file_acquire_result result;
+    };
+    static constexpr std::size_t acquisition_batch_capacity = 256;
+    std::unique_ptr<acquisition_slot[]> acquisition_batch;
+    std::size_t acquisition_count = 0;
+
+    static void acquisition_lane_entry(void* context, std::size_t lane) noexcept {
+        auto& owner = *static_cast<source_preparation*>(context);
+        for (auto i = lane; i < owner.acquisition_count; i += owner.lane_capacity) {
+            auto& slot = owner.acquisition_batch[i];
+            file_context::execute_acquire(slot.job, slot.result);
+        }
+    }
+
+    [[nodiscard]] server_status acquire_range(std::size_t begin, std::size_t end) noexcept {
+        // Sparse baseline replacement retains its own observation protocol.
+        if (files.baseline_bound() || lane_capacity == 0) return server_status::success;
+        acquisition_batch.reset(new (std::nothrow) acquisition_slot[acquisition_batch_capacity]);
+        if (!acquisition_batch) return server_status::io_error;
+        auto next = begin;
+        while (next < end) {
+            acquisition_count = 0;
+            while (next < end && acquisition_count < acquisition_batch_capacity) {
+                const file_id file{static_cast<std::uint32_t>(++next)};
+                if (!lexical_kind(files.kind(file)) || files.content_available(file)) continue;
+                auto& slot = acquisition_batch[acquisition_count];
+                const auto prepared = files.prepare_acquire(file, slot.job);
+                if (!succeeded(prepared)) return prepared;
+                ++acquisition_count;
+            }
+            if (acquisition_count == 0) continue;
+            // Jobs borrow stable paths; workers never mutate File Context.
+            auto status = workers.run(lane_capacity, acquisition_lane_entry, this);
+            if (!succeeded(status)) return status;
+            for (std::size_t i = 0; i < acquisition_count; ++i) {
+                auto& slot = acquisition_batch[i];
+                status = acquisition_status(slot.result.kind);
+                if (!succeeded(status)) return status;
+                bool changed = false;
+                status = files.apply_acquire(slot.result, changed);
+                if (!succeeded(status)) return status;
+                slot.result = {}; // Release private bytes after ordered publication.
+            }
+        }
+        acquisition_batch.reset();
+        return server_status::success;
+    }
+
     static void lexical_lane_entry(
         void* context,
         std::size_t lane) noexcept {
@@ -259,6 +312,9 @@ private:
             return server_status::
                 project_configuration_invalid;
         }
+
+        const auto acquired = acquire_range(begin, end);
+        if (!succeeded(acquired)) return acquired;
 
         for (auto index = begin;
              index < end;

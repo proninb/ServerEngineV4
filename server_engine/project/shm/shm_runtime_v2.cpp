@@ -1542,14 +1542,13 @@ bool shm_runtime_v2::endpoint_dereference_at(
     return true;
 }
 
-shm_runtime_v2_result
-encode_shm_runtime_v2_physical_columns(
+shm_runtime_v2_result prepare_shm_runtime_v2_physical_plan(
     const compiled_project_view& project,
     const server_abi_configuration& abi,
     const shm_layout& layout,
-    std::span<std::byte> compiled_image) noexcept {
+    shm_runtime_v2& runtime) noexcept {
 
-    shm_runtime_v2 runtime;
+    runtime = shm_runtime_v2{};
 
     try {
         shm_runtime_v2_link_builder builder{
@@ -1564,12 +1563,33 @@ encode_shm_runtime_v2_physical_columns(
 
         if (built !=
             shm_runtime_v2_result::success) {
+            runtime = shm_runtime_v2{};
             return built;
         }
     }
     catch (...) {
+        runtime = shm_runtime_v2{};
         return shm_runtime_v2_result::failed;
     }
+
+    return shm_runtime_v2_result::success;
+}
+
+shm_runtime_v2_result encode_shm_runtime_v2_physical_columns(
+    const compiled_project_view& project,
+    const server_abi_configuration& abi,
+    const shm_layout& layout,
+    std::span<std::byte> compiled_image) noexcept {
+    shm_runtime_v2 runtime;
+    const auto prepared = prepare_shm_runtime_v2_physical_plan(project, abi, layout, runtime);
+    return prepared == shm_runtime_v2_result::success
+        ? encode_shm_runtime_v2_physical_columns(runtime, layout, compiled_image) : prepared;
+}
+
+shm_runtime_v2_result encode_shm_runtime_v2_physical_columns(
+    const shm_runtime_v2& runtime,
+    const shm_layout& layout,
+    std::span<std::byte> compiled_image) noexcept {
 
     const auto section =
         [&](compiled_project_section kind) noexcept {

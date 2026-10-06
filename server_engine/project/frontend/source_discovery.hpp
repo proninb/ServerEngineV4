@@ -2,6 +2,9 @@
  * Initial physical source preparation.
  *
  * Project-declared Header/Source bytes are materialized and lexed in parallel.
+ * One persistent lane pool reads bounded batches of physical snapshots; the
+ * owner publishes each batch in file_id order before the same lanes perform
+ * the lexical pass over the committed bytes.
  * This stage performs no preprocessing execution, include discovery, string
  * interning, semantic work, or dependency publication.
  *

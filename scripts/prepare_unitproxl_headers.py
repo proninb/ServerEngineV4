@@ -92,13 +92,18 @@ def main():
             cleaned = TOKEN.sub(expand, cleaned)
         if (args.empty_simlink or args.typedef_sdk_byte) and path.relative_to(source).as_posix() == "unity_pro_xl_base.h":
             anchor = b"struct SimObject {};"
+            newline = b"\r\n" if b"\r\n" in cleaned else b"\n"
+            if cleaned.count(anchor) == 0:
+                base = b"struct U_BASE : SimObject"
+                if cleaned.count(base) != 1:
+                    raise ValueError("Expected one SDK SimObject base in unity_pro_xl_base.h")
+                cleaned = cleaned.replace(base, anchor + newline + newline + base, 1)
             if cleaned.count(anchor) != 1:
                 raise ValueError("Expected one SimObject declaration in unity_pro_xl_base.h")
-            newline = b"\r\n" if b"\r\n" in cleaned else b"\n"
             declarations = anchor
-            if args.empty_simlink:
+            if args.empty_simlink and b"struct SimLink {};" not in cleaned:
                 declarations += newline + b"struct SimLink {};"
-            if args.typedef_sdk_byte:
+            if args.typedef_sdk_byte and b"typedef unsigned char byte;" not in cleaned:
                 declarations += newline + b"typedef unsigned char byte;"
             cleaned = cleaned.replace(anchor, declarations, 1)
         target = destination / path.relative_to(source)

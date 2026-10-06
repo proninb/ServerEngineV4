@@ -15,6 +15,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 
 namespace cw::server {
 
@@ -28,6 +29,97 @@ struct frontend_token final {
 };
 
 static_assert(sizeof(frontend_token) == 16);
+
+// Shared checked decoder; Source borrows a native span, Header keeps a stable
+// descriptor that survives arena growth during includes.
+template<class Words, class Token>
+[[nodiscard]] server_status decode_frontend_token(
+    const Words& words, file_id file, std::uint32_t& word_offset,
+    std::uint32_t& source_offset, Token& output) noexcept {
+    output = {};
+    auto position =
+        static_cast<std::size_t>(
+            word_offset);
+
+    if (position >= words.size()) {
+        return server_status::project_configuration_invalid;
+    }
+
+    const auto header =
+        lexical_token::from_value(
+            words[position++]);
+
+    if (!header) {
+        return server_status::project_configuration_invalid;
+    }
+
+    auto delta =
+        header.delta();
+
+    if (delta ==
+        lexical_token::extended_delta) {
+
+        if (position >= words.size()) {
+            return server_status::project_configuration_invalid;
+        }
+
+        delta =
+            words[position++];
+    }
+
+    auto length =
+        header.length();
+
+    if (length ==
+        lexical_token::extended_length) {
+
+        if (position >= words.size()) {
+            return server_status::project_configuration_invalid;
+        }
+
+        length =
+            words[position++];
+    }
+
+    const auto first =
+        word_offset == 0;
+
+    if (!first &&
+        delta >
+            (std::numeric_limits<std::uint32_t>::max)() -
+                source_offset) {
+
+        return server_status::project_configuration_invalid;
+    }
+
+    const auto source =
+        first
+            ? delta
+            : source_offset + delta;
+
+    if (position >
+        static_cast<std::size_t>(
+            (std::numeric_limits<std::uint32_t>::max)())) {
+
+        return server_status::project_configuration_invalid;
+    }
+
+    word_offset =
+        static_cast<std::uint32_t>(
+            position);
+
+    source_offset =
+        source;
+
+    output = {
+        file,
+        header.kind(),
+        source,
+        length,
+    };
+
+    return server_status::success;
+}
 
 // Active lexical-input stack for Parser/Semantic streaming and exact directive
 // decoding. start_at() enters a sparse lexer-recorded directive anchor without

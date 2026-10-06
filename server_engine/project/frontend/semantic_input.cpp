@@ -3,6 +3,7 @@
 #include "../../filesystem_path.hpp"
 
 #include <filesystem>
+#include <chrono>
 #include <string_view>
 
 namespace cw::server {
@@ -78,7 +79,8 @@ semantic_input::semantic_input(
     file_context& files_value,
     lexical_generation& lexical_value,
     const preprocessor_configuration& configuration_value,
-    string_table& strings_value) noexcept
+    string_table& strings_value,
+    semantic_input_telemetry* telemetry_value) noexcept
     : files(files_value),
       lexical(lexical_value),
       configuration(configuration_value),
@@ -86,7 +88,8 @@ semantic_input::semantic_input(
       input(lexical),
       directive_input(lexical),
       preprocessing(strings),
-      executor(strings, preprocessing) {
+      executor(strings, preprocessing),
+      telemetry(telemetry_value) {
 }
 
 server_status semantic_input::fail(
@@ -154,6 +157,16 @@ server_status semantic_input::start(
     executor.reset();
     once_files.clear();
 
+    if (mode == semantic_input_mode::source) {
+        source_root = root;
+        source_words = lexical.words(root);
+        source_native_words = source_words.native_words();
+        source_word_offset = 0;
+        source_offset = 0;
+        started = true;
+        return server_status::success;
+    }
+
     const auto opened =
         input.start(root);
 
@@ -165,10 +178,7 @@ server_status semantic_input::start(
             opened);
     }
 
-    if (mode == semantic_input_mode::source) {
-        started = true;
-        return server_status::success;
-    }
+    prepare_includes(root);
 
     if (configuration.predefines.empty() &&
         lexical.directives(root).empty()) {
@@ -228,6 +238,28 @@ server_status semantic_input::materialize_and_lex(
     }
 
     if (!files.content_available(file)) {
+        try {
+            const auto path_view = files.path(file);
+            const std::filesystem::path path{path_view.begin(), path_view.end()};
+            const auto cached_physical = prepared_includes.find(path);
+            if (cached_physical != prepared_includes.end()) {
+                auto physical = std::move(cached_physical->second);
+                prepared_includes.erase(cached_physical);
+                physical.acquired.file = file;
+                bool changed = false;
+                auto status = files.apply_acquire(physical.acquired, changed);
+                if (!succeeded(status)) return status;
+                status = lexical.extend(files.size());
+                if (!succeeded(status)) return status;
+                physical.stream.bind_prepared_file(file);
+                status = lexical.publish(file, 0, physical.stream);
+                if (!succeeded(status)) return status;
+                if (telemetry != nullptr) ++telemetry->prepared_include_count;
+                prepare_includes(file);
+                return server_status::success;
+            }
+        }
+        catch (...) { return server_status::io_error; }
         file_acquire_job job;
 
         const auto prepared =
@@ -308,6 +340,7 @@ server_status semantic_input::materialize_and_lex(
     }
 
     if (lexical.contains(file)) {
+        prepare_includes(file);
         return server_status::success;
     }
 
@@ -363,7 +396,100 @@ server_status semantic_input::materialize_and_lex(
             published);
     }
 
+    prepare_includes(file);
     return server_status::success;
+}
+
+void semantic_input::prepare_include_lane(void* context, std::size_t lane) noexcept {
+    auto& owner = *static_cast<semantic_input*>(context);
+    for (auto i = lane; i < owner.include_frontier.size(); i += owner.include_lane_count) {
+        auto& item = owner.include_frontier[i];
+        file_acquire_job job;
+        job.file = file_id{1}; // Temporary identity, never published by workers.
+        job.path = item.path.native();
+        file_context::execute_acquire(job, item.acquired);
+        if (item.acquired.kind != file_acquire_result_kind::present) continue;
+        item.ready = succeeded(lexer::tokenize(job.file, item.acquired.snapshot.bytes, item.stream));
+    }
+}
+
+void semantic_input::prepare_includes(file_id file) noexcept {
+    // BUILD retains its exact replacement/observation protocol. Speculation is
+    // limited to full construction and never executes preprocessing directives.
+    if (files.baseline_bound()) return;
+    try {
+        if (!preparation_scanned.insert(file.value()).second) return;
+        const auto anchors = lexical.directives(file);
+        if (anchors.size() < 8) return;
+        const auto source = files.content(file);
+        const auto path_view = files.path(file);
+        const std::filesystem::path parent =
+            std::filesystem::path{path_view.begin(), path_view.end()}.parent_path();
+        include_frontier.clear();
+        for (const auto anchor : anchors) {
+            if (include_frontier.size() + prepared_includes.size() >= 4096) break;
+            if (!succeeded(directive_input.start_at(file, anchor.word_offset, anchor.source_base))) continue;
+            preprocessing_directive directive;
+            if (!succeeded(directive_decoder::decode(directive_input, directive)) ||
+                directive.kind != directive_kind::include) continue;
+            const auto range = directive.include.locator;
+            if (range.length < 3 || range.offset > source.size() ||
+                range.length > source.size() - range.offset) continue;
+            std::filesystem::path locator;
+            if (filesystem_path_from_utf8(source.substr(range.offset + 1, range.length - 2), locator)
+                != filesystem_path_result::success) continue;
+            auto candidate = parent / locator;
+            std::error_code error;
+            bool found = locator.is_absolute() || directive.include.form == include_form::quoted;
+            found = found && std::filesystem::is_regular_file(candidate, error);
+            if (error && error != std::errc::no_such_file_or_directory) continue;
+            if (!found && !locator.is_absolute()) {
+                for (const auto& configured : configuration.include_directories) {
+                    std::filesystem::path directory;
+                    if (filesystem_path_from_utf8(configured, directory) != filesystem_path_result::success) continue;
+                    const auto searched = configuration.root_directory / directory / locator;
+                    error.clear();
+                    if (std::filesystem::is_regular_file(searched, error)) {
+                        candidate = searched;
+                        found = true;
+                        break;
+                    }
+                    if (error && error != std::errc::no_such_file_or_directory) break;
+                }
+            }
+            if (!found) {
+                error.clear();
+                found = std::filesystem::is_regular_file(candidate, error);
+            }
+            if (!found || error) continue;
+            candidate = candidate.lexically_normal();
+            if (!preparation_attempted.insert(candidate).second) continue;
+            prepared_include item;
+            item.path = std::move(candidate);
+            include_frontier.push_back(std::move(item));
+        }
+        if (include_frontier.size() < 8) { include_frontier.clear(); return; }
+        if (include_workers.size() == 0 &&
+            !succeeded(include_workers.start(execution_lane_capacity()))) {
+            include_frontier.clear(); return;
+        }
+        include_lane_count = (std::min)(include_frontier.size(), include_workers.size());
+        if (!succeeded(include_workers.run(include_lane_count, prepare_include_lane, this))) {
+            include_frontier.clear(); return;
+        }
+        for (auto& item : include_frontier) {
+            if (item.ready) {
+                auto key = item.path;
+                prepared_includes.emplace(std::move(key), std::move(item));
+            }
+        }
+        include_frontier.clear();
+    }
+    catch (...) {
+        // Speculation cannot fail an inactive include. Active replay remains
+        // authoritative and falls back to ordinary acquisition/tokenization.
+        include_frontier.clear();
+    }
 }
 
 server_status semantic_input::resolve_include(
@@ -442,57 +568,68 @@ server_status semantic_input::resolve_include(
             source_path.parent_path() /
             locator;
 
-        if (!locator.is_absolute() && !configuration.include_directories.empty()) {
-            // Quoted includes prefer the including file. Angled includes prefer
-            // the root Project's ordered search directories, then local fallback.
-            std::error_code error;
-            bool found = request.form == include_form::quoted &&
-                std::filesystem::is_regular_file(candidate, error);
-            if (error && error != std::errc::no_such_file_or_directory) {
-                return fail(request.source, request.locator,
-                    "Cannot inspect local include path", server_status::io_error);
-            }
-            for (const auto& configured : configuration.include_directories) {
-                if (found) {
-                    break;
-                }
-                std::filesystem::path directory;
-                if (filesystem_path_from_utf8(configured, directory) != filesystem_path_result::success) {
-                    return fail(request.source, request.locator,
-                        "Invalid configured include directory", server_status::project_configuration_invalid);
-                }
-                const auto searched = configuration.root_directory / directory / locator;
-                error.clear();
-                if (std::filesystem::is_regular_file(searched, error)) {
-                    candidate = searched;
-                    found = true;
-                }
-                else if (error && error != std::errc::no_such_file_or_directory) {
-                    return fail(request.source, request.locator,
-                        "Cannot inspect configured include path", server_status::io_error);
-                }
-            }
+        auto& resolutions = request.form == include_form::quoted
+            ? quoted_includes : angled_includes;
+        const auto resolution_key = candidate;
+        const auto cached = resolutions.find(resolution_key);
+        if (cached != resolutions.end()) {
+            output = cached->second;
         }
+        else {
 
-        const auto resolved =
-            files.resolve(
-                candidate,
-                file_kind::header,
-                output);
+            if (!locator.is_absolute() && !configuration.include_directories.empty()) {
+                // Quoted includes prefer the including file. Angled includes prefer
+                // the root Project's ordered search directories, then local fallback.
+                std::error_code error;
+                bool found = request.form == include_form::quoted &&
+                    std::filesystem::is_regular_file(candidate, error);
+                if (error && error != std::errc::no_such_file_or_directory) {
+                    return fail(request.source, request.locator,
+                        "Cannot inspect local include path", server_status::io_error);
+                }
+                for (const auto& configured : configuration.include_directories) {
+                    if (found) {
+                        break;
+                    }
+                    std::filesystem::path directory;
+                    if (filesystem_path_from_utf8(configured, directory) != filesystem_path_result::success) {
+                        return fail(request.source, request.locator,
+                            "Invalid configured include directory", server_status::project_configuration_invalid);
+                    }
+                    const auto searched = configuration.root_directory / directory / locator;
+                    error.clear();
+                    if (std::filesystem::is_regular_file(searched, error)) {
+                        candidate = searched;
+                        found = true;
+                    }
+                    else if (error && error != std::errc::no_such_file_or_directory) {
+                        return fail(request.source, request.locator,
+                            "Cannot inspect configured include path", server_status::io_error);
+                    }
+                }
+            }
 
-        if (!succeeded(resolved) ||
-            !output) {
+            const auto resolved =
+                files.resolve(
+                    candidate,
+                    file_kind::header,
+                    output);
 
-            output = {};
+            if (!succeeded(resolved) ||
+                !output) {
 
-            return fail(
-                request.source,
-                request.locator,
-                "Included Header could not be resolved",
-                succeeded(resolved)
-                    ? server_status::
-                        project_configuration_invalid
-                    : resolved);
+                output = {};
+
+                return fail(
+                    request.source,
+                    request.locator,
+                    "Included Header could not be resolved",
+                    succeeded(resolved)
+                        ? server_status::
+                            project_configuration_invalid
+                        : resolved);
+            }
+            resolutions.emplace(resolution_key, output);
         }
     }
     catch (...) {
@@ -534,8 +671,15 @@ server_status semantic_input::resolve_include(
             staged);
     }
 
-    return materialize_and_lex(
-        output);
+    const auto lexical_started = telemetry != nullptr
+        ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    const auto materialized = materialize_and_lex(output);
+    if (telemetry != nullptr) {
+        telemetry->include_lexical_ns += static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - lexical_started).count());
+    }
+    return materialized;
 }
 
 server_status semantic_input::consume_directive(
@@ -632,10 +776,19 @@ server_status semantic_input::consume_directive(
 
     file_id target;
 
+    const auto include_started = telemetry != nullptr
+        ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     const auto resolved =
         resolve_include(
             result.include,
             target);
+
+    if (telemetry != nullptr) {
+        telemetry->include_ns += static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - include_started).count());
+        ++telemetry->include_count;
+    }
 
     if (!succeeded(resolved)) {
         return resolved;
@@ -738,9 +891,13 @@ server_status semantic_input::physical_identifier(
             server_status::project_configuration_invalid);
     }
 
-    return strings.intern(
-        spelling,
-        output);
+    using clock_type = std::chrono::steady_clock;
+    const bool measure = telemetry != nullptr && telemetry->detailed_source && mode_value == semantic_input_mode::source;
+    const auto started_at = measure ? clock_type::now() : clock_type::time_point{};
+    const auto status = strings.intern(spelling, output);
+    if (measure) telemetry->source_intern_ns += static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(clock_type::now() - started_at).count());
+    return status;
 }
 
 server_status semantic_input::effective_identifier(
@@ -788,57 +945,33 @@ server_status semantic_input::effective_identifier(
         : server_status::project_configuration_invalid;
 }
 
-server_status semantic_input::next_source(
-    semantic_token& output) noexcept {
-
-    if (input.finished()) {
-        const auto file = input.current_file();
-        const auto left = input.leave();
-
-        if (!succeeded(left) || !input.empty()) {
-            return fail(
-                file,
-                {},
-                "Semantic lexical input could not leave completed Source",
-                succeeded(left)
-                    ? server_status::project_configuration_invalid
-                    : left);
-        }
-
+server_status semantic_input::next_source(semantic_token& output) noexcept {
+    if (source_word_offset == source_words.size()) {
         finished_value = true;
         return server_status::success;
     }
-
-    frontend_token physical;
-    const auto advanced = input.next(physical);
-
-    if (!succeeded(advanced)) {
-        return fail(
-            input.current_file(),
-            {},
-            "Semantic lexical input could not decode next token",
-            advanced);
+    using clock_type = std::chrono::steady_clock;
+    const bool measure = telemetry != nullptr && telemetry->detailed_source;
+    const auto started_at = measure ? clock_type::now() : clock_type::time_point{};
+    const auto advanced = !source_native_words.empty()
+        ? decode_frontend_token(source_native_words, source_root, source_word_offset, source_offset, output)
+        : decode_frontend_token(source_words, source_root, source_word_offset, source_offset, output);
+    if (telemetry != nullptr) {
+        if (measure) telemetry->source_decode_ns += static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(clock_type::now() - started_at).count());
+        if (succeeded(advanced)) ++telemetry->source_token_count;
     }
-
-    if (directive_start(physical.kind)) {
-        return fail(
-            physical.file,
-            {physical.source_offset, physical.source_length},
-            "C++ preprocessing directives are not supported in Source inputs",
-            server_status::project_configuration_invalid);
-    }
-
-    output.file = physical.file;
-    output.kind = physical.kind;
-    output.source_offset = physical.source_offset;
-    output.source_length = physical.source_length;
-
-    if (physical.kind == token_kind::identifier) {
-        return physical_identifier(
-            physical,
+    if (!succeeded(advanced)) return fail(source_root, {},
+        "Semantic lexical input could not decode next token", advanced);
+    if (directive_start(output.kind)) return fail(output.file,
+        {output.source_offset, output.source_length},
+        "C++ preprocessing directives are not supported in Source inputs",
+        server_status::project_configuration_invalid);
+    if (output.kind == token_kind::identifier) {
+        if (telemetry != nullptr) ++telemetry->source_identifier_count;
+        return physical_identifier({output.file, output.kind, output.source_offset, output.source_length},
             output.identifier);
     }
-
     return server_status::success;
 }
 

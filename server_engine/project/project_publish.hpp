@@ -8,6 +8,7 @@
 #pragma once
 
 #include "project.hpp"
+#include "project_full_construction.hpp"
 #include "../configuration/server_configuration.hpp"
 #include "../diagnostics/diagnostic_collection.hpp"
 #include "../operation.hpp"
@@ -23,6 +24,7 @@ namespace cw::server {
     const server_settings_configuration& settings,
     operation_id operation,
     diagnostic_collection& diagnostics,
-    std::unique_ptr<project>& output);
+    std::unique_ptr<project>& output,
+    full_construction_telemetry* telemetry = nullptr);
 
 }

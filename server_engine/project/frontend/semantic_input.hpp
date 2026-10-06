@@ -20,6 +20,8 @@
 #include <cstdint>
 #include <string_view>
 #include <unordered_set>
+#include <unordered_map>
+#include "../construction/execution_lanes.hpp"
 
 namespace cw::server {
 
@@ -54,16 +56,29 @@ struct semantic_input_failure final {
     std::string_view detail;
 };
 
+struct semantic_input_telemetry final {
+    bool detailed_source = true;
+    std::uint64_t include_ns = 0;
+    std::uint64_t include_count = 0;
+    std::uint64_t include_lexical_ns = 0;
+    std::uint64_t prepared_include_count = 0;
+    std::uint64_t source_decode_ns = 0;
+    std::uint64_t source_intern_ns = 0;
+    std::uint64_t source_token_count = 0;
+    std::uint64_t source_identifier_count = 0;
+};
+
 // Replays one Project-declared frontend root. Physical lexical storage remains
-// owned by lexical_generation; this class owns only bounded traversal and
-// preprocessing execution state.
+// owned by lexical_generation; preprocessing and include caches are local to
+// this construction, never persisted into the Project.
 class semantic_input final {
 public:
     semantic_input(
         file_context& files,
         lexical_generation& lexical,
         const preprocessor_configuration& configuration,
-        string_table& strings) noexcept;
+        string_table& strings,
+        semantic_input_telemetry* telemetry = nullptr) noexcept;
 
     semantic_input(const semantic_input&) = delete;
     semantic_input& operator=(const semantic_input&) = delete;
@@ -85,6 +100,21 @@ public:
     }
 
 private:
+    struct prepared_include final {
+        std::filesystem::path path;
+        file_acquire_result acquired;
+        lexical_stream stream;
+        bool ready = false;
+    };
+    void prepare_includes(file_id file) noexcept;
+    static void prepare_include_lane(void* context, std::size_t lane) noexcept;
+    std::vector<prepared_include> include_frontier;
+    std::unordered_map<std::filesystem::path, prepared_include> prepared_includes;
+    std::unordered_set<std::filesystem::path> preparation_attempted;
+    std::unordered_set<std::uint32_t> preparation_scanned;
+    execution_lanes include_workers;
+    std::size_t include_lane_count = 0;
+
     [[nodiscard]] server_status fail(
         file_id file,
         source_range source,
@@ -127,6 +157,12 @@ private:
     const preprocessor_configuration& configuration;
     string_table& strings;
 
+    // Source has no include stack or lexical mutation while a root is consumed.
+    lexical_word_view source_words;
+    std::span<const std::uint32_t> source_native_words;
+    file_id source_root{};
+    std::uint32_t source_word_offset = 0;
+    std::uint32_t source_offset = 0;
     frontend_input input;
     frontend_input directive_input;
     preprocessor preprocessing;
@@ -134,6 +170,10 @@ private:
     lexical_stream include_stream;
     // Physical file identities protected by an executed pragma, per root replay.
     std::unordered_set<std::uint32_t> once_files;
+    // Successful resolutions belong to this construction's file snapshot.
+    // Keep quote/angle search precedence distinct and still stage every edge.
+    std::unordered_map<std::filesystem::path, file_id> quoted_includes;
+    std::unordered_map<std::filesystem::path, file_id> angled_includes;
 
     semantic_input_failure failure_value;
     semantic_input_mode mode_value =
@@ -145,6 +185,7 @@ private:
     bool header_passthrough = false;
     bool started = false;
     bool finished_value = false;
+    semantic_input_telemetry* telemetry = nullptr;
 };
 
 }

@@ -35,6 +35,41 @@ enum class shm_type_batch_result : std::uint8_t {
     failed,
 };
 
+struct shm_type_batch_program_column_profile final {
+    std::uint64_t physical_records = 0;
+    std::uint64_t nonempty_apis = 0;
+    std::uint64_t unique_programs = 0;
+    std::uint64_t duplicate_api_copies = 0;
+    std::uint64_t duplicate_physical_records = 0;
+    std::uint64_t potential_bytes_removed = 0;
+
+    // Execution weighting is Object-phase only. Storage metrics above include
+    // all Type APIs, including canonical-only APIs.
+    std::uint64_t object_execution_operations = 0;
+    std::uint64_t duplicated_object_execution_operations = 0;
+    std::uint64_t max_api_copies = 0;
+};
+
+struct shm_type_batch_program_duplication_profile final {
+    std::uint64_t object_root_apis = 0;
+    std::uint64_t object_reachable_apis = 0;
+    std::uint64_t object_api_applications = 0;
+    std::uint64_t total_potential_bytes_removed = 0;
+
+    shm_type_batch_program_column_profile
+        absolute_references{};
+    shm_type_batch_program_column_profile
+        object_references{};
+    shm_type_batch_program_column_profile
+        stores{};
+    shm_type_batch_program_column_profile
+        post_stores{};
+    shm_type_batch_program_column_profile
+        children{};
+    shm_type_batch_program_column_profile
+        repeats{};
+};
+
 struct shm_type_batch_prepare_telemetry final {
     std::uint64_t type_apis = 0;
     std::uint64_t named_types_prepared = 0;
@@ -62,6 +97,12 @@ struct shm_type_batch_prepare_telemetry final {
     std::uint64_t reference_chain_steps_resolved = 0;
     std::uint64_t child_edges = 0;
     std::uint64_t zero_operations_elided = 0;
+
+    // RUNTIME-SHM-TYPE-PROGRAM-DUPLICATION-PROFILE-09D-13.
+    bool program_duplication_profile_valid = false;
+    std::uint8_t program_duplication_profile_reserved[7]{};
+    shm_type_batch_program_duplication_profile
+        program_duplication_profile{};
 
     // SHM-TYPE-INLINE-08-01.
     std::uint64_t inline_leaf_limit = 0;
@@ -469,6 +510,11 @@ private:
         shm_type_batch&,
         shm_type_batch_prepare_telemetry*) noexcept;
 
+    friend shm_type_batch_result
+    profile_shm_type_batch_program_duplication(
+        const shm_type_batch&,
+        shm_type_batch_program_duplication_profile&) noexcept;
+
     friend void shm_type_batch_compiled_counts(
         const shm_type_batch&,
         compiled_project_runtime_type_counts&) noexcept;
@@ -547,6 +593,14 @@ private:
     const shm_layout& layout,
     shm_type_batch& output,
     shm_type_batch_prepare_telemetry* telemetry = nullptr) noexcept;
+
+// RUNTIME-SHM-TYPE-PROGRAM-DUPLICATION-PROFILE-09D-13:
+// Diagnostic-only exact whole-program duplication profile for the remaining
+// immutable Type API physical columns. No Runtime hot-path instrumentation.
+[[nodiscard]] shm_type_batch_result
+profile_shm_type_batch_program_duplication(
+    const shm_type_batch& area,
+    shm_type_batch_program_duplication_profile& output) noexcept;
 
 // Persist/attach the already selected INLINE-64 executable representation.
 void shm_type_batch_compiled_counts(

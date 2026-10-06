@@ -155,6 +155,14 @@ std::uint32_t lexical_word_view::operator[](
     return value;
 }
 
+std::span<const std::uint32_t> lexical_word_view::native_words() const noexcept {
+    if (native_owner == nullptr || native_arena >= native_owner->arena_count_value) return {};
+    const auto& arena = native_owner->arena_values[native_arena];
+    if (native_offset > arena.word_count || count > arena.word_count - native_offset) return {};
+    if (count == 0) return {};
+    return {arena.words.get() + native_offset, count};
+}
+
 lexical_directive_view lexical_directive_view::from_native(
     std::span<const lexical_directive_anchor> values) noexcept {
 

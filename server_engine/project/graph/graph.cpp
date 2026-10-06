@@ -1912,6 +1912,21 @@ server_status graph::intern_endpoint_path(
             project_configuration_invalid;
     }
 
+    const auto status = intern_resolved_endpoint_path(root_type, steps, resolved, output);
+    if (succeeded(status) && value_type != nullptr) {
+        *value_type = endpoint_paths[output.value() - 1].value_type;
+    }
+    return status;
+}
+
+server_status graph::intern_resolved_endpoint_path(
+    type_ref root_type, std::span<const endpoint_path_step> steps,
+    type_ref resolved, endpoint_path_handle& output) noexcept {
+    output = {};
+    if (!contains(root_type) || !contains(resolved)) {
+        return server_status::project_configuration_invalid;
+    }
+
     const auto hash =
         hash_endpoint_path(
             root_type,
@@ -1929,13 +1944,6 @@ server_status graph::intern_endpoint_path(
         existing) {
 
         output = existing;
-
-        if (value_type != nullptr) {
-            *value_type =
-                endpoint_paths[
-                    existing.value() - 1].
-                    value_type;
-        }
 
         return server_status::success;
     }
@@ -1992,11 +2000,6 @@ server_status graph::intern_endpoint_path(
             hash,
             fingerprint_value);
 
-        if (value_type != nullptr) {
-            *value_type =
-                resolved;
-        }
-
         return server_status::success;
     }
     catch (...) {
@@ -2007,10 +2010,6 @@ server_status graph::intern_endpoint_path(
             old_step_count);
 
         output = {};
-
-        if (value_type != nullptr) {
-            *value_type = {};
-        }
 
         return server_status::io_error;
     }
@@ -2487,6 +2486,16 @@ server_status graph::add_initialization(
             project_configuration_invalid;
     }
 
+    return add_resolved_initialization(target, target_type, value, replaced);
+}
+
+server_status graph::add_resolved_initialization(
+    object_endpoint target, type_ref target_type,
+    construction_value value, bool& replaced) noexcept {
+    replaced = false;
+    if (!scalar_initialization_target(target_type))
+        return server_status::project_configuration_invalid;
+
     const auto key =
         link_target_key(
             target);
@@ -2585,6 +2594,12 @@ server_status graph::add_link(
         return server_status::project_configuration_invalid;
     }
 
+    return add_resolved_link(source, target, output);
+}
+
+server_status graph::add_resolved_link(
+    object_endpoint source, object_endpoint target, link_handle& output) noexcept {
+    output = {};
     if (const auto existing = find_link_target(target); existing) {
         const auto* value = find(existing);
         if (value == nullptr || value->target != target || value->source != source)

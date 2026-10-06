@@ -13,6 +13,8 @@
 #include <fstream>
 #include <iostream>
 #include <string_view>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -93,6 +95,56 @@ bool write_text(
             value.size()));
 
     return static_cast<bool>(output);
+}
+
+void test_parallel_root_acquisition(test_state& tests, const std::filesystem::path& root) {
+    file_context files;
+    lexical_generation lexical;
+    file_id project;
+    tests.expect(succeeded(files.resolve(root / "roots.json", file_kind::project, project)),
+        "resolve nonlexical root before parallel acquisition");
+    std::vector<file_id> ids;
+    std::vector<std::string> texts;
+    for (int i = 0; i < 270; ++i) {
+        texts.push_back(i % 17 == 0 ? "" : "struct Root" + std::to_string(i) + " { int value; };\n");
+        const auto path = root / ("parallel_root_" + std::to_string(i) + ".h");
+        if (!tests.expect(write_text(path, texts.back()), "write parallel root fixture")) return;
+        file_id id;
+        if (!tests.expect(succeeded(files.resolve(path, i % 2 == 0 ? file_kind::header : file_kind::source, id)),
+            "resolve parallel root fixture")) return;
+        ids.push_back(id);
+    }
+    file_acquire_job job;
+    file_acquire_result result;
+    bool changed = false;
+    tests.expect(succeeded(files.prepare_acquire(ids[5], job)), "prepare already materialized root");
+    file_context::execute_acquire(job, result);
+    tests.expect(succeeded(files.apply_acquire(result, changed)), "preload one root");
+    source_preparation_failure failure;
+    if (!tests.expect(succeeded(prepare_source_lexical_state(files, lexical, &failure)),
+        "parallel root acquisition spans batch boundary")) return;
+    tests.expect(!files.content_available(project) && !lexical.contains(project),
+        "nonlexical roots are not acquired");
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+        tests.expect(files.content_available(ids[i]) && files.content(ids[i]) == texts[i],
+            "parallel acquisition preserves exact bytes and file identity");
+        lexical_stream serial;
+        tests.expect(succeeded(lexer::tokenize(ids[i], texts[i], serial)), "tokenize reference root");
+        const auto words = lexical.words(ids[i]);
+        bool equal = lexical.contains(ids[i]) && words.size() == serial.words().size();
+        for (std::size_t j = 0; equal && j < words.size(); ++j) equal = words[j] == serial.words()[j];
+        tests.expect(equal, "parallel roots retain serial lexical words including empty files");
+    }
+    file_context missing_files;
+    lexical_generation missing_lexical;
+    file_id before, missing, after;
+    tests.expect(succeeded(missing_files.resolve(root / "parallel_root_1.h", file_kind::header, before)) &&
+        succeeded(missing_files.resolve(root / "missing_parallel_root.h", file_kind::header, missing)) &&
+        succeeded(missing_files.resolve(root / "parallel_root_2.h", file_kind::header, after)),
+        "resolve missing root ordering fixture");
+    tests.expect(prepare_source_lexical_state(missing_files, missing_lexical) ==
+        server_status::project_configuration_invalid && missing_files.content_available(before) &&
+        !missing_files.content_available(after), "missing root preserves ordered publication prefix");
 }
 
 bool prepare_fixture(
@@ -691,6 +743,7 @@ int main() {
         test_direct_database(
             tests,
             tree.root);
+        test_parallel_root_acquisition(tests, tree.root);
 
         if (tests.failures != 0) {
             std::cerr

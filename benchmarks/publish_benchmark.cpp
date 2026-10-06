@@ -36,7 +36,9 @@ namespace {
 
 enum class benchmark_mode {
     publish,
+    publish_profile,
     load,
+    load_profile,
     build,
     rebuild,
     audit,
@@ -50,9 +52,17 @@ enum class benchmark_mode {
         output = benchmark_mode::publish;
         return true;
     }
+    if (value == "publish-profile" || value == "publish-stage") {
+        output = benchmark_mode::publish_profile;
+        return true;
+    }
 
     if (value == "load") {
         output = benchmark_mode::load;
+        return true;
+    }
+    if (value == "load-profile") {
+        output = benchmark_mode::load_profile;
         return true;
     }
 
@@ -225,7 +235,10 @@ void print_usage() {
     std::cerr
         << "Usage:\n"
         << "  ServerEngineV4PublishBenchmark publish <project.json> <expected-types>\n"
+        << "  ServerEngineV4PublishBenchmark publish-profile <project.json> <expected-types>\n"
+        << "  ServerEngineV4PublishBenchmark publish-stage <project.json> <expected-types>\n"
         << "  ServerEngineV4PublishBenchmark load    <project.json> <expected-types>\n"
+        << "  ServerEngineV4PublishBenchmark load-profile <project.json> <expected-types>\n"
         << "  ServerEngineV4PublishBenchmark build   <project.json> <expected-types>\n"
         << "  ServerEngineV4PublishBenchmark rebuild <project.json> <expected-types>\n"
         << "  ServerEngineV4PublishBenchmark audit   <project.json> <expected-types>\n";
@@ -315,9 +328,12 @@ int main(
 
     cw::server::project_runtime_telemetry
         runtime_telemetry;
+    cw::server::full_construction_telemetry
+        publish_telemetry;
+    publish_telemetry.detailed_source = std::string_view{argv[1]} != "publish-stage";
 
-    if (mode ==
-        benchmark_mode::publish) {
+    if (mode == benchmark_mode::publish ||
+        mode == benchmark_mode::publish_profile) {
 
         status =
             cw::server::publish_project(
@@ -325,7 +341,10 @@ int main(
                 settings,
                 cw::server::operation_id{1},
                 diagnostics,
-                project);
+                project,
+                mode == benchmark_mode::publish_profile
+                    ? &publish_telemetry
+                    : nullptr);
     }
     else if (mode == benchmark_mode::build) {
         status =
@@ -349,7 +368,7 @@ int main(
                 cw::server::operation_id{1},
                 diagnostics,
                 project,
-                &runtime_telemetry);
+                mode == benchmark_mode::load ? nullptr : &runtime_telemetry);
     }
 
     if (mode == benchmark_mode::audit && cw::server::succeeded(status) && project) {
@@ -405,8 +424,8 @@ int main(
         return 3;
     }
 
-    if (mode ==
-            benchmark_mode::publish &&
+    if ((mode == benchmark_mode::publish ||
+         mode == benchmark_mode::publish_profile) &&
         (path_exists(artifacts.manifest) ||
          path_exists(artifacts.source_save) ||
          path_exists(artifacts.database))) {
@@ -463,7 +482,54 @@ int main(
         << ",identities="
         << compiled.identity_count();
 
-    if (mode == benchmark_mode::load ||
+    if (mode == benchmark_mode::publish_profile) {
+        std::cout
+            << ",cleanup_ms=" << ns_to_ms(publish_telemetry.cleanup_ns)
+            << ",configuration_ms=" << ns_to_ms(publish_telemetry.configuration_ns)
+            << ",lexical_ms=" << ns_to_ms(publish_telemetry.lexical_ns)
+            << ",assign_ms=" << ns_to_ms(publish_telemetry.assign_ns)
+            << ",semantic_ms=" << ns_to_ms(publish_telemetry.semantic_ns)
+            << ",header_ms=" << ns_to_ms(publish_telemetry.header_ns)
+            << ",include_ms=" << ns_to_ms(publish_telemetry.include_ns)
+            << ",include_count=" << publish_telemetry.include_count
+            << ",include_lexical_ms=" << ns_to_ms(publish_telemetry.include_lexical_ns)
+            << ",prepared_include_count=" << publish_telemetry.prepared_include_count
+            << ",source_ms=" << ns_to_ms(publish_telemetry.source_ns)
+            << ",source_object_ms=" << ns_to_ms(publish_telemetry.source_object_ns)
+            << ",source_assignment_ms=" << ns_to_ms(publish_telemetry.source_assignment_ns)
+            << ",source_link_ms=" << ns_to_ms(publish_telemetry.source_link_ns)
+            << ",source_endpoint_ms=" << ns_to_ms(publish_telemetry.source_endpoint_ns)
+            << ",source_member_ms=" << ns_to_ms(publish_telemetry.source_member_ns)
+            << ",source_member_lookups=" << publish_telemetry.source_member_lookups
+            << ",source_initialization_commit_ms=" << ns_to_ms(publish_telemetry.source_initialization_commit_ns)
+            << ",source_link_commit_ms=" << ns_to_ms(publish_telemetry.source_link_commit_ns)
+            << ",source_provenance_ms=" << ns_to_ms(publish_telemetry.source_provenance_ns)
+            << ",source_decode_ms=" << ns_to_ms(publish_telemetry.source_decode_ns)
+            << ",source_intern_ms=" << ns_to_ms(publish_telemetry.source_intern_ns)
+            << ",source_token_count=" << publish_telemetry.source_token_count
+            << ",source_identifier_count=" << publish_telemetry.source_identifier_count
+
+
+            << ",source_finalize_ms=" << ns_to_ms(publish_telemetry.source_finalize_ns)
+            << ",persistence_ms=" << ns_to_ms(publish_telemetry.persistence_ns)
+            << ",compiled_prepare_ms=" << ns_to_ms(publish_telemetry.compiled_prepare_ns)
+            << ",compiled_map_ms=" << ns_to_ms(publish_telemetry.compiled_map_ns)
+            << ",compiled_encode_ms=" << ns_to_ms(publish_telemetry.compiled_encode_ns)
+            << ",compiled_validate_ms=" << ns_to_ms(publish_telemetry.compiled_validate_ns)
+            << ",compiled_layout_ms=" << ns_to_ms(publish_telemetry.compiled_layout_ns)
+            << ",compiled_type_ms=" << ns_to_ms(publish_telemetry.compiled_type_ns)
+            << ",compiled_plan_ms=" << ns_to_ms(publish_telemetry.compiled_plan_ns)
+            << ",compiled_runtime_prepare_ms=" << ns_to_ms(publish_telemetry.compiled_runtime_prepare_ns)
+            << ",compiled_remap_ms=" << ns_to_ms(publish_telemetry.compiled_remap_ns)
+            << ",compiled_physical_ms=" << ns_to_ms(publish_telemetry.compiled_physical_ns)
+            << ",compiled_abi_encode_ms=" << ns_to_ms(publish_telemetry.compiled_abi_encode_ns)
+            << ",compiled_type_encode_ms=" << ns_to_ms(publish_telemetry.compiled_type_encode_ns)
+            << ",compiled_runtime_encode_ms=" << ns_to_ms(publish_telemetry.compiled_runtime_encode_ns)
+            << ",compiled_flush_ms=" << ns_to_ms(publish_telemetry.compiled_flush_ns)
+            << ",resident_ms=" << ns_to_ms(publish_telemetry.resident_ns);
+    }
+
+    if (mode == benchmark_mode::load_profile ||
         mode == benchmark_mode::audit) {
 
         std::cout
@@ -485,6 +551,218 @@ int main(
             << ",runtime_v2_relative_reference_records="
             << runtime_telemetry.runtime_v2_prepare.
                 relative_references
+            << ",runtime_v2_object_api_applications="
+            << runtime_telemetry.
+                runtime_v2_objects.api_applications
+            << ",runtime_v2_program_duplication_profile_valid="
+            << static_cast<unsigned>(
+                runtime_telemetry.runtime_v2_prepare.
+                    program_duplication_profile_valid)
+            << ",runtime_v2_program_profile_object_root_apis="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.object_root_apis
+            << ",runtime_v2_program_profile_object_reachable_apis="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.object_reachable_apis
+            << ",runtime_v2_program_profile_object_api_applications="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.object_api_applications
+            << ",runtime_v2_program_profile_total_potential_bytes="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.
+                    total_potential_bytes_removed
+            << ",runtime_v2_program_absolute_reference_records="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.absolute_references.
+                    physical_records
+            << ",runtime_v2_program_absolute_reference_unique="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.absolute_references.
+                    unique_programs
+            << ",runtime_v2_program_absolute_reference_duplicate_api_copies="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.absolute_references.
+                    duplicate_api_copies
+            << ",runtime_v2_program_absolute_reference_duplicate_records="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.absolute_references.
+                    duplicate_physical_records
+            << ",runtime_v2_program_absolute_reference_potential_bytes="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.absolute_references.
+                    potential_bytes_removed
+            << ",runtime_v2_program_absolute_reference_object_ops="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.absolute_references.
+                    object_execution_operations
+            << ",runtime_v2_program_absolute_reference_duplicated_object_ops="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.absolute_references.
+                    duplicated_object_execution_operations
+            << ",runtime_v2_program_absolute_reference_max_api_copies="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.absolute_references.
+                    max_api_copies
+            << ",runtime_v2_program_object_reference_records="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.object_references.
+                    physical_records
+            << ",runtime_v2_program_object_reference_unique="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.object_references.
+                    unique_programs
+            << ",runtime_v2_program_object_reference_duplicate_api_copies="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.object_references.
+                    duplicate_api_copies
+            << ",runtime_v2_program_object_reference_duplicate_records="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.object_references.
+                    duplicate_physical_records
+            << ",runtime_v2_program_object_reference_potential_bytes="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.object_references.
+                    potential_bytes_removed
+            << ",runtime_v2_program_object_reference_object_ops="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.object_references.
+                    object_execution_operations
+            << ",runtime_v2_program_object_reference_duplicated_object_ops="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.object_references.
+                    duplicated_object_execution_operations
+            << ",runtime_v2_program_object_reference_max_api_copies="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.object_references.
+                    max_api_copies
+            << ",runtime_v2_program_store_records="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.stores.
+                    physical_records
+            << ",runtime_v2_program_store_unique="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.stores.
+                    unique_programs
+            << ",runtime_v2_program_store_duplicate_api_copies="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.stores.
+                    duplicate_api_copies
+            << ",runtime_v2_program_store_duplicate_records="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.stores.
+                    duplicate_physical_records
+            << ",runtime_v2_program_store_potential_bytes="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.stores.
+                    potential_bytes_removed
+            << ",runtime_v2_program_store_object_ops="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.stores.
+                    object_execution_operations
+            << ",runtime_v2_program_store_duplicated_object_ops="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.stores.
+                    duplicated_object_execution_operations
+            << ",runtime_v2_program_store_max_api_copies="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.stores.
+                    max_api_copies
+            << ",runtime_v2_program_post_store_records="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.post_stores.
+                    physical_records
+            << ",runtime_v2_program_post_store_unique="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.post_stores.
+                    unique_programs
+            << ",runtime_v2_program_post_store_duplicate_api_copies="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.post_stores.
+                    duplicate_api_copies
+            << ",runtime_v2_program_post_store_duplicate_records="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.post_stores.
+                    duplicate_physical_records
+            << ",runtime_v2_program_post_store_potential_bytes="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.post_stores.
+                    potential_bytes_removed
+            << ",runtime_v2_program_post_store_object_ops="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.post_stores.
+                    object_execution_operations
+            << ",runtime_v2_program_post_store_duplicated_object_ops="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.post_stores.
+                    duplicated_object_execution_operations
+            << ",runtime_v2_program_post_store_max_api_copies="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.post_stores.
+                    max_api_copies
+            << ",runtime_v2_program_child_records="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.children.
+                    physical_records
+            << ",runtime_v2_program_child_unique="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.children.
+                    unique_programs
+            << ",runtime_v2_program_child_duplicate_api_copies="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.children.
+                    duplicate_api_copies
+            << ",runtime_v2_program_child_duplicate_records="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.children.
+                    duplicate_physical_records
+            << ",runtime_v2_program_child_potential_bytes="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.children.
+                    potential_bytes_removed
+            << ",runtime_v2_program_child_object_ops="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.children.
+                    object_execution_operations
+            << ",runtime_v2_program_child_duplicated_object_ops="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.children.
+                    duplicated_object_execution_operations
+            << ",runtime_v2_program_child_max_api_copies="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.children.
+                    max_api_copies
+            << ",runtime_v2_program_repeat_records="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.repeats.
+                    physical_records
+            << ",runtime_v2_program_repeat_unique="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.repeats.
+                    unique_programs
+            << ",runtime_v2_program_repeat_duplicate_api_copies="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.repeats.
+                    duplicate_api_copies
+            << ",runtime_v2_program_repeat_duplicate_records="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.repeats.
+                    duplicate_physical_records
+            << ",runtime_v2_program_repeat_potential_bytes="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.repeats.
+                    potential_bytes_removed
+            << ",runtime_v2_program_repeat_object_ops="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.repeats.
+                    object_execution_operations
+            << ",runtime_v2_program_repeat_duplicated_object_ops="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.repeats.
+                    duplicated_object_execution_operations
+            << ",runtime_v2_program_repeat_max_api_copies="
+            << runtime_telemetry.runtime_v2_prepare.
+                program_duplication_profile.repeats.
+                    max_api_copies
             << ",runtime_v2_constructor_defaults="
             << runtime_telemetry.
                 runtime_v2_constructor_defaults

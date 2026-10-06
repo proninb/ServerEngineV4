@@ -21,6 +21,8 @@
 #include "../diagnostics/diagnostic_descriptor.hpp"
 
 #include <array>
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -203,10 +205,57 @@ persistence_invalid(
     };
 }
 
+struct physical_plan_job final {
+    const compiled_project_view& compiled;
+    const server_abi_configuration& abi;
+    const shm_layout& layout;
+    shm_type_batch& type;
+    shm_runtime_v2& runtime;
+    full_construction_telemetry* telemetry;
+    std::size_t active_lanes = 1;
+    shm_type_batch_result type_result = shm_type_batch_result::invalid_input;
+    shm_runtime_v2_result runtime_result = shm_runtime_v2_result::invalid_input;
+
+    static void run(void* context, std::size_t lane) noexcept {
+        auto& job = *static_cast<physical_plan_job*>(context);
+        using clock_type = std::chrono::steady_clock;
+        for (auto task = lane; task < 2; task += job.active_lanes) {
+            const auto started = job.telemetry != nullptr
+                ? clock_type::now() : clock_type::time_point{};
+            if (task == 0) {
+                job.type_result = prepare_shm_type_batch_inline64(
+                    job.compiled, job.abi, job.layout, job.type);
+            }
+            else {
+                job.runtime_result = prepare_shm_runtime_v2_physical_plan(
+                    job.compiled, job.abi, job.layout, job.runtime);
+            }
+            if (job.telemetry != nullptr) {
+                const auto duration = static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        clock_type::now() - started).count());
+                (task == 0 ? job.telemetry->compiled_type_ns
+                    : job.telemetry->compiled_runtime_prepare_ns) = duration;
+            }
+        }
+    }
+};
+
 [[nodiscard]] full_persistence_result
 persist_compiled(
     const project_artifact_layout& paths,
-    const full_construction_context& context) noexcept {
+    const full_construction_context& context,
+    full_construction_telemetry* telemetry = nullptr) noexcept {
+
+    using clock_type = std::chrono::steady_clock;
+    auto stage_started = telemetry != nullptr ? clock_type::now() : clock_type::time_point{};
+    const auto checkpoint = [&](std::uint64_t full_construction_telemetry::* field) noexcept {
+        if (telemetry == nullptr) return;
+        const auto now = clock_type::now();
+        telemetry->*field = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(now - stage_started).count());
+        stage_started = now;
+    };
 
     compiled_project_layout layout;
 
@@ -231,6 +280,7 @@ persist_compiled(
                 full_persistence_stage::prepare);
     }
 
+    checkpoint(&full_construction_telemetry::compiled_prepare_ns);
     writable_file_mapping mapping;
 
     if (mapping.create(
@@ -242,6 +292,7 @@ persist_compiled(
             full_persistence_stage::create);
     }
 
+    checkpoint(&full_construction_telemetry::compiled_map_ns);
     const auto encoded =
         encode_compiled_project_image(
             context.strings,
@@ -264,6 +315,7 @@ persist_compiled(
                 full_persistence_stage::encode);
     }
 
+    checkpoint(&full_construction_telemetry::compiled_encode_ns);
     compiled_project_view compiled;
 
     if (compiled.bind(mapping.bytes()) !=
@@ -272,6 +324,7 @@ persist_compiled(
             full_persistence_stage::validate);
     }
 
+    checkpoint(&full_construction_telemetry::compiled_validate_ns);
     shm_layout runtime_layout;
 
     if (prepare_shm_layout(
@@ -283,19 +336,26 @@ persist_compiled(
             full_persistence_stage::prepare);
     }
 
+    checkpoint(&full_construction_telemetry::compiled_layout_ns);
     shm_type_batch runtime_type;
-
-    if (prepare_shm_type_batch_inline64(
-            compiled,
-            context.settings.abi,
-            runtime_layout,
-            runtime_type) !=
-        shm_type_batch_result::success) {
+    shm_runtime_v2 runtime_plan;
+    physical_plan_job plan_job{compiled, context.settings.abi, runtime_layout,
+        runtime_type, runtime_plan, telemetry};
+    execution_lanes plan_workers;
+    plan_job.active_lanes = (std::min)(std::size_t{2}, execution_lane_capacity());
+    if (plan_job.active_lanes == 0 ||
+        !succeeded(plan_workers.start(plan_job.active_lanes)) ||
+        !succeeded(plan_workers.run(plan_job.active_lanes, physical_plan_job::run, &plan_job))) {
+        return persistence_io_failure(full_persistence_stage::prepare);
+    }
+    if (plan_job.type_result != shm_type_batch_result::success ||
+        plan_job.runtime_result != shm_runtime_v2_result::success) {
 
         return persistence_invalid(
             full_persistence_stage::prepare);
     }
 
+    checkpoint(&full_construction_telemetry::compiled_plan_ns);
     compiled_project_runtime_type_counts
         runtime_type_counts;
 
@@ -341,18 +401,24 @@ persist_compiled(
             full_persistence_stage::validate);
     }
 
+    checkpoint(&full_construction_telemetry::compiled_remap_ns);
     if (encode_shm_layout_columns(
             runtime_layout,
             context.settings.abi,
             mapping.bytes()) !=
-        shm_layout_result::success ||
-        encode_shm_type_batch_physical_columns(
+        shm_layout_result::success) {
+        return persistence_invalid(full_persistence_stage::encode);
+    }
+    checkpoint(&full_construction_telemetry::compiled_abi_encode_ns);
+    if (encode_shm_type_batch_physical_columns(
             runtime_type,
             mapping.bytes()) !=
-        shm_type_batch_result::success ||
-        encode_shm_runtime_v2_physical_columns(
-            compiled,
-            context.settings.abi,
+        shm_type_batch_result::success) {
+        return persistence_invalid(full_persistence_stage::encode);
+    }
+    checkpoint(&full_construction_telemetry::compiled_type_encode_ns);
+    if (encode_shm_runtime_v2_physical_columns(
+            runtime_plan,
             runtime_layout,
             mapping.bytes()) !=
         shm_runtime_v2_result::success) {
@@ -362,6 +428,11 @@ persist_compiled(
     }
 
     // PUBLISH owns physical correctness. LOAD only attaches mmap views.
+    checkpoint(&full_construction_telemetry::compiled_runtime_encode_ns);
+    if (telemetry != nullptr) {
+        telemetry->compiled_physical_ns = telemetry->compiled_abi_encode_ns +
+            telemetry->compiled_type_encode_ns + telemetry->compiled_runtime_encode_ns;
+    }
 
     if (mapping.flush() !=
         writable_file_mapping_result::success) {
@@ -370,6 +441,7 @@ persist_compiled(
             full_persistence_stage::flush);
     }
 
+    checkpoint(&full_construction_telemetry::compiled_flush_ns);
     return persistence_success();
 }
 
@@ -599,6 +671,7 @@ persist_manifest(
 struct full_persistence_job final {
     const project_artifact_layout& paths;
     const full_construction_context& context;
+    full_construction_telemetry* telemetry = nullptr;
 
     std::size_t active_lanes = 1;
     std::size_t artifact_count =
@@ -630,7 +703,8 @@ void persist_full_artifacts(
             job.results[index] =
                 persist_compiled(
                     job.paths,
-                    job.context);
+                    job.context,
+                    job.telemetry);
             break;
 
         case full_persistence_artifact::source:
@@ -725,9 +799,23 @@ server_status construct_full_project(
     full_construction_mode mode,
     operation_id operation,
     diagnostic_collection& diagnostics,
-    std::unique_ptr<project>& output) {
+    std::unique_ptr<project>& output,
+    full_construction_telemetry* telemetry) {
 
     output.reset();
+    if (telemetry != nullptr) {
+        const auto detailed = telemetry->detailed_source;
+        *telemetry = {};
+        telemetry->detailed_source = detailed;
+    }
+    using clock_type = std::chrono::steady_clock;
+    const auto elapsed_ns = [](clock_type::time_point begin) noexcept {
+        return static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                clock_type::now() - begin).count());
+    };
+    const auto cleanup_started = telemetry != nullptr
+        ? clock_type::now() : clock_type::time_point{};
 
     project_artifact_layout layout;
 
@@ -771,6 +859,7 @@ server_status construct_full_project(
 
         return server_status::io_error;
     }
+    if (telemetry != nullptr) { telemetry->cleanup_ns = elapsed_ns(cleanup_started); }
 
     const auto rebuilt =
         [&]() -> server_status {
@@ -790,6 +879,8 @@ server_status construct_full_project(
             context.change_checkpoint);
     }
 
+    const auto configuration_started = telemetry != nullptr
+        ? clock_type::now() : clock_type::time_point{};
     const auto composed =
         compose_project_configuration(
             project_path,
@@ -798,6 +889,7 @@ server_status construct_full_project(
             context.manifest,
             context.files,
             context.preprocessor);
+    if (telemetry != nullptr) { telemetry->configuration_ns = elapsed_ns(configuration_started); }
 
     if (!succeeded(composed)) {
         return composed;
@@ -808,11 +900,14 @@ server_status construct_full_project(
 
     source_preparation_failure failure;
 
+    const auto lexical_started = telemetry != nullptr
+        ? clock_type::now() : clock_type::time_point{};
     const auto prepared_sources =
         prepare_source_lexical_state(
             context.files,
             context.lexical,
             &failure);
+    if (telemetry != nullptr) { telemetry->lexical_ns = elapsed_ns(lexical_started); }
 
     if (!succeeded(prepared_sources)) {
         if (failure.kind ==
@@ -843,6 +938,8 @@ server_status construct_full_project(
         return prepared_sources;
     }
 
+    const auto assign_started = telemetry != nullptr
+        ? clock_type::now() : clock_type::time_point{};
     const auto assignments_materialized =
         materialize_assign_inputs(
             context.files);
@@ -860,6 +957,7 @@ server_status construct_full_project(
             context.files,
             context.assigns,
             &assign_failure);
+    if (telemetry != nullptr) { telemetry->assign_ns = elapsed_ns(assign_started); }
 
     if (!succeeded(assignments_parsed)) {
         if (assign_failure.file) {
@@ -896,6 +994,10 @@ server_status construct_full_project(
     std::vector<parser_warning>
         semantic_warnings;
 
+    const auto semantic_started = telemetry != nullptr
+        ? clock_type::now() : clock_type::time_point{};
+    semantic_parse_telemetry semantic_telemetry;
+    semantic_telemetry.detailed_source = telemetry != nullptr && telemetry->detailed_source;
     const auto parsed =
         parse_semantic_project(
             context.files,
@@ -907,7 +1009,33 @@ server_status construct_full_project(
             context.G,
             context.sources,
             &semantic_failure,
-            &semantic_warnings);
+            &semantic_warnings,
+            telemetry != nullptr ? &semantic_telemetry : nullptr);
+    if (telemetry != nullptr) {
+        telemetry->semantic_ns = elapsed_ns(semantic_started);
+        telemetry->header_ns = semantic_telemetry.header_ns;
+        telemetry->include_ns = semantic_telemetry.include_ns;
+        telemetry->include_count = semantic_telemetry.include_count;
+        telemetry->include_lexical_ns = semantic_telemetry.include_lexical_ns;
+        telemetry->prepared_include_count = semantic_telemetry.prepared_include_count;
+        telemetry->source_ns = semantic_telemetry.source_ns;
+        telemetry->source_object_ns = semantic_telemetry.source_object_ns;
+        telemetry->source_assignment_ns = semantic_telemetry.source_assignment_ns;
+        telemetry->source_link_ns = semantic_telemetry.source_link_ns;
+        telemetry->source_endpoint_ns = semantic_telemetry.source_endpoint_ns;
+        telemetry->source_member_ns = semantic_telemetry.source_member_ns;
+        telemetry->source_member_lookups = semantic_telemetry.source_member_lookups;
+        telemetry->source_initialization_commit_ns = semantic_telemetry.source_initialization_commit_ns;
+        telemetry->source_link_commit_ns = semantic_telemetry.source_link_commit_ns;
+        telemetry->source_provenance_ns = semantic_telemetry.source_provenance_ns;
+        telemetry->source_decode_ns = semantic_telemetry.source_decode_ns;
+        telemetry->source_intern_ns = semantic_telemetry.source_intern_ns;
+        telemetry->source_token_count = semantic_telemetry.source_token_count;
+        telemetry->source_identifier_count = semantic_telemetry.source_identifier_count;
+
+
+        telemetry->source_finalize_ns = semantic_telemetry.finalize_ns;
+    }
 
     const auto warnings_emitted =
         emit_parser_warnings(
@@ -978,9 +1106,12 @@ server_status construct_full_project(
         return server_status::io_error;
     }
 
+    const auto persistence_started = telemetry != nullptr
+        ? clock_type::now() : clock_type::time_point{};
     full_persistence_job persistence{
         layout,
-        context};
+        context,
+        telemetry};
 
     persistence.artifact_count =
         mode == full_construction_mode::publish
@@ -1050,7 +1181,8 @@ server_status construct_full_project(
                 compiled_index] =
                     persist_compiled(
                         layout,
-                        context);
+                        context,
+                        telemetry);
         }
 
         for (std::size_t index = 1;
@@ -1073,6 +1205,7 @@ server_status construct_full_project(
             }
         }
     }
+    if (telemetry != nullptr) { telemetry->persistence_ns = elapsed_ns(persistence_started); }
 
     const auto compiled_index =
         static_cast<std::size_t>(
@@ -1164,6 +1297,8 @@ server_status construct_full_project(
         diagnostics);
     }
 
+    const auto resident_started = telemetry != nullptr
+        ? clock_type::now() : clock_type::time_point{};
     read_only_file_mapping resident_mapping;
 
     if (resident_mapping.open(
@@ -1201,7 +1336,7 @@ server_status construct_full_project(
             project_artifact_invalid;
     }
 
-    return create_resident_project(
+    const auto resident_result = create_resident_project(
         project_path,
         settings,
         operation,
@@ -1209,6 +1344,8 @@ server_status construct_full_project(
         std::move(resident_mapping),
         resident_compiled,
         output);
+    if (telemetry != nullptr) { telemetry->resident_ns = elapsed_ns(resident_started); }
+    return resident_result;
         }();
 
     if (succeeded(rebuilt)) {

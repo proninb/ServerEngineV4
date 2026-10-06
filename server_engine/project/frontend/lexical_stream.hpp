@@ -49,6 +49,7 @@ public:
         return source_file;
     }
 
+
     [[nodiscard]] std::span<const std::uint32_t> words() const noexcept {
         return {
             values.get(),
@@ -81,6 +82,10 @@ public:
     }
 
 private:
+    friend class semantic_input;
+    // File-local words adopt an identity only when their exact prepared
+    // physical snapshot is committed by active include replay.
+    void bind_prepared_file(file_id file) noexcept { source_file = file; }
     [[nodiscard]] server_status reserve_words(
         std::size_t required) noexcept;
 

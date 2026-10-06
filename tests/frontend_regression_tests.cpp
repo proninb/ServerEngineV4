@@ -797,6 +797,62 @@ void test_conditional_entry_floor(
     return source;
 }
 
+void test_parallel_include_preparation(test_state& tests) {
+    std::vector<std::unique_ptr<temporary_source>> children;
+    std::string text;
+    for (int i = 0; i < 8; ++i) {
+        children.push_back(std::make_unique<temporary_source>(
+            "parallel_include_child", std::string{"#pragma once\n"} +
+            (i == 0 ? "#define ENABLE_PREPARED\n" : "") + "struct Name" + std::to_string(i) + " {};\n"));
+        if (i == 1) text += "#ifdef ENABLE_PREPARED\n";
+        text += "#include \"" + children.back()->path().filename().string() + "\"\n";
+        if (i == 1) text += "#endif\n";
+    }
+    const temporary_source invalid{"parallel_inactive_invalid", "/* unterminated"};
+    text += "#ifdef NEVER_PREPARED\n#include \"" + invalid.path().filename().string() +
+        "\"\n#include \"parallel_include_missing.h\"\n#endif\n";
+    const temporary_source root{"parallel_include_root", text};
+    file_context files;
+    lexical_generation lexical;
+    file_id root_id;
+    if (!prepare_root(tests, root.path(), files, lexical, root_id)) return;
+    preprocessor_configuration configuration;
+    string_table strings;
+    semantic_input_telemetry preparation;
+    semantic_input input{files, lexical, configuration, strings, &preparation};
+    for (int replay = 0; replay < 2; ++replay) {
+        auto status = input.start(root_id, semantic_input_mode::header);
+        std::size_t count = 0;
+        while (succeeded(status) && !input.finished()) {
+            semantic_token token;
+            status = input.next(token);
+            if (succeeded(status) && token.kind == token_kind::identifier) {
+                tests.expect(strings.get(token.identifier) == "Name" + std::to_string(count),
+                    "prepared includes preserve order and included macro effects");
+                ++count;
+            }
+        }
+        tests.expect(succeeded(status) && count == 8,
+            "parallel preparation ignores inactive lexical errors and missing includes");
+        tests.expect(files.size() == 9, "speculative includes do not create file identities");
+        tests.expect(preparation.prepared_include_count == 8,
+            "parallel snapshots are adopted once and reused on root replay");
+    }
+    parser_failure failure;
+    const temporary_source active_invalid{"parallel_active_invalid",
+        text + "#include \"" + invalid.path().filename().string() + "\"\n"};
+    tests.expect(!succeeded(parse_file(tests, active_invalid.path(), failure)),
+        "active speculative lexical failure remains an error");
+    tests.expect(failure.kind == parser_failure_kind::lexical,
+        "active speculative invalid bytes retain lexical diagnostics");
+    const temporary_source active_missing{"parallel_active_missing",
+        text + "#include \"parallel_include_missing.h\"\n"};
+    tests.expect(!succeeded(parse_file(tests, active_missing.path(), failure)),
+        "active speculative missing include remains an error");
+    tests.expect(failure.kind == parser_failure_kind::preprocessing,
+        "active speculative missing file retains preprocessing diagnostics");
+}
+
 void test_pragma_once_and_angled_includes(test_state& tests) {
     const temporary_source child{"pragma_once_child",
         "#pragma once // physical file guard\nVALUE\n"};
@@ -1261,6 +1317,60 @@ void test_sparse_semantic_replay_order(
         "BUILD provenance retains canonical Header then Source replay order");
 }
 
+
+void test_flat_source_cursor(test_state& tests) {
+    const std::string text = "alpha;" + std::string(70000, ' ') +
+        "alpha = \"" + std::string(400, 'x') + "\";";
+    const temporary_source source{"flat_source_cursor", text};
+    file_context files;
+    lexical_generation lexical;
+    file_id root;
+    if (!prepare_root(tests, source.path(), files, lexical, root, file_kind::source)) return;
+    string_table strings;
+    string_id alpha;
+    tests.expect(succeeded(strings.intern("alpha", alpha)), "intern Source name");
+    preprocessor_configuration configuration;
+    configuration.predefines.push_back({"alpha", "replacement"});
+    semantic_input_telemetry telemetry;
+    semantic_input source_input{files, lexical, configuration, strings, &telemetry};
+    for (int replay = 0; replay != 2; ++replay) {
+        frontend_input reference{lexical};
+        tests.expect(succeeded(reference.start(root)), "start stack cursor reference");
+        tests.expect(succeeded(source_input.start(root, semantic_input_mode::source)), "start flat Source cursor");
+        while (!reference.finished()) {
+            frontend_token expected;
+            semantic_token actual;
+            if (!tests.expect(succeeded(reference.next(expected)) && succeeded(source_input.next(actual)),
+                "decode Source with extended delta and length")) return;
+            tests.expect(actual.file == expected.file && actual.kind == expected.kind &&
+                actual.source_offset == expected.source_offset && actual.source_length == expected.source_length,
+                "flat Source matches stack cursor positions");
+            if (actual.kind == token_kind::identifier)
+                tests.expect(actual.identifier == alpha, "Source ignores Header predefines and preserves identifier");
+            else tests.expect(!actual.identifier, "nonidentifier has no stale name");
+        }
+        semantic_token eof;
+        tests.expect(succeeded(source_input.next(eof)) && source_input.finished() &&
+            eof.kind == token_kind::invalid && !eof.file, "flat Source EOF and replay reset");
+        tests.expect(!succeeded(source_input.next(eof)), "Source rejects read after EOF");
+    }
+    tests.expect(telemetry.source_identifier_count == 4 && telemetry.source_token_count == 12,
+        "Source cursor counts successful tokens across replays");
+
+    // Encoded descriptors use the same decoder without borrowing a native arena.
+    const std::array<std::uint32_t, 3> words{
+        lexical_token::make(token_kind::string_literal, lexical_token::extended_delta,
+            lexical_token::extended_length).value(), 70000, 402};
+    const auto encoded = lexical_word_view::from_encoded(std::as_bytes(std::span{words}));
+    std::uint32_t position = 0, offset = 0;
+    semantic_token token;
+    tests.expect(succeeded(decode_frontend_token(encoded, root, position, offset, token)) &&
+        position == 3 && token.source_offset == 70000 && token.source_length == 402,
+        "Source decoder handles encoded extended fields");
+    position = 0; offset = 0;
+    tests.expect(!succeeded(decode_frontend_token(std::span{words}.first(2), root, position, offset, token)) &&
+        position == 0 && offset == 0, "truncated extension leaves cursor position unchanged");
+}
 
 void test_source_preprocessor_rejected(
     test_state& tests) {
@@ -3613,6 +3723,7 @@ int main() {
         test_source_value_initialization(
             tests);
 
+        test_flat_source_cursor(tests);
         test_source_value_initialization_last_wins(
             tests);
 
@@ -3655,6 +3766,7 @@ int main() {
             tests);
 
         test_pragma_once_and_angled_includes(tests);
+        test_parallel_include_preparation(tests);
         test_self_include_guard(
             tests);
 

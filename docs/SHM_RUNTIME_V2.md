@@ -1096,7 +1096,8 @@ reference/differential implementation while Runtime V2 stabilization continues.
 
 The legacy `load-profile` interface was removed because its counters described
 the old fixed_direct materializer rather than the production Runtime V2 path.
-Normal LOAD telemetry already exposes the V2 prepare/materialization phases.
+The current benchmark-only `load-profile` mode reports Runtime V2 telemetry;
+ordinary `load` runs without telemetry, matching the Server path.
 
 
 ## RUNTIME-V2-AUDIT-06
@@ -1832,3 +1833,72 @@ longer persisted multiple times.
 This optimization does not change Graph WHO/WHERE identity, Stable-WHERE,
 sparse BUILD semantics, FIXED_DIRECT SHM ABI, Object scheduling, link phase
 order or Runtime lifecycle behavior.
+
+## RUNTIME-SHM-TYPE-PROGRAM-DUPLICATION-PROFILE-09D-13
+
+09D-12 removed 95.38% of persisted relative-reference records by sharing exact
+whole programs through the existing `type_api.{begin,count}` range. It kept the
+accepted direct Runtime executor unchanged.
+
+09D-13 is diagnostic-only and asks whether the same architectural optimization
+is materially useful for the remaining immutable Type API columns:
+
+```text
+absolute_references
+object_references
+stores
+post_stores
+children
+repeats
+```
+
+The profiler uses a deliberately strict equality rule: two programs are equal
+only when their complete physical record sequences are byte-identical.
+
+This is a conservative lower bound. In particular:
+
+```text
+store programs
+    different constant indexes -> different
+
+child/repeat programs
+    different type_api indexes -> different
+```
+
+even if some deeper semantic equivalence might theoretically exist. No such
+equivalence is assumed by this slice.
+
+For each column the profile reports:
+
+```text
+physical records
+unique exact programs
+duplicate API copies
+duplicate physical records
+potential persisted bytes removable
+Object-phase execution operations
+Object-phase operations belonging to duplicated programs
+maximum exact-program API copy count
+```
+
+Storage metrics inspect all persisted Type APIs. Execution-weighted metrics use
+only Object roots and propagate exact multiplicity through Child/Repeat edges.
+The static Object API application count is printed beside the existing dynamic
+Object executor count and must match.
+
+Hashing is only a diagnostic candidate accelerator. Every hash candidate is
+verified by exact byte comparison before it is grouped.
+
+The profiler runs only when Runtime prepare telemetry is requested. Normal
+Server LOAD with null telemetry performs none of this analysis. The diagnostic
+LOAD timing is therefore not a production performance measurement.
+
+`ServerEngineV4PublishBenchmark load` passes a null Runtime telemetry pointer,
+matching the normal Server LOAD path. Use it for end-to-end LOAD comparisons.
+`ServerEngineV4PublishBenchmark load-profile` requests detailed phase and
+program-duplication telemetry. Run each mode in a separate process and compare
+production timings only with other `load` runs from the same artifact and build.
+
+09D-13 changes no compiled.bin format, persisted record, Type API range,
+PUBLISH output, Runtime executor, SHM ABI, scheduling policy, Stable-WHERE
+contract or lifecycle semantics.

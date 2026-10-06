@@ -4812,6 +4812,641 @@ runtime_type_records(
 
 }
 
+shm_type_batch_result
+profile_shm_type_batch_program_duplication(
+    const shm_type_batch& area,
+    shm_type_batch_program_duplication_profile& output) noexcept {
+
+    output = {};
+
+    try {
+        if (!area.prepared_value) {
+            return shm_type_batch_result::invalid_input;
+        }
+
+        const auto type_apis =
+            area.type_apis_view();
+
+        const auto objects =
+            area.objects_view();
+
+        const auto children =
+            area.children_view();
+
+        const auto repeats =
+            area.repeats_view();
+
+        std::vector<std::uint64_t>
+            multiplicity(
+                type_apis.size() + 1,
+                0);
+
+        std::vector<std::uint8_t>
+            root_seen(
+                type_apis.size() + 1,
+                0);
+
+        const auto add =
+            [](std::uint64_t& target,
+               std::uint64_t value) noexcept {
+
+                if (value >
+                    (std::numeric_limits<
+                        std::uint64_t>::max)() -
+                        target) {
+
+                    return false;
+                }
+
+                target += value;
+                return true;
+            };
+
+        const auto multiply =
+            [](std::uint64_t left,
+               std::uint64_t right,
+               std::uint64_t& value) noexcept {
+
+                value = 0;
+
+                if (left != 0 &&
+                    right >
+                        (std::numeric_limits<
+                            std::uint64_t>::max)() /
+                            left) {
+
+                    return false;
+                }
+
+                value = left * right;
+                return true;
+            };
+
+        const auto valid_range =
+            [](shm_type_batch::range range,
+               std::size_t size) noexcept {
+
+                const auto begin =
+                    static_cast<std::size_t>(
+                        range.begin);
+
+                const auto count =
+                    static_cast<std::size_t>(
+                        range.count);
+
+                return
+                    begin <= size &&
+                    count <= size - begin;
+            };
+
+        for (const auto& object : objects) {
+            if (object.type_api >
+                type_apis.size()) {
+
+                return shm_type_batch_result::
+                    invalid_input;
+            }
+
+            if (object.type_api == 0) {
+                continue;
+            }
+
+            if (!add(
+                    multiplicity[object.type_api],
+                    1)) {
+
+                return shm_type_batch_result::
+                    overflow;
+            }
+
+            if (root_seen[object.type_api] == 0) {
+                root_seen[object.type_api] = 1;
+
+                if (!add(
+                        output.object_root_apis,
+                        1)) {
+
+                    return shm_type_batch_result::
+                        overflow;
+                }
+            }
+        }
+
+        // Dependency APIs are created before their parent. Descending
+        // propagation therefore reproduces exact Object execution
+        // multiplicity without instrumenting the hot executor.
+        for (std::size_t slot =
+                 type_apis.size();
+             slot != 0;
+             --slot) {
+
+            const auto applications =
+                multiplicity[slot];
+
+            if (applications == 0) {
+                continue;
+            }
+
+            if (!add(
+                    output.object_reachable_apis,
+                    1) ||
+                !add(
+                    output.object_api_applications,
+                    applications)) {
+
+                return shm_type_batch_result::
+                    overflow;
+            }
+
+            const auto& api =
+                type_apis[slot - 1];
+
+            if (!valid_range(
+                    api.children,
+                    children.size()) ||
+                !valid_range(
+                    api.repeats,
+                    repeats.size())) {
+
+                return shm_type_batch_result::
+                    invalid_input;
+            }
+
+            for (std::uint32_t index = 0;
+                 index < api.children.count;
+                 ++index) {
+
+                const auto& child =
+                    children[
+                        static_cast<std::size_t>(
+                            api.children.begin) +
+                        index];
+
+                if (child.type_api == 0 ||
+                    child.type_api >= slot) {
+
+                    return shm_type_batch_result::
+                        invalid_input;
+                }
+
+                if (!add(
+                        multiplicity[child.type_api],
+                        applications)) {
+
+                    return shm_type_batch_result::
+                        overflow;
+                }
+            }
+
+            for (std::uint32_t index = 0;
+                 index < api.repeats.count;
+                 ++index) {
+
+                const auto& repeat =
+                    repeats[
+                        static_cast<std::size_t>(
+                            api.repeats.begin) +
+                        index];
+
+                if (repeat.type_api == 0 ||
+                    repeat.type_api >= slot ||
+                    repeat.count == 0) {
+
+                    return shm_type_batch_result::
+                        invalid_input;
+                }
+
+                std::uint64_t repeated = 0;
+
+                if (!multiply(
+                        applications,
+                        repeat.count,
+                        repeated) ||
+                    !add(
+                        multiplicity[repeat.type_api],
+                        repeated)) {
+
+                    return shm_type_batch_result::
+                        overflow;
+                }
+            }
+        }
+
+        const auto profile_column =
+            [&]<typename T>(
+                std::span<const T> records,
+                auto range_of,
+                shm_type_batch_program_column_profile&
+                    profile)
+                -> shm_type_batch_result {
+
+            profile = {};
+            profile.physical_records =
+                static_cast<std::uint64_t>(
+                    records.size());
+
+            struct program_group final {
+                std::uint32_t representative_begin = 0;
+                std::uint32_t count = 0;
+
+                std::uint64_t api_copies = 0;
+                std::uint64_t object_applications = 0;
+
+                std::vector<std::uint32_t>
+                    physical_begins;
+            };
+
+            std::vector<program_group>
+                groups;
+
+            std::unordered_map<
+                std::uint64_t,
+                std::vector<std::size_t>>
+                buckets;
+
+            groups.reserve(
+                type_apis.size());
+
+            buckets.reserve(
+                type_apis.size());
+
+            const auto hash_program =
+                [&](shm_type_batch::range range) noexcept {
+
+                    std::uint64_t hash =
+                        1469598103934665603ull;
+
+                    const auto mix_byte =
+                        [&hash](
+                            std::uint8_t value) noexcept {
+
+                            hash ^= value;
+                            hash *=
+                                1099511628211ull;
+                        };
+
+                    for (std::uint32_t shift = 0;
+                         shift < 32;
+                         shift += 8) {
+
+                        mix_byte(
+                            static_cast<std::uint8_t>(
+                                range.count >>
+                                shift));
+                    }
+
+                    for (std::uint32_t index = 0;
+                         index < range.count;
+                         ++index) {
+
+                        const auto& record =
+                            records[
+                                static_cast<std::size_t>(
+                                    range.begin) +
+                                index];
+
+                        const auto* bytes =
+                            reinterpret_cast<
+                                const std::uint8_t*>(
+                                    &record);
+
+                        for (std::size_t byte = 0;
+                             byte < sizeof(T);
+                             ++byte) {
+
+                            mix_byte(bytes[byte]);
+                        }
+                    }
+
+                    return hash;
+                };
+
+            const auto same_program =
+                [&](const program_group& group,
+                    shm_type_batch::range range) noexcept {
+
+                    if (group.count != range.count) {
+                        return false;
+                    }
+
+                    const auto count =
+                        static_cast<std::size_t>(
+                            range.count);
+
+                    if (count == 0) {
+                        return true;
+                    }
+
+                    return
+                        std::memcmp(
+                            records.data() +
+                                group.representative_begin,
+                            records.data() +
+                                range.begin,
+                            count * sizeof(T)) == 0;
+                };
+
+            for (std::size_t api_index = 0;
+                 api_index < type_apis.size();
+                 ++api_index) {
+
+                const auto range =
+                    range_of(
+                        type_apis[api_index]);
+
+                if (!valid_range(
+                        range,
+                        records.size())) {
+
+                    return shm_type_batch_result::
+                        invalid_input;
+                }
+
+                if (range.count == 0) {
+                    continue;
+                }
+
+                if (!add(
+                        profile.nonempty_apis,
+                        1)) {
+
+                    return shm_type_batch_result::
+                        overflow;
+                }
+
+                std::uint64_t execution_operations = 0;
+
+                if (!multiply(
+                        multiplicity[api_index + 1],
+                        range.count,
+                        execution_operations) ||
+                    !add(
+                        profile.object_execution_operations,
+                        execution_operations)) {
+
+                    return shm_type_batch_result::
+                        overflow;
+                }
+
+                const auto hash =
+                    hash_program(
+                        range);
+
+                auto& candidates =
+                    buckets[hash];
+
+                std::size_t group_index =
+                    groups.size();
+
+                for (const auto candidate :
+                     candidates) {
+
+                    if (candidate >=
+                            groups.size()) {
+
+                        return shm_type_batch_result::
+                            invalid_input;
+                    }
+
+                    if (same_program(
+                            groups[candidate],
+                            range)) {
+
+                        group_index =
+                            candidate;
+                        break;
+                    }
+                }
+
+                if (group_index ==
+                    groups.size()) {
+
+                    program_group group;
+
+                    group.representative_begin =
+                        range.begin;
+
+                    group.count =
+                        range.count;
+
+                    group.physical_begins.push_back(
+                        range.begin);
+
+                    groups.push_back(
+                        std::move(group));
+
+                    candidates.push_back(
+                        group_index);
+                }
+
+                auto& group =
+                    groups[group_index];
+
+                if (!add(
+                        group.api_copies,
+                        1) ||
+                    !add(
+                        group.object_applications,
+                        multiplicity[
+                            api_index + 1])) {
+
+                    return shm_type_batch_result::
+                        overflow;
+                }
+
+                if (std::find(
+                        group.physical_begins.begin(),
+                        group.physical_begins.end(),
+                        range.begin) ==
+                    group.physical_begins.end()) {
+
+                    group.physical_begins.push_back(
+                        range.begin);
+                }
+            }
+
+            profile.unique_programs =
+                static_cast<std::uint64_t>(
+                    groups.size());
+
+            for (const auto& group : groups) {
+                profile.max_api_copies =
+                    (std::max)(
+                        profile.max_api_copies,
+                        group.api_copies);
+
+                if (group.api_copies > 1) {
+                    if (!add(
+                            profile.duplicate_api_copies,
+                            group.api_copies - 1)) {
+
+                        return shm_type_batch_result::
+                            overflow;
+                    }
+
+                    std::uint64_t operations = 0;
+
+                    if (!multiply(
+                            group.object_applications,
+                            group.count,
+                            operations) ||
+                        !add(
+                            profile.
+                                duplicated_object_execution_operations,
+                            operations)) {
+
+                        return shm_type_batch_result::
+                            overflow;
+                    }
+                }
+
+                const auto physical_copies =
+                    static_cast<std::uint64_t>(
+                        group.physical_begins.size());
+
+                if (physical_copies > 1) {
+                    std::uint64_t duplicate_records = 0;
+
+                    if (!multiply(
+                            physical_copies - 1,
+                            group.count,
+                            duplicate_records) ||
+                        !add(
+                            profile.
+                                duplicate_physical_records,
+                            duplicate_records)) {
+
+                        return shm_type_batch_result::
+                            overflow;
+                    }
+                }
+            }
+
+            if (profile.duplicate_physical_records >
+                profile.physical_records) {
+
+                return shm_type_batch_result::
+                    invalid_input;
+            }
+
+            if (!multiply(
+                    profile.duplicate_physical_records,
+                    sizeof(T),
+                    profile.potential_bytes_removed)) {
+
+                return shm_type_batch_result::
+                    overflow;
+            }
+
+            return shm_type_batch_result::success;
+        };
+
+        auto result =
+            profile_column(
+                area.absolute_references_view(),
+                [](const auto& api) noexcept {
+                    return api.absolute_references;
+                },
+                output.absolute_references);
+
+        if (result != shm_type_batch_result::success) {
+            output = {};
+            return result;
+        }
+
+        result =
+            profile_column(
+                area.object_references_view(),
+                [](const auto& api) noexcept {
+                    return api.object_references;
+                },
+                output.object_references);
+
+        if (result != shm_type_batch_result::success) {
+            output = {};
+            return result;
+        }
+
+        result =
+            profile_column(
+                area.stores_view(),
+                [](const auto& api) noexcept {
+                    return api.stores;
+                },
+                output.stores);
+
+        if (result != shm_type_batch_result::success) {
+            output = {};
+            return result;
+        }
+
+        result =
+            profile_column(
+                area.post_stores_view(),
+                [](const auto& api) noexcept {
+                    return api.post_stores;
+                },
+                output.post_stores);
+
+        if (result != shm_type_batch_result::success) {
+            output = {};
+            return result;
+        }
+
+        result =
+            profile_column(
+                area.children_view(),
+                [](const auto& api) noexcept {
+                    return api.children;
+                },
+                output.children);
+
+        if (result != shm_type_batch_result::success) {
+            output = {};
+            return result;
+        }
+
+        result =
+            profile_column(
+                area.repeats_view(),
+                [](const auto& api) noexcept {
+                    return api.repeats;
+                },
+                output.repeats);
+
+        if (result != shm_type_batch_result::success) {
+            output = {};
+            return result;
+        }
+
+        const auto add_potential =
+            [&](const auto& profile) noexcept {
+
+                return add(
+                    output.total_potential_bytes_removed,
+                    profile.potential_bytes_removed);
+            };
+
+        if (!add_potential(output.absolute_references) ||
+            !add_potential(output.object_references) ||
+            !add_potential(output.stores) ||
+            !add_potential(output.post_stores) ||
+            !add_potential(output.children) ||
+            !add_potential(output.repeats)) {
+
+            output = {};
+            return shm_type_batch_result::overflow;
+        }
+
+        return shm_type_batch_result::success;
+    }
+    catch (...) {
+        output = {};
+        return shm_type_batch_result::failed;
+    }
+}
+
+
 void shm_type_batch_compiled_counts(
     const shm_type_batch& area,
     compiled_project_runtime_type_counts& output) noexcept {
@@ -5109,6 +5744,17 @@ attach_shm_type_batch_physical_columns(
             output.persisted_canonical_roots.size();
         telemetry->inline_leaf_limit = 64;
         telemetry->resident_bytes = 0;
+
+        const auto profiled =
+            profile_shm_type_batch_program_duplication(
+                output,
+                telemetry->
+                    program_duplication_profile);
+
+        telemetry->
+            program_duplication_profile_valid =
+                profiled ==
+                    shm_type_batch_result::success;
     }
 
     return shm_type_batch_result::

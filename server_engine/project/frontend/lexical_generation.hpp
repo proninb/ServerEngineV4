@@ -91,6 +91,9 @@ public:
     [[nodiscard]] std::size_t size() const noexcept { return count; }
     [[nodiscard]] bool empty() const noexcept { return count == 0; }
     [[nodiscard]] std::uint32_t operator[](std::size_t index) const noexcept;
+    // Borrow only while this arena cannot grow (one Source root has no includes).
+    // Encoded baseline storage uses the stable descriptor instead.
+    [[nodiscard]] std::span<const std::uint32_t> native_words() const noexcept;
     [[nodiscard]] iterator begin() const noexcept { return iterator{this, 0}; }
     [[nodiscard]] iterator end() const noexcept { return iterator{this, count}; }
 

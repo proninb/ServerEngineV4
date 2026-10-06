@@ -7,6 +7,7 @@
 #include <array>
 #include <bit>
 #include <charconv>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <string_view>
@@ -15,6 +16,18 @@
 
 namespace cw::server {
 namespace {
+
+struct parser_stage_timer final {
+    using clock_type = std::chrono::steady_clock;
+    std::uint64_t* elapsed;
+    clock_type::time_point started;
+    explicit parser_stage_timer(std::uint64_t* value) noexcept
+        : elapsed(value), started(value != nullptr ? clock_type::now() : clock_type::time_point{}) {}
+    ~parser_stage_timer() noexcept {
+        if (elapsed != nullptr) *elapsed += static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(clock_type::now() - started).count());
+    }
+};
 
 [[nodiscard]] constexpr bool builtin_start(
     token_kind kind) noexcept {
@@ -127,19 +140,23 @@ public:
         Graph& G,
         Sources& sources,
         parser_failure* failure,
-        std::vector<parser_warning>* warnings) noexcept
+        std::vector<parser_warning>* warnings,
+        semantic_input_telemetry* input_telemetry = nullptr,
+        semantic_parse_telemetry* parse_telemetry = nullptr) noexcept
         : files(files_value),
           input(
               files_value,
               lexical,
               configuration,
-              strings),
+              strings,
+              input_telemetry),
           strings(strings),
           identities(identities),
           G(G),
           sources(sources),
           failure(failure),
-          warnings(warnings) {
+          warnings(warnings),
+          telemetry(parse_telemetry) {
     }
 
     [[nodiscard]] server_status parse(
@@ -196,6 +213,7 @@ public:
     }
 
 private:
+
     [[nodiscard]] bool read_type(
         type_handle type,
         type_entry& output) const noexcept {
@@ -228,9 +246,18 @@ private:
         if (depth >= parser_scope_depth_limit) {
             return fail(parser_failure_kind::unsupported, "Inherited member lookup exceeds supported depth");
         }
-        auto dependency = sources.add_dependency(G.identity(record));
-        if (!succeeded(dependency)) { return dependency; }
-        member = G.find_member(record, name);
+        // The endpoint registers the selected record before consuming '.name'.
+        // Only inherited records still need registration here.
+        if (depth != 0) {
+            const auto dependency = sources.add_dependency(G.identity(record));
+            if (!succeeded(dependency)) { return dependency; }
+        }
+        {
+            parser_stage_timer timer{domain == semantic_domain::source && telemetry != nullptr
+                ? &telemetry->source_member_ns : nullptr};
+            if (domain == semantic_domain::source && telemetry != nullptr) ++telemetry->source_member_lookups;
+            member = G.find_member(record, name);
+        }
         if (member) { owner = record; return server_status::success; }
         type_entry entry;
         if (!read_type(record, entry)) { return server_status::project_configuration_invalid; }
@@ -3700,6 +3727,8 @@ private:
 
     [[nodiscard]] server_status parse_object(
         identity_ref scope) noexcept {
+        parser_stage_timer timer{domain == semantic_domain::source && telemetry != nullptr
+            ? &telemetry->source_object_ns : nullptr};
 
         bool static_storage = false;
         bool inline_storage = false;
@@ -3962,7 +3991,10 @@ private:
 
     [[nodiscard]] server_status endpoint(
         identity_ref scope,
-        resolved_link_endpoint& output) noexcept {
+        resolved_link_endpoint& output,
+        identity_ref known_object = {}) noexcept {
+        parser_stage_timer timer{domain == semantic_domain::source && telemetry != nullptr
+            ? &telemetry->source_endpoint_ns : nullptr};
 
         output = {};
         endpoint_steps.clear();
@@ -3981,7 +4013,7 @@ private:
             current_location();
 
         const auto object_identity =
-            find_object_identity(
+            known_object ? known_object : find_object_identity(
                 scope,
                 current.identifier);
 
@@ -4211,11 +4243,8 @@ private:
 
                 member_index member;
                 type_handle owner;
-                std::vector<endpoint_path_step> inherited;
-                status = inherited_member_path(record, current.identifier, inherited, owner, member);
+                status = inherited_member_path(record, current.identifier, endpoint_steps, owner, member);
                 if (!succeeded(status)) { return status; }
-                try { endpoint_steps.insert(endpoint_steps.end(), inherited.begin(), inherited.end()); }
-                catch (...) { return server_status::io_error; }
                 if (member) { record = owner; }
 
                 if (!member) {
@@ -4307,12 +4336,18 @@ private:
         endpoint_path_handle path;
         type_ref resolved;
 
-        status =
-            G.intern_endpoint_path(
-                object_value.type,
-                endpoint_steps,
-                path,
-                &resolved);
+        if constexpr (std::is_same_v<Graph, graph>) {
+            if (domain == semantic_domain::source) {
+                resolved = current_type;
+                status = G.intern_resolved_endpoint_path(object_value.type, endpoint_steps, resolved, path);
+            }
+            else {
+                status = G.intern_endpoint_path(object_value.type, endpoint_steps, path, &resolved);
+            }
+        }
+        else {
+            status = G.intern_endpoint_path(object_value.type, endpoint_steps, path, &resolved);
+        }
 
         if (!succeeded(status) ||
             !path ||
@@ -4392,6 +4427,32 @@ private:
         return server_status::success;
     }
 
+    [[nodiscard]] server_status commit_source_initialization(
+        object_endpoint target, type_ref type, construction_value value, bool& replaced) noexcept {
+        parser_stage_timer timer{telemetry != nullptr ? &telemetry->source_initialization_commit_ns : nullptr};
+        if constexpr (std::is_same_v<Graph, graph>)
+            return G.add_resolved_initialization(target, type, value, replaced);
+        else return G.add_initialization(target, value, replaced);
+    }
+
+    [[nodiscard]] server_status commit_source_link(
+        object_endpoint source, object_endpoint target, link_handle& output) noexcept {
+        parser_stage_timer timer{telemetry != nullptr ? &telemetry->source_link_commit_ns : nullptr};
+        if constexpr (std::is_same_v<Graph, graph>)
+            return G.add_resolved_link(source, target, output);
+        else return G.add_link(source, target, output);
+    }
+
+    [[nodiscard]] server_status record_source_initialization(object_endpoint target) noexcept {
+        parser_stage_timer timer{telemetry != nullptr ? &telemetry->source_provenance_ns : nullptr};
+        return sources.add_initialization(target);
+    }
+
+    [[nodiscard]] server_status record_source_data(file_id file, source_data_ref data) noexcept {
+        parser_stage_timer timer{telemetry != nullptr ? &telemetry->source_provenance_ns : nullptr};
+        return sources.add(file, data);
+    }
+
     [[nodiscard]] server_status parse_source_string_assignment(
         const resolved_link_endpoint& target, file_id statement_file) noexcept {
         derived_type_record array;
@@ -4416,19 +4477,24 @@ private:
         for (std::uint64_t i = 0; i < array.payload; ++i) {
             endpoint_steps.back().value = i;
             endpoint_path_handle path;
-            status = G.intern_endpoint_path(object.type, endpoint_steps, path);
+            if constexpr (std::is_same_v<Graph, graph>) {
+                status = G.intern_resolved_endpoint_path(object.type, endpoint_steps, array.child, path);
+            }
+            else {
+                status = G.intern_endpoint_path(object.type, endpoint_steps, path);
+            }
             if (!succeeded(status)) { return status; }
             const object_endpoint element{target.endpoint.object, endpoint_ref::from_path(path)};
             const auto value = construction_value::constant(construction_kind::unsigned_integer,
                 i < bytes.size() ? bytes[static_cast<std::size_t>(i)] : 0);
             bool replaced = false;
-            status = G.add_initialization(element, value, replaced);
+            status = commit_source_initialization(element, array.child, value, replaced);
             if (!succeeded(status)) { return status; }
             any_replaced |= replaced;
-            status = sources.add_initialization(element);
+            status = record_source_initialization(element);
             if (!succeeded(status)) { return status; }
         }
-        status = sources.add(statement_file, source_data_ref::object(target.endpoint.object));
+        status = record_source_data(statement_file, source_data_ref::object(target.endpoint.object));
         if (!succeeded(status)) { return status; }
         if (any_replaced) {
             status = warn_at(parser_warning_kind::duplicate_initialization,
@@ -4439,7 +4505,8 @@ private:
     }
 
     [[nodiscard]] server_status parse_source_assignment(
-        identity_ref scope) noexcept {
+        identity_ref scope, identity_ref target_object) noexcept {
+        parser_stage_timer timer{telemetry != nullptr ? &telemetry->source_assignment_ns : nullptr};
 
         if (domain != semantic_domain::source) {
             return fail(
@@ -4455,7 +4522,7 @@ private:
         auto status =
             endpoint(
                 scope,
-                target);
+                target, target_object);
 
         if (!succeeded(status)) {
             return status;
@@ -4481,6 +4548,7 @@ private:
         if (reference_referent(
                 target.type,
                 target_referent)) {
+            if (telemetry != nullptr) timer.elapsed = &telemetry->source_link_ns;
 
             resolved_link_endpoint source;
 
@@ -4515,7 +4583,7 @@ private:
             link_handle link;
 
             status =
-                G.add_link(
+                commit_source_link(
                     source.endpoint,
                     target.endpoint,
                     link);
@@ -4527,7 +4595,7 @@ private:
             }
 
             status =
-                sources.add(
+                record_source_data(
                     statement_file,
                     source_data_ref::link(
                         link));
@@ -4588,8 +4656,8 @@ private:
         bool replaced = false;
 
         status =
-            G.add_initialization(
-                target.endpoint,
+            commit_source_initialization(
+                target.endpoint, target.type,
                 initial.value,
                 replaced);
 
@@ -4601,7 +4669,7 @@ private:
         }
 
         status =
-            sources.add_initialization(
+            record_source_initialization(
                 target.endpoint);
 
         if (!succeeded(status)) {
@@ -4621,7 +4689,7 @@ private:
         }
 
         status =
-            sources.add(
+            record_source_data(
                 statement_file,
                 source_data_ref::object(
                     object_identity));
@@ -4678,6 +4746,9 @@ private:
         bool expect_close,
         std::size_t scope_depth) noexcept {
 
+        if (domain == semantic_domain::source)
+            return parse_source_scope(scope, expect_close, scope_depth);
+
         for (;;) {
             if (at(token_kind::invalid)) {
                 return expect_close
@@ -4732,23 +4803,6 @@ private:
                 continue;
             }
 
-            if (domain == semantic_domain::source &&
-                at(token_kind::identifier) &&
-                current.identifier &&
-                find_object_identity(
-                    scope,
-                    current.identifier)) {
-
-                const auto status =
-                    parse_source_assignment(
-                        scope);
-
-                if (!succeeded(status)) {
-                    return status;
-                }
-                continue;
-            }
-
             if (builtin_start(current.kind) ||
                 at(token_kind::kw_const) ||
                 at(token_kind::kw_volatile) ||
@@ -4771,6 +4825,39 @@ private:
         }
     }
 
+    // Header declarations have completed before Source roots are visited.
+    // Dispatch only Source statements; consume each statement immediately.
+    [[nodiscard]] server_status parse_source_scope(
+        identity_ref scope, bool expect_close, std::size_t scope_depth) noexcept {
+        for (;;) {
+            if (at(token_kind::invalid)) {
+                return expect_close
+                    ? fail(parser_failure_kind::syntax, "Semantic scope is not closed before end of input")
+                    : server_status::success;
+            }
+            if (expect_close && at(token_kind::r_brace)) return server_status::success;
+
+            server_status status;
+            if (at(token_kind::semicolon)) status = advance();
+            else if (at(token_kind::kw_namespace)) status = parse_namespace(scope, scope_depth);
+            else if (at(token_kind::identifier)) {
+                const auto object = current.identifier
+                    ? find_object_identity(scope, current.identifier) : identity_ref{};
+                status = object ? parse_source_assignment(scope, object) : parse_object(scope);
+            }
+            else if (builtin_start(current.kind) || at(token_kind::kw_const) ||
+                     at(token_kind::kw_volatile) || at(token_kind::kw_static) || at(token_kind::kw_inline))
+                status = parse_object(scope);
+            else if (at(token_kind::kw_typedef))
+                return fail(parser_failure_kind::unsupported, "Typedef declarations belong in Header inputs");
+            else if (at(token_kind::kw_struct) || at(token_kind::kw_class) || at(token_kind::kw_union))
+                return fail(parser_failure_kind::unsupported, "Type declarations are supported only in Header inputs");
+            else return fail(parser_failure_kind::unsupported,
+                "Declaration is outside the current direct Parser/Semantic slice");
+            if (!succeeded(status)) return status;
+        }
+    }
+
     file_context& files;
     semantic_input input;
     string_table& strings;
@@ -4779,6 +4866,7 @@ private:
     Sources& sources;
     parser_failure* failure = nullptr;
     std::vector<parser_warning>* warnings = nullptr;
+    semantic_parse_telemetry* telemetry = nullptr;
     semantic_domain domain =
         semantic_domain::header;
     file_id semantic_root{};
@@ -4809,7 +4897,15 @@ server_status parse_semantic_project(
     graph& G,
     source_map& sources,
     parser_failure* failure,
-    std::vector<parser_warning>* warnings) noexcept {
+    std::vector<parser_warning>* warnings,
+    semantic_parse_telemetry* telemetry) noexcept {
+
+    if (telemetry != nullptr) {
+        const auto detailed = telemetry->detailed_source;
+        *telemetry = {};
+        telemetry->detailed_source = detailed;
+    }
+    using clock_type = std::chrono::steady_clock;
 
     if (failure != nullptr) {
         *failure = {};
@@ -4833,6 +4929,8 @@ server_status parse_semantic_project(
         return source_reset;
     }
 
+    semantic_input_telemetry input_telemetry;
+    input_telemetry.detailed_source = telemetry != nullptr && telemetry->detailed_source;
     semantic_parser<graph, source_map> parser{
         files,
         lexical,
@@ -4842,11 +4940,16 @@ server_status parse_semantic_project(
         G,
         sources,
         failure,
-        warnings};
+        warnings,
+        telemetry != nullptr ? &input_telemetry : nullptr,
+        telemetry != nullptr && telemetry->detailed_source ? telemetry : nullptr};
 
     for (const auto domain :
          {semantic_domain::header,
           semantic_domain::source}) {
+
+        const auto domain_started = telemetry != nullptr
+            ? clock_type::now() : clock_type::time_point{};
 
         const auto expected_kind =
             domain == semantic_domain::header
@@ -4876,9 +4979,34 @@ server_status parse_semantic_project(
                 return parsed;
             }
         }
+
+        if (telemetry != nullptr) {
+            const auto duration = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    clock_type::now() - domain_started).count());
+            (domain == semantic_domain::header
+                ? telemetry->header_ns : telemetry->source_ns) = duration;
+        }
     }
 
-    return sources.finalize(files.size(), identities, G);
+    const auto finalize_started = telemetry != nullptr
+        ? clock_type::now() : clock_type::time_point{};
+    const auto result = sources.finalize(files.size(), identities, G);
+    if (telemetry != nullptr) {
+        telemetry->include_ns = input_telemetry.include_ns;
+        telemetry->include_count = input_telemetry.include_count;
+        telemetry->include_lexical_ns = input_telemetry.include_lexical_ns;
+        telemetry->prepared_include_count = input_telemetry.prepared_include_count;
+        telemetry->source_decode_ns = input_telemetry.source_decode_ns;
+        telemetry->source_intern_ns = input_telemetry.source_intern_ns;
+        telemetry->source_token_count = input_telemetry.source_token_count;
+        telemetry->source_identifier_count = input_telemetry.source_identifier_count;
+
+        telemetry->finalize_ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                clock_type::now() - finalize_started).count());
+    }
+    return result;
 }
 
 server_status parse_semantic_roots(

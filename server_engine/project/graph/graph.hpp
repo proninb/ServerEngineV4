@@ -407,6 +407,14 @@ public:
         construction_value value,
         bool& replaced) noexcept;
 
+    // Parser producer contract: endpoints and value compatibility were checked
+    // against the immutable Type domain. Conflict handling remains in Graph.
+    [[nodiscard]] server_status add_resolved_link(
+        object_endpoint source, object_endpoint target, link_handle& output) noexcept;
+    [[nodiscard]] server_status add_resolved_initialization(
+        object_endpoint target, type_ref target_type,
+        construction_value value, bool& replaced) noexcept;
+
     [[nodiscard]] bool initialization(
         object_endpoint target,
         object_initialization_record& output) const noexcept;
@@ -428,6 +436,12 @@ public:
         std::span<const endpoint_path_step> steps,
         endpoint_path_handle& output,
         type_ref* value_type = nullptr) noexcept;
+
+    // Producer contract: the caller has checked each step while traversing the
+    // immutable Type domain. Commit that resolved path without a second walk.
+    [[nodiscard]] server_status intern_resolved_endpoint_path(
+        type_ref root_type, std::span<const endpoint_path_step> steps,
+        type_ref resolved_type, endpoint_path_handle& output) noexcept;
 
     [[nodiscard]] bool endpoint_path(
         endpoint_path_handle path,
