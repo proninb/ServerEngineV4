@@ -2,8 +2,9 @@
 
 `ServerEngineV4PublishBenchmark publish` measures the normal PUBLISH path.
 `publish-profile` performs the same construction with optional stage timers.
-Both modes create and replace the fixture's `compiled.bin`; profile timings are
-diagnostic and should not be used as the production latency baseline.
+Both modes create and replace the fixture's `compiled.bin` G image and
+`runtime.bin` ABI Runtime image; profile timings are diagnostic and should
+not be used as the production latency baseline.
 
 Run on a dedicated fixture:
 
@@ -19,7 +20,7 @@ three warm Release runs measured 1.705/1.721/1.708 seconds. Median phase times:
 | Header semantic parsing | 604 ms |
 | Physical source acquisition and lexical preparation | 344 ms |
 | Source semantic parsing | 299 ms |
-| `compiled.bin` persistence, including Runtime plan | 301 ms |
+| G + ABI Runtime persistence (`compiled.bin` + `runtime.bin`) | 301 ms |
 | Resident Runtime/SHM publication | 134 ms |
 
 Header parsing is the largest single stage. Header types have declaration and
@@ -192,9 +193,9 @@ plan construction after ABI layout. LOAD must continue attaching persisted plans
 After ABI layout, PUBLISH now builds the Type program and links/init execution
 plan on two execution lanes (one lane executes both tasks on a single-lane host).
 Both tasks read immutable compiled/ABI views and own separate output vectors.
-The producer joins both tasks before resizing/remapping compiled.bin, then
-serializes the finished plans sequentially. LOAD and the artifact format remain
-unchanged. The previous combined Runtime preparation/encoding API delegates to
+The producer joins both tasks before allocating `runtime.bin`, then serializes
+the finished plans sequentially there. LOAD maps both persisted images; the
+physical Runtime record layouts and executor remain unchanged. The previous combined Runtime preparation/encoding API delegates to
 the split preparation and encoding functions for compatibility.
 
 `compiled_plan_ms` is elapsed wall time for both tasks, including worker setup.

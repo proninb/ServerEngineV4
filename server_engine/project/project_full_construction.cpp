@@ -11,6 +11,7 @@
 #include "frontend/source_discovery.hpp"
 #include "parser/parser.hpp"
 #include "persistence/compiled_project.hpp"
+#include "persistence/runtime_project.hpp"
 #include "persistence/database.hpp"
 #include "persistence/project_artifact.hpp"
 #include "persistence/source_save.hpp"
@@ -363,64 +364,75 @@ persist_compiled(
         runtime_type,
         runtime_type_counts);
 
-    std::size_t final_compiled_size = 0;
+    runtime_project_layout runtime_image_layout;
 
-    if (prepare_compiled_project_runtime_type_tail(
-            mapping.bytes(),
+    if (prepare_runtime_project_layout(
+            compiled,
             runtime_type_counts,
-            final_compiled_size) !=
-        compiled_project_image_result::success) {
+            runtime_image_layout) !=
+        runtime_project_image_result::success) {
 
         return persistence_invalid(
             full_persistence_stage::prepare);
     }
 
-    // Exact Type program size is known only after physical compilation.
-    // Extend/remap the SAME final compiled.bin; no candidate/copy is created.
-    compiled.reset();
-    mapping.reset();
+    writable_file_mapping runtime_mapping;
 
-    if (mapping.open_existing(
-            paths.compiled,
-            final_compiled_size) !=
+    if (runtime_mapping.create(
+            paths.runtime,
+            runtime_image_layout.size()) !=
         writable_file_mapping_result::success) {
 
         return persistence_io_failure(
             full_persistence_stage::create);
     }
 
-    if (apply_compiled_project_runtime_type_tail(
-            runtime_type_counts,
-            mapping.bytes()) !=
-        compiled_project_image_result::success ||
-        compiled.bind(
-            mapping.bytes()) !=
-        compiled_project_image_result::success) {
+    if (encode_runtime_project_image(
+            runtime_image_layout,
+            runtime_mapping.bytes()) !=
+        runtime_project_image_result::success) {
 
         return persistence_invalid(
             full_persistence_stage::validate);
     }
 
-    checkpoint(&full_construction_telemetry::compiled_remap_ns);
+    // Preserve fe9d4ab profile counter names for benchmark continuity.
+    // The former compiled.bin "remap" stage now allocates runtime.bin.
+    checkpoint(
+        &full_construction_telemetry::
+            compiled_remap_ns);
+
     if (encode_shm_layout_columns(
             runtime_layout,
             context.settings.abi,
-            mapping.bytes()) !=
+            runtime_mapping.bytes()) !=
         shm_layout_result::success) {
-        return persistence_invalid(full_persistence_stage::encode);
+
+        return persistence_invalid(
+            full_persistence_stage::encode);
     }
-    checkpoint(&full_construction_telemetry::compiled_abi_encode_ns);
+
+    checkpoint(
+        &full_construction_telemetry::
+            compiled_abi_encode_ns);
+
     if (encode_shm_type_batch_physical_columns(
             runtime_type,
-            mapping.bytes()) !=
+            runtime_mapping.bytes()) !=
         shm_type_batch_result::success) {
-        return persistence_invalid(full_persistence_stage::encode);
+
+        return persistence_invalid(
+            full_persistence_stage::encode);
     }
-    checkpoint(&full_construction_telemetry::compiled_type_encode_ns);
+
+    checkpoint(
+        &full_construction_telemetry::
+            compiled_type_encode_ns);
+
     if (encode_shm_runtime_v2_physical_columns(
             runtime_plan,
             runtime_layout,
-            mapping.bytes()) !=
+            runtime_mapping.bytes()) !=
         shm_runtime_v2_result::success) {
 
         return persistence_invalid(
@@ -435,7 +447,9 @@ persist_compiled(
     }
 
     if (mapping.flush() !=
-        writable_file_mapping_result::success) {
+            writable_file_mapping_result::success ||
+        runtime_mapping.flush() !=
+            writable_file_mapping_result::success) {
 
         return persistence_io_failure(
             full_persistence_stage::flush);
@@ -1336,6 +1350,42 @@ server_status construct_full_project(
             project_artifact_invalid;
     }
 
+    read_only_file_mapping resident_runtime_mapping;
+
+    if (resident_runtime_mapping.open(
+            layout.runtime) !=
+        read_only_file_mapping_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_runtime_failed,
+                operation)
+                .file(layout.runtime)
+                .detail(
+                    "Cannot reopen final runtime.bin for resident publication")
+                .build());
+
+        return server_status::io_error;
+    }
+
+    runtime_project_view resident_runtime;
+
+    if (resident_runtime.bind(
+            resident_runtime_mapping.bytes()) !=
+        runtime_project_image_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_runtime_failed,
+                operation)
+                .file(layout.runtime)
+                .detail(
+                    "Final runtime.bin failed resident structural bind")
+                .build());
+
+        return server_status::project_artifact_invalid;
+    }
+
     const auto resident_result = create_resident_project(
         project_path,
         settings,
@@ -1343,6 +1393,8 @@ server_status construct_full_project(
         diagnostics,
         std::move(resident_mapping),
         resident_compiled,
+        std::move(resident_runtime_mapping),
+        resident_runtime,
         output);
     if (telemetry != nullptr) { telemetry->resident_ns = elapsed_ns(resident_started); }
     return resident_result;

@@ -2,6 +2,7 @@
 
 #include "../abi/abi_layout.hpp"
 #include "../persistence/compiled_project.hpp"
+#include "../persistence/runtime_project.hpp"
 #include "../runtime/runtime_system.hpp"
 
 #include <algorithm>
@@ -1443,7 +1444,7 @@ shm_layout_result encode_shm_layout_columns(
 
     const auto section =
         [&](compiled_project_section kind) noexcept {
-            return compiled_project_runtime_physical_section(
+            return runtime_project_mutable_section(
                 compiled_image,
                 kind);
         };
@@ -1603,7 +1604,7 @@ shm_layout_result encode_shm_layout_columns(
 }
 
 void attach_shm_layout_columns(
-    const compiled_project_view& project,
+    const runtime_project_view& project,
     shm_layout& output) noexcept {
 
     output.reset();
@@ -1623,70 +1624,70 @@ void attach_shm_layout_columns(
     const auto header =
         records.template operator()<
             shm_abi_header_record>(
-                project.runtime_physical_section(
+                project.section(
                     compiled_project_section::
                         runtime_abi_header));
 
     output.persisted_type_slots =
         records.template operator()<
             shm_abi_value_record>(
-                project.runtime_physical_section(
+                project.section(
                     compiled_project_section::
                         type_abi));
 
     output.persisted_derived_slots =
         records.template operator()<
             shm_abi_value_record>(
-                project.runtime_physical_section(
+                project.section(
                     compiled_project_section::
                         derived_abi));
 
     output.persisted_member_offsets =
         records.template operator()<
             shm_record_offset>(
-                project.runtime_physical_section(
+                project.section(
                     compiled_project_section::
                         member_abi));
 
     output.persisted_base_offsets =
         records.template operator()<
             shm_record_offset>(
-                project.runtime_physical_section(
+                project.section(
                     compiled_project_section::
                         base_abi));
 
     output.persisted_object_offsets =
         records.template operator()<
             shm_offset>(
-                project.runtime_physical_section(
+                project.section(
                     compiled_project_section::
                         object_abi));
 
     output.persisted_unconnected_intrinsic_offsets =
         records.template operator()<
             shm_offset>(
-                project.runtime_physical_section(
+                project.section(
                     compiled_project_section::
                         unconnected_intrinsic_abi));
 
     output.persisted_unconnected_type_offsets =
         records.template operator()<
             shm_offset>(
-                project.runtime_physical_section(
+                project.section(
                     compiled_project_section::
                         unconnected_type_abi));
 
     output.persisted_unconnected_derived_offsets =
         records.template operator()<
             shm_offset>(
-                project.runtime_physical_section(
+                project.section(
                     compiled_project_section::
                         unconnected_derived_abi));
 
     const auto unconnected_types =
         records.template operator()<
             type_ref>(
-                project.runtime_physical_section(
+                project.section(
                     compiled_project_section::
                         unconnected_types));
 

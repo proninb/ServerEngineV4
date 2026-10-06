@@ -901,35 +901,6 @@ struct direct_object_write_state final {
             change,
             state.mapping->bytes());
 
-    if (applied ==
-            compiled_project_image_result::success) {
-        for (const auto kind :
-             {
-                 compiled_project_section::runtime_abi_header,
-                 compiled_project_section::runtime_execution_header,
-             }) {
-
-            auto runtime_header =
-                compiled_project_runtime_physical_section(
-                    state.mapping->bytes(),
-                    kind);
-
-            if (!runtime_header.empty()) {
-                const auto clear =
-                    (std::min)(
-                        runtime_header.size(),
-                        std::size_t{8});
-
-                std::fill(
-                    runtime_header.begin(),
-                    runtime_header.begin() +
-                        static_cast<std::ptrdiff_t>(
-                            clear),
-                    std::byte{0});
-            }
-        }
-    }
-
     if (applied !=
         compiled_project_image_result::
             success) {
@@ -1991,6 +1962,24 @@ server_status build_project(
         return server_status::project_artifact_invalid;
     }
 
+    // RUNTIME-BIN-02 scope boundary: only PUBLISH and LOAD are developed
+    // in this slice. A semantic-changing BUILD must not mutate final G
+    // until runtime.bin BUILD production/promotion is designed separately.
+    if (!semantic_changed.empty() ||
+        configuration_identity_changed) {
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_build_incomplete,
+                operation)
+                .file(layout.compiled)
+                .detail(
+                    "RUNTIME-BIN-02 supports PUBLISH/LOAD only; "
+                    "semantic-changing BUILD is deferred")
+                .build());
+
+        return server_status::project_artifact_invalid;
+    }
+
     if (semantic_changed.empty() &&
         !configuration_identity_changed) {
 
@@ -2422,35 +2411,6 @@ server_status build_project(
                 context.graph_changes,
                 context.compiled_write_mapping.
                     bytes());
-
-        if (applied ==
-                compiled_project_image_result::success) {
-            for (const auto kind :
-                 {
-                     compiled_project_section::runtime_abi_header,
-                     compiled_project_section::runtime_execution_header,
-                 }) {
-
-                auto runtime_header =
-                    compiled_project_runtime_physical_section(
-                        context.compiled_write_mapping.bytes(),
-                        kind);
-
-                if (!runtime_header.empty()) {
-                    const auto clear =
-                        (std::min)(
-                            runtime_header.size(),
-                            std::size_t{8});
-
-                    std::fill(
-                        runtime_header.begin(),
-                        runtime_header.begin() +
-                            static_cast<std::ptrdiff_t>(
-                                clear),
-                        std::byte{0});
-                }
-            }
-        }
 
         if (applied !=
                 compiled_project_image_result::

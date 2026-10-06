@@ -415,12 +415,9 @@ int main(
         return 3;
     }
 
-    if (!path_exists(
-            artifacts.compiled)) {
-
-        std::cerr
-            << "compiled.bin is missing\n";
-
+    if (!path_exists(artifacts.compiled) ||
+        !path_exists(artifacts.runtime)) {
+        std::cerr << "compiled.bin or runtime.bin is missing\n";
         return 3;
     }
 
@@ -469,6 +466,9 @@ int main(
         << ",compiled_bytes="
         << path_file_size(
             artifacts.compiled)
+        << ",runtime_bytes="
+        << path_file_size(
+            artifacts.runtime)
         << ",types="
         << compiled.type_count()
         << ",members="

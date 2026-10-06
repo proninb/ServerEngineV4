@@ -19,6 +19,7 @@
 namespace cw::server {
 
 class compiled_project_view;
+class runtime_project_view;
 struct compiled_project_runtime_type_counts;
 class shm_type_batch_builder;
 class shm_type_batch_executor;
@@ -526,7 +527,7 @@ private:
 
     friend shm_type_batch_result
     attach_shm_type_batch_physical_columns(
-        const compiled_project_view&,
+        const runtime_project_view&,
         const shm_layout&,
         shm_type_batch&,
         shm_type_batch_prepare_telemetry*) noexcept;
@@ -614,7 +615,7 @@ encode_shm_type_batch_physical_columns(
 
 [[nodiscard]] shm_type_batch_result
 attach_shm_type_batch_physical_columns(
-    const compiled_project_view& project,
+    const runtime_project_view& project,
     const shm_layout& layout,
     shm_type_batch& output,
     shm_type_batch_prepare_telemetry* telemetry = nullptr) noexcept;

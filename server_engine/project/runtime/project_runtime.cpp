@@ -3,6 +3,7 @@
 #include "runtime_binding.hpp"
 
 #include "../abi/abi_layout.hpp"
+#include "../persistence/project_artifact.hpp"
 #include "../construction/execution_lanes.hpp"
 #include "../shm/shm_layout.hpp"
 #include "../shm/shm_runtime_v2.hpp"
@@ -752,7 +753,101 @@ server_status create_resident_project(
     std::unique_ptr<project>& output,
     project_runtime_telemetry* telemetry) {
 
+    project_artifact_layout layout;
+
+    if (make_project_artifact_layout(
+            project_path,
+            settings.files,
+            layout) !=
+        project_artifact_layout_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_invalid_configuration,
+                operation)
+                .file(project_path)
+                .detail(
+                    "Cannot construct Project artifact layout for runtime.bin")
+                .build());
+
+        return server_status::io_error;
+    }
+
+    read_only_file_mapping runtime_mapping;
+
+    const auto opened =
+        runtime_mapping.open(
+            layout.runtime);
+
+    if (opened !=
+        read_only_file_mapping_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_runtime_failed,
+                operation)
+                .file(layout.runtime)
+                .detail(
+                    opened ==
+                            read_only_file_mapping_result::not_found
+                        ? "Resident publication requires existing runtime.bin"
+                        : "Cannot memory-map runtime.bin")
+                .build());
+
+        return opened ==
+                read_only_file_mapping_result::failed
+            ? server_status::io_error
+            : server_status::project_artifact_invalid;
+    }
+
+    runtime_project_view runtime_project;
+
+    if (runtime_project.bind(
+            runtime_mapping.bytes()) !=
+        runtime_project_image_result::success) {
+
+        diagnostics.emit(
+            diagnostic(
+                diagnostics::project_runtime_failed,
+                operation)
+                .file(layout.runtime)
+                .detail(
+                    "runtime.bin failed structural binding")
+                .build());
+
+        return server_status::project_artifact_invalid;
+    }
+
+    return create_resident_project(
+        project_path,
+        settings,
+        operation,
+        diagnostics,
+        std::move(compiled_mapping),
+        compiled,
+        std::move(runtime_mapping),
+        runtime_project,
+        output,
+        telemetry);
+}
+
+server_status create_resident_project(
+    const std::filesystem::path& project_path,
+    const server_settings_configuration& settings,
+    operation_id operation,
+    diagnostic_collection& diagnostics,
+    read_only_file_mapping&& compiled_mapping,
+    compiled_project_view compiled,
+    read_only_file_mapping&& runtime_mapping,
+    runtime_project_view runtime_project,
+    std::unique_ptr<project>& output,
+    project_runtime_telemetry* telemetry) {
+
     output.reset();
+
+    // Construction spans point into runtime_mapping; the mapping is
+    // intentionally transient and dies after resident bindings are copied.
+    (void)runtime_mapping;
 
     if (telemetry != nullptr) {
         *telemetry = {};
@@ -852,7 +947,7 @@ server_status create_resident_project(
         clock_type::now();
 
     attach_shm_layout_columns(
-        compiled,
+        runtime_project,
         v2_layout);
 
     const auto layout_finished =
@@ -876,7 +971,7 @@ server_status create_resident_project(
 
     const auto prepared_runtime =
         prepare_shm_runtime_v2_persisted(
-            compiled,
+            runtime_project,
             settings.abi,
             v2_layout,
             v2_runtime,

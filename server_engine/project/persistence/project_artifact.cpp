@@ -29,6 +29,7 @@ project_artifact_layout_result make_project_artifact_layout(
         output.source_save = output.root / files.source_save;
         output.database = output.root / files.database;
         output.compiled = output.root / files.compiled;
+        output.runtime = output.root / "runtime.bin";
 
         return project_artifact_layout_result::success;
     }
@@ -83,8 +84,10 @@ remove_project_artifacts(
 
     bool failed = false;
 
-    // compiled.bin is removed first because LOAD consumes it independently.
+    // Runtime is derived from G and must never outlive replacement/removal
+    // of the authoritative compiled image.
     const std::filesystem::path* paths[]{
+        &layout.runtime,
         &layout.compiled,
         &layout.manifest,
         &layout.source_save,

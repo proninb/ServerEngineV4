@@ -540,8 +540,6 @@ prepare_build_compiled_project_layout(
                 files.size()),
             source_path_bytes,
             G.constructor_defaults.entries().size(),
-            0,
-            0,
         };
 
     return compiled_project_layout::
@@ -824,21 +822,6 @@ encode_build_compiled_project_image(
              compiled_project_section::object_initialization_target_index,
              compiled_project_section::source_roots,
              compiled_project_section::source_files,
-             compiled_project_section::runtime_abi_header,
-             compiled_project_section::type_abi,
-             compiled_project_section::derived_abi,
-             compiled_project_section::member_abi,
-             compiled_project_section::base_abi,
-             compiled_project_section::object_abi,
-             compiled_project_section::unconnected_intrinsic_abi,
-             compiled_project_section::unconnected_type_abi,
-             compiled_project_section::unconnected_derived_abi,
-             compiled_project_section::unconnected_types,
-             compiled_project_section::runtime_execution_header,
-             compiled_project_section::link_runtime,
-             compiled_project_section::initialization_runtime,
-             compiled_project_section::runtime_endpoint_programs,
-             compiled_project_section::runtime_endpoint_dereferences,
          }) {
 
         clear_section(

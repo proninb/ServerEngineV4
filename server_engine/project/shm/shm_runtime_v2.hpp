@@ -25,6 +25,7 @@
 namespace cw::server {
 
 class compiled_project_view;
+class runtime_project_view;
 class shm_runtime_v2_link_builder;
 class shm_runtime_v2_link_executor;
 
@@ -303,7 +304,7 @@ private:
     friend class shm_runtime_v2_link_executor;
     friend shm_runtime_v2_result
     prepare_shm_runtime_v2_persisted(
-        const compiled_project_view&,
+        const runtime_project_view&,
         const server_abi_configuration&,
         const shm_layout&,
         shm_runtime_v2&,
@@ -323,7 +324,7 @@ private:
 
     friend shm_runtime_v2_result
     attach_shm_runtime_v2_physical_columns(
-        const compiled_project_view&,
+        const runtime_project_view&,
         shm_runtime_v2&) noexcept;
 
     friend shm_runtime_v2_result
@@ -405,7 +406,7 @@ private:
 
 
 // PUBLISH compiles links and source initializations once and encodes immutable
-// same-WHERE Runtime columns directly into compiled.bin.
+// same-WHERE Runtime columns directly into runtime.bin.
 // Preparation owns its output and reads only the stable Project/ABI views.
 [[nodiscard]] shm_runtime_v2_result prepare_shm_runtime_v2_physical_plan(
     const compiled_project_view& project,
@@ -429,7 +430,7 @@ encode_shm_runtime_v2_physical_columns(
 // the mutable link-resolution state. No record validation or semantic fallback.
 [[nodiscard]] shm_runtime_v2_result
 attach_shm_runtime_v2_physical_columns(
-    const compiled_project_view& project,
+    const runtime_project_view& project,
     shm_runtime_v2& output) noexcept;
 
 // Prepare resolves WHO / semantic endpoint paths once into physical Runtime
@@ -438,7 +439,7 @@ attach_shm_runtime_v2_physical_columns(
 // attach already-compiled physical link/initialization columns directly.
 [[nodiscard]] shm_runtime_v2_result
 prepare_shm_runtime_v2_persisted(
-    const compiled_project_view& project,
+    const runtime_project_view& project,
     const server_abi_configuration& abi,
     const shm_layout& layout,
     shm_runtime_v2& output,

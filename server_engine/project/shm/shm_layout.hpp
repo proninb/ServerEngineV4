@@ -21,6 +21,7 @@
 namespace cw::server {
 
 class compiled_project_view;
+class runtime_project_view;
 class shm_layout_builder;
 
 enum class shm_layout_result : std::uint8_t {
@@ -184,7 +185,7 @@ private:
         std::span<std::byte>) noexcept;
 
     friend void attach_shm_layout_columns(
-        const compiled_project_view&,
+        const runtime_project_view&,
         shm_layout&) noexcept;
 
     // Transitional dead-code friendship for the superseded 08A serializer.
@@ -208,7 +209,7 @@ private:
 
 // Trusted LOAD view attachment: pointer/span setup only.
 void attach_shm_layout_columns(
-    const compiled_project_view& project,
+    const runtime_project_view& project,
     shm_layout& output) noexcept;
 
 [[nodiscard]] shm_layout_result prepare_shm_layout(

@@ -8,6 +8,7 @@
 #pragma once
 
 #include "../project.hpp"
+#include "../persistence/runtime_project.hpp"
 #include "../shm/shm_runtime_v2.hpp"
 
 #include "../../configuration/server_configuration.hpp"
@@ -73,6 +74,9 @@ struct project_runtime_telemetry final {
 // Creates the final resident Project state for the configured Runtime/SHM mode.
 // FIXED_DIRECT allocates the one named Project SHM at the configured exact VA
 // and materializes the final ABI-native Runtime image directly into that SHM.
+// Compatibility publication boundary for callers that already own G but
+// do not produce runtime.bin in this slice. This overload only opens an
+// existing runtime.bin; it never derives or rewrites Runtime state.
 [[nodiscard]] server_status create_resident_project(
     const std::filesystem::path& project_path,
     const server_settings_configuration& settings,
@@ -80,6 +84,18 @@ struct project_runtime_telemetry final {
     diagnostic_collection& diagnostics,
     read_only_file_mapping&& compiled_mapping,
     compiled_project_view compiled,
+    std::unique_ptr<project>& output,
+    project_runtime_telemetry* telemetry = nullptr);
+
+[[nodiscard]] server_status create_resident_project(
+    const std::filesystem::path& project_path,
+    const server_settings_configuration& settings,
+    operation_id operation,
+    diagnostic_collection& diagnostics,
+    read_only_file_mapping&& compiled_mapping,
+    compiled_project_view compiled,
+    read_only_file_mapping&& runtime_mapping,
+    runtime_project_view runtime_project,
     std::unique_ptr<project>& output,
     project_runtime_telemetry* telemetry = nullptr);
 

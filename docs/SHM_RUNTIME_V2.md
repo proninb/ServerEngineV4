@@ -1902,3 +1902,97 @@ production timings only with other `load` runs from the same artifact and build.
 09D-13 changes no compiled.bin format, persisted record, Type API range,
 PUBLISH output, Runtime executor, SHM ABI, scheduling policy, Stable-WHERE
 contract or lifecycle semantics.
+
+## RUNTIME-BIN-02 — Separate G and ABI Runtime images
+
+The persisted ownership boundary is now physical:
+
+```text
+compiled.bin
+    = semantic/query G only
+
+runtime.bin
+    = ABI-specific physical Runtime construction image
+
+SHM
+    = mutable native execution state
+```
+
+`compiled.bin` format v25 contains only sections 1..33. Historical Runtime
+section numeric IDs 34..65 remain shared physical identifiers but their bytes
+are no longer part of `compiled.bin`.
+
+`runtime.bin` has its own header and 32-entry directory. It stores the exact
+production physical columns previously embedded in `compiled.bin`: ABI layout,
+link/initialization programs, INLINE-64 Type APIs, reference/store/child/repeat
+programs, and the physical object-offset data.
+
+There is no new semantic identity and no generation/image identifier. Server
+is the single writer.
+
+LOAD is now:
+
+```text
+mmap compiled.bin -> G
+mmap runtime.bin  -> ABI Runtime construction spans
+create zero FIXED_DIRECT SHM
+execute the unchanged Runtime V2 materializer
+```
+
+The resident bridge remains:
+
+```text
+G object_handle (WHERE)
+    -> runtime_binding_index.object_offsets[WHERE - 1]
+    -> SHM offset
+```
+
+`runtime.bin` is construction-only. Its mapping exists only while SHM and the
+resident binding index are created. Resident Project ownership remains G + SHM
++ small binding/control state.
+
+### Slice scope
+
+RUNTIME-BIN-02 develops and accepts only the PUBLISH/LOAD boundary:
+
+```text
+PUBLISH
+    -> compiled.bin = G
+    -> runtime.bin  = ABI Runtime construction image
+
+LOAD
+    -> mmap compiled.bin
+    -> mmap runtime.bin
+    -> unchanged Runtime V2 executor
+    -> SHM
+```
+
+Semantic-changing BUILD and its runtime.bin candidate/promotion/invalidation
+policy are deliberately deferred to a later slice. The current BUILD boundary
+must reject semantic changes before the first physical write to final G.
+No-change resident publication may consume an already existing runtime.bin but
+does not create or replace it.
+
+### Same-project acceptance measurement
+
+On the 23,333-Type UnitProXL fixture, a detached fe9d4ab baseline and the
+RUNTIME-BIN-02 build were published from identical source inputs and measured
+with alternating warm LOAD runs:
+
+```text
+fe9d4ab LOAD median             207.507 ms
+RUNTIME-BIN-02 LOAD median      210.240 ms
+delta                             2.733 ms (1.317%)
+
+fe9d4ab compiled.bin        209,449,664 B
+RUNTIME-BIN-02 compiled.bin 142,291,152 B
+RUNTIME-BIN-02 runtime.bin   67,196,032 B
+```
+
+The LOAD delta is smaller than the observed run-to-run variation and does not
+establish a material regression. Persisted Runtime is compact construction
+metadata, not an SHM snapshot.
+
+RUNTIME-BIN-01 (sparse initial-SHM page snapshot) remains rejected: the measured
+project had 99.86% non-zero 4-KiB SHM pages, producing an approximately 1.44 GB
+image and a restore path about 5.9x slower than the compact executor.

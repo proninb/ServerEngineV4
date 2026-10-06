@@ -2,6 +2,7 @@
 
 #include "../abi/abi_layout.hpp"
 #include "../persistence/compiled_project.hpp"
+#include "../persistence/runtime_project.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -1594,7 +1595,7 @@ shm_runtime_v2_result encode_shm_runtime_v2_physical_columns(
     const auto section =
         [&](compiled_project_section kind) noexcept {
             return
-                compiled_project_runtime_physical_section(
+                runtime_project_mutable_section(
                     compiled_image,
                     kind);
         };
@@ -1823,7 +1824,7 @@ shm_runtime_v2_result encode_shm_runtime_v2_physical_columns(
 
 shm_runtime_v2_result
 attach_shm_runtime_v2_physical_columns(
-    const compiled_project_view& project,
+    const runtime_project_view& project,
     shm_runtime_v2& output) noexcept {
 
     const auto records =
@@ -1841,35 +1842,35 @@ attach_shm_runtime_v2_physical_columns(
     const auto header =
         records.template operator()<
             shm_runtime_v2_execution_header>(
-                project.runtime_physical_section(
+                project.section(
                     compiled_project_section::
                         runtime_execution_header));
 
     output.persisted_links =
         records.template operator()<
             shm_runtime_v2_physical_link>(
-                project.runtime_physical_section(
+                project.section(
                     compiled_project_section::
                         link_runtime));
 
     output.persisted_initializations =
         records.template operator()<
             shm_runtime_v2_physical_initialization>(
-                project.runtime_physical_section(
+                project.section(
                     compiled_project_section::
                         initialization_runtime));
 
     output.persisted_endpoint_programs =
         records.template operator()<
             shm_runtime_v2_physical_endpoint_program>(
-                project.runtime_physical_section(
+                project.section(
                     compiled_project_section::
                         runtime_endpoint_programs));
 
     output.persisted_endpoint_dereferences =
         records.template operator()<
             shm_offset>(
-                project.runtime_physical_section(
+                project.section(
                     compiled_project_section::
                         runtime_endpoint_dereferences));
 
@@ -3474,7 +3475,7 @@ private:
 
 shm_runtime_v2_result
 prepare_shm_runtime_v2_persisted(
-    const compiled_project_view& project,
+    const runtime_project_view& project,
     const server_abi_configuration& abi,
     const shm_layout& layout,
     shm_runtime_v2& output,

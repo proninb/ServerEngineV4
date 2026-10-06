@@ -1,9 +1,9 @@
 /*
  * Project persisted-artifact path and image boundary.
  *
- * The four artifacts are independent files under one Project artifact
- * directory. LOAD requires only compiled.bin. BUILD uses the persisted
- * construction artifacts it needs; missing required BUILD state means REBUILD.
+ * Persisted Project artifacts are independent files under one Project
+ * directory. LOAD requires compiled.bin (G) plus runtime.bin (ABI Runtime).
+ * BUILD additionally uses its source/database/manifest acceleration state.
  */
 #pragma once
 
@@ -22,6 +22,7 @@ struct project_artifact_layout final {
     std::filesystem::path source_save;
     std::filesystem::path database;
     std::filesystem::path compiled;
+    std::filesystem::path runtime;
 };
 
 enum class project_artifact_layout_result : std::uint8_t {

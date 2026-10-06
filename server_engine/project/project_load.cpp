@@ -3,6 +3,7 @@
 #include "project_lifecycle_context.hpp"
 #include "runtime/project_runtime.hpp"
 #include "persistence/compiled_project.hpp"
+#include "persistence/runtime_project.hpp"
 #include "persistence/project_artifact.hpp"
 
 #include "../diagnostics/diagnostic_builder.hpp"
@@ -92,6 +93,34 @@ server_status load_project(
     compiled.attach(
         mapping.bytes());
 
+    read_only_file_mapping runtime_mapping;
+    const auto runtime_opened = runtime_mapping.open(layout.runtime);
+
+    if (runtime_opened != read_only_file_mapping_result::success) {
+        diagnostics.emit(
+            diagnostic(diagnostics::project_runtime_failed, operation)
+                .file(layout.runtime)
+                .detail(runtime_opened == read_only_file_mapping_result::not_found
+                    ? "LOAD requires runtime.bin"
+                    : "Cannot memory-map runtime.bin")
+                .build());
+
+        return runtime_opened == read_only_file_mapping_result::failed
+            ? server_status::io_error
+            : server_status::project_artifact_invalid;
+    }
+
+    runtime_project_view runtime_project;
+    if (runtime_project.bind(runtime_mapping.bytes()) !=
+        runtime_project_image_result::success) {
+        diagnostics.emit(
+            diagnostic(diagnostics::project_runtime_failed, operation)
+                .file(layout.runtime)
+                .detail("runtime.bin failed structural binding")
+                .build());
+        return server_status::project_artifact_invalid;
+    }
+
     return create_resident_project(
         project_path,
         settings,
@@ -99,6 +128,8 @@ server_status load_project(
         diagnostics,
         std::move(mapping),
         compiled,
+        std::move(runtime_mapping),
+        runtime_project,
         output,
         telemetry);
 }

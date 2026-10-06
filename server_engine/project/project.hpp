@@ -1,7 +1,7 @@
 /*
  * Resident Project state.
  *
- * Resident state owns immutable compiled.bin, final Runtime/SHM state, and
+ * Resident state owns immutable compiled.bin G, final Runtime/SHM state, and
  * resolved references to Project runtime resources loaded after Runtime
  * publication. Construction-only state never enters this class.
  */

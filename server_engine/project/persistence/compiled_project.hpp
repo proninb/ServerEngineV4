@@ -1,10 +1,9 @@
 /*
  * mmap-native compiled Project artifact.
  *
- * compiled.bin is final LOAD state, not BUILD acceleration. Numeric
- * string_id/identity_ref/Graph slots are preserved exactly. LOAD binds this
- * immutable view directly over mapped bytes; it never reconstructs mutable
- * string_table, identity_space, or graph containers.
+ * compiled.bin is the mmap-native semantic/query G image. Numeric
+ * string_id/identity_ref/Graph slots are preserved exactly. ABI-specific
+ * Runtime construction columns live separately in runtime.bin.
  */
 #pragma once
 
@@ -27,12 +26,12 @@ class graph_delta;
 class graph_dense_projection;
 class source_map_overlay_view;
 
-inline constexpr std::uint32_t compiled_project_format_version = 24;
+inline constexpr std::uint32_t compiled_project_format_version = 25;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;
 
-inline constexpr std::size_t compiled_project_directory_count = 65;
+inline constexpr std::size_t compiled_project_directory_count = 33;
 
 inline constexpr std::size_t
 compiled_project_directory_entry_size = 32;
@@ -80,8 +79,8 @@ enum class compiled_project_section : std::uint32_t {
     object_initialization_target_index = 32,
     constructor_defaults = 33,
 
-    // Same-WHERE target-ABI physical columns. These are accelerators over the
-    // semantic Graph sections, not a second Runtime identity space.
+    // Shared physical section IDs for runtime.bin. Values 34..65 are not
+    // compiled.bin directory entries in format v25.
     runtime_abi_header = 34,
     type_abi = 35,
     derived_abi = 36,
@@ -178,8 +177,6 @@ private:
         std::uint64_t source_file_count = 0;
         std::uint64_t source_path_bytes = 0;
         std::uint64_t constructor_default_count = 0;
-        std::uint64_t runtime_endpoint_program_count = 0;
-        std::uint64_t runtime_endpoint_dereference_count = 0;
     };
 
     [[nodiscard]] static compiled_project_image_result
@@ -356,12 +353,6 @@ public:
     [[nodiscard]] std::size_t assign_count() const noexcept {
         return assign_count_value;
     }
-
-    // Exposes only target-ABI physical columns. The section WHERE is the
-    // same Graph WHERE as its semantic counterpart.
-    [[nodiscard]] std::span<const std::byte>
-    runtime_physical_section(
-        compiled_project_section kind) const noexcept;
 
     [[nodiscard]] std::string_view string(
         string_id id) const noexcept;
@@ -672,26 +663,6 @@ prepare_compiled_project_layout(const string_table &strings,
                                 const source_map &sources,
                                 compiled_project_layout &output) noexcept;
 
-// Returns one writable target-ABI physical column after a structurally
-// valid bind. Semantic sections are deliberately rejected.
-[[nodiscard]] std::span<std::byte>
-compiled_project_runtime_physical_section(
-    std::span<std::byte> image,
-    compiled_project_section kind) noexcept;
-
-// PUBLISH-only append-tail preparation. The initial v24 image contains zero
-// counts for Type execution sections; after INLINE-64 compilation the same
-// final compiled.bin is extended and these directory entries are finalized.
-[[nodiscard]] compiled_project_image_result
-prepare_compiled_project_runtime_type_tail(
-    std::span<const std::byte> image,
-    const compiled_project_runtime_type_counts& counts,
-    std::size_t& final_size) noexcept;
-
-[[nodiscard]] compiled_project_image_result
-apply_compiled_project_runtime_type_tail(
-    const compiled_project_runtime_type_counts& counts,
-    std::span<std::byte> image) noexcept;
 
 // Encodes directly into caller-owned bytes, including writable mmap pages.
 // layout must come from prepare_compiled_project_layout() for the same unchanged

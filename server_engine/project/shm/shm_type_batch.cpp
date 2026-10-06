@@ -2,6 +2,7 @@
 
 #include "../abi/abi_layout.hpp"
 #include "../persistence/compiled_project.hpp"
+#include "../persistence/runtime_project.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -5487,7 +5488,7 @@ encode_shm_type_batch_physical_columns(
     const auto section =
         [&](compiled_project_section kind) noexcept {
             return
-                compiled_project_runtime_physical_section(
+                runtime_project_mutable_section(
                     compiled_image,
                     kind);
         };
@@ -5590,7 +5591,7 @@ encode_shm_type_batch_physical_columns(
 
 shm_type_batch_result
 attach_shm_type_batch_physical_columns(
-    const compiled_project_view& project,
+    const runtime_project_view& project,
     const shm_layout& layout,
     shm_type_batch& output,
     shm_type_batch_prepare_telemetry* telemetry) noexcept {
@@ -5600,7 +5601,7 @@ attach_shm_type_batch_physical_columns(
     const auto section =
         [&](compiled_project_section kind) noexcept {
             return
-                project.runtime_physical_section(
+                project.section(
                     kind);
         };
 
