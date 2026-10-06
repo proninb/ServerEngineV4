@@ -1526,3 +1526,154 @@ Parser/Semantic now writes `G` directly for the implemented namespace,
 record/member, Project-object, construction, managed-constructor, and static-link
 slice. There is no intermediate semantic database or Builder boundary. BUILD
 persisted-state binding/reuse remains separate later work.
+
+## Specialized semantic parsers (PARSER-SPLIT-01)
+
+Header and Source semantic execution are separate parser specializations.
+
+```text
+Header roots
+    -> header_parser
+    -> Header semantic barrier in G
+
+Source roots
+    -> source_parser
+    -> final Source semantic state in G
+
+Assign roots
+    -> existing Assign parser
+    -> Assign table
+```
+
+This first slice is intentionally semantic-neutral. `header_parser` and
+`source_parser` are distinct compile-time types backed by a shared implementation
+core while the grammar is being separated. The parser domain is no longer
+mutable runtime state and root orchestration no longer loops over a runtime
+`semantic_domain` value.
+
+The Header boundary is semantic, not "types only". Header parsing continues to
+own all currently supported Header semantics, including:
+
+```cpp
+static int A = 0;
+
+struct B {
+    int& IN;
+    B() : IN(A) {}
+};
+```
+
+Therefore the Header result may contain Types, members/bases, constructor/default
+construction, internal-static Header Objects, and reference bindings. Source
+parsing starts only after all Header roots have completed and consumes that
+already-built semantic state.
+
+`test_header_static_constructor_binding` remains the regression gate for
+Header-local static object identity and constructor reference binding.
+
+PARSER-SPLIT-01 does **not** introduce parallel semantic writes, per-root output
+blocks, a second Graph, a Header facts database, or new persisted state. Header
+and Source still write the existing construction `G` directly and preserve
+existing root ordering, Source Map provenance, diagnostics, stable-WHERE rules,
+and persisted formats.
+
+The intended follow-on architecture is to separate the shared grammar physically
+and then make dependency-ready Header work and Source construction blocks
+parallel without putting locks or atomics on semantic hot paths.
+
+## Header WHO streaming (HEADER-WHO-STREAM-01)
+
+Header semantic parsing is one forward stream.
+
+```text
+Header physical roots
+        |
+        v
+semantic_input / preprocessing / includes
+        |
+        v
+compile-time Header parser
+        |
+        +--> declarations enter semantic state in source order
+        +--> record/member semantics are consumed in source order
+        +--> existing Graph construction/validation
+        |
+        v
+HEADER BARRIER
+        |
+        v
+compile-time Source parser
+```
+
+There is no Project-wide effective-token arena, no global Header type
+pre-discovery pass, and no Header token replay.
+
+C++ declaration order is authoritative.
+
+A type used by value must already be declared with the completeness required by
+that language use. A later declaration does not retroactively make an earlier
+use valid.
+
+Valid:
+
+```cpp
+struct B {
+    int X;
+};
+
+struct A {
+    B Value;
+};
+```
+
+Invalid:
+
+```cpp
+struct A {
+    B Value;
+};
+
+struct B {
+    int X;
+};
+```
+
+The frontend must not scan later Header text first merely to make that earlier
+use resolve.
+
+A prior declaration can establish the type name for a language use that permits
+an incomplete type:
+
+```cpp
+struct B;
+
+struct A {
+    B* Value;
+};
+
+struct B {
+    int X;
+};
+```
+
+`HEADER-WHO-STREAM-01` preserves the compile-time Header/Source parser split.
+Header preprocessing executes once through `semantic_input`. Source begins only
+after the Header barrier and continues to use its own compile-time parser
+specialization.
+
+This slice intentionally keeps the existing `parse_record()` Graph construction
+boundary. Forward declarations still use the current Graph declaration path.
+Separating semantic WHO from physical WHERE is a later independent slice.
+
+No persisted format changes are introduced by this streaming correction.
+
+Measured publish-stage Header performance on the 23,333-type workload:
+
+```text
+HEADER-INDEX-02 warm Header     ~456 ms
+HEADER-WHO-STREAM-01 Header     ~421 ms
+```
+
+Therefore the full effective-token arena / global pre-index / replay design is
+rejected for the production Header path.
+

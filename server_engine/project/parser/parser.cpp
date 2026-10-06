@@ -12,6 +12,7 @@
 #include <limits>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace cw::server {
@@ -128,10 +129,10 @@ struct parsed_declarator final {
     bool binary_operator = false;
 };
 
-template <typename Graph, typename Sources>
-class semantic_parser final {
+template <typename Graph, typename Sources, semantic_domain Domain>
+class semantic_parser_core {
 public:
-    semantic_parser(
+    semantic_parser_core(
         file_context& files_value,
         lexical_generation& lexical,
         const preprocessor_configuration& configuration,
@@ -162,14 +163,12 @@ public:
     }
 
     [[nodiscard]] server_status parse(
-        file_id root,
-        semantic_domain domain_value) noexcept {
+        file_id root) noexcept {
 
         if (failure != nullptr) {
             *failure = {};
         }
 
-        domain = domain_value;
         semantic_root = root;
         internal_static_scope_name = {};
         current = {};
@@ -180,7 +179,7 @@ public:
             std::chrono::steady_clock;
 
         const auto profile_source =
-            domain == semantic_domain::source &&
+            Domain == semantic_domain::source &&
             coarse_telemetry != nullptr;
 
         const auto setup_started =
@@ -198,7 +197,7 @@ public:
         const auto started =
             input.start(
                 root,
-                domain == semantic_domain::header
+                Domain == semantic_domain::header
                     ? semantic_input_mode::header
                     : semantic_input_mode::source);
 
@@ -258,6 +257,7 @@ public:
         const auto finished =
             sources.end_root();
 
+
         if (profile_source &&
             succeeded(finished)) {
 
@@ -278,6 +278,7 @@ public:
     }
 
 private:
+
 
     [[nodiscard]] bool read_type(
         type_handle type,
@@ -318,10 +319,10 @@ private:
             if (!succeeded(dependency)) { return dependency; }
         }
         {
-            parser_stage_timer timer{domain == semantic_domain::source && telemetry != nullptr
+            parser_stage_timer timer{Domain == semantic_domain::source && telemetry != nullptr
                 ? &telemetry->source_member_ns : nullptr};
 
-            if (domain == semantic_domain::source &&
+            if (Domain == semantic_domain::source &&
                 coarse_telemetry != nullptr) {
 
                 ++coarse_telemetry->
@@ -821,6 +822,7 @@ private:
             : input_failure(result);
     }
 
+
     [[nodiscard]] server_status peek(
         semantic_token& output) noexcept {
 
@@ -847,6 +849,7 @@ private:
 
         return server_status::success;
     }
+
 
     [[nodiscard]] bool at(
         token_kind kind) const noexcept {
@@ -2889,7 +2892,7 @@ private:
     [[nodiscard]] server_status parse_record(
         identity_ref scope) noexcept {
 
-        if (domain != semantic_domain::header) {
+        if (Domain != semantic_domain::header) {
             return fail(
                 parser_failure_kind::unsupported,
                 "Type declarations are supported only in Header inputs");
@@ -3801,10 +3804,10 @@ private:
 
     [[nodiscard]] server_status parse_object(
         identity_ref scope) noexcept {
-        parser_stage_timer timer{domain == semantic_domain::source && telemetry != nullptr
+        parser_stage_timer timer{Domain == semantic_domain::source && telemetry != nullptr
             ? &telemetry->source_object_ns : nullptr};
 
-        if (domain == semantic_domain::source &&
+        if (Domain == semantic_domain::source &&
             coarse_telemetry != nullptr) {
 
             ++coarse_telemetry->
@@ -3832,7 +3835,7 @@ private:
             }
         }
 
-        if (domain == semantic_domain::header &&
+        if (Domain == semantic_domain::header &&
             !static_storage) {
 
             return fail(
@@ -3840,7 +3843,7 @@ private:
                 "Header namespace-scope objects require internal static storage");
         }
 
-        if (domain == semantic_domain::source &&
+        if (Domain == semantic_domain::source &&
             (static_storage ||
              inline_storage)) {
 
@@ -3871,7 +3874,7 @@ private:
         identity_ref identity;
 
         status =
-            domain == semantic_domain::header
+            Domain == semantic_domain::header
             ? resolve_internal_static_identity(
                 scope,
                 name,
@@ -3887,7 +3890,7 @@ private:
         }
 
         std::uint32_t flags =
-            domain == semantic_domain::header
+            Domain == semantic_domain::header
             ? graph_object_internal_static
             : 0;
 
@@ -4074,7 +4077,7 @@ private:
         identity_ref scope,
         resolved_link_endpoint& output,
         identity_ref known_object = {}) noexcept {
-        parser_stage_timer timer{domain == semantic_domain::source && telemetry != nullptr
+        parser_stage_timer timer{Domain == semantic_domain::source && telemetry != nullptr
             ? &telemetry->source_endpoint_ns : nullptr};
 
         output = {};
@@ -4391,7 +4394,7 @@ private:
 
         const auto record_endpoint_shape =
             [this](bool direct_member_endpoint) noexcept {
-                if (domain !=
+                if (Domain !=
                         semantic_domain::source ||
                     coarse_telemetry == nullptr) {
 
@@ -4477,7 +4480,7 @@ private:
         type_ref resolved;
 
         if constexpr (std::is_same_v<Graph, graph>) {
-            if (domain == semantic_domain::source) {
+            if (Domain == semantic_domain::source) {
                 resolved = current_type;
                 status = G.intern_resolved_endpoint_path(object_value.type, endpoint_steps, resolved, path);
             }
@@ -4661,7 +4664,7 @@ private:
         identity_ref scope, identity_ref target_object) noexcept {
         parser_stage_timer timer{telemetry != nullptr ? &telemetry->source_assignment_ns : nullptr};
 
-        if (domain != semantic_domain::source) {
+        if (Domain != semantic_domain::source) {
             return fail(
                 parser_failure_kind::unsupported,
                 "Source assignments are supported only in Source inputs");
@@ -4878,7 +4881,7 @@ private:
     }
 
     [[nodiscard]] server_status parse_typedef(identity_ref scope) noexcept {
-        if (domain != semantic_domain::header) {
+        if (Domain != semantic_domain::header) {
             return fail(parser_failure_kind::unsupported, "Typedef declarations belong in Header inputs");
         }
         const auto file = current.file;
@@ -4909,8 +4912,12 @@ private:
         bool expect_close,
         std::size_t scope_depth) noexcept {
 
-        if (domain == semantic_domain::source)
-            return parse_source_scope(scope, expect_close, scope_depth);
+        if constexpr (Domain == semantic_domain::source) {
+            return parse_source_scope(
+                scope,
+                expect_close,
+                scope_depth);
+        }
 
         for (;;) {
             if (at(token_kind::invalid)) {
@@ -5031,8 +5038,6 @@ private:
     std::vector<parser_warning>* warnings = nullptr;
     semantic_parse_telemetry* telemetry = nullptr;
     semantic_parse_telemetry* coarse_telemetry = nullptr;
-    semantic_domain domain =
-        semantic_domain::header;
     file_id semantic_root{};
     string_id internal_static_scope_name{};
     semantic_token current;
@@ -5040,6 +5045,7 @@ private:
     bool has_buffered = false;
 
     std::vector<declarator_modifier> declarator_modifiers;
+
     std::vector<endpoint_path_step> endpoint_steps;
     std::vector<base_record> record_bases;
     std::vector<member_record> record_members;
@@ -5048,6 +5054,26 @@ private:
     std::vector<construction_value> record_construction;
     std::vector<bool> record_assigned;
 };
+
+template <typename Graph, typename Sources>
+using header_parser =
+    semantic_parser_core<
+        Graph,
+        Sources,
+        semantic_domain::header>;
+
+template <typename Graph, typename Sources>
+using source_parser =
+    semantic_parser_core<
+        Graph,
+        Sources,
+        semantic_domain::source>;
+
+static_assert(
+    !std::is_same_v<
+        header_parser<graph, source_map>,
+        source_parser<graph, source_map>>);
+
 
 }
 
@@ -5065,11 +5091,16 @@ server_status parse_semantic_project(
     semantic_parse_telemetry* telemetry) noexcept {
 
     if (telemetry != nullptr) {
-        const auto detailed = telemetry->detailed_source;
+        const auto detailed =
+            telemetry->detailed_source;
+
         *telemetry = {};
-        telemetry->detailed_source = detailed;
+        telemetry->detailed_source =
+            detailed;
     }
-    using clock_type = std::chrono::steady_clock;
+
+    using clock_type =
+        std::chrono::steady_clock;
 
     if (failure != nullptr) {
         *failure = {};
@@ -5082,7 +5113,8 @@ server_status parse_semantic_project(
     if (frontend_root_count >
         files.size()) {
 
-        return server_status::project_configuration_invalid;
+        return server_status::
+            project_configuration_invalid;
     }
 
     const auto source_reset =
@@ -5094,32 +5126,34 @@ server_status parse_semantic_project(
     }
 
     semantic_input_telemetry input_telemetry;
-    input_telemetry.detailed_source = telemetry != nullptr && telemetry->detailed_source;
-    semantic_parser<graph, source_map> parser{
-        files,
-        lexical,
-        configuration,
-        strings,
-        identities,
-        G,
-        sources,
-        failure,
-        warnings,
-        telemetry != nullptr ? &input_telemetry : nullptr,
-        telemetry != nullptr && telemetry->detailed_source ? telemetry : nullptr,
-        telemetry};
+    input_telemetry.detailed_source =
+        telemetry != nullptr &&
+        telemetry->detailed_source;
 
-    for (const auto domain :
-         {semantic_domain::header,
-          semantic_domain::source}) {
+    {
+        header_parser<
+            graph,
+            source_map>
+            parser{
+                files,
+                lexical,
+                configuration,
+                strings,
+                identities,
+                G,
+                sources,
+                failure,
+                warnings,
+                telemetry != nullptr
+                    ? &input_telemetry
+                    : nullptr,
+                nullptr,
+                telemetry};
 
-        const auto domain_started = telemetry != nullptr
-            ? clock_type::now() : clock_type::time_point{};
-
-        const auto expected_kind =
-            domain == semantic_domain::header
-            ? file_kind::header
-            : file_kind::source;
+        const auto started =
+            telemetry != nullptr
+            ? clock_type::now()
+            : clock_type::time_point{};
 
         for (std::size_t index = 0;
              index < frontend_root_count;
@@ -5130,15 +5164,14 @@ server_status parse_semantic_project(
                     index + 1)};
 
             if (files.kind(root) !=
-                expected_kind) {
+                file_kind::header) {
 
                 continue;
             }
 
             const auto parsed =
                 parser.parse(
-                    root,
-                    domain);
+                    root);
 
             if (!succeeded(parsed)) {
                 return parsed;
@@ -5146,33 +5179,123 @@ server_status parse_semantic_project(
         }
 
         if (telemetry != nullptr) {
-            const auto duration = static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    clock_type::now() - domain_started).count());
-            (domain == semantic_domain::header
-                ? telemetry->header_ns : telemetry->source_ns) = duration;
+            telemetry->header_ns =
+                static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<
+                        std::chrono::nanoseconds>(
+                        clock_type::now() -
+                        started).count());
         }
     }
 
-    const auto finalize_started = telemetry != nullptr
-        ? clock_type::now() : clock_type::time_point{};
-    const auto result = sources.finalize(files.size(), identities, G);
-    if (telemetry != nullptr) {
-        telemetry->include_ns = input_telemetry.include_ns;
-        telemetry->include_count = input_telemetry.include_count;
-        telemetry->include_lexical_ns = input_telemetry.include_lexical_ns;
-        telemetry->prepared_include_count = input_telemetry.prepared_include_count;
-        telemetry->source_decode_ns = input_telemetry.source_decode_ns;
-        telemetry->source_intern_ns = input_telemetry.source_intern_ns;
-        telemetry->source_token_count = input_telemetry.source_token_count;
-        telemetry->source_identifier_count = input_telemetry.source_identifier_count;
+    {
+        source_parser<
+            graph,
+            source_map>
+            parser{
+                files,
+                lexical,
+                configuration,
+                strings,
+                identities,
+                G,
+                sources,
+                failure,
+                warnings,
+                telemetry != nullptr
+                    ? &input_telemetry
+                    : nullptr,
+                telemetry != nullptr &&
+                    telemetry->detailed_source
+                    ? telemetry
+                    : nullptr,
+                telemetry};
 
-        telemetry->finalize_ns = static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                clock_type::now() - finalize_started).count());
+        const auto started =
+            telemetry != nullptr
+            ? clock_type::now()
+            : clock_type::time_point{};
+
+        for (std::size_t index = 0;
+             index < frontend_root_count;
+             ++index) {
+
+            const file_id root{
+                static_cast<std::uint32_t>(
+                    index + 1)};
+
+            if (files.kind(root) !=
+                file_kind::source) {
+
+                continue;
+            }
+
+            const auto parsed =
+                parser.parse(
+                    root);
+
+            if (!succeeded(parsed)) {
+                return parsed;
+            }
+        }
+
+        if (telemetry != nullptr) {
+            telemetry->source_ns =
+                static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<
+                        std::chrono::nanoseconds>(
+                        clock_type::now() -
+                        started).count());
+        }
     }
+
+    const auto finalize_started =
+        telemetry != nullptr
+        ? clock_type::now()
+        : clock_type::time_point{};
+
+    const auto result =
+        sources.finalize(
+            files.size(),
+            identities,
+            G);
+
+    if (telemetry != nullptr) {
+        telemetry->include_ns =
+            input_telemetry.include_ns;
+
+        telemetry->include_count =
+            input_telemetry.include_count;
+
+        telemetry->include_lexical_ns =
+            input_telemetry.include_lexical_ns;
+
+        telemetry->prepared_include_count =
+            input_telemetry.prepared_include_count;
+
+        telemetry->source_decode_ns =
+            input_telemetry.source_decode_ns;
+
+        telemetry->source_intern_ns =
+            input_telemetry.source_intern_ns;
+
+        telemetry->source_token_count =
+            input_telemetry.source_token_count;
+
+        telemetry->source_identifier_count =
+            input_telemetry.source_identifier_count;
+
+        telemetry->finalize_ns =
+            static_cast<std::uint64_t>(
+                std::chrono::duration_cast<
+                    std::chrono::nanoseconds>(
+                    clock_type::now() -
+                    finalize_started).count());
+    }
+
     return result;
 }
+
 
 server_status parse_semantic_roots(
     file_context& files,
@@ -5228,41 +5351,63 @@ server_status parse_semantic_roots(
         return source_reset;
     }
 
-    semantic_parser<
-        graph_delta,
-        source_map_delta>
-        parser{
-            files,
-            lexical,
-            configuration,
-            strings,
-            identities,
-            G,
-            sources,
-            failure,
-            warnings};
-
-    for (const auto domain :
-         {semantic_domain::header,
-          semantic_domain::source}) {
-
-        const auto expected_kind =
-            domain ==
-                semantic_domain::header
-            ? file_kind::header
-            : file_kind::source;
+    {
+        header_parser<
+            graph_delta,
+            source_map_delta>
+            parser{
+                files,
+                lexical,
+                configuration,
+                strings,
+                identities,
+                G,
+                sources,
+                failure,
+                warnings};
 
         for (const auto root : roots) {
             if (files.kind(root) !=
-                expected_kind) {
+                file_kind::header) {
 
                 continue;
             }
 
             const auto parsed =
                 parser.parse(
-                    root,
-                    domain);
+                    root);
+
+            if (!succeeded(parsed)) {
+                return parsed;
+            }
+        }
+    }
+
+    {
+        source_parser<
+            graph_delta,
+            source_map_delta>
+            parser{
+                files,
+                lexical,
+                configuration,
+                strings,
+                identities,
+                G,
+                sources,
+                failure,
+                warnings};
+
+        for (const auto root : roots) {
+            if (files.kind(root) !=
+                file_kind::source) {
+
+                continue;
+            }
+
+            const auto parsed =
+                parser.parse(
+                    root);
 
             if (!succeeded(parsed)) {
                 return parsed;
@@ -5272,5 +5417,6 @@ server_status parse_semantic_roots(
 
     return server_status::success;
 }
+
 
 }

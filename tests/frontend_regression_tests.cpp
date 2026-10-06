@@ -1715,6 +1715,173 @@ void test_record_scratch_isolation(test_state& tests) {
     check("D", 1, "x", 13);
 }
 
+void test_header_streaming_order(
+    test_state& tests) {
+
+    // Valid: B is defined before A uses B by value.
+    {
+        const temporary_source first{
+            "header_stream_b",
+            "struct B { int X; };\n"};
+
+        const temporary_source second{
+            "header_stream_a",
+            "struct A { B Value; };\n"};
+
+        file_context files;
+        lexical_generation lexical;
+        file_id first_id;
+        file_id second_id;
+
+        if (!tests.expect(
+                succeeded(
+                    files.resolve(
+                        first.path(),
+                        file_kind::header,
+                        first_id)) &&
+                succeeded(
+                    files.resolve(
+                        second.path(),
+                        file_kind::header,
+                        second_id)),
+                "resolve ordered Header streaming roots")) {
+
+            return;
+        }
+
+        const std::array<file_id, 2> roots{
+            first_id,
+            second_id};
+
+        if (!prepare_all_roots(
+                tests,
+                files,
+                lexical,
+                roots)) {
+
+            return;
+        }
+
+        preprocessor_configuration configuration;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        parser_failure failure;
+
+        if (!tests.expect(
+                succeeded(
+                    parse_semantic_project(
+                        files,
+                        lexical,
+                        roots.size(),
+                        configuration,
+                        strings,
+                        identities,
+                        G,
+                        sources,
+                        &failure)),
+                "Header streaming follows declaration order")) {
+
+            return;
+        }
+
+        const auto a_identity =
+            identities.find(
+                identities.root(),
+                strings.find("A"),
+                identity_kind::type);
+
+        const auto b_identity =
+            identities.find(
+                identities.root(),
+                strings.find("B"),
+                identity_kind::type);
+
+        const auto a_type =
+            G.find_type(
+                a_identity);
+
+        const auto b_type =
+            G.find_type(
+                b_identity);
+
+        const auto value =
+            G.find_member(
+                a_type,
+                strings.find("Value"));
+
+        const auto* member =
+            G.member(
+                a_type,
+                value);
+
+        type_handle resolved;
+
+        tests.expect(
+            a_identity &&
+            b_identity &&
+            a_type &&
+            b_type &&
+            member != nullptr &&
+            G.named(
+                member->type,
+                resolved) &&
+            resolved ==
+                b_type,
+            "Header streaming preserves named member type");
+    }
+
+    // Invalid: a later declaration must not make an earlier by-value use valid.
+    {
+        const temporary_source source{
+            "header_stream_reverse",
+            "struct A { B Value; };\n"
+            "struct B { int X; };\n"};
+
+        parser_failure failure;
+
+        const auto status =
+            parse_file(
+                tests,
+                source.path(),
+                failure);
+
+        tests.expect(
+            status ==
+                server_status::
+                    project_configuration_invalid,
+            "Header streaming rejects by-value use before declaration");
+
+        tests.expect(
+            failure.kind ==
+                parser_failure_kind::semantic &&
+            failure.detail ==
+                "Named type is not declared in the visible semantic scope",
+            "Header streaming reports undeclared earlier type");
+    }
+
+    // Valid: a prior declaration is sufficient for pointer use.
+    {
+        const temporary_source source{
+            "header_stream_forward_pointer",
+            "struct B;\n"
+            "struct A { B* Value; };\n"
+            "struct B { int X; };\n"};
+
+        parser_failure failure;
+
+        tests.expect(
+            succeeded(
+                parse_file(
+                    tests,
+                    source.path(),
+                    failure)),
+            "Header streaming accepts prior declaration for pointer type");
+    }
+}
+
+
 void test_header_static_constructor_binding(
     test_state& tests) {
 
@@ -3706,6 +3873,9 @@ int main() {
             tests);
 
         test_source_preprocessor_rejected(
+            tests);
+
+        test_header_streaming_order(
             tests);
 
         test_header_static_constructor_binding(
