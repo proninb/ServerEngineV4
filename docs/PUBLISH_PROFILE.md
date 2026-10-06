@@ -411,3 +411,57 @@ redundant call; the new coarse timing mode is the useful diagnostic result.
 Final compiled SHA-256 and all object/link counts remained identical. Frontend,
 database, and compiled-project regressions passed; the server was rebuilt.
 Control LOAD completed in 194.19 ms.
+
+## Runtime physical-plan coarse profile (PUBLISH-RUNTIME-PLAN-PROFILE-01)
+
+On the 23,333-Type UnitProXL baseline, `compiled_plan_ms` is about 131 ms and
+`compiled_runtime_prepare_ms` is about 131 ms, while the independent Type plan
+takes about 81 ms. Runtime-plan preparation therefore determines the parallel
+physical-plan wall time.
+
+This diagnostic slice adds exactly two coarse timers inside the Runtime physical
+plan builder:
+
+- `runtime_plan_links_ms` covers the complete Graph link compilation loop;
+- `runtime_plan_initializations_ms` covers the complete initialization
+  compilation loop.
+
+There are no clock reads inside either record loop. Allocation/setup outside
+those loops remains visible as the difference between
+`compiled_runtime_prepare_ms` and the two nested counters.
+
+The profile also reports link slots, live links, initialization count, link
+dereference count, initialization dereference count, and total dereference
+count. The Runtime plan, persisted format, encoder, LOAD path and executor are
+unchanged. This slice is diagnostic only and makes no performance claim.
+
+## Parallel Runtime physical-plan producer (PUBLISH-RUNTIME-PLAN-PARALLEL-01)
+
+The coarse profile measured `compiled_runtime_prepare_ms` at 133.12 ms on the
+23,333-Type UnitProXL fixture. Of that, link compilation consumed 74.57 ms and
+initialization compilation consumed 54.46 ms; about 97% of Runtime-plan time was
+therefore split between two independent read-only producer loops.
+
+This experiment runs those two loops on two lanes. It does not partition either
+loop by record and introduces no mutex, atomic work index or shared-vector
+append. Each lane owns a private `shm_runtime_v2` execution result:
+
+- the link lane produces `links` plus link endpoint dereferences;
+- the initialization lane produces `initializations` plus initialization
+  endpoint dereferences.
+
+After both lanes complete, one deterministic merge reconstructs the same
+sequential physical program order: link dereferences first, initialization
+dereferences second. Initialization endpoint `dereference_begin` values are
+rebased by the final link-dereference count. Link slots, live-link WHERE order,
+initialization order and all encoded record formats are unchanged.
+
+If the two-lane execution infrastructure cannot start or dispatch, preparation
+falls back to the previous sequential builder. Semantic errors from either
+producer are not retried or masked.
+
+`runtime_plan_parallel_lanes` reports whether the measured preparation used one
+or two lanes. The existing coarse link/initialization timers remain enabled for
+A/B analysis. `runtime.bin` format, LOAD, Runtime execution and BUILD scope are
+unchanged. Performance acceptance is measured separately.
+

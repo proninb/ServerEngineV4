@@ -62,6 +62,19 @@ struct full_construction_telemetry final {
     std::uint64_t compiled_type_ns = 0;
     std::uint64_t compiled_plan_ns = 0;
     std::uint64_t compiled_runtime_prepare_ns = 0;
+
+    // PUBLISH-RUNTIME-PLAN-PROFILE-01:
+    // coarse producer-only profiling; no per-record clocks.
+    std::uint64_t runtime_plan_links_ns = 0;
+    std::uint64_t runtime_plan_initializations_ns = 0;
+    std::uint64_t runtime_plan_link_slots = 0;
+    std::uint64_t runtime_plan_live_links = 0;
+    std::uint64_t runtime_plan_initializations = 0;
+    std::uint64_t runtime_plan_link_dereferences = 0;
+    std::uint64_t runtime_plan_initialization_dereferences = 0;
+    std::uint64_t runtime_plan_total_dereferences = 0;
+    std::uint64_t runtime_plan_parallel_lanes = 1;
+
     std::uint64_t compiled_remap_ns = 0;
     std::uint64_t compiled_physical_ns = 0;
     std::uint64_t compiled_abi_encode_ns = 0;

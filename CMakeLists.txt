@@ -882,6 +882,18 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
     )
 
+    if(WIN32)
+        target_sources(ServerEngineV4Tests PRIVATE
+            server_engine/project/construction/execution_lanes_windows.cpp
+        )
+    else()
+        target_sources(ServerEngineV4Tests PRIVATE
+            server_engine/project/construction/execution_lanes_posix.cpp
+        )
+
+        target_link_libraries(ServerEngineV4Tests PRIVATE Threads::Threads)
+    endif()
+
     if(MSVC)
         target_compile_options(ServerEngineV4Tests PRIVATE /W4 /permissive-)
     else()

@@ -520,6 +520,15 @@ int main(
             << ",compiled_type_ms=" << ns_to_ms(publish_telemetry.compiled_type_ns)
             << ",compiled_plan_ms=" << ns_to_ms(publish_telemetry.compiled_plan_ns)
             << ",compiled_runtime_prepare_ms=" << ns_to_ms(publish_telemetry.compiled_runtime_prepare_ns)
+            << ",runtime_plan_links_ms=" << ns_to_ms(publish_telemetry.runtime_plan_links_ns)
+            << ",runtime_plan_initializations_ms=" << ns_to_ms(publish_telemetry.runtime_plan_initializations_ns)
+            << ",runtime_plan_link_slots=" << publish_telemetry.runtime_plan_link_slots
+            << ",runtime_plan_live_links=" << publish_telemetry.runtime_plan_live_links
+            << ",runtime_plan_initializations=" << publish_telemetry.runtime_plan_initializations
+            << ",runtime_plan_link_dereferences=" << publish_telemetry.runtime_plan_link_dereferences
+            << ",runtime_plan_initialization_dereferences=" << publish_telemetry.runtime_plan_initialization_dereferences
+            << ",runtime_plan_total_dereferences=" << publish_telemetry.runtime_plan_total_dereferences
+            << ",runtime_plan_parallel_lanes=" << publish_telemetry.runtime_plan_parallel_lanes
             << ",compiled_remap_ms=" << ns_to_ms(publish_telemetry.compiled_remap_ns)
             << ",compiled_physical_ms=" << ns_to_ms(publish_telemetry.compiled_physical_ns)
             << ",compiled_abi_encode_ms=" << ns_to_ms(publish_telemetry.compiled_abi_encode_ns)

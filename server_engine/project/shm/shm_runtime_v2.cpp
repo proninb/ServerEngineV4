@@ -1,11 +1,13 @@
 #include "shm_runtime_v2.hpp"
 
 #include "../abi/abi_layout.hpp"
+#include "../construction/execution_lanes.hpp"
 #include "../persistence/compiled_project.hpp"
 #include "../persistence/runtime_project.hpp"
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -22,20 +24,252 @@ public:
         const compiled_project_view& project,
         const server_abi_configuration& abi,
         const shm_layout& layout,
-        shm_runtime_v2& output) noexcept
+        shm_runtime_v2& output,
+        shm_runtime_v2_physical_plan_telemetry*
+            telemetry = nullptr) noexcept
         : project(project),
           abi(abi),
           layout(layout),
-          output(output) {
+          output(output),
+          telemetry(telemetry) {
     }
 
     [[nodiscard]] shm_runtime_v2_result build() {
 
+        if (telemetry != nullptr) {
+            *telemetry = {};
+        }
+
+        reset_execution();
+
+        const auto compatible =
+            validate_target();
+
+        if (compatible !=
+            shm_runtime_v2_result::success) {
+
+            return compatible;
+        }
+
+        const auto links =
+            build_links_phase();
+
+        if (links !=
+            shm_runtime_v2_result::success) {
+
+            return links;
+        }
+
+        const auto initializations =
+            build_initializations_phase();
+
+        if (initializations !=
+            shm_runtime_v2_result::success) {
+
+            return initializations;
+        }
+
+        if (telemetry != nullptr) {
+            telemetry->total_dereferences =
+                static_cast<std::uint64_t>(
+                    output.endpoint_dereferences.size());
+
+            telemetry->
+                initialization_dereferences =
+                telemetry->total_dereferences >=
+                        telemetry->link_dereferences
+                    ? telemetry->total_dereferences -
+                        telemetry->link_dereferences
+                    : 0;
+
+            telemetry->parallel_lanes = 1;
+        }
+
+        return shm_runtime_v2_result::
+            success;
+    }
+
+    [[nodiscard]] shm_runtime_v2_result
+    build_links_only() {
+
+        reset_execution();
+
+        const auto compatible =
+            validate_target();
+
+        if (compatible !=
+            shm_runtime_v2_result::success) {
+
+            return compatible;
+        }
+
+        return build_links_phase();
+    }
+
+    [[nodiscard]] shm_runtime_v2_result
+    build_initializations_only() {
+
+        reset_execution();
+
+        const auto compatible =
+            validate_target();
+
+        if (compatible !=
+            shm_runtime_v2_result::success) {
+
+            return compatible;
+        }
+
+        const auto result =
+            build_initializations_phase();
+
+        if (result ==
+                shm_runtime_v2_result::success &&
+            telemetry != nullptr) {
+
+            telemetry->
+                initialization_dereferences =
+                static_cast<std::uint64_t>(
+                    output.endpoint_dereferences.size());
+        }
+
+        return result;
+    }
+
+    [[nodiscard]] static
+    shm_runtime_v2_result merge_parallel(
+        shm_runtime_v2&& links,
+        shm_runtime_v2&& initializations,
+        shm_runtime_v2& output,
+        shm_runtime_v2_physical_plan_telemetry*
+            telemetry) {
+
+        const auto link_dereferences =
+            links.endpoint_dereferences.size();
+
+        const auto initialization_dereferences =
+            initializations.
+                endpoint_dereferences.size();
+
+        if (link_dereferences >
+                static_cast<std::size_t>(
+                    (std::numeric_limits<
+                        std::uint32_t>::max)()) ||
+            initialization_dereferences >
+                static_cast<std::size_t>(
+                    (std::numeric_limits<
+                        std::uint32_t>::max)()) -
+                    link_dereferences) {
+
+            return shm_runtime_v2_result::
+                overflow;
+        }
+
+        const auto rebase =
+            static_cast<std::uint32_t>(
+                link_dereferences);
+
+        if (rebase != 0) {
+            for (auto& initialization :
+                 initializations.initializations) {
+
+                if (initialization.target.
+                        dereference_count == 0) {
+
+                    continue;
+                }
+
+                if (initialization.target.
+                        dereference_begin >
+                    (std::numeric_limits<
+                        std::uint32_t>::max)() -
+                        rebase) {
+
+                    return shm_runtime_v2_result::
+                        overflow;
+                }
+
+                initialization.target.
+                    dereference_begin +=
+                        rebase;
+            }
+        }
+
+        output.links =
+            std::move(
+                links.links);
+
+        output.initializations =
+            std::move(
+                initializations.
+                    initializations);
+
+        output.live_link_count_value =
+            links.live_link_count_value;
+
+        output.link_dereference_count_value =
+            link_dereferences;
+
+        if (link_dereferences == 0) {
+            output.endpoint_dereferences =
+                std::move(
+                    initializations.
+                        endpoint_dereferences);
+        }
+        else if (initialization_dereferences == 0) {
+            output.endpoint_dereferences =
+                std::move(
+                    links.endpoint_dereferences);
+        }
+        else {
+            output.endpoint_dereferences =
+                std::move(
+                    links.endpoint_dereferences);
+
+            output.endpoint_dereferences.reserve(
+                link_dereferences +
+                initialization_dereferences);
+
+            output.endpoint_dereferences.insert(
+                output.endpoint_dereferences.end(),
+                initializations.
+                    endpoint_dereferences.begin(),
+                initializations.
+                    endpoint_dereferences.end());
+        }
+
+        if (telemetry != nullptr) {
+            telemetry->link_dereferences =
+                static_cast<std::uint64_t>(
+                    link_dereferences);
+
+            telemetry->
+                initialization_dereferences =
+                static_cast<std::uint64_t>(
+                    initialization_dereferences);
+
+            telemetry->total_dereferences =
+                static_cast<std::uint64_t>(
+                    output.endpoint_dereferences.size());
+
+            telemetry->parallel_lanes = 2;
+        }
+
+        return shm_runtime_v2_result::
+            success;
+    }
+
+private:
+    void reset_execution() noexcept {
         output.links.clear();
         output.initializations.clear();
         output.endpoint_dereferences.clear();
         output.live_link_count_value = 0;
         output.link_dereference_count_value = 0;
+    }
+
+    [[nodiscard]] shm_runtime_v2_result
+    validate_target() const noexcept {
 
         if (!host_compatible(
                 abi.target) ||
@@ -46,8 +280,29 @@ public:
                 incompatible_abi;
         }
 
+        return shm_runtime_v2_result::
+            success;
+    }
+
+    [[nodiscard]] shm_runtime_v2_result
+    build_links_phase() {
+
         output.links.resize(
             project.link_count());
+
+        using profile_clock =
+            std::chrono::steady_clock;
+
+        if (telemetry != nullptr) {
+            telemetry->link_slots =
+                static_cast<std::uint64_t>(
+                    project.link_count());
+        }
+
+        const auto links_started =
+            telemetry != nullptr
+            ? profile_clock::now()
+            : profile_clock::time_point{};
 
         for (std::size_t index = 0;
              index < project.link_count();
@@ -119,6 +374,20 @@ public:
             ++output.live_link_count_value;
         }
 
+        if (telemetry != nullptr) {
+            telemetry->links_ns =
+                static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<
+                        std::chrono::nanoseconds>(
+                        profile_clock::now() -
+                        links_started)
+                        .count());
+
+            telemetry->live_links =
+                static_cast<std::uint64_t>(
+                    output.live_link_count_value);
+        }
+
         if (output.live_link_count_value !=
             project.live_link_count()) {
 
@@ -129,8 +398,30 @@ public:
         output.link_dereference_count_value =
             output.endpoint_dereferences.size();
 
+        if (telemetry != nullptr) {
+            telemetry->link_dereferences =
+                static_cast<std::uint64_t>(
+                    output.
+                        link_dereference_count_value);
+        }
+
+        return shm_runtime_v2_result::
+            success;
+    }
+
+    [[nodiscard]] shm_runtime_v2_result
+    build_initializations_phase() {
+
         output.initializations.reserve(
             project.initialization_count());
+
+        using profile_clock =
+            std::chrono::steady_clock;
+
+        const auto initializations_started =
+            telemetry != nullptr
+            ? profile_clock::now()
+            : profile_clock::time_point{};
 
         for (std::size_t index = 0;
              index <
@@ -189,11 +480,24 @@ public:
                 plan);
         }
 
+        if (telemetry != nullptr) {
+            telemetry->initializations_ns =
+                static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<
+                        std::chrono::nanoseconds>(
+                        profile_clock::now() -
+                        initializations_started)
+                        .count());
+
+            telemetry->initializations =
+                static_cast<std::uint64_t>(
+                    output.initializations.size());
+        }
+
         return shm_runtime_v2_result::
             success;
     }
 
-private:
     [[nodiscard]] static bool host_compatible(
         abi_target target) noexcept {
 
@@ -1176,10 +1480,77 @@ private:
     const server_abi_configuration& abi;
     const shm_layout& layout;
     shm_runtime_v2& output;
+    shm_runtime_v2_physical_plan_telemetry*
+        telemetry = nullptr;
 };
 
 
 namespace {
+
+struct runtime_plan_parallel_job final {
+    const compiled_project_view& project;
+    const server_abi_configuration& abi;
+    const shm_layout& layout;
+
+    shm_runtime_v2 links;
+    shm_runtime_v2 initializations;
+
+    shm_runtime_v2_physical_plan_telemetry*
+        telemetry = nullptr;
+
+    std::array<
+        shm_runtime_v2_result,
+        2> results{
+            shm_runtime_v2_result::failed,
+            shm_runtime_v2_result::failed,
+        };
+
+    static void run(
+        void* context,
+        std::size_t lane) noexcept {
+
+        auto& job =
+            *static_cast<
+                runtime_plan_parallel_job*>(
+                    context);
+
+        if (lane >= 2) {
+            return;
+        }
+
+        try {
+            if (lane == 0) {
+                shm_runtime_v2_link_builder builder{
+                    job.project,
+                    job.abi,
+                    job.layout,
+                    job.links,
+                    job.telemetry,
+                };
+
+                job.results[0] =
+                    builder.build_links_only();
+            }
+            else {
+                shm_runtime_v2_link_builder builder{
+                    job.project,
+                    job.abi,
+                    job.layout,
+                    job.initializations,
+                    job.telemetry,
+                };
+
+                job.results[1] =
+                    builder.
+                        build_initializations_only();
+            }
+        }
+        catch (...) {
+            job.results[lane] =
+                shm_runtime_v2_result::failed;
+        }
+    }
+};
 
 constexpr std::array<std::byte, 8>
     shm_runtime_v2_execution_magic{
@@ -1547,16 +1918,86 @@ shm_runtime_v2_result prepare_shm_runtime_v2_physical_plan(
     const compiled_project_view& project,
     const server_abi_configuration& abi,
     const shm_layout& layout,
-    shm_runtime_v2& runtime) noexcept {
+    shm_runtime_v2& runtime,
+    shm_runtime_v2_physical_plan_telemetry*
+        telemetry) noexcept {
 
     runtime = shm_runtime_v2{};
 
+    if (telemetry != nullptr) {
+        *telemetry = {};
+    }
+
     try {
+        if (execution_lane_capacity() >= 2) {
+            runtime_plan_parallel_job job{
+                project,
+                abi,
+                layout,
+                {},
+                {},
+                telemetry,
+            };
+
+            execution_lanes lanes;
+
+            const auto started =
+                lanes.start(2);
+
+            if (succeeded(started)) {
+                const auto ran =
+                    lanes.run(
+                        2,
+                        runtime_plan_parallel_job::run,
+                        &job);
+
+                if (succeeded(ran)) {
+                    if (job.results[0] !=
+                        shm_runtime_v2_result::
+                            success) {
+
+                        runtime = shm_runtime_v2{};
+                        return job.results[0];
+                    }
+
+                    if (job.results[1] !=
+                        shm_runtime_v2_result::
+                            success) {
+
+                        runtime = shm_runtime_v2{};
+                        return job.results[1];
+                    }
+
+                    const auto merged =
+                        shm_runtime_v2_link_builder::
+                            merge_parallel(
+                                std::move(
+                                    job.links),
+                                std::move(
+                                    job.initializations),
+                                runtime,
+                                telemetry);
+
+                    if (merged !=
+                        shm_runtime_v2_result::
+                            success) {
+
+                        runtime = shm_runtime_v2{};
+                    }
+
+                    return merged;
+                }
+            }
+        }
+
+        // Execution-lane creation/dispatch is an optimization boundary.
+        // Preserve the exact sequential producer as the correctness fallback.
         shm_runtime_v2_link_builder builder{
             project,
             abi,
             layout,
             runtime,
+            telemetry,
         };
 
         const auto built =
@@ -1564,12 +2005,18 @@ shm_runtime_v2_result prepare_shm_runtime_v2_physical_plan(
 
         if (built !=
             shm_runtime_v2_result::success) {
+
             runtime = shm_runtime_v2{};
             return built;
         }
     }
     catch (...) {
         runtime = shm_runtime_v2{};
+
+        if (telemetry != nullptr) {
+            *telemetry = {};
+        }
+
         return shm_runtime_v2_result::failed;
     }
 

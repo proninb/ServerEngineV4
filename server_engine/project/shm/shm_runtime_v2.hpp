@@ -405,14 +405,31 @@ private:
 };
 
 
+struct shm_runtime_v2_physical_plan_telemetry final {
+    std::uint64_t links_ns = 0;
+    std::uint64_t initializations_ns = 0;
+
+    std::uint64_t link_slots = 0;
+    std::uint64_t live_links = 0;
+    std::uint64_t initializations = 0;
+
+    std::uint64_t link_dereferences = 0;
+    std::uint64_t initialization_dereferences = 0;
+    std::uint64_t total_dereferences = 0;
+
+    std::uint64_t parallel_lanes = 1;
+};
+
 // PUBLISH compiles links and source initializations once and encodes immutable
 // same-WHERE Runtime columns directly into runtime.bin.
 // Preparation owns its output and reads only the stable Project/ABI views.
+// Optional telemetry is coarse: no clocks are read inside record loops.
 [[nodiscard]] shm_runtime_v2_result prepare_shm_runtime_v2_physical_plan(
     const compiled_project_view& project,
     const server_abi_configuration& abi,
     const shm_layout& layout,
-    shm_runtime_v2& output) noexcept;
+    shm_runtime_v2& output,
+    shm_runtime_v2_physical_plan_telemetry* telemetry = nullptr) noexcept;
 
 [[nodiscard]] shm_runtime_v2_result encode_shm_runtime_v2_physical_columns(
     const shm_runtime_v2& runtime,

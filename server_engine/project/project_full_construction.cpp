@@ -213,6 +213,8 @@ struct physical_plan_job final {
     shm_type_batch& type;
     shm_runtime_v2& runtime;
     full_construction_telemetry* telemetry;
+    shm_runtime_v2_physical_plan_telemetry
+        runtime_plan_telemetry{};
     std::size_t active_lanes = 1;
     shm_type_batch_result type_result = shm_type_batch_result::invalid_input;
     shm_runtime_v2_result runtime_result = shm_runtime_v2_result::invalid_input;
@@ -229,7 +231,13 @@ struct physical_plan_job final {
             }
             else {
                 job.runtime_result = prepare_shm_runtime_v2_physical_plan(
-                    job.compiled, job.abi, job.layout, job.runtime);
+                    job.compiled,
+                    job.abi,
+                    job.layout,
+                    job.runtime,
+                    job.telemetry != nullptr
+                        ? &job.runtime_plan_telemetry
+                        : nullptr);
             }
             if (job.telemetry != nullptr) {
                 const auto duration = static_cast<std::uint64_t>(
@@ -237,6 +245,39 @@ struct physical_plan_job final {
                         clock_type::now() - started).count());
                 (task == 0 ? job.telemetry->compiled_type_ns
                     : job.telemetry->compiled_runtime_prepare_ns) = duration;
+
+                if (task == 1) {
+                    job.telemetry->runtime_plan_links_ns =
+                        job.runtime_plan_telemetry.links_ns;
+                    job.telemetry->
+                        runtime_plan_initializations_ns =
+                        job.runtime_plan_telemetry.
+                            initializations_ns;
+                    job.telemetry->runtime_plan_link_slots =
+                        job.runtime_plan_telemetry.link_slots;
+                    job.telemetry->runtime_plan_live_links =
+                        job.runtime_plan_telemetry.live_links;
+                    job.telemetry->
+                        runtime_plan_initializations =
+                        job.runtime_plan_telemetry.
+                            initializations;
+                    job.telemetry->
+                        runtime_plan_link_dereferences =
+                        job.runtime_plan_telemetry.
+                            link_dereferences;
+                    job.telemetry->
+                        runtime_plan_initialization_dereferences =
+                        job.runtime_plan_telemetry.
+                            initialization_dereferences;
+                    job.telemetry->
+                        runtime_plan_total_dereferences =
+                        job.runtime_plan_telemetry.
+                            total_dereferences;
+                    job.telemetry->
+                        runtime_plan_parallel_lanes =
+                        job.runtime_plan_telemetry.
+                            parallel_lanes;
+                }
             }
         }
     }
