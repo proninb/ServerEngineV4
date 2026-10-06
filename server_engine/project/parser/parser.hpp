@@ -82,7 +82,30 @@ struct semantic_parse_telemetry final {
     std::uint64_t source_token_count = 0;
     std::uint64_t source_identifier_count = 0;
 
+    // PUBLISH-SOURCE-COARSE-PROFILE-01.
+    // Root-level clocks only; no clocks are read inside Source statement loops.
+    std::uint64_t source_root_count = 0;
+    std::uint64_t source_root_setup_ns = 0;
+    std::uint64_t source_replay_ns = 0;
+    std::uint64_t source_root_finish_ns = 0;
 
+    // Zero-clock Source workload shape.
+    std::uint64_t source_object_statements = 0;
+    std::uint64_t source_value_assignment_statements = 0;
+    std::uint64_t source_link_statements = 0;
+    std::uint64_t source_string_assignment_statements = 0;
+    std::uint64_t source_string_assignment_elements = 0;
+    std::uint64_t source_endpoint_count = 0;
+    std::uint64_t source_endpoint_steps = 0;
+
+    // PUBLISH-SOURCE-ENDPOINT-SHAPE-02.
+    // Zero-clock endpoint/member shape.
+    std::uint64_t source_endpoint_direct_members = 0;
+    std::uint64_t source_endpoint_path_endpoints = 0;
+    std::uint64_t source_endpoint_member_steps = 0;
+    std::uint64_t source_endpoint_array_steps = 0;
+    std::uint64_t source_endpoint_dereference_steps = 0;
+    std::uint64_t source_endpoint_base_steps = 0;
 };
 
 [[nodiscard]] server_status parse_semantic_project(

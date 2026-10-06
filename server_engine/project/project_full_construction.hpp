@@ -51,6 +51,29 @@ struct full_construction_telemetry final {
     std::uint64_t source_token_count = 0;
     std::uint64_t source_identifier_count = 0;
 
+    // PUBLISH-SOURCE-COARSE-PROFILE-01.
+    std::uint64_t source_root_count = 0;
+    std::uint64_t source_root_setup_ns = 0;
+    std::uint64_t source_replay_ns = 0;
+    std::uint64_t source_root_finish_ns = 0;
+    std::uint64_t source_object_statements = 0;
+    std::uint64_t source_value_assignment_statements = 0;
+    std::uint64_t source_link_statements = 0;
+    std::uint64_t source_string_assignment_statements = 0;
+    std::uint64_t source_string_assignment_elements = 0;
+    std::uint64_t source_endpoint_count = 0;
+    std::uint64_t source_endpoint_steps = 0;
+
+    // PUBLISH-SOURCE-ENDPOINT-SHAPE-02.
+    std::uint64_t source_endpoint_direct_members = 0;
+    std::uint64_t source_endpoint_path_endpoints = 0;
+    std::uint64_t source_endpoint_member_steps = 0;
+    std::uint64_t source_endpoint_array_steps = 0;
+    std::uint64_t source_endpoint_dereference_steps = 0;
+    std::uint64_t source_endpoint_base_steps = 0;
+
+    std::uint64_t graph_endpoint_paths = 0;
+    std::uint64_t graph_endpoint_path_steps = 0;
 
     std::uint64_t source_finalize_ns = 0;
     std::uint64_t persistence_ns = 0;

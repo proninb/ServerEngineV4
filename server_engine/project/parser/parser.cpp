@@ -142,7 +142,8 @@ public:
         parser_failure* failure,
         std::vector<parser_warning>* warnings,
         semantic_input_telemetry* input_telemetry = nullptr,
-        semantic_parse_telemetry* parse_telemetry = nullptr) noexcept
+        semantic_parse_telemetry* parse_telemetry = nullptr,
+        semantic_parse_telemetry* coarse_telemetry = nullptr) noexcept
         : files(files_value),
           input(
               files_value,
@@ -156,7 +157,8 @@ public:
           sources(sources),
           failure(failure),
           warnings(warnings),
-          telemetry(parse_telemetry) {
+          telemetry(parse_telemetry),
+          coarse_telemetry(coarse_telemetry) {
     }
 
     [[nodiscard]] server_status parse(
@@ -173,6 +175,18 @@ public:
         current = {};
         buffered = {};
         has_buffered = false;
+
+        using coarse_clock =
+            std::chrono::steady_clock;
+
+        const auto profile_source =
+            domain == semantic_domain::source &&
+            coarse_telemetry != nullptr;
+
+        const auto setup_started =
+            profile_source
+            ? coarse_clock::now()
+            : coarse_clock::time_point{};
 
         const auto provenance_started =
             sources.begin_root(root);
@@ -199,6 +213,22 @@ public:
             return advanced;
         }
 
+        if (profile_source) {
+            coarse_telemetry->
+                source_root_setup_ns +=
+                static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<
+                        std::chrono::nanoseconds>(
+                        coarse_clock::now() -
+                        setup_started)
+                        .count());
+        }
+
+        const auto replay_started =
+            profile_source
+            ? coarse_clock::now()
+            : coarse_clock::time_point{};
+
         const auto parsed =
             parse_scope(
                 identities.root(),
@@ -209,7 +239,42 @@ public:
             return parsed;
         }
 
-        return sources.end_root();
+        if (profile_source) {
+            coarse_telemetry->
+                source_replay_ns +=
+                static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<
+                        std::chrono::nanoseconds>(
+                        coarse_clock::now() -
+                        replay_started)
+                        .count());
+        }
+
+        const auto finish_started =
+            profile_source
+            ? coarse_clock::now()
+            : coarse_clock::time_point{};
+
+        const auto finished =
+            sources.end_root();
+
+        if (profile_source &&
+            succeeded(finished)) {
+
+            coarse_telemetry->
+                source_root_finish_ns +=
+                static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<
+                        std::chrono::nanoseconds>(
+                        coarse_clock::now() -
+                        finish_started)
+                        .count());
+
+            ++coarse_telemetry->
+                source_root_count;
+        }
+
+        return finished;
     }
 
 private:
@@ -255,8 +320,17 @@ private:
         {
             parser_stage_timer timer{domain == semantic_domain::source && telemetry != nullptr
                 ? &telemetry->source_member_ns : nullptr};
-            if (domain == semantic_domain::source && telemetry != nullptr) ++telemetry->source_member_lookups;
-            member = G.find_member(record, name);
+
+            if (domain == semantic_domain::source &&
+                coarse_telemetry != nullptr) {
+
+                ++coarse_telemetry->
+                    source_member_lookups;
+            }
+
+            member = G.find_member(
+                record,
+                name);
         }
         if (member) { owner = record; return server_status::success; }
         type_entry entry;
@@ -3730,6 +3804,13 @@ private:
         parser_stage_timer timer{domain == semantic_domain::source && telemetry != nullptr
             ? &telemetry->source_object_ns : nullptr};
 
+        if (domain == semantic_domain::source &&
+            coarse_telemetry != nullptr) {
+
+            ++coarse_telemetry->
+                source_object_statements;
+        }
+
         bool static_storage = false;
         bool inline_storage = false;
 
@@ -4308,6 +4389,62 @@ private:
         output.type =
             current_type;
 
+        const auto record_endpoint_shape =
+            [this](bool direct_member_endpoint) noexcept {
+                if (domain !=
+                        semantic_domain::source ||
+                    coarse_telemetry == nullptr) {
+
+                    return;
+                }
+
+                ++coarse_telemetry->
+                    source_endpoint_count;
+
+                coarse_telemetry->
+                    source_endpoint_steps +=
+                    static_cast<std::uint64_t>(
+                        endpoint_steps.size());
+
+                if (direct_member_endpoint) {
+                    ++coarse_telemetry->
+                        source_endpoint_direct_members;
+                }
+                else {
+                    ++coarse_telemetry->
+                        source_endpoint_path_endpoints;
+                }
+
+                for (const auto& step :
+                     endpoint_steps) {
+
+                    switch (step.kind) {
+                    case endpoint_path_step_kind::member:
+                        ++coarse_telemetry->
+                            source_endpoint_member_steps;
+                        break;
+
+                    case endpoint_path_step_kind::array_index:
+                        ++coarse_telemetry->
+                            source_endpoint_array_steps;
+                        break;
+
+                    case endpoint_path_step_kind::dereference:
+                        ++coarse_telemetry->
+                            source_endpoint_dereference_steps;
+                        break;
+
+                    case endpoint_path_step_kind::base:
+                        ++coarse_telemetry->
+                            source_endpoint_base_steps;
+                        break;
+
+                    default:
+                        break;
+                    }
+                }
+            };
+
         if (endpoint_steps.size() == 1 &&
             endpoint_steps.front().kind ==
                 endpoint_path_step_kind::member) {
@@ -4329,6 +4466,9 @@ private:
                 object_identity,
                 direct_member,
             };
+
+            record_endpoint_shape(
+                true);
 
             return server_status::success;
         }
@@ -4367,6 +4507,9 @@ private:
             endpoint_ref::from_path(
                 path),
         };
+
+        record_endpoint_shape(
+            false);
 
         return server_status::success;
     }
@@ -4461,6 +4604,16 @@ private:
             !array.payload || !G.intrinsic(array.child, character) || character != intrinsic_type::char_type) {
             return fail(parser_failure_kind::semantic, "String assignment requires a writable bounded char array");
         }
+
+        if (coarse_telemetry != nullptr) {
+            ++coarse_telemetry->
+                source_string_assignment_statements;
+
+            coarse_telemetry->
+                source_string_assignment_elements +=
+                array.payload;
+        }
+
         std::vector<unsigned char> bytes;
         auto status = parse_string_bytes(array.payload, bytes);
         if (!succeeded(status)) { return status; }
@@ -4550,6 +4703,11 @@ private:
                 target_referent)) {
             if (telemetry != nullptr) timer.elapsed = &telemetry->source_link_ns;
 
+            if (coarse_telemetry != nullptr) {
+                ++coarse_telemetry->
+                    source_link_statements;
+            }
+
             resolved_link_endpoint source;
 
             status =
@@ -4605,6 +4763,11 @@ private:
             }
 
             return advance();
+        }
+
+        if (coarse_telemetry != nullptr) {
+            ++coarse_telemetry->
+                source_value_assignment_statements;
         }
 
         if (at(token_kind::string_literal)) {
@@ -4867,6 +5030,7 @@ private:
     parser_failure* failure = nullptr;
     std::vector<parser_warning>* warnings = nullptr;
     semantic_parse_telemetry* telemetry = nullptr;
+    semantic_parse_telemetry* coarse_telemetry = nullptr;
     semantic_domain domain =
         semantic_domain::header;
     file_id semantic_root{};
@@ -4942,7 +5106,8 @@ server_status parse_semantic_project(
         failure,
         warnings,
         telemetry != nullptr ? &input_telemetry : nullptr,
-        telemetry != nullptr && telemetry->detailed_source ? telemetry : nullptr};
+        telemetry != nullptr && telemetry->detailed_source ? telemetry : nullptr,
+        telemetry};
 
     for (const auto domain :
          {semantic_domain::header,

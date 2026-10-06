@@ -1556,32 +1556,33 @@ std::uint64_t graph::hash_endpoint_path(
     type_ref root_type,
     std::span<const endpoint_path_step> steps) noexcept {
 
-    std::uint64_t hash =
-        1469598103934665603ull;
+    // Resident index hash only. Path identity remains the full
+    // root_type + endpoint_path_step sequence checked by find_endpoint_path.
+    constexpr std::uint64_t root_salt =
+        0x9e3779b97f4a7c15ULL;
 
-    const auto mix =
-        [&hash](std::uint64_t value) noexcept {
-            for (std::size_t index = 0;
-                 index < 8;
-                 ++index) {
+    constexpr std::uint64_t kind_salt =
+        0xd6e8feb86659fd93ULL;
 
-                hash ^=
-                    static_cast<std::uint8_t>(
-                        value & 0xffu);
-
-                hash *=
-                    1099511628211ull;
-
-                value >>= 8;
-            }
-        };
-
-    mix(root_type.value());
+    auto hash =
+        mix64(
+            root_type.value() ^
+            root_salt);
 
     for (const auto& step : steps) {
-        mix(static_cast<std::uint8_t>(
-            step.kind));
-        mix(step.value);
+        const auto kind =
+            static_cast<std::uint64_t>(
+                static_cast<std::uint8_t>(
+                    step.kind));
+
+        const auto tagged =
+            step.value ^
+            (kind * kind_salt);
+
+        hash =
+            mix64(
+                hash ^
+                mix64(tagged));
     }
 
     return hash == 0

@@ -465,3 +465,113 @@ or two lanes. The existing coarse link/initialization timers remain enabled for
 A/B analysis. `runtime.bin` format, LOAD, Runtime execution and BUILD scope are
 unchanged. Performance acceptance is measured separately.
 
+## Coarse Source semantic profile (PUBLISH-SOURCE-COARSE-PROFILE-01)
+
+After Runtime physical-plan parallelization, Source semantic replay remains about
+500 ms on the 23,333-Type UnitProXL fixture. The existing `publish-profile`
+Source detail is intentionally not suitable for latency attribution: nested
+per-statement, endpoint, member, commit, provenance, decode and intern clocks
+roughly double Source time on this workload.
+
+This slice therefore keeps `publish-stage` coarse. It adds only three timed
+regions per Source root:
+
+- `source_root_setup_ms`: Source provenance begin, input start and first token;
+- `source_replay_ms`: the complete streaming Source semantic scope replay;
+- `source_root_finish_ms`: Source provenance end.
+
+There are no new clocks inside Source statement, endpoint, member or Graph
+record loops. The remaining Source telemetry is zero-clock workload shape:
+
+- object statements;
+- non-link value-assignment statements;
+- link statements;
+- string-assignment statements and their scalar expansion element count;
+- successful endpoint resolutions and total endpoint path-step count.
+
+`source_ms` remains the authoritative whole Source-domain wall time.
+`source_finalize_ms` remains outside it and measures the existing final
+`source_map::finalize` phase. The difference between `source_ms` and the three
+root-level sums includes root filtering/dispatch and ordinary timing boundary
+overhead.
+
+Parser semantics, Graph writes, Source ordering, persisted formats, LOAD and
+BUILD behavior are unchanged. This slice is diagnostic only and makes no
+performance claim.
+
+## Source endpoint/member shape profile (PUBLISH-SOURCE-ENDPOINT-SHAPE-02)
+
+The preceding coarse profile measured about 500 ms of Source semantic time, of
+which about 499 ms was the streaming replay itself. The observed Source workload
+contained 946,657 successful endpoint resolutions and 1,620,714 endpoint path
+steps, so the next decision is whether member lookup or generic endpoint-path
+interning is the better optimization target.
+
+This diagnostic slice adds no clocks. It records:
+
+- endpoints that collapse to the direct-member representation;
+- endpoints that use generic endpoint-path interning;
+- final member, array-index, dereference and inherited-base path-step counts;
+- Source member-lookup call count;
+- final Graph endpoint-path record and endpoint-path-step counts.
+
+The retained counters are simple increments around work the Source parser
+already performs. No diagnostic overload is added to `graph::find_member`.
+
+Endpoint step-kind counters inspect the already-built final `endpoint_steps`
+vector. They do not perform extra semantic lookup, hashing, path interning or
+Graph mutation.
+
+No persisted format, semantic ordering, LOAD, Runtime or BUILD contract changes
+are introduced. This slice is diagnostic only and makes no performance claim.
+
+## Endpoint-path word hash experiment (PUBLISH-SOURCE-ENDPOINT-HASH-01)
+
+The endpoint shape profile measured 723,717 generic endpoint-path resolutions,
+1,620,714 total Source endpoint steps, and 370,678 final Graph endpoint paths on
+the 23,333-Type UnitProXL fixture. Generic endpoint-path hashing is therefore a
+high-frequency Source operation.
+
+The previous `graph::hash_endpoint_path` used byte-at-a-time FNV-1a. It executed
+eight multiply/xor rounds for `root_type`, then sixteen rounds for each logical
+path step (`kind` and `value`). On the measured Source workload this represents
+tens of millions of byte hash rounds, plus rehash work when the resident
+endpoint-path index grows.
+
+This experiment replaces only that transient index hash with 64-bit word-level
+mixing using the Graph's existing `mix64` primitive. Each path step is tagged
+with its kind and mixed as one 64-bit word contribution.
+
+Correctness does not depend on hash uniqueness:
+
+- endpoint-path handles are still allocated in first-occurrence order;
+- index capacity remains count-driven;
+- `find_endpoint_path` still verifies `root_type`, step count and every complete
+  `endpoint_path_step` before accepting a hit;
+- the hash/fingerprint are not persisted in `compiled.bin` or `runtime.bin`.
+
+No Graph record layout, parser semantic rule, endpoint representation, BUILD,
+LOAD or Runtime contract changes. Acceptance is based on `source_ms` and normal
+production PUBLISH latency; if the measured gain is not meaningful, this hash
+change should be reverted.
+
+## Source profile production cleanup (PUBLISH-SOURCE-PROFILE-CLEANUP-03)
+
+After ENDPOINT-SHAPE-02 selected endpoint-path hashing as the optimization
+target, the temporary member-scan instrumentation is no longer needed in the
+production baseline.
+
+This cleanup removes:
+
+- the diagnostic three-argument `graph::find_member` overload;
+- the conditional increment executed for each inspected member record;
+- `source_member_scan_records` from parser/full-construction telemetry and
+  benchmark output.
+
+The cheaper zero-clock `source_member_lookups` count is retained, as are the
+endpoint-shape counters and root-level coarse Source timers. HASH-01 remains
+unchanged.
+
+No parser semantic behavior, Graph lookup result, persisted format, BUILD,
+LOAD or Runtime contract changes.
+

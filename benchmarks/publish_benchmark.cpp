@@ -508,8 +508,25 @@ int main(
             << ",source_intern_ms=" << ns_to_ms(publish_telemetry.source_intern_ns)
             << ",source_token_count=" << publish_telemetry.source_token_count
             << ",source_identifier_count=" << publish_telemetry.source_identifier_count
-
-
+            << ",source_root_count=" << publish_telemetry.source_root_count
+            << ",source_root_setup_ms=" << ns_to_ms(publish_telemetry.source_root_setup_ns)
+            << ",source_replay_ms=" << ns_to_ms(publish_telemetry.source_replay_ns)
+            << ",source_root_finish_ms=" << ns_to_ms(publish_telemetry.source_root_finish_ns)
+            << ",source_object_statements=" << publish_telemetry.source_object_statements
+            << ",source_value_assignment_statements=" << publish_telemetry.source_value_assignment_statements
+            << ",source_link_statements=" << publish_telemetry.source_link_statements
+            << ",source_string_assignment_statements=" << publish_telemetry.source_string_assignment_statements
+            << ",source_string_assignment_elements=" << publish_telemetry.source_string_assignment_elements
+            << ",source_endpoint_count=" << publish_telemetry.source_endpoint_count
+            << ",source_endpoint_steps=" << publish_telemetry.source_endpoint_steps
+            << ",source_endpoint_direct_members=" << publish_telemetry.source_endpoint_direct_members
+            << ",source_endpoint_path_endpoints=" << publish_telemetry.source_endpoint_path_endpoints
+            << ",source_endpoint_member_steps=" << publish_telemetry.source_endpoint_member_steps
+            << ",source_endpoint_array_steps=" << publish_telemetry.source_endpoint_array_steps
+            << ",source_endpoint_dereference_steps=" << publish_telemetry.source_endpoint_dereference_steps
+            << ",source_endpoint_base_steps=" << publish_telemetry.source_endpoint_base_steps
+            << ",graph_endpoint_paths=" << publish_telemetry.graph_endpoint_paths
+            << ",graph_endpoint_path_steps=" << publish_telemetry.graph_endpoint_path_steps
             << ",source_finalize_ms=" << ns_to_ms(publish_telemetry.source_finalize_ns)
             << ",persistence_ms=" << ns_to_ms(publish_telemetry.persistence_ns)
             << ",compiled_prepare_ms=" << ns_to_ms(publish_telemetry.compiled_prepare_ns)

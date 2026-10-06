@@ -1088,6 +1088,48 @@ server_status construct_full_project(
         telemetry->source_token_count = semantic_telemetry.source_token_count;
         telemetry->source_identifier_count = semantic_telemetry.source_identifier_count;
 
+        telemetry->source_root_count =
+            semantic_telemetry.source_root_count;
+        telemetry->source_root_setup_ns =
+            semantic_telemetry.source_root_setup_ns;
+        telemetry->source_replay_ns =
+            semantic_telemetry.source_replay_ns;
+        telemetry->source_root_finish_ns =
+            semantic_telemetry.source_root_finish_ns;
+        telemetry->source_object_statements =
+            semantic_telemetry.source_object_statements;
+        telemetry->source_value_assignment_statements =
+            semantic_telemetry.source_value_assignment_statements;
+        telemetry->source_link_statements =
+            semantic_telemetry.source_link_statements;
+        telemetry->source_string_assignment_statements =
+            semantic_telemetry.source_string_assignment_statements;
+        telemetry->source_string_assignment_elements =
+            semantic_telemetry.source_string_assignment_elements;
+        telemetry->source_endpoint_count =
+            semantic_telemetry.source_endpoint_count;
+        telemetry->source_endpoint_steps =
+            semantic_telemetry.source_endpoint_steps;
+
+        telemetry->source_endpoint_direct_members =
+            semantic_telemetry.source_endpoint_direct_members;
+        telemetry->source_endpoint_path_endpoints =
+            semantic_telemetry.source_endpoint_path_endpoints;
+        telemetry->source_endpoint_member_steps =
+            semantic_telemetry.source_endpoint_member_steps;
+        telemetry->source_endpoint_array_steps =
+            semantic_telemetry.source_endpoint_array_steps;
+        telemetry->source_endpoint_dereference_steps =
+            semantic_telemetry.source_endpoint_dereference_steps;
+        telemetry->source_endpoint_base_steps =
+            semantic_telemetry.source_endpoint_base_steps;
+
+        telemetry->graph_endpoint_paths =
+            static_cast<std::uint64_t>(
+                context.G.endpoint_path_count());
+        telemetry->graph_endpoint_path_steps =
+            static_cast<std::uint64_t>(
+                context.G.endpoint_path_step_count());
 
         telemetry->source_finalize_ns = semantic_telemetry.finalize_ns;
     }
