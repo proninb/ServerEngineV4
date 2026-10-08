@@ -5,6 +5,32 @@
 #include <limits>
 
 namespace cw::server {
+namespace {
+
+// Header intrinsic grammar: the same token family as OLD parse_intrinsic().
+[[nodiscard]] constexpr bool header_v2_builtin_start(token_kind kind) noexcept {
+    switch (kind) {
+    case token_kind::kw_void:
+    case token_kind::kw_bool:
+    case token_kind::kw_char:
+    case token_kind::kw_wchar_t:
+    case token_kind::kw_char8_t:
+    case token_kind::kw_char16_t:
+    case token_kind::kw_char32_t:
+    case token_kind::kw_short:
+    case token_kind::kw_int:
+    case token_kind::kw_long:
+    case token_kind::kw_signed:
+    case token_kind::kw_unsigned:
+    case token_kind::kw_float:
+    case token_kind::kw_double:
+        return true;
+    default:
+        return false;
+    }
+}
+
+} // namespace
 
 header_parser_v2::header_parser_v2(
     semantic_preprocessor_v2& input_value,
@@ -461,6 +487,132 @@ server_status header_parser_v2::parse_type_tail(
     return server_status::success;
 }
 
+// HEADER-V2-PARITY-03: match OLD's intrinsic spellings and modifiers.
+// This only selects existing intrinsic_type values: no new Graph or Runtime ABI.
+server_status header_parser_v2::parse_intrinsic(
+    intrinsic_type& output) noexcept {
+
+    output = intrinsic_type::none;
+    bool is_signed = false;
+    bool is_unsigned = false;
+    bool is_short = false;
+    std::uint32_t long_count = 0;
+
+    while (at(token_kind::kw_signed) ||
+           at(token_kind::kw_unsigned) ||
+           at(token_kind::kw_short) ||
+           at(token_kind::kw_long)) {
+        if (at(token_kind::kw_signed)) {
+            if (is_signed || is_unsigned) {
+                return fail(parser_v2_failure_kind::syntax,
+                    "Invalid signed/unsigned type specifier combination");
+            }
+            is_signed = true;
+        }
+        else if (at(token_kind::kw_unsigned)) {
+            if (is_signed || is_unsigned) {
+                return fail(parser_v2_failure_kind::syntax,
+                    "Invalid signed/unsigned type specifier combination");
+            }
+            is_unsigned = true;
+        }
+        else if (at(token_kind::kw_short)) {
+            if (is_short || long_count != 0) {
+                return fail(parser_v2_failure_kind::syntax,
+                    "Invalid short/long type specifier combination");
+            }
+            is_short = true;
+        }
+        else {
+            if (is_short || long_count == 2) {
+                return fail(parser_v2_failure_kind::syntax,
+                    "Invalid long type specifier combination");
+            }
+            ++long_count;
+        }
+        const auto advanced = consume();
+        if (!succeeded(advanced)) return advanced;
+    }
+
+    // MSVC spelling is an identifier by lexical contract.
+    if (input.contextual_identifier("__int64")) {
+        if (is_short || long_count != 0) {
+            return fail(parser_v2_failure_kind::syntax,
+                "__int64 cannot use short/long modifiers");
+        }
+        output = is_unsigned
+            ? intrinsic_type::unsigned_long_long
+            : intrinsic_type::signed_long_long;
+        return consume();
+    }
+
+    if (at(token_kind::kw_char)) {
+        if (is_short || long_count != 0) {
+            return fail(parser_v2_failure_kind::syntax,
+                "char cannot use short/long modifiers");
+        }
+        output = is_unsigned
+            ? intrinsic_type::unsigned_char
+            : is_signed ? intrinsic_type::signed_char
+                        : intrinsic_type::char_type;
+        return consume();
+    }
+
+    if (at(token_kind::kw_double)) {
+        if (is_signed || is_unsigned || is_short || long_count > 1) {
+            return fail(parser_v2_failure_kind::syntax,
+                "Invalid double type specifier combination");
+        }
+        output = long_count == 1
+            ? intrinsic_type::long_double_type
+            : intrinsic_type::double_type;
+        return consume();
+    }
+
+    if (at(token_kind::kw_int)) {
+        const auto advanced = consume();
+        if (!succeeded(advanced)) return advanced;
+    }
+    else if (!is_signed && !is_unsigned && !is_short && long_count == 0) {
+        const auto* token = current();
+        switch (token != nullptr ? token->kind : token_kind::invalid) {
+        case token_kind::kw_void: output = intrinsic_type::void_type; break;
+        case token_kind::kw_bool: output = intrinsic_type::bool_type; break;
+        case token_kind::kw_wchar_t: output = intrinsic_type::wchar_type; break;
+        case token_kind::kw_char8_t: output = intrinsic_type::char8_type; break;
+        case token_kind::kw_char16_t: output = intrinsic_type::char16_type; break;
+        case token_kind::kw_char32_t: output = intrinsic_type::char32_type; break;
+        case token_kind::kw_float: output = intrinsic_type::float_type; break;
+        default:
+            return fail(parser_v2_failure_kind::syntax,
+                "Expected supported intrinsic type");
+        }
+        return consume();
+    }
+
+    if (long_count == 2) {
+        output = is_unsigned
+            ? intrinsic_type::unsigned_long_long
+            : intrinsic_type::signed_long_long;
+    }
+    else if (long_count == 1) {
+        output = is_unsigned
+            ? intrinsic_type::unsigned_long
+            : intrinsic_type::signed_long;
+    }
+    else if (is_short) {
+        output = is_unsigned
+            ? intrinsic_type::unsigned_short
+            : intrinsic_type::signed_short;
+    }
+    else {
+        output = is_unsigned
+            ? intrinsic_type::unsigned_int
+            : intrinsic_type::signed_int;
+    }
+    return server_status::success;
+}
+
 server_status header_parser_v2::parse_type(
     identity_ref scope,
     resolved_type& output) noexcept {
@@ -487,27 +639,16 @@ server_status header_parser_v2::parse_type(
         }
     }
 
-    if (at(token_kind::kw_int) ||
-        at(token_kind::kw_void)) {
-        const auto intrinsic =
-            at(token_kind::kw_void)
-            ? intrinsic_type::void_type
-            : intrinsic_type::signed_int;
-
-        output.type =
-            G.intrinsic(intrinsic);
-
+    const auto* first = current();
+    if ((first != nullptr && header_v2_builtin_start(first->kind)) ||
+        input.contextual_identifier("__int64")) {
+        intrinsic_type intrinsic = intrinsic_type::none;
+        const auto status = parse_intrinsic(intrinsic);
+        if (!succeeded(status)) return status;
+        output.type = G.intrinsic(intrinsic);
         if (!output.type) {
-            return fail(
-                parser_v2_failure_kind::semantic,
-                "Header Parser V2 could not create intrinsic int type");
-        }
-
-        const auto status =
-            consume();
-
-        if (!succeeded(status)) {
-            return status;
+            return fail(parser_v2_failure_kind::semantic,
+                "Header Parser V2 could not create intrinsic type");
         }
     }
     else {

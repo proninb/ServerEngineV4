@@ -146,6 +146,9 @@ private:
         bool const_qualified = false,
         bool volatile_qualified = false) noexcept;
 
+    [[nodiscard]] server_status parse_intrinsic(
+        intrinsic_type& output) noexcept;
+
     [[nodiscard]] server_status parse_type(
         identity_ref scope,
         resolved_type& output) noexcept;

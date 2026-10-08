@@ -493,6 +493,20 @@ fixtures exercise positive and negative diagnostics and compare canonical
 semantic Graph projections. This slice does not change Graph ABI, compiled.bin,
 stable-WHERE or the OLD production parser.
 
+## HEADER-V2-PARITY-03 — Intrinsic type specifier parity
+
+V2 now uses the same restricted intrinsic specifier rules as production OLD
+Header: signed/unsigned, short, long/long long, char and signed/unsigned char,
+float, double/long double, void, bool, wchar_t, char8_t/16_t/32_t, and the
+MSVC identifier spelling __int64 (signed/unsigned). Invalid combinations are
+rejected before Graph declaration. All spellings resolve to existing
+`intrinsic_type` values; no new type records, storage ABI, or Graph format.
+
+Independent OLD/V2 differential tests compare positive and negative spellings,
+including data members, cv-qualified types and method/conversion return types.
+This slice does not implement aggregate initializers, reference member binding,
+operator overloads or production Parser replacement.
+
 ## Next
 
 1. Header grammar parity.
