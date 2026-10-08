@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <bit> // HEADER-V2-REAL-LITERAL-11
 #include <charconv>
+#include <chrono>
 #include <filesystem>
 #include <limits>
 #include <new>
@@ -43,6 +44,15 @@ struct prepared_file_storage_v2 final {
 
     bool root = false;
 };
+
+// PARSER-V2-PERF-03: invoked only when an optional profile is supplied.
+using prepare_clock_v2 = std::chrono::steady_clock;
+
+[[nodiscard]] double prepared_elapsed_ms_v2(
+    prepare_clock_v2::time_point begin) noexcept {
+    return std::chrono::duration<double, std::milli>{
+        prepare_clock_v2::now() - begin}.count();
+}
 
 struct physical_token_v2 final {
     token_kind kind = token_kind::invalid;
@@ -372,15 +382,21 @@ public:
         file_context& files_value,
         const preprocessor_configuration& configuration_value,
         prepared_include_closure_v2::state& output_value,
-        prepared_include_failure_v2* failure_value) noexcept
+        prepared_include_failure_v2* failure_value,
+        prepared_include_profile_v2* profile_value) noexcept
         : files(files_value),
           configuration(configuration_value),
           output(output_value),
-          failure(failure_value) {
+          failure(failure_value),
+          profile(profile_value) {
     }
 
     [[nodiscard]] server_status run(
         std::span<const file_id> roots) noexcept {
+
+        const auto total_started = profile != nullptr
+            ? prepare_clock_v2::now() : prepare_clock_v2::time_point{};
+        if (profile != nullptr) *profile = {};
 
         if (failure != nullptr) {
             *failure = {};
@@ -473,9 +489,14 @@ public:
             lane_count = 1;
         }
 
+        const auto workers_started = profile != nullptr
+            ? prepare_clock_v2::now() : prepare_clock_v2::time_point{};
         const auto started =
             workers.start(
                 lane_count);
+        if (profile != nullptr) {
+            profile->workers_start_ms += prepared_elapsed_ms_v2(workers_started);
+        }
 
         if (!succeeded(started)) {
             return started;
@@ -484,16 +505,38 @@ public:
         lane_capacity =
             lane_count;
 
+        if (profile != nullptr) {
+            try { lane_profiles.resize(lane_count); }
+            catch (...) { return server_status::io_error; }
+        }
+
         while (!frontier.empty()) {
+            if (profile != nullptr) {
+                ++profile->frontiers;
+                profile->peak_frontier_files = (std::max)(
+                    profile->peak_frontier_files, frontier.size());
+            }
+            const auto materialize_started = profile != nullptr
+                ? prepare_clock_v2::now() : prepare_clock_v2::time_point{};
             const auto materialized =
                 materialize_frontier();
+            if (profile != nullptr) {
+                profile->materialize_wall_ms +=
+                    prepared_elapsed_ms_v2(materialize_started);
+            }
 
             if (!succeeded(materialized)) {
                 return materialized;
             }
 
+            const auto lexical_started = profile != nullptr
+                ? prepare_clock_v2::now() : prepare_clock_v2::time_point{};
             const auto lexed =
                 lex_frontier();
+            if (profile != nullptr) {
+                profile->lexical_wall_ms +=
+                    prepared_elapsed_ms_v2(lexical_started);
+            }
 
             if (!succeeded(lexed)) {
                 return lexed;
@@ -527,6 +570,8 @@ public:
             }
 
             next_frontier.clear();
+            const auto scan_started = profile != nullptr
+                ? prepare_clock_v2::now() : prepare_clock_v2::time_point{};
 
             for (const auto file :
                  frontier) {
@@ -553,7 +598,15 @@ public:
                 if (!succeeded(scanned)) {
                     return scanned;
                 }
+                if (profile != nullptr) {
+                    profile->include_records += storage->includes.size();
+                }
             }
+            if (profile != nullptr) {
+                profile->include_scan_ms += prepared_elapsed_ms_v2(scan_started);
+            }
+            const auto sort_started = profile != nullptr
+                ? prepare_clock_v2::now() : prepare_clock_v2::time_point{};
 
             std::sort(
                 next_frontier.begin(),
@@ -566,12 +619,37 @@ public:
                 std::move(next_frontier);
 
             next_frontier.clear();
+            if (profile != nullptr) {
+                profile->frontier_sort_ms += prepared_elapsed_ms_v2(sort_started);
+            }
         }
 
-        return finalize();
+        const auto finalize_started = profile != nullptr
+            ? prepare_clock_v2::now() : prepare_clock_v2::time_point{};
+        const auto result = finalize();
+        if (profile != nullptr) {
+            profile->finalize_ms += prepared_elapsed_ms_v2(finalize_started);
+            profile->ready_files = output.ready_file_count;
+            for (const auto& lane : lane_profiles) {
+                profile->read_task_elapsed_sum_ms += lane.read_ms;
+                profile->lexer_task_elapsed_sum_ms += lane.lexer_ms;
+                profile->literal_task_elapsed_sum_ms += lane.literal_ms;
+                profile->lexed_files += lane.lexed_files;
+            }
+            profile->total_ms = prepared_elapsed_ms_v2(total_started);
+        }
+        return result;
     }
 
 private:
+    // Per-lane counters have a single writer; collected only after workers.run.
+    struct lane_profile final {
+        double read_ms = 0;
+        double lexer_ms = 0;
+        double literal_ms = 0;
+        std::size_t lexed_files = 0;
+    };
+
     struct acquisition_task final {
         file_id file{};
         file_acquire_job job;
@@ -834,14 +912,22 @@ private:
                 owner.acquisition_tasks[
                     index];
 
+            const auto task_started = owner.profile != nullptr
+                ? prepare_clock_v2::now() : prepare_clock_v2::time_point{};
             file_context::execute_acquire(
                 task.job,
                 task.result);
+            if (owner.profile != nullptr) {
+                owner.lane_profiles[lane].read_ms +=
+                    prepared_elapsed_ms_v2(task_started);
+            }
         }
     }
 
     [[nodiscard]] server_status materialize_frontier() noexcept {
 
+        const auto preparation_started = profile != nullptr
+            ? prepare_clock_v2::now() : prepare_clock_v2::time_point{};
         acquisition_tasks.clear();
 
         try {
@@ -906,23 +992,37 @@ private:
             }
         }
 
+        if (profile != nullptr) {
+            profile->acquisition_prepare_ms +=
+                prepared_elapsed_ms_v2(preparation_started);
+            profile->read_tasks += acquisition_tasks.size();
+        }
+
         if (!acquisition_tasks.empty()) {
             active_lanes =
                 (std::min)(
                     lane_capacity,
                     acquisition_tasks.size());
+            const auto read_started = profile != nullptr
+                ? prepare_clock_v2::now() : prepare_clock_v2::time_point{};
 
             const auto executed =
                 workers.run(
                     active_lanes,
                     acquisition_lane_entry,
                     this);
+            if (profile != nullptr) {
+                profile->acquisition_read_wall_ms +=
+                    prepared_elapsed_ms_v2(read_started);
+            }
 
             if (!succeeded(executed)) {
                 return executed;
             }
         }
 
+        const auto apply_started = profile != nullptr
+            ? prepare_clock_v2::now() : prepare_clock_v2::time_point{};
         for (auto& task :
              acquisition_tasks) {
 
@@ -987,6 +1087,9 @@ private:
             }
         }
 
+        if (profile != nullptr) {
+            profile->acquisition_apply_ms += prepared_elapsed_ms_v2(apply_started);
+        }
         return server_status::success;
     }
 
@@ -1021,6 +1124,8 @@ private:
             }
 
             lexical_error error;
+            const auto lexer_started = owner.profile != nullptr
+                ? prepare_clock_v2::now() : prepare_clock_v2::time_point{};
 
             storage->lexical_status =
                 lexer::tokenize(
@@ -1030,9 +1135,16 @@ private:
                     storage->lexical,
                     &error,
                     &storage->symbols);
+            if (owner.profile != nullptr) {
+                owner.lane_profiles[lane].lexer_ms +=
+                    prepared_elapsed_ms_v2(lexer_started);
+                ++owner.lane_profiles[lane].lexed_files;
+            }
 
             if (succeeded(
                     storage->lexical_status)) {
+                const auto literal_started = owner.profile != nullptr
+                    ? prepare_clock_v2::now() : prepare_clock_v2::time_point{};
 
                 storage->lexical_status =
                     prepare_literals_v2(
@@ -1041,6 +1153,10 @@ private:
                             file),
                         storage->lexical.words(),
                         storage->literals);
+                if (owner.profile != nullptr) {
+                    owner.lane_profiles[lane].literal_ms +=
+                        prepared_elapsed_ms_v2(literal_started);
+                }
             }
 
             storage->state =
@@ -1545,8 +1661,10 @@ private:
 
     prepared_include_failure_v2*
         failure = nullptr;
+    prepared_include_profile_v2* profile = nullptr;
 
     execution_lanes workers;
+    std::vector<lane_profile> lane_profiles;
 
     std::size_t lane_capacity = 1;
     std::size_t active_lanes = 1;
@@ -1590,7 +1708,8 @@ server_status prepare_header_include_closure_v2(
     std::span<const file_id> roots,
     const preprocessor_configuration& configuration,
     prepared_include_closure_v2& output,
-    prepared_include_failure_v2* failure) noexcept {
+    prepared_include_failure_v2* failure,
+    prepared_include_profile_v2* profile) noexcept {
 
     try {
         output.state_value =
@@ -1606,7 +1725,8 @@ server_status prepare_header_include_closure_v2(
         files,
         configuration,
         *output.state_value,
-        failure};
+        failure,
+        profile};
 
     const auto status =
         builder.run(

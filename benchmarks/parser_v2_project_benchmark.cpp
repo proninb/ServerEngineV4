@@ -68,6 +68,8 @@ using clock_type = std::chrono::steady_clock;
 }
 
 struct sample final {
+    // PARSER-V2-PERF-03: populated only by the explicit 'profile' mode.
+    prepared_include_profile_v2 physical_profile;
     double manifest_ms = 0;
     double physical_ms = 0;
     double preprocessor_start_ms = 0;
@@ -205,12 +207,13 @@ void compose(trial& world, const std::filesystem::path& project) {
     return rows;
 }
 
-void parse_v2(trial& t) {
+void parse_v2(trial& t, bool with_profile = false) {
     prepared_include_closure_v2 closure;
     prepared_include_failure_v2 physical_error;
     const auto begin = clock_type::now();
     const auto prepared = prepare_header_include_closure_v2(
-        t.files, t.headers, t.config, closure, &physical_error);
+        t.files, t.headers, t.config, closure, &physical_error,
+        with_profile ? &t.metrics.physical_profile : nullptr);
     t.metrics.physical_ms = ms(begin, clock_type::now());
     if (!succeeded(prepared)) {
         std::cerr << "V2 physical failure: file=" <<
@@ -324,11 +327,11 @@ void parse_old(trial& t) {
 }
 
 [[nodiscard]] std::unique_ptr<trial> run(const std::filesystem::path& project,
-                                         bool old) {
+                                         bool old, bool profile = false) {
     auto value = std::make_unique<trial>();
     compose(*value, project);
     if (old) parse_old(*value);
-    else parse_v2(*value);
+    else parse_v2(*value, profile);
     return value;
 }
 
@@ -341,15 +344,26 @@ void parse_old(trial& t) {
     return true;
 }
 
-void header() {
+void header(bool profile = false) {
     std::cout << "mode,run,manifest_ms,physical_prepare_ms,preprocessor_start_ms,"
                  "header_semantic_parse_graph_ms,measured_sum_ms,"
                  "project_configuration_files,header_roots,source_roots_ignored,"
                  "assign_roots_ignored,prepared_files,header_source_bytes,"
-                 "graph_types,graph_members,process_peak_working_set_bytes\n";
+                 "graph_types,graph_members,process_peak_working_set_bytes";
+    if (profile) {
+        std::cout << ",perf03_total_ms,workers_start_ms,materialize_wall_ms,"
+                     "acquisition_prepare_ms,acquisition_read_wall_ms,"
+                     "acquisition_apply_ms,lexical_wall_ms,include_scan_ms,"
+                     "frontier_sort_ms,finalize_ms,read_task_elapsed_sum_ms,"
+                     "lexer_task_elapsed_sum_ms,literal_task_elapsed_sum_ms,"
+                     "frontiers,peak_frontier_files,read_tasks,lexed_files,"
+                     "ready_files,include_records,other_wall_ms";
+    }
+    std::cout << '\n';
 }
 
-void print(const char* mode, unsigned run_index, const sample& s) {
+void print(const char* mode, unsigned run_index, const sample& s,
+           bool profile = false) {
     const auto sum = s.manifest_ms + s.physical_ms +
         s.preprocessor_start_ms + s.semantic_ms;
     std::cout << mode << ',' << run_index << ',' << s.manifest_ms << ','
@@ -358,7 +372,25 @@ void print(const char* mode, unsigned run_index, const sample& s) {
               << s.header_roots << ',' << s.source_roots << ','
               << s.assign_roots << ',' << s.prepared_files << ','
               << s.header_bytes << ',' << s.types << ',' << s.members << ','
-              << s.peak_bytes << '\n';
+              << s.peak_bytes;
+    if (profile) {
+        const auto& p = s.physical_profile;
+        const auto measured = p.workers_start_ms + p.materialize_wall_ms +
+            p.lexical_wall_ms + p.include_scan_ms + p.frontier_sort_ms +
+            p.finalize_ms;
+        std::cout << ',' << p.total_ms << ',' << p.workers_start_ms << ','
+                  << p.materialize_wall_ms << ',' << p.acquisition_prepare_ms
+                  << ',' << p.acquisition_read_wall_ms << ','
+                  << p.acquisition_apply_ms << ',' << p.lexical_wall_ms
+                  << ',' << p.include_scan_ms << ',' << p.frontier_sort_ms
+                  << ',' << p.finalize_ms << ',' << p.read_task_elapsed_sum_ms
+                  << ',' << p.lexer_task_elapsed_sum_ms << ','
+                  << p.literal_task_elapsed_sum_ms << ',' << p.frontiers << ','
+                  << p.peak_frontier_files << ',' << p.read_tasks << ','
+                  << p.lexed_files << ',' << p.ready_files << ','
+                  << p.include_records << ',' << (p.total_ms - measured);
+    }
+    std::cout << '\n';
 }
 
 void compare(const std::filesystem::path& project) {
@@ -399,9 +431,10 @@ int main(int argc, char** argv) {
         if (argc < 3 || argc > 5 ||
             (std::string_view{argv[1]} != "v2" &&
              std::string_view{argv[1]} != "old" &&
-             std::string_view{argv[1]} != "compare")) {
+             std::string_view{argv[1]} != "compare" &&
+             std::string_view{argv[1]} != "profile")) {
             std::cerr << "Usage: ServerEngineV4ParserV2ProjectBenchmark "
-                         "<v2|old|compare> <project.json> [runs warmup]\n";
+                         "<v2|old|compare|profile> <project.json> [runs warmup]\n";
             return 2;
         }
         const std::filesystem::path project = std::filesystem::absolute(argv[2]);
@@ -421,13 +454,15 @@ int main(int argc, char** argv) {
         if (argc != 3 && argc != 5)
             throw std::runtime_error{"Provide both runs and warmup"};
         const auto old = std::string_view{argv[1]} == "old";
+        const auto profile = std::string_view{argv[1]} == "profile";
         std::cout << std::fixed << std::setprecision(5);
-        header();
+        header(profile);
         for (unsigned i = 0; i < runs + warmup; ++i) {
-            auto result = run(project, old);
+            auto result = run(project, old, profile);
             if (i >= warmup)
-                print(old ? "old-header-only" : "v2-header-only",
-                      i - warmup + 1, result->metrics);
+                print(profile ? "v2-header-profile" :
+                      old ? "old-header-only" : "v2-header-only",
+                      i - warmup + 1, result->metrics, profile);
         }
         return 0;
     }

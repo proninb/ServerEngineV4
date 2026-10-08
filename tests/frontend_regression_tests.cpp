@@ -492,6 +492,67 @@ void test_lexical_symbols_v2(
 }
 
 
+// LEX-SYMBOL-GROWTH-04: exercise the old pathological reserve(size+1)
+// path with thousands of unique names followed by repeated occurrences.
+void test_lexical_symbols_v2_growth_04(test_state& tests) {
+    constexpr std::size_t unique_count = 4096;
+    constexpr std::size_t repeat_count = 4096;
+
+    std::string source;
+    source.reserve((unique_count + repeat_count) * 12);
+
+    for (std::size_t occurrence = 0;
+         occurrence < unique_count + repeat_count;
+         ++occurrence) {
+        source += "Field" + std::to_string(occurrence % unique_count);
+        source.push_back(' ');
+    }
+
+    lexical_stream words;
+    lexical_symbol_stream_v2 symbols;
+    lexical_error error;
+    if (!tests.expect(
+            succeeded(lexer::tokenize(
+                file_id{13}, source, words, &error, &symbols)) &&
+            symbols.symbol_count() == unique_count &&
+            symbols.identifier_count() == unique_count + repeat_count,
+            "LEX-SYMBOL-GROWTH-04 many unique and repeated identifiers")) {
+        return;
+    }
+
+    bool stable = true;
+    for (std::size_t occurrence = 0;
+         occurrence < unique_count + repeat_count;
+         ++occurrence) {
+        const auto slot =
+            symbols.identifier_symbol(occurrence);
+        if (slot.value() != 1 + occurrence % unique_count ||
+            symbols.spelling(slot, source) !=
+                "Field" + std::to_string(occurrence % unique_count)) {
+            stable = false;
+            break;
+        }
+    }
+    tests.expect(stable,
+        "LEX-SYMBOL-GROWTH-04 stable one-based IDs and spelling order");
+
+    constexpr std::string_view reused = "Again Again";
+    if (!tests.expect(
+            succeeded(lexer::tokenize(
+                file_id{14}, reused, words, &error, &symbols)) &&
+            symbols.symbol_count() == 1 &&
+            symbols.identifier_count() == 2,
+            "LEX-SYMBOL-GROWTH-04 reset reuses geometric capacity")) {
+        return;
+    }
+
+    const auto first = symbols.identifier_symbol(0);
+    tests.expect(
+        first && first == symbols.identifier_symbol(1) &&
+        symbols.spelling(first, reused) == "Again",
+        "LEX-SYMBOL-GROWTH-04 reset clears hash slots and old IDs");
+}
+
 void test_prepared_include_v2(
     test_state& tests) {
 
@@ -536,6 +597,8 @@ void test_prepared_include_v2(
 
     prepared_include_closure_v2 closure;
     prepared_include_failure_v2 failure;
+    // PARSER-V2-PERF-03: validate opt-in metrics on a two-file include graph.
+    prepared_include_profile_v2 profile;
 
     const std::array<file_id, 1>
         roots{root};
@@ -547,11 +610,21 @@ void test_prepared_include_v2(
                     roots,
                     configuration,
                     closure,
-                    &failure)),
+                    &failure,
+                    &profile)),
             "prepare existing direct include closure before semantic replay")) {
 
         return;
     }
+
+    tests.expect(
+        profile.frontiers >= 2 && profile.peak_frontier_files >= 1 &&
+        profile.ready_files == closure.file_count() &&
+        profile.lexed_files == closure.file_count() &&
+        profile.include_records >= 1 &&
+        profile.total_ms >= profile.lexical_wall_ms &&
+        profile.materialize_wall_ms >= profile.acquisition_read_wall_ms,
+        "PERF-03 opt-in physical profile records include closure stages");
 
     const auto view =
         closure.view();
@@ -6428,6 +6501,8 @@ int main() {
 
         test_lexical_symbols_v2(
             tests);
+
+        test_lexical_symbols_v2_growth_04(tests);
 
         test_prepared_include_v2(
             tests);

@@ -11,6 +11,7 @@
 #include "../../server_status.hpp"
 #include "../../string_id.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -140,18 +141,28 @@ public:
             if (!succeeded(prepared)) {
                 return prepared;
             }
+        }
 
-            try {
-                symbol_records.reserve(
-                    symbol_records.size() + 1);
+        // LEX-SYMBOL-GROWTH-04: reserve geometrically, before mutating either
+        // record stream. On allocation failure no new local symbol is inserted.
+        // Once capacities are sufficient, all appends below are non-allocating.
+        if (creating) {
+            const auto status =
+                reserve_for_append(symbol_records);
 
-                identifier_symbols.reserve(
-                    identifier_symbols.size() + 1);
+            if (!succeeded(status)) {
+                return status;
             }
-            catch (...) {
-                return server_status::io_error;
-            }
+        }
 
+        const auto reserved =
+            reserve_for_append(identifier_symbols);
+
+        if (!succeeded(reserved)) {
+            return reserved;
+        }
+
+        if (creating) {
             symbol_records.push_back({
                 hash,
                 source_offset,
@@ -167,15 +178,6 @@ public:
                 symbol_index,
                 symbol,
                 hash);
-        }
-        else {
-            try {
-                identifier_symbols.reserve(
-                    identifier_symbols.size() + 1);
-            }
-            catch (...) {
-                return server_status::io_error;
-            }
         }
 
         identifier_symbols.push_back(
@@ -251,6 +253,43 @@ public:
     }
 
 private:
+    // LEX-SYMBOL-GROWTH-04: no reserve(size + 1) on every identifier.
+    // Keep uint32_t local-ID limits and avoid overflow when doubling.
+    template <typename Value>
+    [[nodiscard]] static server_status reserve_for_append(
+        std::vector<Value>& values) noexcept {
+
+        if (values.size() < values.capacity()) {
+            return server_status::success;
+        }
+
+        const auto limit =
+            (std::min)(
+                values.max_size(),
+                static_cast<std::size_t>(
+                    (std::numeric_limits<std::uint32_t>::max)()));
+
+        if (values.size() >= limit) {
+            return server_status::io_error;
+        }
+
+        const auto capacity = values.capacity();
+        const auto next = capacity == 0
+            ? (std::min)(std::size_t{8}, limit)
+            : capacity > limit / 2
+                ? limit
+                : capacity * 2;
+
+        try {
+            values.reserve(next);
+        }
+        catch (...) {
+            return server_status::io_error;
+        }
+
+        return server_status::success;
+    }
+
     struct symbol_slot final {
         std::uint32_t hash = 0;
         std::uint32_t symbol = 0;

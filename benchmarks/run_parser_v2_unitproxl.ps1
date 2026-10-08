@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ProjectPath,
     [string]$ResultPath = 'build/parser-v2-unitproxl.csv',
-    [ValidateSet('v2','old')]
+    [ValidateSet('v2','old','profile')] # PARSER-V2-PERF-03
     [string]$Mode = 'v2',
     [int]$Runs = 7,
     [int]$Warmup = 2,

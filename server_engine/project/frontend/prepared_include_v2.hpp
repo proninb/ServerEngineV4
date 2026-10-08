@@ -169,6 +169,31 @@ private:
     friend class prepared_include_closure_v2;
 };
 
+// PARSER-V2-PERF-03: optional wall-time and lane-task telemetry.
+// Main stage times are wall milliseconds; task elapsed sums may exceed wall
+// time when worker lanes operate concurrently. Never sum them as wall time.
+struct prepared_include_profile_v2 final {
+    double total_ms = 0;
+    double workers_start_ms = 0;
+    double materialize_wall_ms = 0;
+    double acquisition_prepare_ms = 0;
+    double acquisition_read_wall_ms = 0;
+    double acquisition_apply_ms = 0;
+    double lexical_wall_ms = 0;
+    double include_scan_ms = 0;
+    double frontier_sort_ms = 0;
+    double finalize_ms = 0;
+    double read_task_elapsed_sum_ms = 0;
+    double lexer_task_elapsed_sum_ms = 0;
+    double literal_task_elapsed_sum_ms = 0;
+    std::size_t frontiers = 0;
+    std::size_t peak_frontier_files = 0;
+    std::size_t read_tasks = 0;
+    std::size_t lexed_files = 0;
+    std::size_t ready_files = 0;
+    std::size_t include_records = 0;
+};
+
 struct prepared_include_failure_v2 final {
     file_id file{};
     source_range source;
@@ -202,7 +227,8 @@ private:
         std::span<const file_id> roots,
         const preprocessor_configuration& configuration,
         prepared_include_closure_v2& output,
-        prepared_include_failure_v2* failure) noexcept;
+        prepared_include_failure_v2* failure,
+        prepared_include_profile_v2* profile) noexcept;
 };
 
 // Builds a speculative physical closure. Direct includes are discovered in
@@ -214,6 +240,7 @@ private:
     std::span<const file_id> roots,
     const preprocessor_configuration& configuration,
     prepared_include_closure_v2& output,
-    prepared_include_failure_v2* failure = nullptr) noexcept;
+    prepared_include_failure_v2* failure = nullptr,
+    prepared_include_profile_v2* profile = nullptr) noexcept;
 
 }
