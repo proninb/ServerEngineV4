@@ -104,6 +104,12 @@ private:
         parser_v2_failure_kind kind,
         std::string_view detail) noexcept;
 
+    [[nodiscard]] server_status fail_at(
+        parser_v2_failure_kind kind,
+        std::string_view detail,
+        file_id file,
+        source_range source) noexcept;
+
     [[nodiscard]] server_status parse_scope(
         identity_ref scope,
         bool closing_brace,

@@ -23,6 +23,8 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <initializer_list>
+#include <stdexcept>
 #include <span>
 #include <string>
 #include <string_view>
@@ -10487,6 +10489,198 @@ void test_windows_class_abi_runtime(
         "single empty-base layout matches the native compiler");
 }
 
+
+void test_runtime_multiple_empty_bases_01(test_state& tests) {
+    compiled_fixture f;
+    const auto name = [&](std::string_view value) {
+        string_id id;
+        if (!succeeded(f.strings.intern(value, id))) {
+            throw std::runtime_error("multi-empty string intern");
+        }
+        return id;
+    };
+    const auto identity = [&](std::string_view value) {
+        identity_ref id;
+        if (!succeeded(f.identities.resolve(
+                f.identities.root(), name(value), identity_kind::type, id))) {
+            throw std::runtime_error("multi-empty identity resolve");
+        }
+        return id;
+    };
+    const auto make_type = [&](std::string_view value) {
+        const auto id = identity(value);
+        type_handle handle;
+        if (!succeeded(f.G.declare_record(id, graph_record_kind::struct_type, handle))) {
+            throw std::runtime_error("multi-empty declare");
+        }
+        return handle;
+    };
+    const auto empty0 = make_type("E0");
+    const auto empty1 = make_type("E1");
+    const auto data = make_type("Data");
+    const auto ee = make_type("EE");
+    const auto eed = make_type("EED");
+    const auto ed = make_type("ED");
+    const auto nested = make_type("Nested");
+    const auto de = make_type("DE");
+    const auto dee = make_type("DEE");
+    const auto field = name("value");
+    const std::array<member_record, 1> data_members{{
+        {field, f.G.intrinsic(intrinsic_type::signed_int), graph_member_access::public_access}
+    }};
+    const auto base = [&](type_handle handle) {
+        return base_record{f.G.identity(handle), graph_member_access::public_access, 0, 0};
+    };
+    const auto add_fixture_object = [&](type_handle handle,
+                                        std::string_view object_name) {
+        identity_ref who;
+        object_handle where;
+        return succeeded(f.identities.resolve(
+                   f.identities.root(), name(object_name),
+                   identity_kind::object, who)) &&
+               succeeded(f.G.add_object(who, f.G.named(handle), where));
+    };
+    const std::array<base_record, 2> empty_pair{base(empty0), base(empty1)};
+    const std::array<base_record, 2> empty_data{base(empty0), base(data)};
+    const std::array<base_record, 2> nested_data{base(ee), base(data)};
+    const std::array<base_record, 2> data_empty{base(data), base(empty0)};
+    const std::array<base_record, 3> data_empty_empty{
+        base(data), base(empty0), base(empty1)};
+
+    if (!tests.expect(
+            succeeded(f.G.define_record(empty0, graph_record_kind::struct_type, {})) &&
+            succeeded(f.G.define_record(empty1, graph_record_kind::struct_type, {})) &&
+            succeeded(f.G.define_record(data, graph_record_kind::struct_type, data_members)) &&
+            succeeded(f.G.define_record(ee, graph_record_kind::struct_type, {}, {}, empty_pair)) &&
+            succeeded(f.G.define_record(eed, graph_record_kind::struct_type, data_members, {}, empty_pair)) &&
+            succeeded(f.G.define_record(ed, graph_record_kind::struct_type, data_members, {}, empty_data)) &&
+            succeeded(f.G.define_record(nested, graph_record_kind::struct_type, data_members, {}, nested_data)) &&
+            succeeded(f.G.define_record(de, graph_record_kind::struct_type, data_members, {}, data_empty)) &&
+            succeeded(f.G.define_record(dee, graph_record_kind::struct_type, data_members, {}, data_empty_empty)) &&
+            // All six top-level types must be reachable from objects;
+            // prepare_runtime_layout deliberately does not resolve cold types.
+            add_fixture_object(ee, "object_ee") &&
+            add_fixture_object(eed, "object_eed") &&
+            add_fixture_object(ed, "object_ed") &&
+            add_fixture_object(nested, "object_nested") &&
+            add_fixture_object(de, "object_de") &&
+            add_fixture_object(dee, "object_dee") &&
+            succeeded(f.sources.finalize(f.files.size(), f.identities, f.G)),
+            "MULTI-EMPTY-01 build Graph with empty/nonempty bases")) {
+        return;
+    }
+    compiled_test_image image;
+    if (!tests.expect(build_test_compiled_image(f, image) ==
+                          compiled_project_image_result::success,
+                      "MULTI-EMPTY-01 persist Graph")) {
+        return;
+    }
+    compiled_project_view view;
+    runtime_layout layout;
+    const server_abi_configuration windows_abi{
+#if defined(_M_IX86)
+        abi_target::windows_x86,
+#else
+        abi_target::windows_x64,
+#endif
+        8
+    };
+    if (!tests.expect(view.bind(image.bytes) == compiled_project_image_result::success &&
+                      view.verify_contents() == compiled_project_image_result::success &&
+                      prepare_runtime_layout(view, windows_abi, layout) ==
+                          runtime_layout_result::success,
+                      "MULTI-EMPTY-01 Windows Runtime layout accepts empty multi-base")) {
+        return;
+    }
+    const auto compare = [&](type_handle handle, std::uint64_t native_size,
+                             std::uint32_t native_align,
+                             std::initializer_list<record_offset> expected_bases,
+                             record_offset expected_member) {
+        const auto derived = view.find_type(f.G.identity(handle));
+        type_entry entry;
+        runtime_value_layout actual;
+        const bool persisted = derived && view.type(derived, entry);
+        const bool ready = persisted && layout.type(derived, actual);
+        if (!tests.expect(ready &&
+                          actual.size == native_size &&
+                          actual.alignment == native_align &&
+                          entry.bases.count == expected_bases.size(),
+                          "MULTI-EMPTY-01 size/align/base count")) {
+            std::cerr << "MULTI-EMPTY-01 handle=" << handle.value()
+                      << " persisted=" << persisted << " layout-ready=" << ready
+                      << " expected-size=" << native_size << " actual-size=" << actual.size
+                      << " expected-align=" << native_align << " actual-align=" << actual.alignment
+                      << " expected-bases=" << expected_bases.size()
+                      << " actual-bases=" << entry.bases.count << '\n';
+            return;
+        }
+        std::size_t position = 0;
+        for (const auto expected : expected_bases) {
+            record_offset offset = 99999;
+            tests.expect(layout.base_offset(entry.bases.begin + position, offset) &&
+                         offset == expected, "MULTI-EMPTY-01 direct base offset");
+            ++position;
+        }
+        if (entry.members.count != 0) {
+            record_offset offset = 99999;
+            tests.expect(layout.member_offset(entry.members.begin, offset) &&
+                         offset == expected_member,
+                         "MULTI-EMPTY-01 member offset");
+        }
+    };
+
+#if defined(_MSC_VER) && defined(_WIN32)
+    struct E0 {};
+    struct E1 {};
+    struct Data { int value; };
+    struct EE : E0, E1 {};
+    struct EED : E0, E1 { int value; };
+    struct ED : E0, Data { int value; };
+    struct Nested : EE, Data { int value; };
+    struct DE : Data, E0 { int value; };
+    struct DEE : Data, E0, E1 { int value; };
+    const auto offset = [](const auto& child, const auto* base_ptr) -> record_offset {
+        return static_cast<record_offset>(
+            reinterpret_cast<const std::byte*>(base_ptr) -
+            reinterpret_cast<const std::byte*>(&child));
+    };
+    EE native_ee{};
+    EED native_eed{};
+    ED native_ed{};
+    Nested native_nested{};
+    DE native_de{};
+    DEE native_dee{};
+    compare(ee, sizeof(EE), alignof(EE),
+        {offset(native_ee, static_cast<E0*>(&native_ee)),
+         offset(native_ee, static_cast<E1*>(&native_ee))}, 0);
+    compare(eed, sizeof(EED), alignof(EED),
+        {offset(native_eed, static_cast<E0*>(&native_eed)),
+         offset(native_eed, static_cast<E1*>(&native_eed))},
+        offset(native_eed, &native_eed.value));
+    compare(ed, sizeof(ED), alignof(ED),
+        {offset(native_ed, static_cast<E0*>(&native_ed)),
+         offset(native_ed, static_cast<Data*>(&native_ed))},
+        offset(native_ed, &native_ed.value));
+    compare(nested, sizeof(Nested), alignof(Nested),
+        {offset(native_nested, static_cast<EE*>(&native_nested)),
+         offset(native_nested, static_cast<Data*>(&native_nested))},
+        offset(native_nested, &native_nested.value));
+    compare(de, sizeof(DE), alignof(DE),
+        {offset(native_de, static_cast<Data*>(&native_de)),
+         offset(native_de, static_cast<E0*>(&native_de))},
+        offset(native_de, &native_de.value));
+    compare(dee, sizeof(DEE), alignof(DEE),
+        {offset(native_dee, static_cast<Data*>(&native_dee)),
+         offset(native_dee, static_cast<E0*>(&native_dee)),
+         offset(native_dee, static_cast<E1*>(&native_dee))},
+        offset(native_dee, &native_dee.value));
+#else
+    // Non-MSVC builds only check that persisted layouts can be computed;
+    // native ABI reference must be tested with MSVC Win32/x64.
+    (void)compare;
+#endif
+}
+
 void test_runtime_layout_tail_alignment(
     test_state& tests) {
 
@@ -12533,6 +12727,9 @@ int main() {
             first);
 
         test_windows_class_abi_runtime(
+            tests);
+
+        test_runtime_multiple_empty_bases_01(
             tests);
 
         test_runtime_layout_tail_alignment(

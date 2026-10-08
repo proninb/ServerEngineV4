@@ -3385,6 +3385,7 @@ private:
                 return status;
             }
 
+            for (;;) {
             graph_member_access base_access =
                 default_access(kind);
 
@@ -3484,6 +3485,14 @@ private:
                     "Base class must name a complete non-union record type");
             }
 
+            for (const auto& previous : bases) {
+                if (previous.type == base_identity) {
+                    return fail(
+                        parser_failure_kind::semantic,
+                        "Direct base class is duplicated");
+                }
+            }
+
             const auto dependency =
                 add_dependency_profiled(
                     base_identity);
@@ -3509,10 +3518,14 @@ private:
                 return status;
             }
 
-            if (at(token_kind::comma)) {
-                return fail(
-                    parser_failure_kind::unsupported,
-                    "Multiple inheritance is not implemented in CXX-CLASS-ABI-V1");
+            if (!at(token_kind::comma)) {
+                break;
+            }
+
+            status = advance();
+            if (!succeeded(status)) {
+                return status;
+            }
             }
         }
 
@@ -3583,16 +3596,15 @@ private:
         if (!bases.empty()) {
         }
 
-        const auto base_handle =
-            !bases.empty()
-            ? find_type_profiled(
-                bases.front().type)
-            : type_handle{};
-
-        const bool base_polymorphic =
-            base_handle &&
-            record_polymorphic(
-                base_handle);
+        const bool base_polymorphic = [&]() noexcept {
+            for (const auto& base : bases) {
+                const auto handle = find_type_profiled(base.type);
+                if (handle && record_polymorphic(handle)) {
+                    return true;
+                }
+            }
+            return false;
+        }();
 
         const auto contextual =
             [&](std::string_view value) noexcept {

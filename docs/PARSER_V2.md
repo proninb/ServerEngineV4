@@ -442,6 +442,21 @@ work.
 This slice does not change the old production parser, Graph persistence,
 `compiled.bin`, `database.bin`, or stable-WHERE rules.
 
+## HEADER-MULTI-BASE-01 — Multiple nonvirtual bases and MSVC empty bases
+
+OLD Header and Parser V2 consume the same comma-separated base-specifier list.
+Each base retains its semantic WHO, declared order, and access. Virtual bases
+are still unsupported; direct duplicate bases and incomplete bases are rejected.
+The Graph `base_record` representation and persisted ABI are unchanged.
+
+Windows Runtime construction-only layout uses per-base empty classification and
+nonvirtual extent, instead of rejecting multiple empty bases. This preserves
+MSVC's *default* (legacy) empty-base layout, not the opt-in
+`__declspec(empty_bases)` layout (the restricted grammar has no such attribute).
+The temporary type layout slot remains 16 bytes. Tests compare Graph and Parser
+results, and on native MSVC compare `sizeof`, `alignof`, direct base pointer
+offsets, and member offsets against actual compiler-generated objects.
+
 ## Next
 
 1. Header grammar parity.

@@ -688,7 +688,11 @@ private:
             no_primary;
 
         std::uint32_t record_alignment = 1;
-        bool single_empty_base = false;
+        bool all_bases_empty = base_count != 0;
+        bool previous_base_empty = false;
+        std::uint64_t previous_empty_end = 0;
+        // The last empty base is permitted at the end of a complete
+        // record in the legacy MSVC ABI (it may have offset == sizeof).
 
         for (std::uint32_t local = 0;
              local <
@@ -747,10 +751,10 @@ private:
                 return resolved;
             }
 
-            if (output.type_slots[base_handle.value() - 1].empty_record) {
-                if (base_count != 1) { return runtime_layout_result::unsupported_type; }
-                single_empty_base = true;
-            }
+            // Empty-ness is a property of each base type, not of the
+            // derived record or the number of direct bases.
+            all_bases_empty = all_bases_empty &&
+                output.type_slots[base_handle.value() - 1].empty_record;
 
             const auto effective_alignment =
                 (std::min)(
@@ -966,22 +970,46 @@ private:
                         overflow;
                 }
 
-                output.base_offsets[
-                    global] =
-                        static_cast<record_offset>(
-                            aligned);
+                const bool is_empty =
+                    output.type_slots[base_handle.value() - 1].empty_record;
 
-                if (!add_u64(
-                        aligned,
-                        single_empty_base ? 0 : base_layout.size,
-                        cursor)) {
-
-                    return runtime_layout_result::
-                        overflow;
+                // Default MSVC empty-base layout (without the optional
+                // __declspec(empty_bases) attribute): consecutive empty
+                // bases receive distinct locations. First empty base may
+                // overlap the next nonempty base or the first data member.
+                const auto extent =
+                    output.type_slots[base_handle.value() - 1].nonvirtual_size;
+                if (is_empty && previous_base_empty &&
+                    aligned <= previous_empty_end) {
+                    if (!add_u64(previous_empty_end, 1, aligned)) {
+                        return runtime_layout_result::overflow;
+                    }
+                }
+                if (aligned >= invalid_record_offset) {
+                    return runtime_layout_result::overflow;
                 }
 
-                return runtime_layout_result::
-                    success;
+                output.base_offsets[global] =
+                    static_cast<record_offset>(aligned);
+
+                if (is_empty) {
+                    previous_base_empty = true;
+                    // A recursively empty class can have nonzero MSVC
+                    // non-virtual extent (e.g. E0,E1). A plain empty has
+                    // extent 0, so it still overlaps the next data member.
+                    if (!add_u64(aligned, extent, cursor)) {
+                        return runtime_layout_result::overflow;
+                    }
+                    previous_empty_end = cursor;
+                }
+                else {
+                    previous_base_empty = false;
+                    if (!add_u64(aligned, base_layout.size, cursor)) {
+                        return runtime_layout_result::overflow;
+                    }
+                }
+
+                return runtime_layout_result::success;
             };
 
         if (has_primary) {
@@ -1231,6 +1259,7 @@ private:
             }
         }
 
+        const auto nonvirtual_size = cursor;
         if (cursor == 0) {
             cursor = 1;
         }
@@ -1251,10 +1280,15 @@ private:
         slot.size =
             final_size;
 
+        // Non-virtual physical extent differs from sizeof for empty classes;
+        // nested multiple inheritance needs the *actual* nonvirtual extent.
+        slot.nonvirtual_size =
+            static_cast<std::uint32_t>(nonvirtual_size);
+
         slot.alignment =
             record_alignment;
 
-        slot.empty_record = single_empty_base && type.members.count == 0 && !type.polymorphic();
+        slot.empty_record = all_bases_empty && type.members.count == 0 && !type.polymorphic();
 
         slot.state =
             runtime_layout::slot_state::ready;
@@ -1343,7 +1377,7 @@ private:
             const auto result = intrinsic_layout(type.alias_intrinsic(), abi.target, value);
             if (result == runtime_layout_result::success) {
                 slot.size = value.size;
-                slot.alignment = value.alignment;
+                slot.alignment = static_cast<std::uint16_t>(value.alignment);
                 slot.state = runtime_layout::slot_state::ready;
             }
             return result;
@@ -1533,9 +1567,11 @@ private:
 
         slot.size =
             final_size;
+        slot.nonvirtual_size = static_cast<std::uint32_t>(
+            is_union ? union_size : cursor);
 
         slot.alignment =
-            record_alignment;
+            static_cast<std::uint16_t>(record_alignment);
 
         slot.empty_record =
             !is_union &&

@@ -17,6 +17,7 @@
 #include "project/source/source_map.hpp"
 #include "project/string/string_table.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -25,6 +26,8 @@
 #include <array>
 #include <bit>
 #include <iostream>
+#include <vector>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -1324,6 +1327,318 @@ void test_graph_resolved_v2(
 }
 
 
+
+
+// HEADER-V2-DIFFERENTIAL-01: test-only independent old/V2 oracle.
+// Never compare physical handles, local intern IDs or allocation order.
+[[nodiscard]] std::string differential_identity(
+    const identity_space& ids, const string_table& strings,
+    identity_ref id) {
+    if (!id) return "<invalid-identity>";
+    if (id == ids.root()) return "::";
+    identity_record rec;
+    if (!ids.record(id, rec)) return "<unknown-identity>";
+    return differential_identity(ids, strings, rec.parent) +
+        std::string{strings.get(rec.name)} +
+        (id.kind() == identity_kind::namespace_scope ? "::" : "");
+}
+
+[[nodiscard]] std::string differential_type(
+    const graph& G, const identity_space& ids,
+    const string_table& strings, type_ref type, unsigned depth = 0) {
+    if (depth > 128) return "<type-depth-limit>";
+    intrinsic_type intrinsic;
+    if (G.intrinsic(type, intrinsic))
+        return "intrinsic(" + std::to_string(static_cast<unsigned>(intrinsic)) + ")";
+    if (type.kind() == type_ref_kind::named) {
+        // Named type_ref payload is a semantic WHO slot, not a WHERE.
+        const auto who = ids.at_slot(type.payload());
+        return "named(" + differential_identity(ids, strings, who) + ")";
+    }
+    derived_type_record derived;
+    if (G.derived(type, derived))
+        return "derived(" + std::to_string(static_cast<unsigned>(derived.kind)) +
+            "," + std::to_string(derived.payload) + "," +
+            differential_type(G, ids, strings, derived.child, depth + 1) + ")";
+    return "<invalid-type>";
+}
+
+[[nodiscard]] std::vector<std::string> differential_projection(
+    const graph& G, const identity_space& ids,
+    const string_table& strings) {
+    std::vector<std::string> result;
+    // Semantic identity is the primary key. WHERE allocation of forward
+    // declarations differs intentionally between production and V2.
+    for (std::uint32_t slot = 2; slot <= ids.size(); ++slot) {
+        const auto id = ids.at_slot(slot);
+        if (!id || id.kind() != identity_kind::type) continue;
+        const auto name = differential_identity(ids, strings, id);
+        result.push_back("who:" + name);
+        const auto handle = G.find_type(id);
+        const auto* entry = G.find(handle);
+        if (entry == nullptr || !entry->defined()) continue;
+        result.push_back("record:" + name + ":" +
+            std::to_string(static_cast<unsigned>(entry->kind)) + ":" +
+            std::to_string(static_cast<unsigned>(entry->record_kind)));
+        const auto members = G.members(handle);
+        for (std::size_t i = 0; i < members.size(); ++i) {
+            const auto& member = members[i];
+            std::string line = "member:" + name + ":" +
+                std::string{strings.get(member.name)} + ":" +
+                differential_type(G, ids, strings, member.type) + ":" +
+                std::to_string(static_cast<unsigned>(member.access));
+            const auto index = G.find_member(handle, member.name);
+            const auto* construction = G.construction(handle, index);
+            if (construction != nullptr) {
+                line += ":init=" +
+                    std::to_string(static_cast<unsigned>(construction->kind)) +
+                    ":" + std::to_string(construction->bits()) +
+                    ":" + std::to_string(construction->operand);
+            } else {
+                line += ":init=<missing>";
+            }
+            result.push_back(std::move(line));
+        }
+    }
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
+void test_header_v2_differential_01(test_state& tests) {
+    struct fixture { const char* id; const char* source; bool success; };
+    const fixture fixtures[] = {
+        {"plain-record", "struct A { int X; int Y; };", true},
+        {"namespace", "namespace N { struct A { int X; }; }", true},
+        {"class-access", "class C { public: int X; private: int Y; };", true},
+        {"array", "struct A { int M[2][3]; int* P; };", true},
+        {"forward-definition", "struct A; struct A { int X; };", true},
+        {"duplicate-member", "struct A { int X; int X; };", false},
+        {"unknown-type", "struct A { Missing X; };", false},
+    };
+    for (const auto& f : fixtures) {
+        const temporary_source source{"header_v2_diff_01", f.source};
+        // OLD context is entirely independent of the V2 context.
+        string_table old_strings;
+        identity_space old_ids{old_strings};
+        graph old_graph;
+        file_context old_files;
+        lexical_generation old_lexical;
+        file_id old_root;
+        parser_failure old_failure;
+        source_map old_sources;
+        preprocessor_configuration old_config;
+        old_config.root_directory = source.path().parent_path();
+        if (!prepare_root(tests, source.path(), old_files, old_lexical, old_root)) return;
+        const auto old_status = parse_semantic_project(
+            old_files, old_lexical, 1, old_config, old_strings,
+            old_ids, old_graph, old_sources, &old_failure);
+
+        string_table v2_strings;
+        identity_space v2_ids{v2_strings};
+        graph v2_graph;
+        file_context v2_files;
+        file_id v2_root;
+        parser_v2_failure v2_failure;
+        preprocessor_configuration v2_config;
+        v2_config.root_directory = source.path().parent_path();
+        if (!tests.expect(succeeded(v2_files.resolve(
+                source.path(), file_kind::header, v2_root)) && v2_root,
+                "DIFF resolve V2 fixture")) return;
+        const std::array<file_id, 1> roots{v2_root};
+        prepared_include_closure_v2 closure;
+        prepared_include_failure_v2 preparation_failure;
+        const auto prepared = prepare_header_include_closure_v2(
+            v2_files, roots, v2_config, closure, &preparation_failure);
+        if (!tests.expect(succeeded(prepared), "DIFF prepare V2 fixture")) return;
+        preprocessor_v2_failure preprocessor_failure;
+        semantic_preprocessor_v2 input{
+            v2_files, closure.view(), v2_config, v2_strings, &preprocessor_failure};
+        const auto started = input.start(v2_root);
+        if (!tests.expect(succeeded(started), "DIFF start V2 fixture")) return;
+        header_parser_v2 parser{input, v2_ids, v2_graph, &v2_failure};
+        const auto v2_status = parser.parse();
+        const auto context = std::string{"HEADER-V2-DIFFERENTIAL-01/"} + f.id;
+        const bool old_ok = succeeded(old_status);
+        const bool v2_ok = succeeded(v2_status);
+        if (!tests.expect(old_ok == f.success, context + "/old oracle expectation")) continue;
+        if (!tests.expect(v2_ok == old_ok, context + "/outcome")) {
+            std::cerr << context << " old-kind=" << static_cast<int>(old_failure.kind)
+                      << " v2-kind=" << static_cast<int>(v2_failure.kind)
+                      << " old-detail=" << old_failure.detail
+                      << " v2-detail=" << v2_failure.detail << '\n';
+            continue;
+        }
+        if (!old_ok) {
+            // Common syntax/semantic categories are comparable, diagnostic text
+            // is not yet part of the production API contract.
+            const auto category = [](auto kind) {
+                switch (static_cast<unsigned>(kind)) {
+                default: return 0u;
+                case 3: return 1u; // OLD syntax
+                case 4: return 2u; // OLD semantic
+                case 5: return 3u; // OLD unsupported
+                }
+            };
+            const unsigned v2_category = static_cast<unsigned>(v2_failure.kind);
+            const unsigned old_category = category(old_failure.kind);
+            tests.expect(old_category == v2_category, context + "/category");
+            tests.expect(old_failure.file == old_root && v2_failure.file == v2_root,
+                context + "/source-file");
+            tests.expect(old_failure.source.offset == v2_failure.source.offset &&
+                old_failure.source.length == v2_failure.source.length,
+                context + "/source-span");
+            continue;
+        }
+        const auto old_view = differential_projection(old_graph, old_ids, old_strings);
+        const auto v2_view = differential_projection(v2_graph, v2_ids, v2_strings);
+        if (old_view != v2_view) {
+            std::cerr << context << " Graph semantic mismatch\nOLD:\n";
+            for (const auto& row : old_view) std::cerr << row << '\n';
+            std::cerr << "V2:\n";
+            for (const auto& row : v2_view) std::cerr << row << '\n';
+        }
+        tests.expect(old_view == v2_view, context + "/semantic-graph");
+    }
+}
+
+#include "header_v2_differential_02.inc"
+
+
+// HEADER-MULTI-BASE-01: only existing restricted syntax, now multiple bases.
+void test_header_multi_base_01(test_state& tests) {
+    const std::string accepted =
+        "struct EmptyA {};\n"
+        "struct EmptyB {};\n"
+        "struct Data { int X; };\n"
+        "struct Multi : EmptyA, protected EmptyB, public Data { int Y; };\n"
+        "namespace N { struct Other : private EmptyA, Data { int Z; }; }\n";
+    const temporary_source source{"header_multi_base_01", accepted};
+
+    // OLD uses the production frontend, with an independent semantic arena.
+    file_context old_files;
+    lexical_generation old_lexical;
+    file_id old_root;
+    if (!prepare_root(tests, source.path(), old_files, old_lexical, old_root)) {
+        return;
+    }
+    preprocessor_configuration config;
+    config.root_directory = source.path().parent_path();
+    string_table old_strings;
+    identity_space old_ids{old_strings};
+    graph old_graph;
+    source_map old_map;
+    parser_failure old_error;
+    const auto old_status = parse_semantic_project(
+        old_files, old_lexical, 1, config,
+        old_strings, old_ids, old_graph, old_map, &old_error);
+
+    // V2 uses a new file arena and independently prepared input.
+    file_context new_files;
+    file_id new_root;
+    if (!tests.expect(succeeded(new_files.resolve(
+            source.path(), file_kind::header, new_root)) && new_root,
+            "MULTI-BASE-01 resolve V2 root")) {
+        return;
+    }
+    prepared_include_closure_v2 closure;
+    prepared_include_failure_v2 prepare_error;
+    const std::array<file_id, 1> roots{new_root};
+    if (!tests.expect(succeeded(prepare_header_include_closure_v2(
+            new_files, roots, config, closure, &prepare_error)),
+            "MULTI-BASE-01 prepare V2 root")) {
+        return;
+    }
+    string_table new_strings;
+    identity_space new_ids{new_strings};
+    graph new_graph;
+    preprocessor_v2_failure pp_error;
+    semantic_preprocessor_v2 input{
+        new_files, closure.view(), config, new_strings, &pp_error};
+    parser_v2_failure v2_error;
+    const auto started = input.start(new_root);
+    auto new_status = started;
+    if (succeeded(started)) {
+        header_parser_v2 parser{input, new_ids, new_graph, &v2_error};
+        new_status = parser.parse();
+    }
+    if (!tests.expect(succeeded(old_status) && succeeded(new_status),
+            "MULTI-BASE-01 OLD/V2 accept multiple bases")) {
+        std::cerr << "MULTI-BASE-01 old=" << old_error.detail
+                  << " new=" << v2_error.detail << '\n';
+        return;
+    }
+
+    const auto check = [&](const string_table& strings,
+                           const identity_space& ids,
+                           const graph& G) {
+        const auto id = ids.find(ids.root(), strings.find("Multi"), identity_kind::type);
+        const auto h = G.find_type(id);
+        const auto b = G.bases(h);
+        return h && b.size() == 3 &&
+            b[0].type == ids.find(ids.root(), strings.find("EmptyA"), identity_kind::type) &&
+            b[1].type == ids.find(ids.root(), strings.find("EmptyB"), identity_kind::type) &&
+            b[2].type == ids.find(ids.root(), strings.find("Data"), identity_kind::type) &&
+            b[0].access == graph_member_access::public_access &&
+            b[1].access == graph_member_access::protected_access &&
+            b[2].access == graph_member_access::public_access &&
+            G.find_member(h, strings.find("Y"));
+    };
+    tests.expect(check(old_strings, old_ids, old_graph) &&
+                 check(new_strings, new_ids, new_graph),
+        "MULTI-BASE-01 OLD/V2 canonical WHO, base order and access");
+
+    const auto negative = [&](std::string_view text,
+                              std::string_view name) {
+        const temporary_source bad{"header_multi_base_negative", text};
+        parser_failure old_failure;
+        const auto old_result = parse_file(tests, bad.path(), old_failure);
+        file_context v2_files;
+        file_id root;
+        if (!tests.expect(succeeded(v2_files.resolve(
+                bad.path(), file_kind::header, root)) && root,
+                "MULTI-BASE-01 negative fixture V2 resolve")) {
+            return;
+        }
+        preprocessor_configuration cfg;
+        cfg.root_directory = bad.path().parent_path();
+        prepared_include_closure_v2 closure;
+        prepared_include_failure_v2 preparation_failure;
+        const std::array<file_id, 1> roots{root};
+        if (!tests.expect(succeeded(prepare_header_include_closure_v2(
+                v2_files, roots, cfg, closure, &preparation_failure)),
+                "MULTI-BASE-01 negative fixture V2 prepare")) {
+            return;
+        }
+        string_table symbols;
+        identity_space ids{symbols};
+        graph G;
+        preprocessor_v2_failure pp_failure;
+        semantic_preprocessor_v2 input{
+            v2_files, closure.view(), cfg, symbols, &pp_failure};
+        parser_v2_failure v2_failure;
+        auto new_result = input.start(root);
+        if (succeeded(new_result)) {
+            header_parser_v2 parser{input, ids, G, &v2_failure};
+            new_result = parser.parse();
+        }
+        const auto old_kind = old_failure.kind;
+        const bool same_kind =
+            (old_kind == parser_failure_kind::semantic &&
+                v2_failure.kind == parser_v2_failure_kind::semantic) ||
+            (old_kind == parser_failure_kind::unsupported &&
+                v2_failure.kind == parser_v2_failure_kind::unsupported) ||
+            (old_kind == parser_failure_kind::syntax &&
+                v2_failure.kind == parser_v2_failure_kind::syntax);
+        tests.expect(!succeeded(old_result) && !succeeded(new_result) &&
+                     same_kind, name);
+    };
+    negative("struct A {}; struct X : A, A {};",
+        "MULTI-BASE-01 OLD rejects duplicate direct bases");
+    negative("struct A; struct X : A, A {};",
+        "MULTI-BASE-01 OLD rejects incomplete bases");
+    negative("struct A {}; struct X : virtual A {};",
+        "MULTI-BASE-01 virtual bases remain unsupported");
+}
 
 void test_header_parser_v2_parity_02(
     test_state& tests) {
@@ -3586,17 +3901,11 @@ void test_class_abi_semantics(
     parser_failure multiple_failure;
 
     tests.expect(
-        parse_file(
+        succeeded(parse_file(
             tests,
             multiple_base.path(),
-            multiple_failure) ==
-                server_status::
-                    project_configuration_invalid &&
-        multiple_failure.kind ==
-            parser_failure_kind::unsupported &&
-        multiple_failure.detail ==
-            "Multiple inheritance is not implemented in CXX-CLASS-ABI-V1",
-        "multiple inheritance fails closed in V1 semantic slice");
+            multiple_failure)),
+        "multiple nonvirtual inheritance is accepted by the Header semantic slice");
 }
 
 void test_record_scratch_isolation(test_state& tests) {
@@ -5972,6 +6281,13 @@ int main() {
 
         test_header_parser_v2_parity_02(
             tests);
+
+        test_header_multi_base_01(
+            tests);
+
+        test_header_v2_differential_01(tests);
+
+        test_header_v2_differential_02(tests);
 
         test_header_parser_v2_minimal(
             tests);

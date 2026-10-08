@@ -36,22 +36,31 @@ server_status header_parser_v2::fail(
     parser_v2_failure_kind kind,
     std::string_view detail) noexcept {
 
+    if (const auto* token = current();
+        token != nullptr) {
+
+        return fail_at(
+            kind,
+            detail,
+            token->file,
+            {token->source_offset, token->source_length});
+    }
+
+    return fail_at(kind, detail, {}, {});
+}
+
+server_status header_parser_v2::fail_at(
+    parser_v2_failure_kind kind,
+    std::string_view detail,
+    file_id file,
+    source_range source) noexcept {
+
     if (failure != nullptr) {
         *failure = {};
         failure->kind = kind;
         failure->detail = detail;
-
-        if (const auto* token = current();
-            token != nullptr) {
-
-            failure->file =
-                token->file;
-
-            failure->source = {
-                token->source_offset,
-                token->source_length,
-            };
-        }
+        failure->file = file;
+        failure->source = source;
     }
 
     return server_status::
@@ -994,6 +1003,14 @@ server_status header_parser_v2::parse_member_declarator(
     const auto member_name =
         name->identifier;
 
+    const auto member_file =
+        name->file;
+
+    const source_range member_source{
+        name->source_offset,
+        name->source_length,
+    };
+
     auto status =
         consume();
 
@@ -1022,9 +1039,11 @@ server_status header_parser_v2::parse_member_declarator(
     }
 
     if (!inserted) {
-        return fail(
+        return fail_at(
             parser_v2_failure_kind::semantic,
-            "Header Parser V2 data-member name is duplicated");
+            "Header Parser V2 data-member name is duplicated",
+            member_file,
+            member_source);
     }
 
     construction_value initial;
@@ -1494,10 +1513,114 @@ server_status header_parser_v2::parse_record(
         return status;
     }
 
+    std::vector<base_record> bases;
+
     if (at(token_kind::colon)) {
+        if (kind == graph_record_kind::union_type) {
+            return fail(
+                parser_v2_failure_kind::semantic,
+                "Union types cannot have base classes");
+        }
+
+        status = consume();
+        if (!succeeded(status)) {
+            return status;
+        }
+
+        for (;;) {
+            auto access = default_access(kind);
+            bool access_seen = false;
+            bool virtual_seen = false;
+
+            // Match OLD: access and virtual may appear in either order,
+            // but neither specifier may be repeated.
+            for (;;) {
+                if (!access_seen &&
+                    (at(token_kind::kw_public) ||
+                     at(token_kind::kw_protected) ||
+                     at(token_kind::kw_private))) {
+
+                    access = at(token_kind::kw_public)
+                        ? graph_member_access::public_access
+                        : at(token_kind::kw_protected)
+                            ? graph_member_access::protected_access
+                            : graph_member_access::private_access;
+                    access_seen = true;
+                }
+                else if (!virtual_seen && at(token_kind::kw_virtual)) {
+                    virtual_seen = true;
+                }
+                else {
+                    break;
+                }
+
+                status = consume();
+                if (!succeeded(status)) {
+                    return status;
+                }
+            }
+
+            if (virtual_seen) {
+                return fail(
+                    parser_v2_failure_kind::unsupported,
+                    "Virtual base classes are not implemented in CXX-CLASS-ABI-V1");
+            }
+
+            const auto* base_name = current();
+            if (base_name == nullptr ||
+                base_name->kind != token_kind::identifier ||
+                !base_name->identifier) {
+                return fail(
+                    parser_v2_failure_kind::syntax,
+                    "Expected base class type");
+            }
+
+            const auto base_identity = find_type_identity(
+                scope, base_name->identifier);
+            const auto base_type = G.find_type(base_identity);
+            const auto* base_entry = G.find(base_type);
+            if (!base_identity || !base_type ||
+                base_entry == nullptr || !base_entry->defined() ||
+                base_entry->kind != graph_type_kind::record ||
+                base_entry->record_kind == graph_record_kind::union_type) {
+                return fail(
+                    parser_v2_failure_kind::semantic,
+                    "Base class must name a complete non-union record type");
+            }
+
+            for (const auto& previous : bases) {
+                if (previous.type == base_identity) {
+                    return fail(
+                        parser_v2_failure_kind::semantic,
+                        "Direct base class is duplicated");
+                }
+            }
+
+            try {
+                bases.push_back({base_identity, access, 0, 0});
+            }
+            catch (...) {
+                return server_status::io_error;
+            }
+
+            status = consume();
+            if (!succeeded(status)) {
+                return status;
+            }
+            if (!at(token_kind::comma)) {
+                break;
+            }
+            status = consume();
+            if (!succeeded(status)) {
+                return status;
+            }
+        }
+    }
+
+    if (at(token_kind::semicolon) && !bases.empty()) {
         return fail(
-            parser_v2_failure_kind::unsupported,
-            "Header Parser V2 base-specifier lists are not part of PARITY-02");
+            parser_v2_failure_kind::syntax,
+            "A base-specifier list requires a record definition");
     }
 
     if (at(token_kind::semicolon)) {
@@ -1708,7 +1831,8 @@ server_status header_parser_v2::parse_record(
             handle,
             kind,
             members,
-            construction);
+            construction,
+            bases);
 
     if (!succeeded(status)) {
         return fail(

@@ -117,10 +117,12 @@ private:
 
     struct layout_slot final {
         std::uint64_t size = 0;
-        std::uint32_t alignment = 0;
+        // Construction-only MSVC nonvirtual extent, distinct from sizeof.
+        // Stays inside the existing 16-byte slot.
+        std::uint32_t nonvirtual_size = 0;
+        std::uint16_t alignment = 0;
         slot_state state = slot_state::empty;
         bool empty_record = false;
-        std::uint8_t reserved[2]{};
     };
 
     static_assert(sizeof(layout_slot) == 16);
