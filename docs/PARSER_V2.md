@@ -507,6 +507,27 @@ including data members, cv-qualified types and method/conversion return types.
 This slice does not implement aggregate initializers, reference member binding,
 operator overloads or production Parser replacement.
 
+## HEADER-V2-PARITY-04 — Declaration-only named operators
+
+Header V2 accepts the same restricted named operator declarations as OLD:
+assignment (`operator=`), compound assignment, comparison, unary logical-not
+(`operator!`), and single-argument subscript (`operator[]`). Operators may use
+OLD-supported cv/ref/noexcept/override/final/pure/delete suffixes and the
+in-record redundant qualifier of their own class (`T::operator...`).
+
+The same OLD parameter restrictions apply: non-unary named operators require
+exactly one parameter, with no default or ellipsis; logical-not requires an
+empty parameter list; `= default` is allowed for assignment but not the other
+named operators. Bodies and unsupported operator spellings remain unsupported.
+The syntax has no Graph method rows and does not execute in Server Runtime.
+Only already-supported polymorphic layout metadata may change.
+
+**Native object contract:** for FIXED_DIRECT the Task uses native addresses and
+reference words in SHM. Current Runtime computes MSVC polymorphic storage, but
+vfptr words remain zero: virtual calls/RTTI/destruction are outside its current
+execution contract. This grammar slice does not claim complete support for
+virtual execution and does not change physical Runtime/SHM or Graph formats.
+
 ## Next
 
 1. Header grammar parity.

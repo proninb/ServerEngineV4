@@ -177,10 +177,21 @@ private:
         bool virtual_prefix,
         bool base_polymorphic,
         bool& declares_virtual,
-        bool conversion = false) noexcept;
+        bool conversion = false,
+        bool assignment_operator = false,
+        bool subscript_operator = false,
+        bool binary_operator = false) noexcept;
+
+    // OLD-compatible declaration-only named operators. No Graph methods.
+    [[nodiscard]] server_status parse_named_operator(
+        string_id enclosing_record,
+        bool virtual_prefix,
+        bool base_polymorphic,
+        bool& declares_virtual) noexcept;
 
     [[nodiscard]] server_status parse_member(
         identity_ref scope,
+        string_id enclosing_record,
         graph_member_access access,
         std::vector<member_record>& members,
         std::vector<construction_value>& construction,

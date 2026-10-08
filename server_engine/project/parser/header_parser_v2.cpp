@@ -1262,6 +1262,7 @@ server_status header_parser_v2::parse_member_declarator(
 
 server_status header_parser_v2::parse_member(
     identity_ref scope,
+    string_id enclosing_record,
     graph_member_access access,
     std::vector<member_record>& members,
     std::vector<construction_value>& construction,
@@ -1279,6 +1280,14 @@ server_status header_parser_v2::parse_member(
 
     if (!succeeded(status)) {
         return status;
+    }
+
+    if (at(token_kind::kw_operator) ||
+        (at(token_kind::identifier) &&
+         current()->identifier == enclosing_record)) {
+        return parse_named_operator(
+            enclosing_record, virtual_prefix,
+            base_polymorphic, declares_virtual);
     }
 
     return parse_member_declarator(
@@ -1299,7 +1308,10 @@ server_status header_parser_v2::parse_method_tail(
     bool virtual_prefix,
     bool base_polymorphic,
     bool& declares_virtual,
-    bool conversion) noexcept {
+    bool conversion,
+    bool assignment_operator,
+    bool subscript_operator,
+    bool binary_operator) noexcept {
 
     if (!at(token_kind::l_paren)) {
         return fail(parser_v2_failure_kind::syntax,
@@ -1310,10 +1322,22 @@ server_status header_parser_v2::parse_method_tail(
     // types are deliberately not persisted or resolved by this grammar slice.
     std::size_t depth = 0;
     bool conversion_void = false;
+    std::size_t parameter_tokens = 0;
+    bool sole_void = false;
     for (;;) {
         if (input.finished() || current() == nullptr) {
             return fail(parser_v2_failure_kind::syntax,
                 "Method parameter list is not closed");
+        }
+        if ((assignment_operator || subscript_operator || binary_operator) &&
+            depth == 1 && !at(token_kind::r_paren)) {
+            if (at(token_kind::comma) || at(token_kind::ellipsis) ||
+                at(token_kind::assign)) {
+                return fail(parser_v2_failure_kind::syntax,
+                    "Named operator requires one parameter without a default argument");
+            }
+            sole_void = parameter_tokens == 0 && at(token_kind::kw_void);
+            ++parameter_tokens;
         }
         if (conversion && depth != 0 && !at(token_kind::r_paren)) {
             if (!conversion_void && at(token_kind::kw_void)) {
@@ -1339,13 +1363,20 @@ server_status header_parser_v2::parse_method_tail(
         if (depth == 0) break;
     }
 
+    if ((assignment_operator || subscript_operator || binary_operator) &&
+        (parameter_tokens == 0 || sole_void)) {
+        return fail(parser_v2_failure_kind::syntax,
+            "Named operator requires one parameter");
+    }
+
     bool override_seen = false;
     bool final_seen = false;
     bool ref_seen = false;
     for (;;) {
-        // OLD permits member ref-qualifiers for conversion operators but
-        // not for ordinary functions/destructors in its current subset.
-        if (conversion && !ref_seen &&
+        // OLD permits ref-qualifiers on conversion and named operators,
+        // not on ordinary functions/destructors in its current subset.
+        if ((conversion || assignment_operator || subscript_operator ||
+             binary_operator) && !ref_seen &&
             (at(token_kind::ampersand) || at(token_kind::logical_and))) {
             ref_seen = true;
             const auto consumed = consume();
@@ -1410,7 +1441,8 @@ server_status header_parser_v2::parse_method_tail(
             token->number.bits == 0) {
             pure = true;
         }
-        else if ((conversion || !at(token_kind::kw_default)) &&
+        else if ((conversion || subscript_operator || binary_operator ||
+                  !at(token_kind::kw_default)) &&
                  !at(token_kind::kw_delete)) {
             return fail(parser_v2_failure_kind::unsupported,
                 "Method declaration supports only '= 0', '= default', or '= delete'");
@@ -1432,6 +1464,86 @@ server_status header_parser_v2::parse_method_tail(
             "CXX-CLASS-ABI-V1 stores method declarations only; method bodies are not implemented");
     }
     return consume();
+}
+
+// HEADER-V2-PARITY-04: declaration-only named operators share the OLD
+// method tail and produce no method records in Graph.
+server_status header_parser_v2::parse_named_operator(
+    string_id enclosing_record,
+    bool virtual_prefix,
+    bool base_polymorphic,
+    bool& declares_virtual) noexcept {
+
+    server_status status = server_status::success;
+    if (at(token_kind::identifier)) {
+        if (!enclosing_record ||
+            current()->identifier != enclosing_record) {
+            return fail(parser_v2_failure_kind::semantic,
+                "In-class operator qualifier must name the enclosing record");
+        }
+        status = consume();
+        if (!succeeded(status)) return status;
+        status = expect(token_kind::scope,
+            "In-class operator qualification is supported only for the enclosing record");
+        if (!succeeded(status)) return status;
+    }
+
+    status = expect(token_kind::kw_operator,
+        "In-class qualification is supported only for named operators");
+    if (!succeeded(status)) return status;
+
+    bool conversion = false;
+    bool assignment_operator = false;
+    bool subscript_operator = false;
+    bool binary_operator = false;
+    if (at(token_kind::assign)) {
+        assignment_operator = true;
+    }
+    else if (at(token_kind::l_bracket)) {
+        subscript_operator = true;
+        status = consume();
+        if (!succeeded(status)) return status;
+        status = expect(token_kind::r_bracket,
+            "Expected ']' in operator[] declarator");
+        if (!succeeded(status)) return status;
+        // The operator token has been consumed by expect().
+        return parse_method_tail(virtual_prefix, base_polymorphic,
+            declares_virtual, false, false, true, false);
+    }
+    else if (at(token_kind::exclamation)) {
+        conversion = true; // OLD treats operator! like an empty conversion tail.
+    }
+    else {
+        switch (current() ? current()->kind : token_kind::invalid) {
+        case token_kind::plus_assign:
+        case token_kind::minus_assign:
+        case token_kind::star_assign:
+        case token_kind::slash_assign:
+        case token_kind::percent_assign:
+        case token_kind::caret_assign:
+        case token_kind::ampersand_assign:
+        case token_kind::pipe_assign:
+        case token_kind::shift_left_assign:
+        case token_kind::shift_right_assign:
+        case token_kind::equal:
+        case token_kind::not_equal:
+        case token_kind::less:
+        case token_kind::greater:
+        case token_kind::less_equal:
+        case token_kind::greater_equal:
+            binary_operator = true;
+            break;
+        default:
+            return fail(parser_v2_failure_kind::unsupported,
+                "Named operator declarator is not supported");
+        }
+    }
+
+    status = consume();
+    if (!succeeded(status)) return status;
+    return parse_method_tail(virtual_prefix, base_polymorphic,
+        declares_virtual, conversion, assignment_operator,
+        subscript_operator, binary_operator);
 }
 
 server_status header_parser_v2::parse_constructor(
@@ -2151,8 +2263,15 @@ server_status header_parser_v2::parse_record(
                 return status;
             }
 
-            status =
-                parse_member_declarator(
+            if (at(token_kind::kw_operator) ||
+                (at(token_kind::identifier) &&
+                 current()->identifier == record_name)) {
+                status = parse_named_operator(
+                    record_name, virtual_prefix,
+                    base_polymorphic, declares_virtual);
+            }
+            else {
+                status = parse_member_declarator(
                     self_type,
                     access,
                     members,
@@ -2161,6 +2280,7 @@ server_status header_parser_v2::parse_record(
                     virtual_prefix,
                     base_polymorphic,
                     declares_virtual);
+            }
 
             if (!succeeded(status)) {
                 return status;
@@ -2172,6 +2292,7 @@ server_status header_parser_v2::parse_record(
         status =
             parse_member(
                 scope,
+                record_name,
                 access,
                 members,
                 construction,
