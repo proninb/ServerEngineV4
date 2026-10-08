@@ -544,6 +544,27 @@ before and after field declarations. No AST, second source/semantic pass,
 persisted construction-operation records, Graph ABI changes or SHM changes.
 More complex aggregate/reference construction forms remain separate parity work.
 
+## HEADER-V2-MEMBER-INDEX-06 — Reuse the record-local name index
+
+Header Parser V2 keeps the small-record contiguous lookup (fewer than 32
+members) without allocating a hash. For large records, the existing record-local
+open-addressed duplicate detector now stores a **one-based `uint32_t` member
+index** instead of a copy of the `string_id`. The same index supports duplicate
+checks and immediate constructor assignment target resolution; no second hash
+or Graph representation is created. The hash uses 4 bytes per slot as before.
+
+For a record with `N` fields and `K` constructor writes, the previous immediate
+normalization performed `O(N*K)` target comparisons. Large-record lookups now
+have expected `O(K)` cost after the existing index construction, while the
+small-record path avoids hash allocations. Forward targets remain in the
+existing pending-only map and are resolved when the corresponding field is
+declared. Source tokens are read once. A 160-field differential fixture
+exercises growth and hash reallocation, and a forward-declared 96-field case
+checks pending resolution. ABI, Graph persistence and SHM are unchanged.
+
+This is an algorithmic speed improvement; runtime performance gains must be
+measured separately on the Windows/MSVC workload before acceptance.
+
 ## Next
 
 1. Header grammar parity.

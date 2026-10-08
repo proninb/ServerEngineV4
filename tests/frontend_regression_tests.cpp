@@ -1414,8 +1414,36 @@ void test_graph_resolved_v2(
 
 void test_header_v2_differential_01(test_state& tests) {
     struct fixture { const char* id; const char* source; bool success; };
+
+    // HEADER-V2-MEMBER-INDEX-06: cross the 32-member linear/hash threshold
+    // and the 128-slot rehash boundary; exercise the same member index from
+    // declaration duplicate checks and constructor target lookup.
+    std::string indexed_fields = "struct Indexed { ";
+    for (int i = 0; i < 160; ++i) {
+        indexed_fields += "int M" + std::to_string(i) + "; ";
+    }
+    indexed_fields += "Indexed() { ";
+    for (int i = 159; i >= 0; --i) {
+        indexed_fields += "M" + std::to_string(i) + " = " +
+            std::to_string(i + 1) + "; ";
+    }
+    indexed_fields += "} };";
+
+    std::string indexed_forward = "struct Forward { Forward() : ";
+    for (int i = 0; i < 96; ++i) {
+        if (i != 0) indexed_forward += ", ";
+        indexed_forward += "M" + std::to_string(i) + "(" +
+            std::to_string(i + 1) + ")";
+    }
+    indexed_forward += " {} ";
+    for (int i = 0; i < 96; ++i) {
+        indexed_forward += "int M" + std::to_string(i) + "; ";
+    }
+    indexed_forward += "};";
     const fixture fixtures[] = {
         {"plain-record", "struct A { int X; int Y; };", true},
+        {"indexed-constructor-160", indexed_fields.c_str(), true},
+        {"indexed-forward-96", indexed_forward.c_str(), true},
         // HEADER-V2-CONSTRUCTION-05: single token pass, constructor before/after fields.
         {"constructor-before-member", "struct A { A() : X(5) {} int X; };", true},
         {"constructor-after-member", "struct A { int X; A() : X(5) {} };", true},

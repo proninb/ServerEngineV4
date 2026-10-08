@@ -718,24 +718,16 @@ header_parser_v2::record_member_name_set::hash(
 
 void
 header_parser_v2::record_member_name_set::insert_slot(
-    string_id name) noexcept {
+    string_id name,
+    std::uint32_t index_plus_one) noexcept {
 
-    const auto mask =
-        slots.size() - 1;
+    const auto mask = slots.size() - 1;
+    auto position = static_cast<std::size_t>(hash(name)) & mask;
 
-    auto position =
-        static_cast<std::size_t>(
-            hash(name)) &
-        mask;
-
-    while (slots[position]) {
-        position =
-            (position + 1) &
-            mask;
+    while (slots[position] != 0) {
+        position = (position + 1) & mask;
     }
-
-    slots[position] =
-        name;
+    slots[position] = index_plus_one;
 }
 
 server_status
@@ -743,54 +735,59 @@ header_parser_v2::record_member_name_set::rebuild(
     std::span<const member_record> existing,
     std::size_t required) noexcept {
 
-    if (required == 0) {
-        return server_status::success;
+    if (required == 0) return server_status::success;
+    if (required > (std::numeric_limits<std::uint32_t>::max)()) {
+        return server_status::io_error;
     }
-
-    constexpr std::size_t
-        minimum_capacity = 128;
-
-    if (required >
-        (std::numeric_limits<std::size_t>::max)() / 2) {
-
+    if (required > (std::numeric_limits<std::size_t>::max)() / 2) {
         return server_status::io_error;
     }
 
-    const auto minimum =
-        required * 2;
-
-    auto capacity =
-        minimum_capacity;
-
+    constexpr std::size_t minimum_capacity = 128;
+    const auto minimum = required * 2;
+    auto capacity = minimum_capacity;
     while (capacity < minimum) {
-        if (capacity >
-            (std::numeric_limits<std::size_t>::max)() / 2) {
-
+        if (capacity > (std::numeric_limits<std::size_t>::max)() / 2) {
             return server_status::io_error;
         }
-
         capacity *= 2;
     }
 
     try {
-        std::vector<string_id>
-            candidate(capacity);
-
-        slots.swap(
-            candidate);
-
-        for (const auto& member :
-             existing) {
-
-            insert_slot(
-                member.name);
+        std::vector<std::uint32_t> candidate(capacity);
+        slots.swap(candidate);
+        for (std::size_t i = 0; i < existing.size(); ++i) {
+            insert_slot(existing[i].name, static_cast<std::uint32_t>(i + 1));
         }
-
         return server_status::success;
     }
-    catch (...) {
-        return server_status::io_error;
+    catch (...) { return server_status::io_error; }
+}
+
+std::size_t
+header_parser_v2::record_member_name_set::find(
+    std::span<const member_record> existing,
+    string_id name) const noexcept {
+
+    if (slots.empty()) {
+        for (std::size_t i = 0; i < existing.size(); ++i) {
+            if (existing[i].name == name) return i;
+        }
+        return existing.size();
     }
+
+    const auto mask = slots.size() - 1;
+    auto position = static_cast<std::size_t>(hash(name)) & mask;
+    for (std::size_t probe = 0; probe < slots.size(); ++probe) {
+        const auto indexed = slots[position];
+        if (indexed == 0) return existing.size();
+        const auto index = static_cast<std::size_t>(indexed - 1);
+        if (index < existing.size() && existing[index].name == name) {
+            return index;
+        }
+        position = (position + 1) & mask;
+    }
+    return existing.size();
 }
 
 server_status
@@ -800,81 +797,29 @@ header_parser_v2::record_member_name_set::insert(
     bool& inserted) noexcept {
 
     inserted = false;
+    if (!name) return server_status::project_configuration_invalid;
 
-    if (!name) {
-        return server_status::
-            project_configuration_invalid;
-    }
-
+    // Common tiny records do not allocate a hash table.
     if (slots.empty() &&
-        existing.size() <
-            header_parser_v2::
-                record_member_linear_limit) {
-
-        for (const auto& member :
-             existing) {
-
-            if (member.name == name) {
-                return server_status::success;
-            }
-        }
-
+        existing.size() < header_parser_v2::record_member_linear_limit) {
+        if (find(existing, name) != existing.size()) return server_status::success;
         inserted = true;
         return server_status::success;
     }
 
-    const auto required =
-        existing.size() + 1;
-
-    if (slots.empty() ||
-        required >
-            slots.size() / 2) {
-
-        const auto rebuilt =
-            rebuild(
-                existing,
-                required);
-
-        if (!succeeded(rebuilt)) {
-            return rebuilt;
-        }
+    if (existing.size() >= (std::numeric_limits<std::uint32_t>::max)()) {
+        return server_status::io_error;
     }
-
-    const auto mask =
-        slots.size() - 1;
-
-    auto position =
-        static_cast<std::size_t>(
-            hash(name)) &
-        mask;
-
-    for (std::size_t probe = 0;
-         probe < slots.size();
-         ++probe) {
-
-        const auto existing_name =
-            slots[position];
-
-        if (!existing_name) {
-            slots[position] =
-                name;
-
-            inserted = true;
-            return server_status::success;
-        }
-
-        if (existing_name ==
-            name) {
-
-            return server_status::success;
-        }
-
-        position =
-            (position + 1) &
-            mask;
+    const auto required = existing.size() + 1;
+    if (slots.empty() || required > slots.size() / 2) {
+        const auto rebuilt = rebuild(existing, required);
+        if (!succeeded(rebuilt)) return rebuilt;
     }
+    if (find(existing, name) != existing.size()) return server_status::success;
 
-    return server_status::io_error;
+    insert_slot(name, static_cast<std::uint32_t>(required));
+    inserted = true;
+    return server_status::success;
 }
 
 server_status header_parser_v2::parse_array_suffix(
@@ -1565,6 +1510,7 @@ server_status header_parser_v2::parse_named_operator(
 server_status header_parser_v2::parse_constructor(
     string_id record_name,
     std::span<const member_record> members,
+    const record_member_name_set& names,
     std::vector<construction_value>& construction,
     pending_constructor_operations& pending) noexcept {
 
@@ -1637,8 +1583,8 @@ server_status header_parser_v2::parse_constructor(
         [&](string_id target, construction_value value,
             file_id file, source_range source) -> server_status {
 
-            for (std::size_t i = 0; i < members.size(); ++i) {
-                if (members[i].name != target) continue;
+            const auto i = names.find(members, target);
+            if (i < members.size()) {
                 if (i >= construction.size()) {
                     return server_status::project_configuration_invalid;
                 }
@@ -2222,6 +2168,7 @@ server_status header_parser_v2::parse_record(
                     parse_constructor(
                         record_name,
                         members,
+                        names,
                         construction,
                         pending);
 

@@ -66,6 +66,12 @@ private:
     // Record-local duplicate detector. Tiny records stay as a contiguous scan;
     // larger records promote once to an ephemeral open-addressed name set.
     struct record_member_name_set final {
+        // Returns existing.size() when absent. Reuses the duplicate detector:
+        // tiny records scan contiguous members, larger records use one index.
+        [[nodiscard]] std::size_t find(
+            std::span<const member_record> existing,
+            string_id name) const noexcept;
+
         [[nodiscard]] server_status insert(
             std::span<const member_record> existing,
             string_id name,
@@ -76,13 +82,16 @@ private:
             string_id name) noexcept;
 
         void insert_slot(
-            string_id name) noexcept;
+            string_id name,
+            std::uint32_t index_plus_one) noexcept;
 
         [[nodiscard]] server_status rebuild(
             std::span<const member_record> existing,
             std::size_t required) noexcept;
 
-        std::vector<string_id> slots;
+        // Zero is empty; nonzero is one-based index in member_record[].
+        // Storage remains 4 bytes per slot; no duplicate name table.
+        std::vector<std::uint32_t> slots;
     };
 
     static constexpr std::size_t
@@ -212,6 +221,7 @@ private:
     [[nodiscard]] server_status parse_constructor(
         string_id record_name,
         std::span<const member_record> members,
+        const record_member_name_set& names,
         std::vector<construction_value>& construction,
         pending_constructor_operations& pending) noexcept;
 
