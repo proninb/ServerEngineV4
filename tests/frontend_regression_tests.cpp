@@ -1380,6 +1380,14 @@ void test_graph_resolved_v2(
         result.push_back("record:" + name + ":" +
             std::to_string(static_cast<unsigned>(entry->kind)) + ":" +
             std::to_string(static_cast<unsigned>(entry->record_kind)));
+        result.push_back("polymorphic:" + name + ":" +
+            (entry->polymorphic() ? "1" : "0"));
+        for (const auto& base : G.bases(handle)) {
+            result.push_back("base:" + name + ":" +
+                differential_identity(ids, strings, base.type) + ":" +
+                std::to_string(static_cast<unsigned>(base.access)) + ":" +
+                std::to_string(static_cast<unsigned>(base.flags)));
+        }
         const auto members = G.members(handle);
         for (std::size_t i = 0; i < members.size(); ++i) {
             const auto& member = members[i];
@@ -1412,6 +1420,14 @@ void test_header_v2_differential_01(test_state& tests) {
         {"class-access", "class C { public: int X; private: int Y; };", true},
         {"array", "struct A { int M[2][3]; int* P; };", true},
         {"forward-definition", "struct A; struct A { int X; };", true},
+        {"virtual-void", "struct A { virtual void Tick(); int X; };", true},
+        {"virtual-pure", "struct A { virtual int Value() const noexcept = 0; };", true},
+        {"nonvirtual-method", "struct A { void Tick(void); int X; };", true},
+        {"derived-poly", "struct A { virtual int F(); }; struct B : A { int G(); int X; };", true},
+        {"inherited-pure", "struct A { virtual int F(); }; struct B : A { int G() = 0; };", true},
+        {"virtual-field", "struct A { virtual int X; };", false},
+        {"pure-no-base", "struct A { int F() = 0; };", false},
+        {"method-body", "struct A { virtual void F() {} };", false},
         {"duplicate-member", "struct A { int X; int X; };", false},
         {"unknown-type", "struct A { Missing X; };", false},
     };

@@ -457,6 +457,22 @@ The temporary type layout slot remains 16 bytes. Tests compare Graph and Parser
 results, and on native MSVC compare `sizeof`, `alignof`, direct base pointer
 offsets, and member offsets against actual compiler-generated objects.
 
+## HEADER-V2-VIRTUAL-01 — Declaration-only virtual methods
+
+V2 now accepts zero-parameter method declarations (`()` or `(void)`), with
+`virtual`, `const`/`volatile`, plain `noexcept`, and `= 0`/`= default`/`= delete`.
+Like OLD, declarations without bodies do not create instance data members;
+explicit virtual or pure method declarations contribute the Graph polymorphic
+flag. Pure declarations without an explicit virtual keyword require an existing
+polymorphic base. `void` is supported as a return type; void data members are
+rejected. Parameter lists with actual parameters, operator overloads,
+`override`/`final`, method bodies, noexcept expressions, and other method
+syntax remain unimplemented by V2.
+
+The independent OLD/V2 differential projection now compares polymorphism and
+base descriptors, in addition to member types and constructors. No Graph ABI,
+compiled.bin, stable-WHERE, or production parser changes.
+
 ## Next
 
 1. Header grammar parity.

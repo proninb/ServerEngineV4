@@ -165,14 +165,25 @@ private:
         graph_member_access access,
         std::vector<member_record>& members,
         std::vector<construction_value>& construction,
-        record_member_name_set& names) noexcept;
+        record_member_name_set& names,
+        bool virtual_prefix,
+        bool base_polymorphic,
+        bool& declares_virtual) noexcept;
+
+    [[nodiscard]] server_status parse_method_tail(
+        bool virtual_prefix,
+        bool base_polymorphic,
+        bool& declares_virtual) noexcept;
 
     [[nodiscard]] server_status parse_member(
         identity_ref scope,
         graph_member_access access,
         std::vector<member_record>& members,
         std::vector<construction_value>& construction,
-        record_member_name_set& names) noexcept;
+        record_member_name_set& names,
+        bool virtual_prefix,
+        bool base_polymorphic,
+        bool& declares_virtual) noexcept;
 
     [[nodiscard]] server_status parse_constructor(
         string_id record_name,

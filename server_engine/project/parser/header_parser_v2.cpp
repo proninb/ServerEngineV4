@@ -487,10 +487,15 @@ server_status header_parser_v2::parse_type(
         }
     }
 
-    if (at(token_kind::kw_int)) {
+    if (at(token_kind::kw_int) ||
+        at(token_kind::kw_void)) {
+        const auto intrinsic =
+            at(token_kind::kw_void)
+            ? intrinsic_type::void_type
+            : intrinsic_type::signed_int;
+
         output.type =
-            G.intrinsic(
-                intrinsic_type::signed_int);
+            G.intrinsic(intrinsic);
 
         if (!output.type) {
             return fail(
@@ -985,7 +990,10 @@ server_status header_parser_v2::parse_member_declarator(
     graph_member_access access,
     std::vector<member_record>& members,
     std::vector<construction_value>& construction,
-    record_member_name_set& names) noexcept {
+    record_member_name_set& names,
+    bool virtual_prefix,
+    bool base_polymorphic,
+    bool& declares_virtual) noexcept {
 
     const auto* name =
         current();
@@ -1016,6 +1024,27 @@ server_status header_parser_v2::parse_member_declarator(
 
     if (!succeeded(status)) {
         return status;
+    }
+
+    // HEADER-V2-VIRTUAL-01: methods have no stored Graph member.
+    // Consume their declaration before the record-local field name set.
+    if (at(token_kind::l_paren)) {
+        return parse_method_tail(
+            virtual_prefix,
+            base_polymorphic,
+            declares_virtual);
+    }
+
+    if (virtual_prefix) {
+        return fail(
+            parser_v2_failure_kind::syntax,
+            "virtual must declare a member function");
+    }
+
+    if (type.type == G.intrinsic(intrinsic_type::void_type)) {
+        return fail(
+            parser_v2_failure_kind::semantic,
+            "A data member cannot have void type");
     }
 
     status =
@@ -1095,7 +1124,10 @@ server_status header_parser_v2::parse_member(
     graph_member_access access,
     std::vector<member_record>& members,
     std::vector<construction_value>& construction,
-    record_member_name_set& names) noexcept {
+    record_member_name_set& names,
+    bool virtual_prefix,
+    bool base_polymorphic,
+    bool& declares_virtual) noexcept {
 
     resolved_type type;
 
@@ -1113,7 +1145,78 @@ server_status header_parser_v2::parse_member(
         access,
         members,
         construction,
-        names);
+        names,
+        virtual_prefix,
+        base_polymorphic,
+        declares_virtual);
+}
+
+// HEADER-V2-VIRTUAL-01: declaration-only methods, zero argument subset.
+// Method declarations affect polymorphic ABI but do not create Graph members.
+server_status header_parser_v2::parse_method_tail(
+    bool virtual_prefix,
+    bool base_polymorphic,
+    bool& declares_virtual) noexcept {
+
+    auto status = expect(
+        token_kind::l_paren,
+        "Header Parser V2 expected '(' after method name");
+    if (!succeeded(status)) return status;
+
+    // A sole void is equivalent to an empty C++ parameter list.
+    if (at(token_kind::kw_void)) {
+        status = consume();
+        if (!succeeded(status)) return status;
+    }
+    if (!at(token_kind::r_paren)) {
+        return fail(
+            parser_v2_failure_kind::unsupported,
+            "Header Parser V2 method parameters are not yet supported");
+    }
+    status = consume();
+    if (!succeeded(status)) return status;
+
+    while (at(token_kind::kw_const) ||
+           at(token_kind::kw_volatile) ||
+           at(token_kind::kw_noexcept)) {
+        status = consume();
+        if (!succeeded(status)) return status;
+    }
+
+    bool pure = false;
+    if (at(token_kind::assign)) {
+        status = consume();
+        if (!succeeded(status)) return status;
+        const auto* token = current();
+        if (token != nullptr &&
+            token->kind == token_kind::pp_number &&
+            token->number.kind == prepared_number_kind_v2::unsigned_integer &&
+            token->number.bits == 0) {
+            pure = true;
+        }
+        else if (!at(token_kind::kw_default) &&
+                 !at(token_kind::kw_delete)) {
+            return fail(
+                parser_v2_failure_kind::unsupported,
+                "Method declaration supports only '= 0', '= default', or '= delete'");
+        }
+        status = consume();
+        if (!succeeded(status)) return status;
+    }
+
+    if (pure && !virtual_prefix && !base_polymorphic) {
+        return fail(
+            parser_v2_failure_kind::semantic,
+            "Pure method requires a polymorphic base or explicit virtual");
+    }
+    if (pure || virtual_prefix) declares_virtual = true;
+
+    if (!at(token_kind::semicolon)) {
+        return fail(
+            parser_v2_failure_kind::unsupported,
+            "CXX-CLASS-ABI-V1 stores method declarations only; method bodies are not implemented");
+    }
+    return consume();
 }
 
 server_status header_parser_v2::parse_constructor(
@@ -1670,6 +1773,15 @@ server_status header_parser_v2::parse_record(
             kind);
 
     bool constructor_seen = false;
+    bool declares_virtual = false;
+    bool base_polymorphic = false;
+    for (const auto& base : bases) {
+        const auto base_handle = G.find_type(base.type);
+        if (base_handle && G.polymorphic(base_handle)) {
+            base_polymorphic = true;
+            break;
+        }
+    }
 
     while (!input.finished() &&
            !at(token_kind::r_brace)) {
@@ -1718,6 +1830,13 @@ server_status header_parser_v2::parse_record(
             continue;
         }
 
+        bool virtual_prefix = false;
+        if (at(token_kind::kw_virtual)) {
+            virtual_prefix = true;
+            status = consume();
+            if (!succeeded(status)) return status;
+        }
+
         if (at(token_kind::identifier) &&
             current()->identifier ==
                 record_name) {
@@ -1730,6 +1849,10 @@ server_status header_parser_v2::parse_record(
             }
 
             if (at(token_kind::l_paren)) {
+                if (virtual_prefix) {
+                    return fail(parser_v2_failure_kind::syntax,
+                        "Constructor cannot be virtual");
+                }
                 if (constructor_seen) {
                     return fail(
                         parser_v2_failure_kind::semantic,
@@ -1776,7 +1899,10 @@ server_status header_parser_v2::parse_record(
                     access,
                     members,
                     construction,
-                    names);
+                    names,
+                    virtual_prefix,
+                    base_polymorphic,
+                    declares_virtual);
 
             if (!succeeded(status)) {
                 return status;
@@ -1791,7 +1917,10 @@ server_status header_parser_v2::parse_record(
                 access,
                 members,
                 construction,
-                names);
+                names,
+                virtual_prefix,
+                base_polymorphic,
+                declares_virtual);
 
         if (!succeeded(status)) {
             return status;
@@ -1832,7 +1961,8 @@ server_status header_parser_v2::parse_record(
             kind,
             members,
             construction,
-            bases);
+            bases,
+            declares_virtual);
 
     if (!succeeded(status)) {
         return fail(
