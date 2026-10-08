@@ -51,6 +51,15 @@ semantic_preprocessor_v2::semantic_preprocessor_v2(
       failure(failure_value) {
 }
 
+bool semantic_preprocessor_v2::contextual_identifier(
+    std::string_view spelling) const noexcept {
+
+    return current_valid &&
+        current_value.kind == token_kind::identifier &&
+        current_value.identifier &&
+        strings.get(current_value.identifier) == spelling;
+}
+
 std::uint32_t semantic_preprocessor_v2::file_hash(
     std::uint32_t value) noexcept {
 

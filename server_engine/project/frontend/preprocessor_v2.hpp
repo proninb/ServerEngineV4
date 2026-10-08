@@ -77,6 +77,10 @@ public:
             : nullptr;
     }
 
+    // Contextual C++ keywords are identifiers, not grammar token kinds.
+    [[nodiscard]] bool contextual_identifier(
+        std::string_view spelling) const noexcept;
+
     [[nodiscard]] bool at(
         token_kind kind) const noexcept {
 
