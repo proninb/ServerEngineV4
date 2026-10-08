@@ -17,6 +17,7 @@
 #include <span>
 #include <string_view>
 #include <vector>
+#include <unordered_map>
 
 namespace cw::server {
 
@@ -87,10 +88,16 @@ private:
     static constexpr std::size_t
         record_member_linear_limit = 32;
 
+    // HEADER-V2-CONSTRUCTION-05: only not-yet-declared member targets are
+    // deferred. No second semantic traversal of constructor operations.
     struct constructor_operation final {
-        string_id target{};
         construction_value value{};
+        file_id file{};
+        source_range source{};
     };
+
+    using pending_constructor_operations =
+        std::unordered_map<std::uint32_t, constructor_operation>;
 
     [[nodiscard]] const prepared_token* current() const noexcept;
     [[nodiscard]] bool at(token_kind kind) const noexcept;
@@ -168,6 +175,7 @@ private:
         graph_member_access access,
         std::vector<member_record>& members,
         std::vector<construction_value>& construction,
+        pending_constructor_operations& pending,
         record_member_name_set& names,
         bool virtual_prefix,
         bool base_polymorphic,
@@ -195,6 +203,7 @@ private:
         graph_member_access access,
         std::vector<member_record>& members,
         std::vector<construction_value>& construction,
+        pending_constructor_operations& pending,
         record_member_name_set& names,
         bool virtual_prefix,
         bool base_polymorphic,
@@ -202,12 +211,9 @@ private:
 
     [[nodiscard]] server_status parse_constructor(
         string_id record_name,
-        std::vector<constructor_operation>& operations) noexcept;
-
-    [[nodiscard]] server_status apply_constructor_operations(
         std::span<const member_record> members,
         std::vector<construction_value>& construction,
-        std::span<const constructor_operation> operations) noexcept;
+        pending_constructor_operations& pending) noexcept;
 
     [[nodiscard]] identity_ref find_type_identity(
         identity_ref scope,

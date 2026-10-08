@@ -1131,6 +1131,7 @@ server_status header_parser_v2::parse_member_declarator(
     graph_member_access access,
     std::vector<member_record>& members,
     std::vector<construction_value>& construction,
+    pending_constructor_operations& pending,
     record_member_name_set& names,
     bool virtual_prefix,
     bool base_polymorphic,
@@ -1242,6 +1243,19 @@ server_status header_parser_v2::parse_member_declarator(
         return status;
     }
 
+    // A constructor may precede its fields. Apply the pending value now,
+    // after the declaration default is validated, without re-reading tokens.
+    const auto pending_it = pending.find(member_name.value());
+    if (pending_it != pending.end()) {
+        if (!construction_compatible(G, type.type, pending_it->second.value)) {
+            return fail_at(parser_v2_failure_kind::semantic,
+                "Header Parser V2 constructor initializer is incompatible with target field",
+                pending_it->second.file, pending_it->second.source);
+        }
+        initial = pending_it->second.value;
+        pending.erase(pending_it);
+    }
+
     try {
         members.push_back({
             member_name,
@@ -1266,6 +1280,7 @@ server_status header_parser_v2::parse_member(
     graph_member_access access,
     std::vector<member_record>& members,
     std::vector<construction_value>& construction,
+    pending_constructor_operations& pending,
     record_member_name_set& names,
     bool virtual_prefix,
     bool base_polymorphic,
@@ -1295,6 +1310,7 @@ server_status header_parser_v2::parse_member(
         access,
         members,
         construction,
+        pending,
         names,
         virtual_prefix,
         base_polymorphic,
@@ -1548,7 +1564,9 @@ server_status header_parser_v2::parse_named_operator(
 
 server_status header_parser_v2::parse_constructor(
     string_id record_name,
-    std::vector<constructor_operation>& operations) noexcept {
+    std::span<const member_record> members,
+    std::vector<construction_value>& construction,
+    pending_constructor_operations& pending) noexcept {
 
     if (!record_name ||
         !at(token_kind::l_paren)) {
@@ -1613,17 +1631,29 @@ server_status header_parser_v2::parse_constructor(
             "Header Parser V2 expected ';' after '= default'");
     }
 
+    // Resolve and normalize at the operation's source position. Only a
+    // forward member name is temporarily stored by its compact string ID.
     const auto append =
-        [&](string_id target,
-            construction_value value)
-            -> server_status {
+        [&](string_id target, construction_value value,
+            file_id file, source_range source) -> server_status {
+
+            for (std::size_t i = 0; i < members.size(); ++i) {
+                if (members[i].name != target) continue;
+                if (i >= construction.size()) {
+                    return server_status::project_configuration_invalid;
+                }
+                if (!construction_compatible(G, members[i].type, value)) {
+                    return fail_at(parser_v2_failure_kind::semantic,
+                        "Header Parser V2 constructor initializer is incompatible with target field",
+                        file, source);
+                }
+                construction[i] = value;
+                return server_status::success;
+            }
 
             try {
-                operations.push_back({
-                    target,
-                    value,
-                });
-
+                pending.insert_or_assign(target.value(),
+                    constructor_operation{value, file, source});
                 return server_status::success;
             }
             catch (...) {
@@ -1655,6 +1685,9 @@ server_status header_parser_v2::parse_constructor(
 
             const auto target_name =
                 target->identifier;
+            const auto target_file = target->file;
+            const source_range target_source{
+                target->source_offset, target->source_length};
 
             status =
                 consume();
@@ -1711,7 +1744,9 @@ server_status header_parser_v2::parse_constructor(
             status =
                 append(
                     target_name,
-                    value);
+                    value,
+                    target_file,
+                    target_source);
 
             if (!succeeded(status)) {
                 return status;
@@ -1761,6 +1796,9 @@ server_status header_parser_v2::parse_constructor(
 
         const auto target_name =
             target->identifier;
+        const auto target_file = target->file;
+        const source_range target_source{
+            target->source_offset, target->source_length};
 
         status =
             consume();
@@ -1800,7 +1838,9 @@ server_status header_parser_v2::parse_constructor(
         status =
             append(
                 target_name,
-                value);
+                value,
+                target_file,
+                target_source);
 
         if (!succeeded(status)) {
             return status;
@@ -1809,60 +1849,6 @@ server_status header_parser_v2::parse_constructor(
 
     return consume();
 }
-
-server_status header_parser_v2::apply_constructor_operations(
-    std::span<const member_record> members,
-    std::vector<construction_value>& construction,
-    std::span<const constructor_operation> operations) noexcept {
-
-    if (construction.size() !=
-        members.size()) {
-
-        return server_status::
-            project_configuration_invalid;
-    }
-
-    for (const auto& operation :
-         operations) {
-
-        std::size_t index = 0;
-
-        for (;
-             index < members.size();
-             ++index) {
-
-            if (members[index].name ==
-                operation.target) {
-
-                break;
-            }
-        }
-
-        if (index ==
-            members.size()) {
-
-            return fail(
-                parser_v2_failure_kind::semantic,
-                "Header Parser V2 constructor target is not a field of this record");
-        }
-
-        if (!construction_compatible(
-                G,
-                members[index].type,
-                operation.value)) {
-
-            return fail(
-                parser_v2_failure_kind::semantic,
-                "Header Parser V2 constructor initializer is incompatible with target field");
-        }
-
-        construction[index] =
-            operation.value;
-    }
-
-    return server_status::success;
-}
-
 
 server_status header_parser_v2::parse_record(
     identity_ref scope) noexcept {
@@ -2089,8 +2075,8 @@ server_status header_parser_v2::parse_record(
     std::vector<construction_value>
         construction;
 
-    std::vector<constructor_operation>
-        constructor_operations;
+    // Only forward constructor targets live beyond the point of parsing.
+    pending_constructor_operations pending;
 
     record_member_name_set
         names;
@@ -2235,7 +2221,9 @@ server_status header_parser_v2::parse_record(
                 status =
                     parse_constructor(
                         record_name,
-                        constructor_operations);
+                        members,
+                        construction,
+                        pending);
 
                 if (!succeeded(status)) {
                     return status;
@@ -2276,6 +2264,7 @@ server_status header_parser_v2::parse_record(
                     access,
                     members,
                     construction,
+                    pending,
                     names,
                     virtual_prefix,
                     base_polymorphic,
@@ -2296,6 +2285,7 @@ server_status header_parser_v2::parse_record(
                 access,
                 members,
                 construction,
+                pending,
                 names,
                 virtual_prefix,
                 base_polymorphic,
@@ -2315,14 +2305,18 @@ server_status header_parser_v2::parse_record(
         return status;
     }
 
-    status =
-        apply_constructor_operations(
-            members,
-            construction,
-            constructor_operations);
-
-    if (!succeeded(status)) {
-        return status;
+    // All forward declarations must be satisfied by the end of this record.
+    // No second pass over constructor operations or member initializations.
+    if (!pending.empty()) {
+        auto earliest = pending.begin();
+        for (auto it = pending.begin(); it != pending.end(); ++it) {
+            if (it->second.source.offset < earliest->second.source.offset) {
+                earliest = it;
+            }
+        }
+        return fail_at(parser_v2_failure_kind::semantic,
+            "Header Parser V2 constructor target is not a field of this record",
+            earliest->second.file, earliest->second.source);
     }
 
     status =

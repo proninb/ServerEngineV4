@@ -1416,6 +1416,15 @@ void test_header_v2_differential_01(test_state& tests) {
     struct fixture { const char* id; const char* source; bool success; };
     const fixture fixtures[] = {
         {"plain-record", "struct A { int X; int Y; };", true},
+        // HEADER-V2-CONSTRUCTION-05: single token pass, constructor before/after fields.
+        {"constructor-before-member", "struct A { A() : X(5) {} int X; };", true},
+        {"constructor-after-member", "struct A { int X; A() : X(5) {} };", true},
+        {"constructor-override-later-default", "struct A { A() : X(9) {} int X = 3; };", true},
+        {"constructor-override-earlier-default", "struct A { int X = 3; A() : X(9) {} };", true},
+        {"constructor-body-forward-last-wins", "struct A { A() : X(4) { X = 8; } int X = 1; };", true},
+        {"constructor-body-existing-last-wins", "struct A { int X = 1; A() : X(4) { X = 8; } };", true},
+        {"constructor-reordered-forward", "struct A { A() : Y(2), X(1) { Y = 3; } int X; int Y; };", true},
+        {"constructor-mixed-declaration-order", "struct A { int X; A() : X(1), Y(2) {} int Y; };", true},
         {"namespace", "namespace N { struct A { int X; }; }", true},
         {"class-access", "class C { public: int X; private: int Y; };", true},
         {"array", "struct A { int M[2][3]; int* P; };", true},

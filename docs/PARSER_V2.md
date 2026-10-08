@@ -528,6 +528,22 @@ vfptr words remain zero: virtual calls/RTTI/destruction are outside its current
 execution contract. This grammar slice does not claim complete support for
 virtual execution and does not change physical Runtime/SHM or Graph formats.
 
+## HEADER-V2-CONSTRUCTION-05 — Single-pass constructor normalization
+
+Header Parser V2 reads each prepared semantic token once. It applies a managed
+constructor operation directly to a declared member's normalized construction
+slot. If the constructor appears before a member declaration, **only that
+unresolved target** is retained in a record-local hash keyed by `string_id`.
+When the member is declared, the pending construction overrides its declaration
+default and the pending entry is removed. At the closing brace, the parser checks
+that no pending names remain; it does not traverse all constructor operations.
+
+This preserves the OLD precedence (member default, initializer list, constructor
+body) for the supported scalar-construction subset, including constructors both
+before and after field declarations. No AST, second source/semantic pass,
+persisted construction-operation records, Graph ABI changes or SHM changes.
+More complex aggregate/reference construction forms remain separate parity work.
+
 ## Next
 
 1. Header grammar parity.
