@@ -10840,6 +10840,398 @@ void test_runtime_multiple_empty_bases_01(test_state& tests) {
 #endif
 }
 
+// SHM-MULTI-BASE-03: a nonvirtual diamond owns *two* distinct A subobjects.
+// A dotted name such as object.value is ambiguous; physical Graph endpoint
+// paths (base -> base -> member) unambiguously select each A subobject.
+void test_shm_multi_base_diamond_03(test_state& tests) {
+    compiled_fixture f;
+
+    const auto name = [&](std::string_view value) {
+        string_id result;
+        if (!succeeded(f.strings.intern(value, result))) {
+            throw std::runtime_error("DIAMOND-03 intern string");
+        }
+        return result;
+    };
+    const auto identity = [&](std::string_view value, identity_kind kind) {
+        identity_ref result;
+        if (!succeeded(f.identities.resolve(
+                f.identities.root(), name(value), kind, result))) {
+            throw std::runtime_error("DIAMOND-03 resolve identity");
+        }
+        return result;
+    };
+    const auto declare = [&](std::string_view value) {
+        type_handle result;
+        if (!succeeded(f.G.declare_record(identity(value, identity_kind::type),
+                                          graph_record_kind::struct_type, result))) {
+            throw std::runtime_error("DIAMOND-03 declare record");
+        }
+        return result;
+    };
+    const auto base = [&](type_handle record) {
+        return base_record{f.G.identity(record),
+                           graph_member_access::public_access, 0, 0};
+    };
+    const auto integer = f.G.intrinsic(intrinsic_type::signed_int);
+    type_ref reference;
+    if (!tests.expect(succeeded(f.G.derive(
+                          integer, derived_type_kind::lvalue_reference, 0, reference)),
+                      "DIAMOND-03 derive int reference")) {
+        return;
+    }
+
+    const auto empty = declare("DiamondEmpty");
+    const auto a = declare("DiamondA");
+    const auto b = declare("DiamondB");
+    const auto c = declare("DiamondC");
+    const auto d = declare("DiamondD");
+    const auto hidden = declare("DiamondHidden");
+
+    const auto value_name = name("value");
+    const auto alias_name = name("alias");
+    const auto left_name = name("left_only");
+    const auto right_name = name("right_only");
+    const auto own_name = name("own");
+    const std::array<member_record, 2> a_members{{
+        {value_name, integer, graph_member_access::public_access},
+        {alias_name, reference, graph_member_access::public_access},
+    }};
+    // Graph member_binding uses the one-based member ordinal.
+    const std::array<construction_value, 2> a_construction{{
+        {}, construction_value::member_binding(1),
+    }};
+    const std::array<member_record, 1> b_members{{
+        {left_name, integer, graph_member_access::public_access},
+    }};
+    const std::array<member_record, 1> c_members{{
+        {right_name, integer, graph_member_access::public_access},
+    }};
+    const std::array<member_record, 1> d_members{{
+        {own_name, integer, graph_member_access::public_access},
+    }};
+    const std::array<member_record, 1> hidden_members{{
+        {value_name, integer, graph_member_access::public_access},
+    }};
+    const std::array<construction_value, 1> own_construction{{
+        construction_value::constant(construction_kind::unsigned_integer, 9),
+    }};
+    const std::array<construction_value, 1> hidden_construction{{
+        construction_value::constant(construction_kind::unsigned_integer, 99),
+    }};
+    const std::array<base_record, 1> a_base{{base(a)}};
+    const std::array<base_record, 1> d_base{{base(d)}};
+    // Direct base indices of D: Empty=0, B=1, C=2.
+    const std::array<base_record, 3> d_bases{{base(empty), base(b), base(c)}};
+
+    if (!tests.expect(
+            succeeded(f.G.define_record(empty, graph_record_kind::struct_type, {})) &&
+            succeeded(f.G.define_record(a, graph_record_kind::struct_type,
+                                        a_members, a_construction)) &&
+            succeeded(f.G.define_record(b, graph_record_kind::struct_type,
+                                        b_members, {}, a_base)) &&
+            succeeded(f.G.define_record(c, graph_record_kind::struct_type,
+                                        c_members, {}, a_base)) &&
+            succeeded(f.G.define_record(d, graph_record_kind::struct_type,
+                                        d_members, own_construction, d_bases)) &&
+            succeeded(f.G.define_record(hidden, graph_record_kind::struct_type,
+                                        hidden_members, hidden_construction, d_base)),
+            "DIAMOND-03 define nonvirtual diamond and hiding record")) {
+        return;
+    }
+
+    const auto root_id = identity("diamond_root", identity_kind::object);
+    const auto hidden_id = identity("diamond_hidden", identity_kind::object);
+    const auto scalar_id = identity("diamond_scalar", identity_kind::object);
+    object_handle root_object, hidden_object, scalar_object;
+    if (!tests.expect(
+            succeeded(f.G.add_object(root_id, f.G.named(d), root_object)) &&
+            succeeded(f.G.add_object(hidden_id, f.G.named(hidden), hidden_object)) &&
+            succeeded(f.G.add_object(scalar_id, integer, scalar_object)),
+            "DIAMOND-03 add all reachable objects")) {
+        return;
+    }
+
+    const std::array<endpoint_path_step, 3> left_value_steps{{
+        {1, endpoint_path_step_kind::base, {}},
+        {0, endpoint_path_step_kind::base, {}},
+        {0, endpoint_path_step_kind::member, {}},
+    }};
+    const std::array<endpoint_path_step, 3> right_value_steps{{
+        {2, endpoint_path_step_kind::base, {}},
+        {0, endpoint_path_step_kind::base, {}},
+        {0, endpoint_path_step_kind::member, {}},
+    }};
+    const std::array<endpoint_path_step, 3> left_alias_steps{{
+        {1, endpoint_path_step_kind::base, {}},
+        {0, endpoint_path_step_kind::base, {}},
+        {1, endpoint_path_step_kind::member, {}},
+    }};
+    const std::array<endpoint_path_step, 3> right_alias_steps{{
+        {2, endpoint_path_step_kind::base, {}},
+        {0, endpoint_path_step_kind::base, {}},
+        {1, endpoint_path_step_kind::member, {}},
+    }};
+    const std::array<endpoint_path_step, 2> left_only_steps{{
+        {1, endpoint_path_step_kind::base, {}},
+        {0, endpoint_path_step_kind::member, {}},
+    }};
+    const std::array<endpoint_path_step, 2> right_only_steps{{
+        {2, endpoint_path_step_kind::base, {}},
+        {0, endpoint_path_step_kind::member, {}},
+    }};
+    endpoint_path_handle left_value, right_value, left_alias, right_alias;
+    endpoint_path_handle left_only, right_only, scalar_path;
+    if (!tests.expect(
+            succeeded(f.G.intern_endpoint_path(f.G.named(d), left_value_steps, left_value)) &&
+            succeeded(f.G.intern_endpoint_path(f.G.named(d), right_value_steps, right_value)) &&
+            succeeded(f.G.intern_endpoint_path(f.G.named(d), left_alias_steps, left_alias)) &&
+            succeeded(f.G.intern_endpoint_path(f.G.named(d), right_alias_steps, right_alias)) &&
+            succeeded(f.G.intern_endpoint_path(f.G.named(d), left_only_steps, left_only)) &&
+            succeeded(f.G.intern_endpoint_path(f.G.named(d), right_only_steps, right_only)) &&
+            succeeded(f.G.intern_endpoint_path(integer, {}, scalar_path)) &&
+            left_value != right_value && left_alias != right_alias,
+            "DIAMOND-03 distinct Graph endpoint paths for repeated A")) {
+        return;
+    }
+    bool replaced = false;
+    const auto initialize = [&](identity_ref object, endpoint_path_handle path,
+                                std::uint64_t value) {
+        bool was_replaced = false;
+        return succeeded(f.G.add_initialization(
+            {object, endpoint_ref::from_path(path)},
+            construction_value::constant(construction_kind::unsigned_integer, value),
+            was_replaced)) && !was_replaced;
+    };
+    link_handle link;
+    if (!tests.expect(
+            initialize(root_id, left_value, 11) &&
+            initialize(root_id, right_value, 22) &&
+            initialize(root_id, left_only, 31) &&
+            initialize(root_id, right_only, 42) &&
+            initialize(scalar_id, scalar_path, 73) &&
+            succeeded(f.G.add_link(
+                {scalar_id, endpoint_ref::from_path(scalar_path)},
+                {root_id, endpoint_ref::from_path(left_alias)}, link)) &&
+            succeeded(f.sources.finalize(f.files.size(), f.identities, f.G)),
+            "DIAMOND-03 initialize both A and link only left reference")) {
+        return;
+    }
+    (void)replaced;
+
+    compiled_test_image image;
+    compiled_project_view view;
+    if (!tests.expect(
+            build_test_compiled_image(f, image) == compiled_project_image_result::success &&
+            view.bind(image.bytes) == compiled_project_image_result::success &&
+            view.verify_contents() == compiled_project_image_result::success,
+            "DIAMOND-03 persist and validate Graph")) {
+        return;
+    }
+
+    const server_abi_configuration abi{
+#if defined(_M_IX86)
+        abi_target::windows_x86,
+#else
+        abi_target::windows_x64,
+#endif
+        8,
+    };
+    runtime_layout fixed_layout;
+    shm_layout physical_layout;
+    if (!tests.expect(
+            prepare_runtime_layout(view, abi, fixed_layout) == runtime_layout_result::success &&
+            prepare_shm_layout(view, abi, physical_layout) == shm_layout_result::success,
+            "DIAMOND-03 prepare both layout engines")) {
+        return;
+    }
+
+    type_entry persisted_a, persisted_b, persisted_c, persisted_d, persisted_hidden;
+    runtime_value_layout fixed_d, fixed_hidden;
+    shm_value_layout shm_d, shm_hidden;
+    record_offset fixed_empty = 0, fixed_b = 0, fixed_c = 0;
+    record_offset fixed_b_a = 0, fixed_c_a = 0;
+    shm_record_offset shm_empty = 0, shm_b = 0, shm_c = 0;
+    shm_record_offset shm_b_a = 0, shm_c_a = 0;
+    shm_record_offset value_offset = 0, alias_offset = 0;
+    record_offset fixed_value_offset = 0, fixed_alias_offset = 0;
+    if (!tests.expect(
+            view.type(a, persisted_a) && view.type(b, persisted_b) &&
+            view.type(c, persisted_c) && view.type(d, persisted_d) &&
+            view.type(hidden, persisted_hidden) &&
+            persisted_d.bases.count == 3 &&
+            persisted_b.bases.count == 1 && persisted_c.bases.count == 1 &&
+            fixed_layout.type(d, fixed_d) && fixed_layout.type(hidden, fixed_hidden) &&
+            physical_layout.type(d, shm_d) && physical_layout.type(hidden, shm_hidden) &&
+            fixed_layout.base_offset(persisted_d.bases.begin, fixed_empty) &&
+            fixed_layout.base_offset(persisted_d.bases.begin + 1, fixed_b) &&
+            fixed_layout.base_offset(persisted_d.bases.begin + 2, fixed_c) &&
+            fixed_layout.base_offset(persisted_b.bases.begin, fixed_b_a) &&
+            fixed_layout.base_offset(persisted_c.bases.begin, fixed_c_a) &&
+            physical_layout.base_offset(persisted_d.bases.begin, shm_empty) &&
+            physical_layout.base_offset(persisted_d.bases.begin + 1, shm_b) &&
+            physical_layout.base_offset(persisted_d.bases.begin + 2, shm_c) &&
+            physical_layout.base_offset(persisted_b.bases.begin, shm_b_a) &&
+            physical_layout.base_offset(persisted_c.bases.begin, shm_c_a) &&
+            physical_layout.member_offset(persisted_a.members.begin, value_offset) &&
+            physical_layout.member_offset(persisted_a.members.begin + 1, alias_offset) &&
+            fixed_layout.member_offset(persisted_a.members.begin, fixed_value_offset) &&
+            fixed_layout.member_offset(persisted_a.members.begin + 1, fixed_alias_offset),
+            "DIAMOND-03 resolve both repeated base paths")) {
+        return;
+    }
+    const auto left_a = shm_b + shm_b_a;
+    const auto right_a = shm_c + shm_c_a;
+    tests.expect(
+        fixed_d.size == shm_d.size && fixed_d.alignment == shm_d.alignment &&
+        fixed_hidden.size == shm_hidden.size &&
+        fixed_hidden.alignment == shm_hidden.alignment &&
+        fixed_empty == shm_empty && fixed_b == shm_b && fixed_c == shm_c &&
+        fixed_b_a == shm_b_a && fixed_c_a == shm_c_a &&
+        fixed_value_offset == value_offset && fixed_alias_offset == alias_offset &&
+        left_a != right_a,
+        "DIAMOND-03 identical Fixed Direct/SHM offsets and distinct A addresses");
+
+#if defined(_MSC_VER) && defined(_WIN32)
+    struct NativeEmpty {};
+    struct NativeA { int value = 0; int& alias = value; };
+    struct NativeB : NativeA { int left_only = 0; };
+    struct NativeC : NativeA { int right_only = 0; };
+    struct NativeD : NativeEmpty, NativeB, NativeC { int own = 0; };
+    struct NativeHidden : NativeD { int value = 0; };
+    NativeD native{};
+    const auto native_offset = [&](const auto* p) {
+        return static_cast<std::uint64_t>(
+            reinterpret_cast<const std::byte*>(p) -
+            reinterpret_cast<const std::byte*>(&native));
+    };
+    const auto* native_b = static_cast<NativeB*>(&native);
+    const auto* native_c = static_cast<NativeC*>(&native);
+    tests.expect(
+        shm_d.size == sizeof(NativeD) && shm_d.alignment == alignof(NativeD) &&
+        shm_hidden.size == sizeof(NativeHidden) &&
+        shm_hidden.alignment == alignof(NativeHidden) &&
+        shm_empty == native_offset(static_cast<NativeEmpty*>(&native)) &&
+        shm_b == native_offset(native_b) &&
+        shm_c == native_offset(native_c) &&
+        left_a == native_offset(static_cast<const NativeA*>(native_b)) &&
+        right_a == native_offset(static_cast<const NativeA*>(native_c)),
+        "DIAMOND-03 MSVC native diamond base offsets");
+#endif
+
+#if defined(_WIN32)
+    std::vector<std::byte> fixed_image(
+        static_cast<std::size_t>(fixed_layout.size()), std::byte{0});
+    if (!tests.expect(
+            materialize_fixed_direct(view, fixed_layout, abi, fixed_image) ==
+                fixed_direct_materialization_result::success,
+            "DIAMOND-03 Fixed Direct materialization")) {
+        return;
+    }
+    runtime_binding_index bindings;
+    if (!tests.expect(fixed_layout.release_bindings(bindings),
+                      "DIAMOND-03 Fixed Direct bindings")) {
+        return;
+    }
+    runtime_value queried;
+    tests.expect(
+        get_runtime_value(view, bindings, fixed_image, "diamond_root.value", queried) ==
+            runtime_query_result::invalid_input &&
+        get_runtime_value(view, bindings, fixed_image, "diamond_root.alias", queried) ==
+            runtime_query_result::invalid_input,
+        "DIAMOND-03 ambiguous inherited names rejected");
+    tests.expect(
+        get_runtime_value(view, bindings, fixed_image, "diamond_root.left_only", queried) ==
+            runtime_query_result::success && queried.bits == 31 &&
+        get_runtime_value(view, bindings, fixed_image, "diamond_root.right_only", queried) ==
+            runtime_query_result::success && queried.bits == 42 &&
+        get_runtime_value(view, bindings, fixed_image, "diamond_root.own", queried) ==
+            runtime_query_result::success && queried.bits == 9 &&
+        get_runtime_value(view, bindings, fixed_image, "diamond_hidden.value", queried) ==
+            runtime_query_result::success && queried.bits == 99,
+        "DIAMOND-03 unique members and direct-name hiding");
+
+    shm_runtime_v2 runtime_v2;
+    if (!tests.expect(
+            prepare_shm_runtime_v2(view, abi, physical_layout, runtime_v2) ==
+                shm_runtime_v2_result::success,
+            "DIAMOND-03 prepare production SHM Runtime V2")) {
+        return;
+    }
+    std::vector<std::byte> shm_image(
+        static_cast<std::size_t>(physical_layout.size()), std::byte{0});
+    if (!tests.expect(
+            materialize_shm_runtime_v2_canonical(runtime_v2, abi, physical_layout, shm_image) ==
+                shm_runtime_v2_result::success &&
+            mark_shm_runtime_v2_links(runtime_v2, abi, physical_layout, shm_image) ==
+                shm_runtime_v2_result::success &&
+            materialize_shm_runtime_v2_objects(runtime_v2, abi, physical_layout, shm_image) ==
+                shm_runtime_v2_result::success &&
+            materialize_shm_runtime_v2_links(runtime_v2, abi, physical_layout, shm_image) ==
+                shm_runtime_v2_result::success &&
+            materialize_shm_runtime_v2_initializations(runtime_v2, abi, physical_layout, shm_image) ==
+                shm_runtime_v2_result::success,
+            "DIAMOND-03 execute complete production SHM Runtime V2")) {
+        return;
+    }
+    shm_offset root_where = 0, scalar_where = 0;
+    runtime_offset fixed_root_where = 0, fixed_scalar_where = 0;
+    if (!tests.expect(
+            physical_layout.object_offset(root_object, root_where) &&
+            physical_layout.object_offset(scalar_object, scalar_where) &&
+            bindings.object_offset(root_object, fixed_root_where) &&
+            bindings.object_offset(scalar_object, fixed_scalar_where),
+            "DIAMOND-03 physical object offsets")) {
+        return;
+    }
+    const auto inspect = [&](std::span<const std::byte> bytes,
+                             std::uint64_t root_where_value,
+                             std::uint64_t scalar_where_value,
+                             std::uint64_t left_a_offset,
+                             std::uint64_t right_a_offset) {
+        const auto read_integer = [&](std::uint64_t at) {
+            int result = 0;
+            if (at + sizeof(result) > bytes.size()) {
+                return -1;
+            }
+            std::memcpy(&result, bytes.data() + static_cast<std::size_t>(at),
+                        sizeof(result));
+            return result;
+        };
+        const auto read_reference = [&](std::uint64_t at) {
+            std::uintptr_t result = 0;
+            if (at + sizeof(result) > bytes.size()) {
+                return result;
+            }
+            std::memcpy(&result, bytes.data() + static_cast<std::size_t>(at),
+                        sizeof(result));
+            return result;
+        };
+        const auto left_value_at = root_where_value + left_a_offset + value_offset;
+        const auto right_value_at = root_where_value + right_a_offset + value_offset;
+        const auto left_alias_at = root_where_value + left_a_offset + alias_offset;
+        const auto right_alias_at = root_where_value + right_a_offset + alias_offset;
+        const auto to_address = [&](std::uint64_t relative) {
+            return reinterpret_cast<std::uintptr_t>(
+                bytes.data() + static_cast<std::size_t>(relative));
+        };
+        return left_value_at != right_value_at &&
+            read_integer(left_value_at) == 11 &&
+            read_integer(right_value_at) == 22 &&
+            read_integer(scalar_where_value) == 73 &&
+            read_reference(left_alias_at) == to_address(scalar_where_value) &&
+            read_reference(right_alias_at) == to_address(right_value_at);
+    };
+    tests.expect(
+        inspect(shm_image, root_where, scalar_where, left_a, right_a),
+        "DIAMOND-03 SHM V2 isolates both A values and native references");
+    tests.expect(
+        inspect(fixed_image, fixed_root_where, fixed_scalar_where,
+                fixed_b + fixed_b_a, fixed_c + fixed_c_a),
+        "DIAMOND-03 Fixed Direct isolates both A values and native references");
+#endif
+}
+
 void test_runtime_layout_tail_alignment(
     test_state& tests) {
 
@@ -12889,6 +13281,9 @@ int main() {
             tests);
 
         test_runtime_multiple_empty_bases_01(
+            tests);
+
+        test_shm_multi_base_diamond_03(
             tests);
 
         test_runtime_layout_tail_alignment(
