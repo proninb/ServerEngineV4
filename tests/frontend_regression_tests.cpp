@@ -308,6 +308,162 @@ private:
 
 
 
+// PARSER-V2-CURSOR-DECODE-09: ordinary, extended and malformed word streams.
+void test_semantic_cursor_v2_decode_09(test_state& tests) {
+    const file_id file{1};
+    std::string text(70500, ' ');
+    text.replace(0, 5, "Alpha");
+    text.replace(70000, 4, "Beta");
+
+    string_table strings;
+    string_id alpha;
+    string_id beta;
+    lexical_symbol_stream_v2 symbols;
+    lexical_symbol_resolution_v2 resolution;
+    prepared_literal_stream_v2 numbers;
+    prepared_number_v2 constant{};
+    constant.kind = prepared_number_kind_v2::unsigned_integer;
+    constant.bits = 42;
+
+    if (!tests.expect(
+            succeeded(strings.intern("Alpha", alpha)) &&
+            succeeded(strings.intern("Beta", beta)) &&
+            succeeded(symbols.reset(file, text.size())) &&
+            succeeded(symbols.record_identifier(text, 1u, 0u, 5u)) &&
+            succeeded(symbols.record_identifier(text, 2u, 70000u, 4u)) &&
+            succeeded(resolution.reset(file, 2)) &&
+            succeeded(resolution.set(local_symbol_id_v2{1}, alpha)) &&
+            succeeded(resolution.set(local_symbol_id_v2{2}, beta)) &&
+            succeeded(numbers.reset(file)) &&
+            succeeded(numbers.record(constant)),
+            "CURSOR-DECODE-09 prepare canonical symbol and numeric inputs")) {
+        return;
+    }
+
+    const std::array<std::uint32_t, 7> mixed{
+        lexical_token::make(token_kind::identifier, 0, 5).value(),
+        lexical_token::make(token_kind::semicolon, 5, 1).value(),
+        lexical_token::make(token_kind::identifier,
+            lexical_token::extended_delta, 4).value(), 69995,
+        lexical_token::make(token_kind::pp_number, 0,
+            lexical_token::extended_length).value(), 400,
+        lexical_token::make(token_kind::semicolon, 0, 1).value(),
+    };
+    const prepared_lexical_input_v2 input{
+        file, mixed, &symbols, &resolution, &numbers};
+    semantic_cursor_v2 cursor;
+    if (!tests.expect(succeeded(cursor.start(input)),
+            "CURSOR-DECODE-09 start mixed stream")) return;
+
+    const auto* current = cursor.current();
+    tests.expect(current && current->kind == token_kind::identifier &&
+        current->source_offset == 0 && current->source_length == 5 &&
+        current->identifier == alpha && !current->number.valid(),
+        "CURSOR-DECODE-09 first ordinary token");
+
+    if (!tests.expect(succeeded(cursor.advance()),
+            "CURSOR-DECODE-09 advance ordinary token")) return;
+    current = cursor.current();
+    tests.expect(current && current->kind == token_kind::semicolon &&
+        current->source_offset == 5 && current->source_length == 1 &&
+        !current->identifier && !current->number.valid(),
+        "CURSOR-DECODE-09 inline delta and length");
+
+    if (!tests.expect(succeeded(cursor.advance()),
+            "CURSOR-DECODE-09 advance extended delta")) return;
+    current = cursor.current();
+    tests.expect(current && current->kind == token_kind::identifier &&
+        current->source_offset == 70000 && current->source_length == 4 &&
+        current->identifier == beta && !current->number.valid(),
+        "CURSOR-DECODE-09 extended delta and canonical second identifier");
+
+    if (!tests.expect(succeeded(cursor.advance()),
+            "CURSOR-DECODE-09 advance extended length")) return;
+    current = cursor.current();
+    tests.expect(current && current->kind == token_kind::pp_number &&
+        current->source_offset == 70000 && current->source_length == 400 &&
+        !current->identifier && current->number.valid() &&
+        current->number.bits == 42,
+        "CURSOR-DECODE-09 extended length and number occurrence");
+
+    if (!tests.expect(succeeded(cursor.advance()),
+            "CURSOR-DECODE-09 advance final ordinary token")) return;
+    current = cursor.current();
+    tests.expect(current && current->kind == token_kind::semicolon &&
+        current->source_offset == 70000 && current->source_length == 1 &&
+        !current->identifier && !current->number.valid(),
+        "CURSOR-DECODE-09 no stale identifier or number");
+    tests.expect(succeeded(cursor.advance()) && cursor.finished() &&
+        cursor.current() == nullptr && !succeeded(cursor.advance()),
+        "CURSOR-DECODE-09 EOF and rejection after EOF");
+
+    // Separate stream: both escape words, including on the very first token.
+    lexical_symbol_stream_v2 empty_symbols;
+    lexical_symbol_resolution_v2 empty_resolution;
+    prepared_literal_stream_v2 empty_numbers;
+    if (!tests.expect(succeeded(empty_symbols.reset(file, text.size())) &&
+            succeeded(empty_resolution.reset(file, 0)) &&
+            succeeded(empty_numbers.reset(file)),
+            "CURSOR-DECODE-09 prepare empty auxiliary tables")) return;
+
+    const std::array<std::uint32_t, 3> extended{
+        lexical_token::make(token_kind::string_literal,
+            lexical_token::extended_delta,
+            lexical_token::extended_length).value(), 70000, 400,
+    };
+    semantic_cursor_v2 wide;
+    const prepared_lexical_input_v2 wide_input{
+        file, extended, &empty_symbols, &empty_resolution, &empty_numbers};
+    tests.expect(succeeded(wide.start(wide_input)) && wide.current() &&
+        wide.current()->source_offset == 70000 &&
+        wide.current()->source_length == 400 &&
+        succeeded(wide.advance()) && wide.finished(),
+        "CURSOR-DECODE-09 simultaneous extended delta and length");
+
+    const std::array<std::uint32_t, 1> truncated{
+        lexical_token::make(token_kind::semicolon,
+            lexical_token::extended_delta, 1).value(),
+    };
+    semantic_cursor_v2 invalid;
+    const prepared_lexical_input_v2 truncated_input{
+        file, truncated, &empty_symbols, &empty_resolution, &empty_numbers};
+    tests.expect(!succeeded(invalid.start(truncated_input)) &&
+        invalid.current() == nullptr,
+        "CURSOR-DECODE-09 truncated escape rejected");
+
+    const std::array<std::uint32_t, 2> too_far{
+        lexical_token::make(token_kind::semicolon, 0, 1).value(),
+        lexical_token::make(token_kind::semicolon,
+            lexical_token::extended_delta, 1).value(),
+    };
+    semantic_cursor_v2 invalid_tail;
+    const prepared_lexical_input_v2 malformed_input{
+        file, too_far, &empty_symbols, &empty_resolution, &empty_numbers};
+    tests.expect(succeeded(invalid_tail.start(malformed_input)) &&
+        !succeeded(invalid_tail.advance()) && invalid_tail.current() == nullptr,
+        "CURSOR-DECODE-09 truncated nonfirst escape rejected");
+
+    const std::array<std::uint32_t, 2> out_of_bounds{
+        lexical_token::make(token_kind::semicolon, 0, 1).value(),
+        lexical_token::make(token_kind::semicolon, 65534, 1).value(),
+    };
+    // source_size 1 => the second inline token must fail source-range validation.
+    lexical_symbol_stream_v2 short_symbols;
+    lexical_symbol_resolution_v2 short_resolution;
+    prepared_literal_stream_v2 short_numbers;
+    if (!tests.expect(succeeded(short_symbols.reset(file, 1)) &&
+            succeeded(short_resolution.reset(file, 0)) &&
+            succeeded(short_numbers.reset(file)),
+            "CURSOR-DECODE-09 short stream setup")) return;
+    const prepared_lexical_input_v2 short_input{
+        file, out_of_bounds, &short_symbols, &short_resolution, &short_numbers};
+    semantic_cursor_v2 invalid_inline;
+    tests.expect(succeeded(invalid_inline.start(short_input)) &&
+        !succeeded(invalid_inline.advance()) &&
+        invalid_inline.current() == nullptr,
+        "CURSOR-DECODE-09 out-of-bounds inline delta rejected");
+}
+
 void test_lexical_symbols_v2(
     test_state& tests) {
 
@@ -756,6 +912,249 @@ void test_prepared_include_v2(
         "inactive-capable missing include is recorded without semantic publication");
 }
 
+
+// PARSER-V2-MACRO-FASTPATH-08: validate zero active definitions, including
+// after undefine/reset when the hash table may retain allocated slots.
+void test_macro_fastpath_08(test_state& tests) {
+    string_table strings;
+    string_id first;
+    string_id second;
+
+    if (!tests.expect(
+            succeeded(strings.intern("Macro08First", first)) &&
+            succeeded(strings.intern("Macro08Second", second)) &&
+            first && second,
+            "MACRO-FASTPATH-08 intern test spellings")) {
+        return;
+    }
+
+    preprocessor macros{strings};
+    preprocessor_expansion expansion;
+    const auto same = [&](string_id input, string_id expected,
+                          std::string_view label) {
+        const auto status = macros.expand(input, expansion);
+        static_cast<void>(tests.expect(succeeded(status) &&
+                     expansion.kind == preprocessor_expansion_kind::identifier &&
+                     expansion.identifier == expected, label));
+    };
+    const auto empty = [&](string_id input, std::string_view label) {
+        const auto status = macros.expand(input, expansion);
+        static_cast<void>(tests.expect(succeeded(status) &&
+                     expansion.kind == preprocessor_expansion_kind::empty &&
+                     !expansion.identifier, label));
+    };
+
+    same(first, first, "MACRO-FASTPATH-08 empty table preserves identifier");
+    static_cast<void>(tests.expect(macros.size() == 0,
+                 "MACRO-FASTPATH-08 initial active count is zero"));
+
+    if (!tests.expect(succeeded(macros.define(first, second)),
+                      "MACRO-FASTPATH-08 define replacement")) return;
+    same(first, second, "MACRO-FASTPATH-08 replacement remains active");
+    if (!tests.expect(succeeded(macros.define(second)),
+                      "MACRO-FASTPATH-08 define empty replacement")) return;
+    empty(first, "MACRO-FASTPATH-08 chained empty replacement");
+    empty(second, "MACRO-FASTPATH-08 empty definition");
+
+    if (!tests.expect(succeeded(macros.undefine(second)),
+                      "MACRO-FASTPATH-08 undefine chained target")) return;
+    same(first, second, "MACRO-FASTPATH-08 remaining definition preserved");
+
+    if (!tests.expect(succeeded(macros.undefine(first)) && macros.size() == 0,
+                      "MACRO-FASTPATH-08 remove last active definition")) return;
+    same(first, first, "MACRO-FASTPATH-08 fast path after last undefine");
+    same(second, second, "MACRO-FASTPATH-08 second identifier after undefine");
+
+    if (!tests.expect(succeeded(macros.define(first)),
+                      "MACRO-FASTPATH-08 redefine with empty replacement")) return;
+    empty(first, "MACRO-FASTPATH-08 redefined empty replacement");
+    macros.reset();
+    static_cast<void>(tests.expect(macros.size() == 0,
+                 "MACRO-FASTPATH-08 reset clears active definitions"));
+    same(first, first, "MACRO-FASTPATH-08 fast path after reset");
+
+    // string_id's numeric constructor is intentionally private. The
+    // public default constructor supplies an invalid id (slot == 0).
+    const auto bad = macros.expand(string_id{}, expansion);
+    static_cast<void>(tests.expect(!succeeded(bad) && !expansion.identifier,
+                 "MACRO-FASTPATH-08 invalid string_id remains rejected"));
+}
+
+// FRONTEND-PHYSICAL-11: directive anchor ordinal regression.
+// Lexical data contains a >64KiB gap and a >255-byte identifier in an
+// inactive branch; only direct #include directive ordinals are collected.
+void test_prepared_include_anchor_replay_11(test_state& tests) {
+    const temporary_source leaf_a{
+        "physical_11_a", "#pragma once\nstruct Physical11A { int A; };\n"};
+    const temporary_source leaf_b{
+        "physical_11_b", "#pragma once\nstruct Physical11B { int B; };\n"};
+    const std::string root_text =
+        std::string{"#define ACTIVE\n"} +
+        std::string(70000, ' ') + "#include \"" +
+        leaf_a.path().filename().string() + "\"\n" +
+        "#ifdef NOT_DEFINED\n"
+        "#include \"physical_11_missing_never_92864.hpp\"\n"
+        "#define LONG " + std::string(300, 'z') + "\n"
+        "#endif\n"
+        "#include \"" + leaf_b.path().filename().string() + "\"\n" +
+        "#include \"" + leaf_a.path().filename().string() + "\"\n" +
+        "struct Physical11Root { Physical11A* A; Physical11B* B; };\n";
+    const temporary_source root_file{"physical_11_root", root_text};
+
+    file_context files;
+    file_id root;
+    if (!tests.expect(succeeded(files.resolve(root_file.path(),
+            file_kind::header, root)) && root,
+            "PHYSICAL-11 resolve root")) return;
+
+    preprocessor_configuration cfg;
+    cfg.root_directory = root_file.path().parent_path();
+    const std::array<file_id, 1> roots{root};
+    prepared_include_closure_v2 closure;
+    prepared_include_failure_v2 failure;
+    if (!tests.expect(succeeded(prepare_header_include_closure_v2(
+            files, roots, cfg, closure, &failure)) && closure.file_count() == 3,
+            "PHYSICAL-11 include closure with two unique leaves")) return;
+
+    const auto* physical = closure.view().file(root);
+    if (!tests.expect(physical && physical->includes.size() == 4,
+            "PHYSICAL-11 four ordered direct include occurrences")) return;
+    const auto& entries = physical->includes;
+    const bool same_leaf = entries[0].target &&
+        entries[0].target == entries[3].target;
+    tests.expect(entries[0].state == prepared_include_state_v2::ready &&
+        entries[1].state == prepared_include_state_v2::missing &&
+        entries[2].state == prepared_include_state_v2::ready &&
+        entries[3].state == prepared_include_state_v2::ready &&
+        same_leaf && entries[0].target != entries[2].target,
+        "PHYSICAL-11 exact include ordinal/state/target order");
+
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    preprocessor_v2_failure preprocessing_error;
+    semantic_preprocessor_v2 input{
+        files, closure.view(), cfg, strings, &preprocessing_error};
+    if (!tests.expect(succeeded(input.start(root)),
+            "PHYSICAL-11 start active semantic input")) return;
+    parser_v2_failure parser_error;
+    header_parser_v2 parser{input, identities, G, &parser_error};
+    tests.expect(succeeded(parser.parse()) && G.type_count() == 3,
+        "PHYSICAL-11 inactive missing include ignored; pragma once and G parity");
+}
+
+// FRONTEND-PHYSICAL-12: same-directory positives shared across Header roots.
+// Missing targets are deliberately probed again; no negative-cache shortcut.
+void test_include_positive_resolution_reuse_12(test_state& tests) {
+    const temporary_source leaf{"physical_12_shared",
+        "#pragma once\nstruct Physical12Leaf { int value; };\n"};
+    const auto spelling = leaf.path().filename().string();
+    const std::string content_a =
+        "#include \"" + spelling + "\"\n" +
+        "#include \"physical_12_missing_never_73631.hpp\"\n" +
+        "#include \"" + spelling + "\"\n";
+    const std::string content_b =
+        "#include \"" + spelling + "\"\n" +
+        "#include \"physical_12_missing_never_73631.hpp\"\n";
+    const temporary_source source_a{"physical_12_root_a", content_a};
+    const temporary_source source_b{"physical_12_root_b", content_b};
+    file_context files;
+    file_id root_a;
+    file_id root_b;
+    if (!tests.expect(
+            succeeded(files.resolve(source_a.path(), file_kind::header, root_a)) &&
+            succeeded(files.resolve(source_b.path(), file_kind::header, root_b)) &&
+            root_a && root_b && root_a != root_b,
+            "PHYSICAL-12 resolve two roots")) return;
+    preprocessor_configuration configuration;
+    configuration.root_directory = source_a.path().parent_path();
+    const std::array<file_id, 2> roots{root_a, root_b};
+    prepared_include_closure_v2 closure;
+    prepared_include_failure_v2 failure;
+    prepared_include_profile_v2 profile;
+    if (!tests.expect(succeeded(prepare_header_include_closure_v2(
+            files, roots, configuration, closure, &failure, &profile)) &&
+            closure.file_count() == 3,
+            "PHYSICAL-12 successful include closure")) return;
+    const auto* first = closure.view().file(root_a);
+    const auto* second = closure.view().file(root_b);
+    if (!tests.expect(first && second && first->includes.size() == 3 &&
+            second->includes.size() == 2,
+            "PHYSICAL-12 include ordinals across roots")) return;
+    const auto shared = first->includes[0].target;
+    tests.expect(shared && first->includes[0].state == prepared_include_state_v2::ready &&
+            first->includes[1].state == prepared_include_state_v2::missing &&
+            first->includes[2].state == prepared_include_state_v2::ready &&
+            second->includes[0].state == prepared_include_state_v2::ready &&
+            second->includes[1].state == prepared_include_state_v2::missing &&
+            shared == first->includes[2].target &&
+            shared == second->includes[0].target,
+            "PHYSICAL-12 repeated positive IDs; negative states preserved");
+    tests.expect(profile.include_cache_lookups == 5 &&
+            profile.include_positive_cache_hits == 2 &&
+            profile.include_cache_misses == 3 &&
+            profile.include_positive_cache_entries == 1 &&
+            profile.include_file_resolve_calls == 1 &&
+            profile.include_filesystem_probe_calls >= 3,
+            "PHYSICAL-12 positive cache reuses paths, negatives re-probed");
+}
+
+// Quoted searches local first, angled searches configured include dirs first.
+// The memo MUST NOT share an entry between these two search orders.
+void test_include_form_search_order_12(test_state& tests) {
+    const temporary_source local_leaf{"physical_12_form_leaf",
+        "struct Physical12Local { int value; };\n"};
+    const auto file_name = local_leaf.path().filename().string();
+    const temporary_source root_file{"physical_12_form_root",
+        "#include \"" + file_name + "\"\n#include <" + file_name + ">\n"};
+    const auto directory = local_leaf.path().parent_path() /
+        ("physical_12_alt_" + std::to_string(
+             std::chrono::steady_clock::now().time_since_epoch().count()));
+    struct directory_cleanup final {
+        std::filesystem::path path;
+        ~directory_cleanup() {
+            std::error_code error;
+            (void)std::filesystem::remove_all(path, error);
+        }
+    } cleanup{directory};
+    std::error_code error;
+    if (!tests.expect(std::filesystem::create_directory(directory, error) &&
+            !error, "PHYSICAL-12 prepare alternate include directory")) return;
+    {
+        std::ofstream stream{directory / file_name,
+            std::ios::binary | std::ios::trunc};
+        stream << "struct Physical12Alternate { int value; };\n";
+        if (!tests.expect(static_cast<bool>(stream),
+                "PHYSICAL-12 create alternate include file")) return;
+    }
+    file_context files;
+    file_id root;
+    if (!tests.expect(succeeded(files.resolve(root_file.path(),
+            file_kind::header, root)) && root,
+            "PHYSICAL-12 resolve form root")) return;
+    preprocessor_configuration cfg;
+    cfg.root_directory = root_file.path().parent_path();
+    cfg.include_directories.push_back(directory.filename().string());
+    const std::array<file_id, 1> roots{root};
+    prepared_include_closure_v2 closure;
+    prepared_include_profile_v2 profile;
+    prepared_include_failure_v2 failure;
+    if (!tests.expect(succeeded(prepare_header_include_closure_v2(
+            files, roots, cfg, closure, &failure, &profile)) &&
+            closure.file_count() == 3,
+            "PHYSICAL-12 include form closure")) return;
+    const auto* physical = closure.view().file(root);
+    if (!tests.expect(physical && physical->includes.size() == 2,
+            "PHYSICAL-12 two form-specific include ordinals")) return;
+    tests.expect(physical->includes[0].target &&
+        physical->includes[1].target &&
+        physical->includes[0].state == prepared_include_state_v2::ready &&
+        physical->includes[1].state == prepared_include_state_v2::ready &&
+        physical->includes[0].target != physical->includes[1].target &&
+        profile.include_positive_cache_hits == 0 &&
+        profile.include_cache_misses == 2,
+        "PHYSICAL-12 quoted/angled search precedence remains distinct");
+}
 
 void test_preprocessor_v2_include_execution(
     test_state& tests) {
@@ -6499,6 +6898,8 @@ int main() {
     try {
         test_state tests;
 
+        test_semantic_cursor_v2_decode_09(tests);
+
         test_lexical_symbols_v2(
             tests);
 
@@ -6506,6 +6907,13 @@ int main() {
 
         test_prepared_include_v2(
             tests);
+
+        test_macro_fastpath_08(tests);
+
+        test_include_positive_resolution_reuse_12(tests);
+        test_include_form_search_order_12(tests);
+
+        test_prepared_include_anchor_replay_11(tests);
 
         test_preprocessor_v2_include_execution(
             tests);

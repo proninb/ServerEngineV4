@@ -14,6 +14,7 @@
 #include <limits>
 #include <new>
 #include <system_error>
+#include <unordered_map> // FRONTEND-PHYSICAL-12
 #include <utility>
 #include <vector>
 
@@ -53,6 +54,31 @@ using prepare_clock_v2 = std::chrono::steady_clock;
     return std::chrono::duration<double, std::milli>{
         prepare_clock_v2::now() - begin}.count();
 }
+
+// FRONTEND-PHYSICAL-12: one temporary memo per physical include closure.
+// Both spelling and requested form matter: <...> searches configured include
+// directories before the local directory, while "..." tries local first.
+// A native local candidate path already encodes the source directory.
+struct positive_include_key_v2 final {
+    std::filesystem::path local;
+    bool quoted = false;
+
+    [[nodiscard]] bool operator==(const positive_include_key_v2& other)
+        const noexcept {
+        return quoted == other.quoted && local == other.local;
+    }
+};
+
+struct positive_include_key_hash_v2 final {
+    [[nodiscard]] std::size_t operator()(
+        const positive_include_key_v2& key) const noexcept {
+        const auto hash = std::filesystem::hash_value(key.local);
+        // Quoted and angled lookups cannot alias, even on a hash collision:
+        // unordered_map additionally compares the entire native path/form.
+        return hash ^ (key.quoted ? std::size_t{0x9e3779b9u}
+                                   : std::size_t{0x85ebca6bu});
+    }
+};
 
 struct physical_token_v2 final {
     token_kind kind = token_kind::invalid;
@@ -1186,6 +1212,34 @@ private:
             this);
     }
 
+    // FRONTEND-PHYSICAL-12: common publication for cache hits and misses.
+    [[nodiscard]] server_status publish_candidate_target(
+        file_id target,
+        prepared_include_record_v2& record) noexcept {
+
+        prepared_file_storage_v2* target_storage = nullptr;
+        const auto ensure_started = profile != nullptr
+            ? prepare_clock_v2::now() : prepare_clock_v2::time_point{};
+        const auto prepared = ensure_file(target, target_storage);
+        if (profile != nullptr) {
+            ++profile->include_ensure_file_calls;
+            profile->include_ensure_file_wall_ms +=
+                prepared_elapsed_ms_v2(ensure_started);
+        }
+        if (!succeeded(prepared) || target_storage == nullptr) {
+            return succeeded(prepared)
+                ? server_status::project_artifact_invalid : prepared;
+        }
+        record.target = target;
+        record.state = prepared_include_state_v2::ready;
+        if (target_storage->state == prepared_file_state_v2::unseen) {
+            target_storage->state = prepared_file_state_v2::queued;
+            try { next_frontier.push_back(target); }
+            catch (...) { return server_status::io_error; }
+        }
+        return server_status::success;
+    }
+
     [[nodiscard]] server_status resolve_candidate(
         file_id source_file,
         physical_token_v2 token,
@@ -1275,6 +1329,25 @@ private:
                 source_path.parent_path() /
                 locator;
 
+            file_id target;
+            if (profile != nullptr) {
+                ++profile->include_cache_lookups;
+            }
+#ifndef CW_PREPARED_INCLUDE_RESOLUTION_REFERENCE
+            const positive_include_key_v2 cache_key{local, quoted};
+            const auto cached = positive_includes.find(cache_key);
+            const bool cache_hit = cached != positive_includes.end();
+            if (cache_hit) {
+                target = cached->second;
+                if (profile != nullptr) ++profile->include_positive_cache_hits;
+            }
+            else if (profile != nullptr) {
+                ++profile->include_cache_misses;
+            }
+#else
+            if (profile != nullptr) ++profile->include_cache_misses;
+#endif
+            if (!target) {
             std::filesystem::path selected;
             bool found = false;
 
@@ -1284,10 +1357,17 @@ private:
 
                     bool regular = false;
 
+                    const auto probe_started = profile != nullptr
+                        ? prepare_clock_v2::now() : prepare_clock_v2::time_point{};
                     const auto checked =
                         regular_file_v2(
                             candidate,
                             regular);
+                    if (profile != nullptr) {
+                        ++profile->include_filesystem_probe_calls;
+                        profile->include_filesystem_probe_wall_ms +=
+                            prepared_elapsed_ms_v2(probe_started);
+                    }
 
                     if (!succeeded(checked)) {
                         record.state =
@@ -1376,13 +1456,18 @@ private:
                 return server_status::success;
             }
 
-            file_id target;
-
+            const auto file_resolve_started = profile != nullptr
+                ? prepare_clock_v2::now() : prepare_clock_v2::time_point{};
             const auto resolved =
                 files.resolve(
                     selected,
                     file_kind::header,
                     target);
+            if (profile != nullptr) {
+                ++profile->include_file_resolve_calls;
+                profile->include_file_resolve_wall_ms +=
+                    prepared_elapsed_ms_v2(file_resolve_started);
+            }
 
             if (!succeeded(resolved) ||
                 !target) {
@@ -1392,48 +1477,26 @@ private:
                         project_configuration_invalid
                     : resolved;
             }
+            } // Cache misses use the original ordered path/probe resolution.
 
-            prepared_file_storage_v2*
-                target_storage = nullptr;
-
-            const auto prepared =
-                ensure_file(
-                    target,
-                    target_storage);
-
-            if (!succeeded(prepared) ||
-                target_storage == nullptr) {
-
-                return succeeded(prepared)
-                    ? server_status::
-                        project_artifact_invalid
-                    : prepared;
+            const auto published = publish_candidate_target(target, record);
+            if (!succeeded(published)) {
+                return published;
             }
-
-            record.target =
-                target;
-
-            record.state =
-                prepared_include_state_v2::
-                    ready;
-
-            if (target_storage->state ==
-                prepared_file_state_v2::
-                    unseen) {
-
-                target_storage->state =
-                    prepared_file_state_v2::
-                        queued;
-
+#ifndef CW_PREPARED_INCLUDE_RESOLUTION_REFERENCE
+            if (!cache_hit) {
+                // Memoization is optional. An allocation failure must not turn
+                // an otherwise valid include into a semantic error.
                 try {
-                    next_frontier.push_back(
-                        target);
+                    const auto inserted = positive_includes.emplace(cache_key, target);
+                    if (profile != nullptr && inserted.second) {
+                        ++profile->include_positive_cache_entries;
+                    }
                 }
                 catch (...) {
-                    return server_status::io_error;
                 }
             }
-
+#endif
             return server_status::success;
         }
         catch (...) {
@@ -1453,13 +1516,33 @@ private:
         const auto words =
             storage.lexical.words();
 
+        // FRONTEND-PHYSICAL-11: collect wall time for stream walking separately
+        // from candidate resolution; timers are disabled in ordinary V2.
+        const auto scan_started = profile != nullptr
+            ? prepare_clock_v2::now() : prepare_clock_v2::time_point{};
+        double candidate_wall_ms = 0.0;
+
+#ifdef CW_PREPARED_INCLUDE_SCAN_REFERENCE
+        // The exact previous whole-stream walk, benchmark-reference only.
         std::size_t word_offset = 0;
         std::uint32_t source_offset = 0;
         std::size_t token_index = 0;
 
         while (word_offset <
                words.size()) {
-
+#else
+        // lexical_stream::append() recorded source_base BEFORE each directive
+        // and word_offset at its header. No replay of ordinary C++ tokens.
+        for (const auto& anchor : storage.lexical.directives()) {
+            if (anchor.word_offset >= words.size()) {
+                return server_status::project_artifact_invalid;
+            }
+            std::size_t word_offset = anchor.word_offset;
+            std::uint32_t source_offset = anchor.source_base;
+            // decode_physical_token_v2 treats only the first token specially.
+            // word offset zero implies token ordinal zero in a valid stream.
+            std::size_t token_index = anchor.word_offset == 0 ? 0 : 1;
+#endif
             physical_token_v2 token;
 
             const auto decoded =
@@ -1537,11 +1620,20 @@ private:
                         token_kind::
                             header_name_angled)) {
 
+                if (profile != nullptr) {
+                    ++profile->include_candidate_calls;
+                }
+                const auto candidate_started = profile != nullptr
+                    ? prepare_clock_v2::now() : prepare_clock_v2::time_point{};
                 const auto resolved =
                     resolve_candidate(
                         storage.file,
                         argument,
                         record);
+                if (profile != nullptr) {
+                    candidate_wall_ms +=
+                        prepared_elapsed_ms_v2(candidate_started);
+                }
 
                 if (!succeeded(resolved)) {
                     return resolved;
@@ -1567,6 +1659,12 @@ private:
             }
         }
 
+        if (profile != nullptr) {
+            const auto scanned_ms = prepared_elapsed_ms_v2(scan_started);
+            profile->include_candidate_wall_ms += candidate_wall_ms;
+            profile->include_stream_walk_wall_ms +=
+                (std::max)(0.0, scanned_ms - candidate_wall_ms);
+        }
         return server_status::success;
     }
 
@@ -1674,6 +1772,14 @@ private:
 
     std::vector<acquisition_task>
         acquisition_tasks;
+
+#ifndef CW_PREPARED_INCLUDE_RESOLUTION_REFERENCE
+    // Positive results only, owned by this builder/run. Inactive speculative
+    // includes receive NO semantic identity, and negative results are NOT
+    // cached. The map dies before the prepared physical view is published.
+    std::unordered_map<positive_include_key_v2, file_id,
+                       positive_include_key_hash_v2> positive_includes;
+#endif
 };
 
 }

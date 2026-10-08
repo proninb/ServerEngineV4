@@ -215,6 +215,99 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
         benchmarks/parser_v2_project_benchmark.cpp
         ${SERVER_ENGINE_V4_BENCHMARK_SOURCES}
     )
+    # Profiling code compiles ONLY into the benchmark executable. Production
+    # Header V2 has no timer branches, changed object layout or profiling cost.
+    target_compile_definitions(ServerEngineV4ParserV2ProjectBenchmark PRIVATE
+        CW_HEADER_V2_SEMANTIC_PROFILE)
+
+    # FRONTEND-PHYSICAL-12: original path/probe resolution with anchor scan.
+    # Production and AB candidate use the same decoder and anchor scanner.
+    add_executable(ServerEngineV4ParserV2IncludeResolveReference
+        benchmarks/parser_v2_project_benchmark.cpp
+        ${SERVER_ENGINE_V4_BENCHMARK_SOURCES})
+    target_include_directories(ServerEngineV4ParserV2IncludeResolveReference
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+    target_compile_definitions(ServerEngineV4ParserV2IncludeResolveReference
+        PRIVATE CW_HEADER_V2_SEMANTIC_PROFILE
+                CW_PREPARED_INCLUDE_RESOLUTION_REFERENCE)
+    if(WIN32)
+        target_link_libraries(ServerEngineV4ParserV2IncludeResolveReference
+            PRIVATE Psapi bcrypt crypt32 ncrypt winhttp ws2_32)
+    else()
+        target_link_libraries(ServerEngineV4ParserV2IncludeResolveReference
+            PRIVATE Threads::Threads)
+        if(NOT APPLE)
+            target_link_libraries(ServerEngineV4ParserV2IncludeResolveReference
+                PRIVATE rt)
+        endif()
+    endif()
+    if(MSVC)
+        target_compile_options(ServerEngineV4ParserV2IncludeResolveReference
+            PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4ParserV2IncludeResolveReference
+            PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    # FRONTEND-PHYSICAL-11: same decoder and frontend; old include scanning only.
+    # Target-private flag: production never uses the whole-stream reference.
+    add_executable(ServerEngineV4ParserV2IncludeScanReference
+        benchmarks/parser_v2_project_benchmark.cpp
+        ${SERVER_ENGINE_V4_BENCHMARK_SOURCES})
+    target_include_directories(ServerEngineV4ParserV2IncludeScanReference
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+    target_compile_definitions(ServerEngineV4ParserV2IncludeScanReference
+        PRIVATE CW_HEADER_V2_SEMANTIC_PROFILE
+                CW_PREPARED_INCLUDE_SCAN_REFERENCE)
+    if(WIN32)
+        target_link_libraries(ServerEngineV4ParserV2IncludeScanReference
+            PRIVATE Psapi bcrypt crypt32 ncrypt winhttp ws2_32)
+    else()
+        target_link_libraries(ServerEngineV4ParserV2IncludeScanReference
+            PRIVATE Threads::Threads)
+        if(NOT APPLE)
+            target_link_libraries(ServerEngineV4ParserV2IncludeScanReference
+                PRIVATE rt)
+        endif()
+    endif()
+    if(MSVC)
+        target_compile_options(ServerEngineV4ParserV2IncludeScanReference
+            PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4ParserV2IncludeScanReference
+            PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    # PARSER-V2-CURSOR-AB-DIRECTIVE-10: independent reference executable.
+    # Recompile the exact same source list with the previous decoder selected.
+    # No git checkout, source copying, DLL injection, or runtime ABI switch.
+    add_executable(ServerEngineV4ParserV2ProjectBenchmarkReference
+        benchmarks/parser_v2_project_benchmark.cpp
+        ${SERVER_ENGINE_V4_BENCHMARK_SOURCES})
+    target_include_directories(ServerEngineV4ParserV2ProjectBenchmarkReference
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+    target_compile_definitions(ServerEngineV4ParserV2ProjectBenchmarkReference
+        PRIVATE CW_HEADER_V2_SEMANTIC_PROFILE
+                CW_PARSER_V2_DECODE09_REFERENCE)
+    if(WIN32)
+        target_link_libraries(ServerEngineV4ParserV2ProjectBenchmarkReference
+            PRIVATE Psapi bcrypt crypt32 ncrypt winhttp ws2_32)
+    else()
+        target_link_libraries(ServerEngineV4ParserV2ProjectBenchmarkReference
+            PRIVATE Threads::Threads)
+        if(NOT APPLE)
+            target_link_libraries(ServerEngineV4ParserV2ProjectBenchmarkReference
+                PRIVATE rt)
+        endif()
+    endif()
+    if(MSVC)
+        target_compile_options(ServerEngineV4ParserV2ProjectBenchmarkReference
+            PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4ParserV2ProjectBenchmarkReference
+            PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
     target_include_directories(ServerEngineV4ParserV2ProjectBenchmark PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
     if(WIN32)

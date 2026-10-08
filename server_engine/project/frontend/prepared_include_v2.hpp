@@ -192,6 +192,26 @@ struct prepared_include_profile_v2 final {
     std::size_t lexed_files = 0;
     std::size_t ready_files = 0;
     std::size_t include_records = 0;
+
+    // FRONTEND-PHYSICAL-11: profile-only, single-owner include discovery.
+    // scan includes candidate_wall; probe/resolve/ensure are nested in candidate.
+    // Never sum them as independent wall time.
+    double include_stream_walk_wall_ms = 0;
+    double include_candidate_wall_ms = 0;
+    double include_filesystem_probe_wall_ms = 0;
+    double include_file_resolve_wall_ms = 0;
+    double include_ensure_file_wall_ms = 0;
+    std::size_t include_candidate_calls = 0;
+    std::size_t include_filesystem_probe_calls = 0;
+    std::size_t include_file_resolve_calls = 0;
+    std::size_t include_ensure_file_calls = 0;
+
+    // FRONTEND-PHYSICAL-12: exact counts. Only successful path resolutions
+    // enter the ephemeral cache. Missing, invalid and I/O results do not.
+    std::size_t include_cache_lookups = 0;
+    std::size_t include_cache_misses = 0;
+    std::size_t include_positive_cache_hits = 0;
+    std::size_t include_positive_cache_entries = 0;
 };
 
 struct prepared_include_failure_v2 final {
