@@ -7,6 +7,7 @@
 #include "../../filesystem_path.hpp"
 
 #include <algorithm>
+#include <bit> // HEADER-V2-REAL-LITERAL-11
 #include <charconv>
 #include <filesystem>
 #include <limits>
@@ -153,6 +154,25 @@ struct physical_token_v2 final {
 
     if (spelling.empty()) {
         return {};
+    }
+
+    // HEADER-V2-REAL-LITERAL-11: OLD recognizes decimal real pp-numbers
+    // containing '.', 'e' or 'E'. Decode once in physical preparation, never
+    // parse source text inside Header semantic execution. from_chars must
+    // consume the whole token; suffixes, hex and overflow stay unsupported.
+    if (spelling.find_first_of(".eE") != std::string_view::npos) {
+        double value = 0;
+        const auto parsed = std::from_chars(
+            spelling.data(), spelling.data() + spelling.size(), value);
+        if (parsed.ec != std::errc{} ||
+            parsed.ptr != spelling.data() + spelling.size()) {
+            return {};
+        }
+        return {
+            std::bit_cast<std::uint64_t>(value),
+            prepared_number_kind_v2::real,
+            {},
+        };
     }
 
     std::uint64_t value = 0;

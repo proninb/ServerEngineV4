@@ -1408,6 +1408,16 @@ void test_graph_resolved_v2(
             result.push_back(std::move(line));
         }
     }
+    // HEADER-V2-NESTED-CONSTRUCTOR-10: include path-keyed constructor
+    // overrides. Matching member layout alone would miss these semantics.
+    for (const auto& item : G.constructor_defaults.entries()) {
+        result.push_back("constructor-default:" +
+            differential_identity(ids, strings, item.owner) + ":" +
+            std::string{strings.get(item.path)} + ":" +
+            std::to_string(static_cast<unsigned>(item.value.kind)) + ":" +
+            std::to_string(item.value.bits()) + ":" +
+            std::to_string(item.value.operand));
+    }
     std::sort(result.begin(), result.end());
     return result;
 }
@@ -1441,6 +1451,59 @@ void test_header_v2_differential_01(test_state& tests) {
     }
     indexed_forward += "};";
     const fixture fixtures[] = {
+        // HEADER-V2-REAL-LITERAL-11: OLD real normalization is IEEE-754
+        // binary64 even for float member targets (Runtime handles narrowing).
+        {"real-field-initializers", "struct R { double A = 0.0; double B = -0.0; float C = 1.25; double D = 2.5e3; };", true},
+        {"real-constructor-ops", "struct R { double X; R() : X(0.0) { X = -3.5; } };", true},
+        {"real-nested-constructor", "struct Leaf { double X; }; struct R { Leaf L; R() { L.X = -2.5e-3; } };", true},
+        {"real-positive-unary", "struct R { double X = +1.5; };", true},
+        {"real-invalid-suffix", "struct R { double X = 0.0f; };", false},
+        {"real-invalid-overflow", "struct R { double X = 1e9999; };", false},
+        // HEADER-V2-NESTED-CONSTRUCTOR-10: OLD validates nested constructor
+        // paths against the completed Type domain; G stores path-keyed defaults.
+        {"nested-dot-scalar", "struct I { int X; }; struct R { I P; R() { P.X = 7; } };", true},
+        {"nested-dot-forward-root", "struct I { int X; }; struct R { R() { P.X = 7; } I P; };", true},
+        {"nested-array-index", "struct I { short X[3]; }; struct R { I P; R() { P.X[2] = 19; } };", true},
+        {"nested-root-array", "struct I { int X; }; struct R { I P[2]; R() { P[1].X = 3; } };", true},
+        {"nested-last-wins", "struct I { int X; }; struct R { I P; R() { P.X = 2; P.X = 9; } };", true},
+        // HEADER-V2-DECLARATOR-09: parentheses change *type* precedence,
+        // with old and V2 compared by named WHO, derived type and binding.
+        {"group-ref-array-ctor", "struct R { short (&ADR)[6]; short _ADR[6]; R() : ADR(_ADR) {} };", true},
+        {"group-ref-array-ctor-before", "struct R { R() : ADR(_ADR) {} short (&ADR)[6]; short _ADR[6]; };", true},
+        {"group-ref-array-default", "struct R { short _ADR[6]; short (&ADR)[6] = _ADR; };", true},
+        {"group-ref-array-forward-default", "struct R { short (&ADR)[6] = _ADR; short _ADR[6]; };", true},
+        {"group-ptr-array", "struct R { short (*ADR)[6]; short _ADR[6]; };", true},
+        {"group-ref-array-bad-size", "struct R { short (&ADR)[6]; short _ADR[7]; R() : ADR(_ADR) {} };", false},
+        {"group-array-of-references-invalid", "struct R { short &ADR[6]; };", false},
+        // HEADER-V2-REFERENCE-08: OLD/V2 local binding oracle.
+        {"reference-member-backward", "struct R { int OUT; int& IN = OUT; };", true},
+        {"reference-member-forward", "struct R { int& IN = OUT; int OUT; };", true},
+        {"reference-member-this", "struct R { int OUT; int& IN = this.OUT; };", true},
+        {"reference-multi-forward", "struct R { int& A = OUT; int& B = OUT; int OUT; };", true},
+        {"reference-self", "struct R { int& IN = IN; };", true},
+        {"reference-ctor-forward", "struct R { R() : IN(OUT) {} int& IN; int OUT; };", true},
+        {"reference-ctor-existing", "struct R { int OUT; int& IN; R() : IN(OUT) {} };", true},
+        {"reference-ctor-body", "struct R { int OUT; int& IN; R() { IN = OUT; } };", true},
+        {"reference-ctor-override", "struct R { int X; int Y; int& IN = X; R() : IN(Y) {} };", true},
+        {"reference-ctor-forward-override", "struct R { R() : IN(Y) {} int& IN = X; int X; int Y; };", true},
+        {"reference-incompatible", "struct R { int OUT; double& IN = OUT; };", false},
+        {"reference-unknown", "struct R { int& IN = Missing; };", false},
+        {"reference-nonref-ctor-name", "struct R { int X; int Y; R() : X(Y) {} };", false},
+        // HEADER-V2-TYPEDEF-07: UnitProXL SDK byte and OLD alias folding.
+        {"intrinsic-alias-byte", "typedef unsigned char byte; struct A { byte X; };", true},
+        {"intrinsic-alias-chain", "typedef unsigned char byte; typedef byte octet; struct A { octet X; };", true},
+        {"intrinsic-alias-namespace", "namespace N { typedef signed int Word; struct A { Word X; }; }", true},
+        // HEADER-V2-BOOL-ZERO-12: OLD `false` / `nullptr` are ZERO,
+        // whereas numeric 0 is an explicit unsigned integer constant.
+        {"bool-false-default", "struct T { bool F = false; };", true},
+        {"bool-false-braced", "struct T { bool F{false}; };", true},
+        {"bool-false-ctor-list", "struct T { bool F; T() : F(false) {} };", true},
+        {"bool-false-ctor-body", "struct T { bool F; T() { F = false; } };", true},
+        {"bool-false-forward-ctor", "struct T { T() : F(false) {} bool F; };", true},
+        {"bool-true-remains-one", "struct T { bool F = true; };", true},
+        {"bool-numeric-zero-remains-integer", "struct T { bool F = 0; };", true},
+        {"nullptr-pointer-default", "struct T { int *P = nullptr; };", true},
+        {"nullptr-pointer-ctor-list", "struct T { int *P; T() : P(nullptr) {} };", true},
         {"plain-record", "struct A { int X; int Y; };", true},
         {"indexed-constructor-160", indexed_fields.c_str(), true},
         {"indexed-forward-96", indexed_forward.c_str(), true},

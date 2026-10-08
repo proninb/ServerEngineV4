@@ -18,6 +18,7 @@ namespace cw::server {
 enum class prepared_number_kind_v2 : std::uint8_t {
     none = 0,
     unsigned_integer,
+    real, // HEADER-V2-REAL-LITERAL-11: IEEE-754 binary64 bits.
 };
 
 struct prepared_number_v2 final {

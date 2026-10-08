@@ -77,6 +77,10 @@ public:
             : nullptr;
     }
 
+    // HEADER-V2-NESTED-CONSTRUCTOR-10: expose the existing Project-local
+    // string table to semantic consumers, not to lexical/physical preparation.
+    [[nodiscard]] string_table& semantic_strings() noexcept { return strings; }
+
     // Contextual C++ keywords are identifiers, not grammar token kinds.
     [[nodiscard]] bool contextual_identifier(
         std::string_view spelling) const noexcept;

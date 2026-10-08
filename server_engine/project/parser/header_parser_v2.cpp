@@ -3,6 +3,9 @@
 #include "../graph/construction_semantics.hpp"
 
 #include <limits>
+#include <algorithm>
+#include <string>
+#include <utility>
 
 namespace cw::server {
 namespace {
@@ -249,6 +252,18 @@ server_status header_parser_v2::resolve_named_type(
         const auto* entry =
             G.find(
                 handle);
+
+        // HEADER-V2-TYPEDEF-07: OLD folds intrinsic aliases to the scalar type.
+        if (entry != nullptr &&
+            entry->kind == graph_type_kind::intrinsic_alias) {
+
+            output.type = G.intrinsic(entry->alias_intrinsic());
+            output.complete = true;
+            return output.type
+                ? server_status::success
+                : fail(parser_v2_failure_kind::semantic,
+                    "Header Parser V2 intrinsic alias is invalid");
+        }
 
         if (entry == nullptr ||
             entry->kind !=
@@ -828,6 +843,20 @@ server_status header_parser_v2::parse_array_suffix(
     std::vector<std::uint64_t>
         bounds;
 
+    // HEADER-V2-DECLARATOR-09-SPAN-01: preserve the first '[' diagnostic
+    // location before consuming array dimensions. OLD reports the array
+    // modifier's source location, not the token after the final ']'.
+    file_id reference_array_file{};
+    source_range reference_array_source{};
+    if (output.is_reference && at(token_kind::l_bracket)) {
+        const auto* bracket = current();
+        reference_array_file = bracket->file;
+        reference_array_source = {
+            bracket->source_offset,
+            bracket->source_length,
+        };
+    }
+
     while (at(token_kind::l_bracket)) {
         auto status =
             consume();
@@ -887,9 +916,11 @@ server_status header_parser_v2::parse_array_suffix(
     }
 
     if (output.is_reference) {
-        return fail(
+        return fail_at(
             parser_v2_failure_kind::semantic,
-            "Header Parser V2 arrays of references are invalid");
+            "Header Parser V2 arrays of references are invalid",
+            reference_array_file,
+            reference_array_source);
     }
 
     for (auto iterator =
@@ -933,8 +964,8 @@ server_status header_parser_v2::parse_scalar_constant(
 
     bool negative = false;
 
-    if (at(token_kind::minus)) {
-        negative = true;
+    if (at(token_kind::minus) || at(token_kind::plus)) {
+        negative = at(token_kind::minus);
 
         const auto status =
             consume();
@@ -944,43 +975,50 @@ server_status header_parser_v2::parse_scalar_constant(
         }
     }
 
-    if (at(token_kind::kw_true) ||
-        at(token_kind::kw_false)) {
-
+    // HEADER-V2-BOOL-ZERO-12: OLD distinguishes the zero-initializer
+    // semantics of `false`/`nullptr` from the numeric literal `0`.
+    // Keep their canonical construction_kind::zero in persisted G.
+    if (at(token_kind::kw_false) || at(token_kind::kw_nullptr)) {
         if (negative) {
-            return fail(
-                parser_v2_failure_kind::syntax,
+            return fail(parser_v2_failure_kind::syntax,
+                "Header Parser V2 boolean/nullptr initializer cannot be negated");
+        }
+        output = {};
+        return consume();
+    }
+
+    if (at(token_kind::kw_true)) {
+        if (negative) {
+            return fail(parser_v2_failure_kind::syntax,
                 "Header Parser V2 boolean initializer cannot be negated");
         }
-
-        output =
-            construction_value::constant(
-                construction_kind::
-                    unsigned_integer,
-                at(token_kind::kw_true)
-                    ? 1u
-                    : 0u);
-
+        output = construction_value::constant(
+            construction_kind::unsigned_integer, 1);
         return consume();
     }
 
     const auto* token =
         current();
 
-    if (token == nullptr ||
-        token->kind !=
-            token_kind::pp_number ||
-        token->number.kind !=
-            prepared_number_kind_v2::
-                unsigned_integer) {
-
-        return fail(
-            parser_v2_failure_kind::unsupported,
-            "Header Parser V2 initializer requires a plain decimal integer or boolean literal");
+    // HEADER-V2-REAL-LITERAL-11: numbers are already decoded by the
+    // physical prepare pass; semantic parsing only consumes their bits.
+    if (token == nullptr || token->kind != token_kind::pp_number ||
+        (token->number.kind != prepared_number_kind_v2::unsigned_integer &&
+         token->number.kind != prepared_number_kind_v2::real)) {
+        return fail(parser_v2_failure_kind::unsupported,
+            "Header Parser V2 initializer requires a plain decimal numeric or boolean literal");
     }
 
-    const auto magnitude =
-        token->number.bits;
+    if (token->number.kind == prepared_number_kind_v2::real) {
+        // IEEE-754 sign flip preserves -0.0 exactly, as OLD does by -value.
+        output = construction_value::constant(
+            construction_kind::real,
+            token->number.bits ^
+                (negative ? (std::uint64_t{1} << 63) : std::uint64_t{0}));
+        return consume();
+    }
+
+    const auto magnitude = token->number.bits;
 
     output =
         negative
@@ -997,77 +1035,211 @@ server_status header_parser_v2::parse_scalar_constant(
     return consume();
 }
 
+// HEADER-V2-REFERENCE-08: Header-local reference operands are resolved as
+// soon as their source and destination members exist. No AST, no second pass.
+server_status header_parser_v2::parse_reference_name(
+    constructor_operation& output) noexcept {
+
+    if (at(token_kind::kw_this)) {
+        auto status = consume();
+        if (!succeeded(status)) return status;
+        status = expect(token_kind::dot,
+            "Expected '.' after this in reference binding");
+        if (!succeeded(status)) return status;
+    }
+
+    const auto* token = current();
+    if (token == nullptr || token->kind != token_kind::identifier ||
+        !token->identifier) {
+        return fail(parser_v2_failure_kind::unsupported,
+            "Reference initializer must name another member");
+    }
+    output.reference_name = token->identifier;
+    output.reference_file = token->file;
+    output.reference_source = {token->source_offset, token->source_length};
+    return consume();
+}
+
+server_status header_parser_v2::parse_construction_operand(
+    constructor_operation& output, bool allow_reference_name) noexcept {
+
+    if (allow_reference_name &&
+        (at(token_kind::identifier) || at(token_kind::kw_this))) {
+        return parse_reference_name(output);
+    }
+    return parse_scalar_constant(output.value);
+}
+
 server_status header_parser_v2::parse_member_initializer(
-    type_ref target,
-    construction_value& output) noexcept {
+    type_ref target, constructor_operation& output) noexcept {
 
     output = {};
-
-    if (!at(token_kind::assign) &&
-        !at(token_kind::l_brace)) {
-
+    if (!at(token_kind::assign) && !at(token_kind::l_brace)) {
         return server_status::success;
     }
 
-    auto status =
-        server_status::success;
+    if (const auto* token = current(); token != nullptr) {
+        output.file = token->file;
+        output.source = {token->source_offset, token->source_length};
+    }
+
+    derived_type_record derived;
+    const bool reference_target = G.derived(target, derived) &&
+        (derived.kind == derived_type_kind::lvalue_reference ||
+         derived.kind == derived_type_kind::rvalue_reference);
 
     if (at(token_kind::assign)) {
-        status =
-            consume();
-
-        if (!succeeded(status)) {
-            return status;
-        }
+        const auto status = consume();
+        if (!succeeded(status)) return status;
     }
-
     if (at(token_kind::l_brace)) {
-        status =
-            consume();
-
-        if (!succeeded(status)) {
-            return status;
-        }
-
+        auto status = consume();
+        if (!succeeded(status)) return status;
         if (!at(token_kind::r_brace)) {
-            status =
-                parse_scalar_constant(
-                    output);
-
-            if (!succeeded(status)) {
-                return status;
-            }
+            status = parse_construction_operand(output, reference_target);
+            if (!succeeded(status)) return status;
         }
-
-        status =
-            expect(
-                token_kind::r_brace,
-                "Header Parser V2 expected '}' after member initializer");
-
-        if (!succeeded(status)) {
-            return status;
-        }
+        status = expect(token_kind::r_brace,
+            "Header Parser V2 expected '}' after member initializer");
+        if (!succeeded(status)) return status;
     }
     else {
-        status =
-            parse_scalar_constant(
-                output);
+        const auto status = parse_construction_operand(output, reference_target);
+        if (!succeeded(status)) return status;
+    }
 
-        if (!succeeded(status)) {
-            return status;
+    if (!output.reference_name &&
+        !construction_compatible(G, target, output.value)) {
+        return fail_at(parser_v2_failure_kind::semantic,
+            "Header Parser V2 member initializer is incompatible with its type",
+            output.file, output.source);
+    }
+    return server_status::success;
+}
+
+server_status header_parser_v2::apply_record_operand(
+    std::size_t target,
+    const constructor_operation& input_value,
+    std::span<const member_record> members,
+    std::vector<construction_value>& construction,
+    const record_member_name_set& names,
+    record_reference_state& references) noexcept {
+
+    if (target >= members.size() || construction.size() != members.size()) {
+        return server_status::project_configuration_invalid;
+    }
+
+    const auto& target_type = members[target].type;
+    auto revision = references.generations.find(target);
+
+    if (!input_value.reference_name) {
+        if (!construction_compatible(G, target_type, input_value.value)) {
+            return fail_at(parser_v2_failure_kind::semantic,
+                "Header Parser V2 construction value is incompatible with its field",
+                input_value.file, input_value.source);
         }
+        if (revision != references.generations.end()) ++revision->second;
+        construction[target] = input_value.value;
+        return server_status::success;
     }
 
-    if (!construction_compatible(
-            G,
-            target,
-            output)) {
-
-        return fail(
-            parser_v2_failure_kind::semantic,
-            "Header Parser V2 member initializer is incompatible with its type");
+    derived_type_record target_ref;
+    if (!G.derived(target_type, target_ref) ||
+        (target_ref.kind != derived_type_kind::lvalue_reference &&
+         target_ref.kind != derived_type_kind::rvalue_reference)) {
+        return fail_at(parser_v2_failure_kind::unsupported,
+            "Value construction requires a scalar constant, not a member name",
+            input_value.reference_file, input_value.reference_source);
     }
 
+    const auto source = names.find(members, input_value.reference_name);
+    if (source == members.size()) {
+        try {
+            auto [it, inserted] = references.generations.try_emplace(target, 0);
+            (void)inserted;
+            ++it->second;
+            references.waiting.emplace(input_value.reference_name.value(),
+                waiting_reference{target, it->second,
+                    input_value.reference_file, input_value.reference_source});
+            construction[target] = {};
+            return server_status::success;
+        }
+        catch (...) { return server_status::io_error; }
+    }
+
+    if (source >= static_cast<std::size_t>(
+        (std::numeric_limits<std::uint32_t>::max)())) {
+        return server_status::io_error;
+    }
+
+    auto source_type = members[source].type;
+    derived_type_record source_ref;
+    if (G.derived(source_type, source_ref) &&
+        (source_ref.kind == derived_type_kind::lvalue_reference ||
+         source_ref.kind == derived_type_kind::rvalue_reference)) {
+        source_type = source_ref.child;
+    }
+    if (target_ref.child != source_type) {
+        return fail_at(parser_v2_failure_kind::semantic,
+            "Reference binding type does not match bound member type",
+            input_value.reference_file, input_value.reference_source);
+    }
+
+    if (revision != references.generations.end()) ++revision->second;
+    construction[target] = construction_value::member_binding(
+        static_cast<std::uint32_t>(source + 1));
+    return server_status::success;
+}
+
+server_status header_parser_v2::resolve_waiting_references(
+    string_id source_name,
+    std::span<const member_record> members,
+    std::vector<construction_value>& construction,
+    record_reference_state& references) noexcept {
+
+    if (references.waiting.empty()) return server_status::success;
+    if (!source_name || members.empty() || construction.size() != members.size() ||
+        members.back().name != source_name) {
+        return server_status::project_configuration_invalid;
+    }
+    const auto source_index = members.size() - 1;
+    if (source_index >= static_cast<std::size_t>(
+        (std::numeric_limits<std::uint32_t>::max)())) {
+        return server_status::io_error;
+    }
+    auto source_type = members.back().type;
+    derived_type_record source_ref;
+    if (G.derived(source_type, source_ref) &&
+        (source_ref.kind == derived_type_kind::lvalue_reference ||
+         source_ref.kind == derived_type_kind::rvalue_reference)) {
+        source_type = source_ref.child;
+    }
+
+    const auto range = references.waiting.equal_range(source_name.value());
+    for (auto it = range.first; it != range.second;) {
+        const auto waiting = it->second;
+        if (waiting.target >= members.size()) {
+            return server_status::project_configuration_invalid;
+        }
+        derived_type_record target_ref;
+        if (!G.derived(members[waiting.target].type, target_ref) ||
+            (target_ref.kind != derived_type_kind::lvalue_reference &&
+             target_ref.kind != derived_type_kind::rvalue_reference) ||
+            target_ref.child != source_type) {
+            return fail_at(parser_v2_failure_kind::semantic,
+                "Reference binding type does not match bound member type",
+                waiting.file, waiting.source);
+        }
+        const auto current = references.generations.find(waiting.target);
+        if (current == references.generations.end()) {
+            return server_status::project_configuration_invalid;
+        }
+        if (current->second == waiting.generation) {
+            construction[waiting.target] = construction_value::member_binding(
+                static_cast<std::uint32_t>(source_index + 1));
+        }
+        it = references.waiting.erase(it);
+    }
     return server_status::success;
 }
 
@@ -1077,10 +1249,41 @@ server_status header_parser_v2::parse_member_declarator(
     std::vector<member_record>& members,
     std::vector<construction_value>& construction,
     pending_constructor_operations& pending,
+    record_reference_state& references,
+    record_nested_state& nested,
     record_member_name_set& names,
     bool virtual_prefix,
     bool base_polymorphic,
     bool& declares_virtual) noexcept {
+
+    // HEADER-V2-DECLARATOR-09: a parenthesized prefix binds *outside* the
+    // following array suffix: short (&A)[6] => reference(array(short, 6)).
+    // A plain short &A[6] remains invalid (array of references).
+    bool grouped = false;
+    derived_type_kind grouped_kind = derived_type_kind::pointer;
+    auto status = server_status::success;
+
+    if (at(token_kind::l_paren)) {
+        grouped = true;
+        status = consume();
+        if (!succeeded(status)) return status;
+
+        if (at(token_kind::star)) {
+            grouped_kind = derived_type_kind::pointer;
+        }
+        else if (at(token_kind::ampersand)) {
+            grouped_kind = derived_type_kind::lvalue_reference;
+        }
+        else if (at(token_kind::logical_and)) {
+            grouped_kind = derived_type_kind::rvalue_reference;
+        }
+        else {
+            return fail(parser_v2_failure_kind::unsupported,
+                "Header Parser V2 grouped data declarator requires *, & or &&");
+        }
+        status = consume();
+        if (!succeeded(status)) return status;
+    }
 
     const auto* name =
         current();
@@ -1106,16 +1309,18 @@ server_status header_parser_v2::parse_member_declarator(
         name->source_length,
     };
 
-    auto status =
-        consume();
+    status = consume();
+    if (!succeeded(status)) return status;
 
-    if (!succeeded(status)) {
-        return status;
+    if (grouped) {
+        status = expect(token_kind::r_paren,
+            "Header Parser V2 expected ')' after grouped declarator name");
+        if (!succeeded(status)) return status;
     }
 
     // HEADER-V2-VIRTUAL-01: methods have no stored Graph member.
     // Consume their declaration before the record-local field name set.
-    if (at(token_kind::l_paren)) {
+    if (!grouped && at(token_kind::l_paren)) {
         return parse_method_tail(
             virtual_prefix,
             base_polymorphic,
@@ -1142,6 +1347,24 @@ server_status header_parser_v2::parse_member_declarator(
         return status;
     }
 
+    // Apply the grouped prefix AFTER the array suffix. No token replay, AST,
+    // second Graph pass or additional persisted representation is needed.
+    if (grouped) {
+        if (type.is_reference) {
+            return fail(parser_v2_failure_kind::semantic,
+                "Pointer/reference to reference is not valid C++");
+        }
+        type_ref wrapped;
+        status = G.derive_resolved(type.type, grouped_kind, 0, wrapped);
+        if (!succeeded(status) || !wrapped) {
+            return fail(parser_v2_failure_kind::semantic,
+                "Header Parser V2 grouped declarator produces an invalid type");
+        }
+        type.type = wrapped;
+        type.indirect = true;
+        type.is_reference = grouped_kind != derived_type_kind::pointer;
+    }
+
     bool inserted = false;
 
     status =
@@ -1162,7 +1385,10 @@ server_status header_parser_v2::parse_member_declarator(
             member_source);
     }
 
-    construction_value initial;
+    // Most fields have no initializer: avoid type lookups and hash probes.
+    const bool has_initializer =
+        at(token_kind::assign) || at(token_kind::l_brace);
+    constructor_operation initial;
 
     status =
         parse_member_initializer(
@@ -1188,35 +1414,34 @@ server_status header_parser_v2::parse_member_declarator(
         return status;
     }
 
-    // A constructor may precede its fields. Apply the pending value now,
-    // after the declaration default is validated, without re-reading tokens.
+    // HEADER-V2-REFERENCE-08: resolve declaration default immediately when
+    // possible; defer only a forward referent, keyed by its compact name ID.
+    try {
+        members.push_back({member_name, type.type, access, {}});
+        construction.push_back({});
+    }
+    catch (...) { return server_status::io_error; }
+
+    const auto index = members.size() - 1;
+    if (has_initializer) {
+        status = apply_record_operand(index, initial, members, construction,
+            names, references);
+        if (!succeeded(status)) return status;
+    }
+
     const auto pending_it = pending.find(member_name.value());
     if (pending_it != pending.end()) {
-        if (!construction_compatible(G, type.type, pending_it->second.value)) {
-            return fail_at(parser_v2_failure_kind::semantic,
-                "Header Parser V2 constructor initializer is incompatible with target field",
-                pending_it->second.file, pending_it->second.source);
-        }
-        initial = pending_it->second.value;
+        status = apply_record_operand(index, pending_it->second,
+            members, construction, names, references);
+        if (!succeeded(status)) return status;
         pending.erase(pending_it);
     }
 
-    try {
-        members.push_back({
-            member_name,
-            type.type,
-            access,
-            {},
-        });
-
-        construction.push_back(
-            initial);
-    }
-    catch (...) {
-        return server_status::io_error;
-    }
-
-    return server_status::success;
+    // One hashed range is visited only when its source member becomes known.
+    status = resolve_waiting_references(member_name, members, construction,
+        references);
+    if (!succeeded(status)) return status;
+    return resolve_waiting_nested(member_name, members, names, nested);
 }
 
 server_status header_parser_v2::parse_member(
@@ -1226,6 +1451,8 @@ server_status header_parser_v2::parse_member(
     std::vector<member_record>& members,
     std::vector<construction_value>& construction,
     pending_constructor_operations& pending,
+    record_reference_state& references,
+    record_nested_state& nested,
     record_member_name_set& names,
     bool virtual_prefix,
     bool base_polymorphic,
@@ -1256,6 +1483,8 @@ server_status header_parser_v2::parse_member(
         members,
         construction,
         pending,
+        references,
+        nested,
         names,
         virtual_prefix,
         base_polymorphic,
@@ -1507,12 +1736,170 @@ server_status header_parser_v2::parse_named_operator(
         subscript_operator, binary_operator);
 }
 
+// HEADER-V2-NESTED-CONSTRUCTOR-10: resolve a nested member/array path
+// against the already-created Type domain and intern its canonical spelling.
+// No AST, Graph projection or source-token replay. OLD's per-record last-wins
+// semantics are retained until the one-time constructor-default commit.
+server_status header_parser_v2::apply_nested_operation(
+    const nested_operation& operation,
+    std::span<const member_record> members,
+    const record_member_name_set& names,
+    record_nested_state& nested) noexcept {
+
+    const auto index = names.find(members, operation.root);
+    if (index >= members.size() || operation.path.empty()) {
+        return server_status::project_configuration_invalid;
+    }
+
+    auto type = members[index].type;
+    auto& strings = input.semantic_strings();
+    std::string spelling;
+    try { spelling.assign(strings.get(operation.root)); }
+    catch (...) { return server_status::io_error; }
+
+    for (const auto& step : operation.path) {
+        if (step.name) {
+            if (type.kind() != type_ref_kind::named) {
+                return fail_at(parser_v2_failure_kind::unsupported,
+                    "Nested constructor path requires direct record fields",
+                    operation.file, operation.source);
+            }
+            type_handle record;
+            if (!G.named(type, record)) {
+                return fail_at(parser_v2_failure_kind::semantic,
+                    "Nested constructor target record is invalid",
+                    operation.file, operation.source);
+            }
+            const auto member_index = G.find_member(record, step.name);
+            const auto* member = G.member(record, member_index);
+            if (member == nullptr) {
+                return fail_at(parser_v2_failure_kind::semantic,
+                    "Nested constructor field does not exist",
+                    operation.file, operation.source);
+            }
+            type = member->type;
+            try {
+                spelling.push_back('.');
+                spelling.append(strings.get(step.name));
+            }
+            catch (...) { return server_status::io_error; }
+        }
+        else {
+            derived_type_record array;
+            if (!G.derived(type, array) ||
+                array.kind != derived_type_kind::bounded_array) {
+                return fail_at(parser_v2_failure_kind::semantic,
+                    "Constructor array index requires a bounded array",
+                    operation.file, operation.source);
+            }
+            if (step.index >= array.payload) {
+                return fail_at(parser_v2_failure_kind::semantic,
+                    "Constructor array index is outside the declared bound",
+                    operation.file, operation.source);
+            }
+            type = array.child;
+            try {
+                spelling.push_back('[');
+                spelling.append(std::to_string(step.index));
+                spelling.push_back(']');
+            }
+            catch (...) { return server_status::io_error; }
+        }
+    }
+
+    if (type.kind() != type_ref_kind::intrinsic ||
+        !construction_compatible(G, type, operation.value)) {
+        return fail_at(parser_v2_failure_kind::unsupported,
+            "Nested constructor assignment requires a writable scalar field and scalar constant",
+            operation.file, operation.source);
+    }
+
+    string_id path;
+    const auto interned = strings.intern(spelling, path);
+    if (!succeeded(interned)) return interned;
+    if (!path) return server_status::project_configuration_invalid;
+
+    // Small nested constructors scan a contiguous vector; large ones reuse
+    // one path-ID index, avoiding quadratic override lookup on PLC records.
+    if (nested.completed.size() < 32) {
+        for (auto& previous : nested.completed) {
+            if (previous.path == path) {
+                previous.value = operation.value;
+                return server_status::success;
+            }
+        }
+    }
+    else {
+        try {
+            if (nested.completed_lookup.empty()) {
+                nested.completed_lookup.reserve(nested.completed.size() * 2);
+                for (std::size_t i = 0; i < nested.completed.size(); ++i) {
+                    nested.completed_lookup.emplace(
+                        nested.completed[i].path.value(), i);
+                }
+            }
+            const auto found = nested.completed_lookup.find(path.value());
+            if (found != nested.completed_lookup.end()) {
+                nested.completed[found->second].value = operation.value;
+                return server_status::success;
+            }
+        }
+        catch (...) { return server_status::io_error; }
+    }
+    try {
+        if (!nested.completed_lookup.empty()) {
+            // Vector/index insertion either both succeeds, or the operation
+            // fails: the construction run will be discarded on error.
+            nested.completed_lookup.emplace(path.value(), nested.completed.size());
+        }
+        nested.completed.push_back({nested.owner, path, operation.value});
+    }
+    catch (...) { return server_status::io_error; }
+    return server_status::success;
+}
+
+server_status header_parser_v2::append_nested_operation(
+    nested_operation&& operation,
+    std::span<const member_record> members,
+    const record_member_name_set& names,
+    record_nested_state& nested) noexcept {
+
+    if (names.find(members, operation.root) < members.size()) {
+        return apply_nested_operation(operation, members, names, nested);
+    }
+    try {
+        nested.waiting[operation.root.value()].push_back(std::move(operation));
+    }
+    catch (...) { return server_status::io_error; }
+    return server_status::success;
+}
+
+server_status header_parser_v2::resolve_waiting_nested(
+    string_id root,
+    std::span<const member_record> members,
+    const record_member_name_set& names,
+    record_nested_state& nested) noexcept {
+
+    if (nested.waiting.empty()) return server_status::success;
+    const auto it = nested.waiting.find(root.value());
+    if (it == nested.waiting.end()) return server_status::success;
+    // These operations were written in source order, including last-wins.
+    for (const auto& operation : it->second) {
+        const auto status = apply_nested_operation(operation, members, names, nested);
+        if (!succeeded(status)) return status;
+    }
+    nested.waiting.erase(it);
+    return server_status::success;
+}
+
 server_status header_parser_v2::parse_constructor(
     string_id record_name,
     std::span<const member_record> members,
     const record_member_name_set& names,
     std::vector<construction_value>& construction,
-    pending_constructor_operations& pending) noexcept {
+    pending_constructor_operations& pending,
+    record_reference_state& references,
+    record_nested_state& nested) noexcept {
 
     if (!record_name ||
         !at(token_kind::l_paren)) {
@@ -1577,35 +1964,22 @@ server_status header_parser_v2::parse_constructor(
             "Header Parser V2 expected ';' after '= default'");
     }
 
-    // Resolve and normalize at the operation's source position. Only a
-    // forward member name is temporarily stored by its compact string ID.
-    const auto append =
-        [&](string_id target, construction_value value,
-            file_id file, source_range source) -> server_status {
-
-            const auto i = names.find(members, target);
-            if (i < members.size()) {
-                if (i >= construction.size()) {
-                    return server_status::project_configuration_invalid;
-                }
-                if (!construction_compatible(G, members[i].type, value)) {
-                    return fail_at(parser_v2_failure_kind::semantic,
-                        "Header Parser V2 constructor initializer is incompatible with target field",
-                        file, source);
-                }
-                construction[i] = value;
-                return server_status::success;
-            }
-
-            try {
-                pending.insert_or_assign(target.value(),
-                    constructor_operation{value, file, source});
-                return server_status::success;
-            }
-            catch (...) {
-                return server_status::io_error;
-            }
-        };
+    // HEADER-V2-REFERENCE-08: both scalar and local-reference constructor
+    // operands normalize when their destination is available. Forward
+    // destinations retain only their latest unresolved source operand.
+    const auto append = [&](string_id target,
+        const constructor_operation& value) -> server_status {
+        const auto i = names.find(members, target);
+        if (i < members.size()) {
+            return apply_record_operand(i, value, members, construction,
+                names, references);
+        }
+        try {
+            pending.insert_or_assign(target.value(), value);
+            return server_status::success;
+        }
+        catch (...) { return server_status::io_error; }
+    };
 
     if (at(token_kind::colon)) {
         status =
@@ -1666,16 +2040,13 @@ server_status header_parser_v2::parse_constructor(
                 return status;
             }
 
-            construction_value value;
+            constructor_operation value;
+            value.file = target_file;
+            value.source = target_source;
 
             if (!at(close)) {
-                status =
-                    parse_scalar_constant(
-                        value);
-
-                if (!succeeded(status)) {
-                    return status;
-                }
+                status = parse_construction_operand(value, true);
+                if (!succeeded(status)) return status;
             }
 
             status =
@@ -1687,12 +2058,7 @@ server_status header_parser_v2::parse_constructor(
                 return status;
             }
 
-            status =
-                append(
-                    target_name,
-                    value,
-                    target_file,
-                    target_source);
+            status = append(target_name, value);
 
             if (!succeeded(status)) {
                 return status;
@@ -1753,6 +2119,47 @@ server_status header_parser_v2::parse_constructor(
             return status;
         }
 
+        // HEADER-V2-NESTED-CONSTRUCTOR-10: OLD's constructor target path
+        // grammar is identifier (.identifier | [decimal-index])*, depth <= 256.
+        std::vector<nested_path_step> path;
+        while (at(token_kind::dot) || at(token_kind::l_bracket)) {
+            if (path.size() >= parser_v2_scope_depth_limit) {
+                return fail(parser_v2_failure_kind::unsupported,
+                    "Constructor path exceeds supported depth");
+            }
+            if (at(token_kind::dot)) {
+                status = consume();
+                if (!succeeded(status)) return status;
+                const auto* member = current();
+                if (member == nullptr || member->kind != token_kind::identifier ||
+                    !member->identifier) {
+                    return fail(parser_v2_failure_kind::syntax,
+                        "Invalid nested constructor field path");
+                }
+                try { path.push_back({member->identifier, 0}); }
+                catch (...) { return server_status::io_error; }
+                status = consume();
+                if (!succeeded(status)) return status;
+            }
+            else {
+                status = consume();
+                if (!succeeded(status)) return status;
+                const auto* index = current();
+                if (index == nullptr || index->kind != token_kind::pp_number ||
+                    index->number.kind != prepared_number_kind_v2::unsigned_integer) {
+                    return fail(parser_v2_failure_kind::unsupported,
+                        "Constructor array index requires a decimal integer literal");
+                }
+                try { path.push_back({{}, index->number.bits}); }
+                catch (...) { return server_status::io_error; }
+                status = consume();
+                if (!succeeded(status)) return status;
+                status = expect(token_kind::r_bracket,
+                    "Expected ']' after constructor array index");
+                if (!succeeded(status)) return status;
+            }
+        }
+
         status =
             expect(
                 token_kind::assign,
@@ -1762,11 +2169,13 @@ server_status header_parser_v2::parse_constructor(
             return status;
         }
 
-        construction_value value;
+        constructor_operation value;
+        value.file = target_file;
+        value.source = target_source;
 
-        status =
-            parse_scalar_constant(
-                value);
+        status = path.empty()
+            ? parse_construction_operand(value, true)
+            : parse_scalar_constant(value.value);
 
         if (!succeeded(status)) {
             return status;
@@ -1781,12 +2190,19 @@ server_status header_parser_v2::parse_constructor(
             return status;
         }
 
-        status =
-            append(
-                target_name,
-                value,
-                target_file,
-                target_source);
+        if (path.empty()) {
+            status = append(target_name, value);
+        }
+        else {
+            nested_operation operation;
+            operation.root = target_name;
+            operation.path = std::move(path);
+            operation.value = value.value;
+            operation.file = target_file;
+            operation.source = target_source;
+            status = append_nested_operation(std::move(operation), members,
+                names, nested);
+        }
 
         if (!succeeded(status)) {
             return status;
@@ -2023,6 +2439,9 @@ server_status header_parser_v2::parse_record(
 
     // Only forward constructor targets live beyond the point of parsing.
     pending_constructor_operations pending;
+    record_reference_state references;
+    record_nested_state nested;
+    nested.owner = identity;
 
     record_member_name_set
         names;
@@ -2170,7 +2589,9 @@ server_status header_parser_v2::parse_record(
                         members,
                         names,
                         construction,
-                        pending);
+                        pending,
+                        references,
+                        nested);
 
                 if (!succeeded(status)) {
                     return status;
@@ -2212,6 +2633,8 @@ server_status header_parser_v2::parse_record(
                     members,
                     construction,
                     pending,
+                    references,
+                    nested,
                     names,
                     virtual_prefix,
                     base_polymorphic,
@@ -2233,6 +2656,8 @@ server_status header_parser_v2::parse_record(
                 members,
                 construction,
                 pending,
+                references,
+                nested,
                 names,
                 virtual_prefix,
                 base_polymorphic,
@@ -2266,6 +2691,34 @@ server_status header_parser_v2::parse_record(
             earliest->second.file, earliest->second.source);
     }
 
+    if (!nested.waiting.empty()) {
+        const nested_operation* earliest = nullptr;
+        for (const auto& bucket : nested.waiting) {
+            for (const auto& operation : bucket.second) {
+                if (earliest == nullptr || operation.source.offset < earliest->source.offset)
+                    earliest = &operation;
+            }
+        }
+        if (earliest == nullptr) return server_status::project_configuration_invalid;
+        return fail_at(parser_v2_failure_kind::semantic,
+            "Constructor target is not a field of this record",
+            earliest->file, earliest->source);
+    }
+
+    if (!references.waiting.empty()) {
+        // Only unresolved forward names are checked. No second field or
+        // constructor-operation traversal, and no token replay.
+        auto earliest = references.waiting.begin();
+        for (auto it = references.waiting.begin();
+             it != references.waiting.end(); ++it) {
+            if (it->second.source.offset < earliest->second.source.offset)
+                earliest = it;
+        }
+        return fail_at(parser_v2_failure_kind::semantic,
+            "Reference binding names neither a member nor a visible Header static object",
+            earliest->second.file, earliest->second.source);
+    }
+
     status =
         expect(
             token_kind::semicolon,
@@ -2290,6 +2743,14 @@ server_status header_parser_v2::parse_record(
             "Header Parser V2 record definition conflicts with G");
     }
 
+    // Cold sparse defaults only, emitted with the existing Graph ABI.
+    for (const auto& item : nested.completed) {
+        const auto added = G.constructor_defaults.add(item);
+        if (!succeeded(added)) {
+            return fail(parser_v2_failure_kind::semantic,
+                "Nested constructor default conflicts with Graph");
+        }
+    }
     return server_status::success;
 }
 
@@ -2360,6 +2821,64 @@ server_status header_parser_v2::parse_namespace(
         depth + 1);
 }
 
+// HEADER-V2-TYPEDEF-07: normalize typedef immediately, one token pass.
+// OLD intentionally restricts typedef to intrinsic scalars, not records,
+// pointers, arrays, references or function declarators.
+server_status header_parser_v2::parse_typedef(
+    identity_ref scope) noexcept {
+
+    auto status = expect(
+        token_kind::kw_typedef,
+        "Expected typedef");
+    if (!succeeded(status)) return status;
+
+    resolved_type parsed;
+    status = parse_type(scope, parsed);
+    if (!succeeded(status)) return status;
+
+    intrinsic_type intrinsic = intrinsic_type::none;
+    if (!G.intrinsic(parsed.type, intrinsic) ||
+        intrinsic < intrinsic_type::bool_type ||
+        intrinsic > intrinsic_type::long_double_type) {
+        return fail(parser_v2_failure_kind::unsupported,
+            "Typedef currently supports intrinsic scalar aliases");
+    }
+
+    const auto* alias = current();
+    if (alias == nullptr || alias->kind != token_kind::identifier ||
+        !alias->identifier) {
+        return fail(parser_v2_failure_kind::syntax,
+            "Expected typedef alias identifier");
+    }
+    const auto alias_name = alias->identifier;
+    const auto alias_file = alias->file;
+    const source_range alias_source{alias->source_offset, alias->source_length};
+    status = consume();
+    if (!succeeded(status)) return status;
+
+    status = expect(token_kind::semicolon,
+        "Expected ';' after typedef");
+    if (!succeeded(status)) return status;
+
+    identity_ref identity;
+    status = identities.resolve(
+        scope, alias_name, identity_kind::type, identity);
+    if (!succeeded(status) || !identity) {
+        return fail_at(parser_v2_failure_kind::semantic,
+            "Typedef identity conflicts with existing semantic identity",
+            alias_file, alias_source);
+    }
+
+    type_handle handle;
+    status = G.define_intrinsic_alias(identity, intrinsic, handle);
+    if (!succeeded(status) || !handle) {
+        return fail_at(parser_v2_failure_kind::semantic,
+            "Typedef conflicts with existing type in G",
+            alias_file, alias_source);
+    }
+    return server_status::success;
+}
+
 server_status header_parser_v2::parse_scope(
     identity_ref scope,
     bool closing_brace,
@@ -2378,6 +2897,13 @@ server_status header_parser_v2::parse_scope(
             at(token_kind::r_brace)) {
 
             return consume();
+        }
+
+        // HEADER-V2-TYPEDEF-07: Header-scope alias declaration.
+        if (at(token_kind::kw_typedef)) {
+            const auto status = parse_typedef(scope);
+            if (!succeeded(status)) return status;
+            continue;
         }
 
         if (at(token_kind::kw_namespace)) {

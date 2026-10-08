@@ -565,6 +565,184 @@ checks pending resolution. ABI, Graph persistence and SHM are unchanged.
 This is an algorithmic speed improvement; runtime performance gains must be
 measured separately on the Windows/MSVC workload before acceptance.
 
+## PARSER-V2-PERF-01 — Isolated Header V2 baseline (measurement only)
+
+An optional benchmark target `ServerEngineV4ParserV2Benchmark` measures
+physically prepared Header V2 input on independently fresh semantic contexts.
+The source fixture is generated and written **before timing**; each warmup or
+measured trial creates new File Context, string table, identity space, G and
+preprocessor, preserving one semantic parse per trial. The timed phases are:
+
+1. `physical_prepare_ms`: `file_context.resolve()` plus full
+   `prepare_header_include_closure_v2()` (file acquisition, lexical processing,
+   directive/include discovery and physical preparation). It **does not**
+   isolate lexer time from file IO, and may include parallel preparation.
+2. `preprocessor_start_ms`: `semantic_preprocessor_v2::start()` after
+   creating the preprocessor. It does **not** represent the total cost of
+   preprocessing, because semantic token delivery continues during parsing.
+3. `combined_semantic_parse_graph_ms`: one `header_parser_v2::parse()` call,
+   including streaming semantic preprocessing, name/type resolution, member
+   lookup, normalization, and writes to G. These sub-stages cannot be divided
+   accurately using external wall clocks.
+
+`measured_sum_ms` is the sum of **these timed sections**, not a claim to
+measure the complete process or include fixture generation, setup, verification
+or file removal. Output is one CSV row per measured trial, not aggregated
+estimates; the runner rejects an existing output path. Each trial checks real
+Graph field counts and representative normalized constructor values **after**
+timing. Scenarios exercise many narrow records, wide records (128, 550
+members), and constructors before/after member declarations. Timings are not
+an OLD/V2 speedup claim; collect a separate production comparison before
+switching parsers.
+
+PowerShell from repository root (use a **new** result path for each run):
+
+```powershell
+cmake -S . -B build -DSERVER_ENGINE_BUILD_BENCHMARKS=ON
+cmake --build build --config Release --target ServerEngineV4ParserV2Benchmark
+.\benchmarks\run_parser_v2_perf.ps1 -ResultPath build/parser-v2-perf-01-a.csv
+```
+
+The benchmark has no runtime impact when the optional target is not built.
+No Parser/Graph/Runtime/SHM ABI change and no extra semantic pass.
+
+## PARSER-V2-PERF-02 — UnitProXL real-project Header benchmark
+
+This **opt-in**, read-only benchmark consumes a real `project.json` through
+`compose_project_configuration()` and uses the manifest's exact declared Header
+roots and preprocessing configuration. It does not synthesize headers or
+replace an unsupported V2 syntax with OLD. Project Source and Assign inputs
+are counted but intentionally excluded: Source Parser V2 is not production-
+ready, so this does **not** measure full Project PUBLISH/BUILD/REBUILD.
+
+Three modes are supported by `ServerEngineV4ParserV2ProjectBenchmark`:
+
+- `v2`: physical include closure and streaming semantic Header V2 into G;
+- `old`: the *same explicit Header roots* through OLD lexical preparation and
+  OLD Header grammar (includes are discovered by OLD, with independent state);
+- `compare`: an **untimed** semantic Graph WHO/type/member/base/constructor
+  projection comparison. Physical Graph handles, string IDs and WHERE are not
+  compared. On any V2 syntax gap the tool prints the file and source offset,
+  exits nonzero, and does not claim parity.
+
+The two physical preparation implementations differ. Their timings are not
+interchangeable, and the `old` mode deliberately parses **Headers only** rather
+than full production PUBLISH. `semantic_ms` includes streaming preprocessor and
+Graph writes in both modes. No invented Preprocessor-only or G-only clock is
+reported. `process_peak_working_set_bytes` is the process-level peak observed at
+measurement time, **not** trial-local allocations. Each trial re-composes the
+Project, so the manifest cost is shown separately; validation/projections are
+outside the timers. No SHM or compiled.bin files are written by the benchmark.
+
+```powershell
+cmake -S . -B build -DSERVER_ENGINE_BUILD_BENCHMARKS=ON
+cmake --build build --config Release --target ServerEngineV4ParserV2ProjectBenchmark
+.\benchmarks\run_parser_v2_unitproxl.ps1 `
+    -ProjectPath .\build\unitproxl-transfer-check\project.json `
+    -ResultPath build\parser-v2-unitproxl-a.csv -Runs 7 -Warmup 2
+# Optional independent Header-only OLD baseline and semantic parity check:
+.\benchmarks\run_parser_v2_unitproxl.ps1 `
+    -ProjectPath .\build\unitproxl-transfer-check\project.json `
+    -ResultPath build\parser-old-unitproxl-a.csv -Mode old -Runs 7 -Warmup 2
+.\build\Release\ServerEngineV4ParserV2ProjectBenchmark.exe compare `
+    .\build\unitproxl-transfer-check\project.json
+```
+
+## HEADER-V2-TYPEDEF-07 — OLD scalar typedef parity for UnitProXL
+
+The UnitProXL transfer script inserts `typedef unsigned char byte;` into
+`unity_pro_xl_base.h`. V2 now recognizes OLD's restricted intrinsic-scalar
+`typedef` at Header namespace/file scope, creates the existing Graph alias
+WHO/WHERE via `define_intrinsic_alias`, and folds subsequent alias references
+to their underlying intrinsic `type_ref`. Only already supported scalar
+intrinsics are accepted; C++ general typedef declarators remain out of scope.
+
+A failing real-project benchmark now prints the offending source token to aid
+incremental grammar parity work. The benchmark must still reject unsupported
+syntax without falling back to OLD. Differential OLD/V2 fixtures cover SDK
+`byte`, chained aliases and a namespace-local alias. The one-pass parser,
+Graph persistence and Runtime/SHM ABI remain unchanged.
+
+## HEADER-V2-REFERENCE-08 — One-pass local reference member bindings
+
+Header V2 now accepts OLD-compatible local member reference defaults and
+managed-constructor reference operands (`OUT`, `this.OUT`) and writes their
+one-based member index into the existing 16-byte `member_binding` construction.
+Type compatibility compares the target referent to the source expression type.
+
+Known fields bind immediately via the existing record-local member index.
+Forward reference names are the only items kept in a sparse per-record map,
+resolved and erased when their source field appears. An operand-generation
+counter prevents an earlier deferred default from replacing a later constructor
+override; superseded defaults are still type-validated when resolved. No
+second pass over fields, source tokens, constructors or G is performed. Header
+static object bindings remain outside this slice; no bogus zero binding is
+substituted for an unsupported reference. Differential fixtures verify OLD/V2
+construction operands and declaration/constructor ordering.
+
+No Graph/persistence/Runtime/SHM ABI changes. The failure-first UnitProXL
+benchmark should be rerun after MSVC Release differential tests.
+
+## HEADER-V2-DECLARATOR-09 — Parenthesized reference/pointer to array
+
+Header V2 now recognizes the restricted record data declarator forms
+`T (&name)[N]`, `T (&&name)[N]`, and `T (*name)[N]`. The prefix within
+parentheses applies **after** the array suffix; `short (&ADR)[6]` resolves to
+`reference(bounded_array(short, 6))`, not `bounded_array(reference(short), 6)`.
+Plain `T &name[N]` remains an invalid array of references.
+
+The Parser reads each token once, directly resolves the derived type using
+existing Graph type operators, and uses HEADER-V2-REFERENCE-08 for constructor
+or declaration bindings such as `ADR(_ADR)`. The referent array's bound and
+element type must agree. No AST, second pass, Graph/compiled.bin or Runtime/SHM
+ABI changes. This slice deliberately excludes arbitrary nested/function
+pointer declarators and unsupported grouped syntax. Independent OLD/V2
+fixtures cover type precedence, forward constructor references and negatives.
+
+## HEADER-V2-NESTED-CONSTRUCTOR-10 — Nested managed constructor writes
+
+Header Parser V2 consumes the OLD-supported managed constructor body paths
+`root.field` / `root[index]` (including combinations and bounded arrays).
+Each path is validated against the existing Type domain and normalized into
+`G.constructor_defaults` under the owner WHO and canonical interned string
+(`P.X`, `P.X[2]`, `P[1].X`). Duplicate path assignments have OLD's last-wins
+semantics. Constructor operations whose root member has not been declared are
+stored sparsely and resolved immediately when that member is declared.
+
+The hot direct scalar/reference constructor assignments are untouched. No
+source replay, whole-record semantic pass, AST, dense Graph projection, or
+Graph/compiled.bin/SHM ABI changes. The differential projection compares
+constructor-default values and paths, not just member definitions.
+
+Only nested scalar writes in managed constructor **bodies** are in this slice;
+aggregate `{...}` constructor initializers require independent parity tests.
+
+## HEADER-V2-REAL-LITERAL-11 — Decimal real construction values
+
+The physical `prepare_literals_v2` phase recognizes the same decimal real
+pp-numbers as OLD (`.` / `e` / `E` and full `std::from_chars<double>` parse),
+recording IEEE-754 binary64 bits in the existing 16-byte prepared number
+record. Header Parser V2 uses `construction_kind::real` with those bits,
+flipping the sign bit for `-`, including negative zero. A leading `+` is
+accepted. Invalid suffixes or out-of-range real tokens remain unsupported.
+
+The decoder runs only once per physical file. No source spelling lookup or
+`from_chars` is added to semantic parsing; the final Graph construction_value,
+Runtime ABI, compiled.bin and SHM formats are unchanged. Differential tests
+cover defaults, managed constructor writes, nested defaults, signed zero,
+exponents and invalid numbers.
+
+## HEADER-V2-BOOL-ZERO-12: Canonical false/nullptr initializers
+
+OLD Header Parser normalizes `false` and `nullptr` to the canonical
+`construction_kind::zero` (bits=0, operand=0), not
+`construction_kind::unsigned_integer(0)`. Parser V2 now matches OLD for
+record member initializers and managed constructor writes, including
+forward member declarations. `true` remains unsigned_integer(1) and the
+numeric token `0` remains unsigned_integer(0). Differential fixtures
+verify exact semantic Graph construction values; Graph layout, compiled.bin
+and Runtime ABI are unchanged.
+
 ## Next
 
 1. Header grammar parity.

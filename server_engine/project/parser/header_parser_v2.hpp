@@ -97,16 +97,55 @@ private:
     static constexpr std::size_t
         record_member_linear_limit = 32;
 
-    // HEADER-V2-CONSTRUCTION-05: only not-yet-declared member targets are
-    // deferred. No second semantic traversal of constructor operations.
+    // HEADER-V2-REFERENCE-08: a name is stored only until its member is
+    // available; G always receives the resolved one-based member operand.
     struct constructor_operation final {
         construction_value value{};
         file_id file{};
         source_range source{};
+        string_id reference_name{};
+        file_id reference_file{};
+        source_range reference_source{};
+    };
+
+    struct waiting_reference final {
+        std::size_t target = 0;
+        std::uint64_t generation = 0;
+        file_id file{};
+        source_range source{};
+    };
+
+    struct record_reference_state final {
+        // Only forward references allocate these sparse indices. No second
+        // whole-record traversal is performed at the closing brace.
+        std::unordered_multimap<std::uint32_t, waiting_reference> waiting;
+        std::unordered_map<std::size_t, std::uint64_t> generations;
     };
 
     using pending_constructor_operations =
         std::unordered_map<std::uint32_t, constructor_operation>;
+
+    // HEADER-V2-NESTED-CONSTRUCTOR-10: sparse, record-local paths only.
+    // The common case (no nested constructor body assignments) allocates none.
+    struct nested_path_step final {
+        string_id name{};
+        std::uint64_t index = 0;
+    };
+    struct nested_operation final {
+        string_id root{};
+        std::vector<nested_path_step> path;
+        construction_value value{};
+        file_id file{};
+        source_range source{};
+    };
+    struct record_nested_state final {
+        identity_ref owner{};
+        std::unordered_map<std::uint32_t, std::vector<nested_operation>> waiting;
+        std::vector<constructor_default> completed;
+        // Allocate the extra index only for unusually large nested bodies.
+        std::unordered_map<std::uint32_t, std::size_t> completed_lookup;
+    };
+
 
     [[nodiscard]] const prepared_token* current() const noexcept;
     [[nodiscard]] bool at(token_kind kind) const noexcept;
@@ -134,6 +173,10 @@ private:
     [[nodiscard]] server_status parse_namespace(
         identity_ref scope,
         std::size_t depth) noexcept;
+
+    // HEADER-V2-TYPEDEF-07: restricted intrinsic aliases.
+    [[nodiscard]] server_status parse_typedef(
+        identity_ref scope) noexcept;
 
     [[nodiscard]] server_status parse_record(
         identity_ref scope) noexcept;
@@ -175,9 +218,48 @@ private:
     [[nodiscard]] server_status parse_scalar_constant(
         construction_value& output) noexcept;
 
+    [[nodiscard]] server_status parse_reference_name(
+        constructor_operation& output) noexcept;
+
+    [[nodiscard]] server_status parse_construction_operand(
+        constructor_operation& output,
+        bool allow_reference_name) noexcept;
+
     [[nodiscard]] server_status parse_member_initializer(
         type_ref target,
-        construction_value& output) noexcept;
+        constructor_operation& output) noexcept;
+
+    [[nodiscard]] server_status apply_record_operand(
+        std::size_t target,
+        const constructor_operation& input_value,
+        std::span<const member_record> members,
+        std::vector<construction_value>& construction,
+        const record_member_name_set& names,
+        record_reference_state& references) noexcept;
+
+    [[nodiscard]] server_status resolve_waiting_references(
+        string_id source_name,
+        std::span<const member_record> members,
+        std::vector<construction_value>& construction,
+        record_reference_state& references) noexcept;
+
+    [[nodiscard]] server_status apply_nested_operation(
+        const nested_operation& operation,
+        std::span<const member_record> members,
+        const record_member_name_set& names,
+        record_nested_state& nested) noexcept;
+
+    [[nodiscard]] server_status append_nested_operation(
+        nested_operation&& operation,
+        std::span<const member_record> members,
+        const record_member_name_set& names,
+        record_nested_state& nested) noexcept;
+
+    [[nodiscard]] server_status resolve_waiting_nested(
+        string_id root,
+        std::span<const member_record> members,
+        const record_member_name_set& names,
+        record_nested_state& nested) noexcept;
 
     [[nodiscard]] server_status parse_member_declarator(
         resolved_type type,
@@ -185,6 +267,8 @@ private:
         std::vector<member_record>& members,
         std::vector<construction_value>& construction,
         pending_constructor_operations& pending,
+        record_reference_state& references,
+        record_nested_state& nested,
         record_member_name_set& names,
         bool virtual_prefix,
         bool base_polymorphic,
@@ -213,6 +297,8 @@ private:
         std::vector<member_record>& members,
         std::vector<construction_value>& construction,
         pending_constructor_operations& pending,
+        record_reference_state& references,
+        record_nested_state& nested,
         record_member_name_set& names,
         bool virtual_prefix,
         bool base_polymorphic,
@@ -223,7 +309,9 @@ private:
         std::span<const member_record> members,
         const record_member_name_set& names,
         std::vector<construction_value>& construction,
-        pending_constructor_operations& pending) noexcept;
+        pending_constructor_operations& pending,
+        record_reference_state& references,
+        record_nested_state& nested) noexcept;
 
     [[nodiscard]] identity_ref find_type_identity(
         identity_ref scope,

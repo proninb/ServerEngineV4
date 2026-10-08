@@ -173,11 +173,68 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
         EXCLUDE REGEX "server_engine/main\\.cpp$"
     )
 
+    # PARSER-V2-PERF-01: opt-in standalone benchmark, no production instrumentation.
+    add_executable(
+        ServerEngineV4ParserV2Benchmark
+        benchmarks/parser_v2_benchmark.cpp
+        ${SERVER_ENGINE_V4_BENCHMARK_SOURCES}
+    )
+    target_include_directories(
+        ServerEngineV4ParserV2Benchmark PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
+    )
+    if(WIN32)
+        target_link_libraries(
+            ServerEngineV4ParserV2Benchmark PRIVATE
+            Psapi bcrypt crypt32 ncrypt winhttp ws2_32
+        )
+    else()
+        target_link_libraries(
+            ServerEngineV4ParserV2Benchmark PRIVATE Threads::Threads
+        )
+        if(NOT APPLE)
+            target_link_libraries(ServerEngineV4ParserV2Benchmark PRIVATE rt)
+        endif()
+    endif()
+    if(MSVC)
+        target_compile_options(ServerEngineV4ParserV2Benchmark PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4ParserV2Benchmark PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
     add_executable(
         ServerEngineV4PublishBenchmark
         benchmarks/publish_benchmark.cpp
         ${SERVER_ENGINE_V4_BENCHMARK_SOURCES}
     )
+
+    # PARSER-V2-PERF-02: real project.json Header-only profile + OLD/V2 oracle.
+    # Benchmark target is opt-in and shares production sources without changes.
+    add_executable(
+        ServerEngineV4ParserV2ProjectBenchmark
+        benchmarks/parser_v2_project_benchmark.cpp
+        ${SERVER_ENGINE_V4_BENCHMARK_SOURCES}
+    )
+    target_include_directories(ServerEngineV4ParserV2ProjectBenchmark PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+    if(WIN32)
+        target_link_libraries(ServerEngineV4ParserV2ProjectBenchmark PRIVATE
+            Psapi bcrypt crypt32 ncrypt winhttp ws2_32)
+    else()
+        target_link_libraries(ServerEngineV4ParserV2ProjectBenchmark PRIVATE
+            Threads::Threads)
+        if(NOT APPLE)
+            target_link_libraries(ServerEngineV4ParserV2ProjectBenchmark PRIVATE rt)
+        endif()
+    endif()
+    if(MSVC)
+        target_compile_options(ServerEngineV4ParserV2ProjectBenchmark PRIVATE
+            /W4 /permissive-)
+    else()
+        target_compile_options(ServerEngineV4ParserV2ProjectBenchmark PRIVATE
+            -Wall -Wextra -Wpedantic)
+    endif()
+
 
     target_include_directories(
         ServerEngineV4PublishBenchmark
