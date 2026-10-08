@@ -173,7 +173,8 @@ private:
     [[nodiscard]] server_status parse_method_tail(
         bool virtual_prefix,
         bool base_polymorphic,
-        bool& declares_virtual) noexcept;
+        bool& declares_virtual,
+        bool conversion = false) noexcept;
 
     [[nodiscard]] server_status parse_member(
         identity_ref scope,

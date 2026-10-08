@@ -1151,42 +1151,117 @@ server_status header_parser_v2::parse_member(
         declares_virtual);
 }
 
-// HEADER-V2-VIRTUAL-01: declaration-only methods, zero argument subset.
-// Method declarations affect polymorphic ABI but do not create Graph members.
+// HEADER-V2-METHOD-02: preserve OLD declaration-only method semantics.
+// Ordinary method parameters are opaque balanced tokens (as in OLD); no
+// method-body execution, Graph data members or Runtime method ABI is added.
 server_status header_parser_v2::parse_method_tail(
     bool virtual_prefix,
     bool base_polymorphic,
-    bool& declares_virtual) noexcept {
+    bool& declares_virtual,
+    bool conversion) noexcept {
 
-    auto status = expect(
-        token_kind::l_paren,
-        "Header Parser V2 expected '(' after method name");
-    if (!succeeded(status)) return status;
-
-    // A sole void is equivalent to an empty C++ parameter list.
-    if (at(token_kind::kw_void)) {
-        status = consume();
-        if (!succeeded(status)) return status;
+    if (!at(token_kind::l_paren)) {
+        return fail(parser_v2_failure_kind::syntax,
+            "Expected '(' after method declarator");
     }
-    if (!at(token_kind::r_paren)) {
-        return fail(
-            parser_v2_failure_kind::unsupported,
-            "Header Parser V2 method parameters are not yet supported");
-    }
-    status = consume();
-    if (!succeeded(status)) return status;
 
-    while (at(token_kind::kw_const) ||
-           at(token_kind::kw_volatile) ||
-           at(token_kind::kw_noexcept)) {
-        status = consume();
-        if (!succeeded(status)) return status;
+    // OLD's method parameter contract counts balanced parentheses. Parameter
+    // types are deliberately not persisted or resolved by this grammar slice.
+    std::size_t depth = 0;
+    bool conversion_void = false;
+    for (;;) {
+        if (input.finished() || current() == nullptr) {
+            return fail(parser_v2_failure_kind::syntax,
+                "Method parameter list is not closed");
+        }
+        if (conversion && depth != 0 && !at(token_kind::r_paren)) {
+            if (!conversion_void && at(token_kind::kw_void)) {
+                conversion_void = true;
+            }
+            else {
+                return fail(parser_v2_failure_kind::syntax,
+                    "This operator must have an empty parameter list");
+            }
+        }
+        if (at(token_kind::l_paren)) {
+            ++depth;
+        }
+        else if (at(token_kind::r_paren)) {
+            if (depth == 0) {
+                return fail(parser_v2_failure_kind::syntax,
+                    "Unexpected ')' in method declaration");
+            }
+            --depth;
+        }
+        const auto consumed = consume();
+        if (!succeeded(consumed)) return consumed;
+        if (depth == 0) break;
+    }
+
+    bool override_seen = false;
+    bool final_seen = false;
+    bool ref_seen = false;
+    for (;;) {
+        // OLD permits member ref-qualifiers for conversion operators but
+        // not for ordinary functions/destructors in its current subset.
+        if (conversion && !ref_seen &&
+            (at(token_kind::ampersand) || at(token_kind::logical_and))) {
+            ref_seen = true;
+            const auto consumed = consume();
+            if (!succeeded(consumed)) return consumed;
+            continue;
+        }
+        if (at(token_kind::kw_const) || at(token_kind::kw_volatile)) {
+            const auto consumed = consume();
+            if (!succeeded(consumed)) return consumed;
+            continue;
+        }
+        if (at(token_kind::kw_noexcept)) {
+            auto consumed = consume();
+            if (!succeeded(consumed)) return consumed;
+            if (at(token_kind::l_paren)) {
+                std::size_t noexcept_depth = 0;
+                for (;;) {
+                    if (input.finished() || current() == nullptr) {
+                        return fail(parser_v2_failure_kind::syntax,
+                            "noexcept expression is not closed");
+                    }
+                    if (at(token_kind::l_paren)) {
+                        ++noexcept_depth;
+                    }
+                    else if (at(token_kind::r_paren)) {
+                        if (noexcept_depth == 0) {
+                            return fail(parser_v2_failure_kind::syntax,
+                                "Unexpected ')' in noexcept expression");
+                        }
+                        --noexcept_depth;
+                    }
+                    consumed = consume();
+                    if (!succeeded(consumed)) return consumed;
+                    if (noexcept_depth == 0) break;
+                }
+            }
+            continue;
+        }
+        if (!override_seen && input.contextual_identifier("override")) {
+            override_seen = true;
+            const auto consumed = consume();
+            if (!succeeded(consumed)) return consumed;
+            continue;
+        }
+        if (!final_seen && input.contextual_identifier("final")) {
+            final_seen = true;
+            const auto consumed = consume();
+            if (!succeeded(consumed)) return consumed;
+            continue;
+        }
+        break;
     }
 
     bool pure = false;
     if (at(token_kind::assign)) {
-        status = consume();
-        if (!succeeded(status)) return status;
+        auto consumed = consume();
+        if (!succeeded(consumed)) return consumed;
         const auto* token = current();
         if (token != nullptr &&
             token->kind == token_kind::pp_number &&
@@ -1194,26 +1269,25 @@ server_status header_parser_v2::parse_method_tail(
             token->number.bits == 0) {
             pure = true;
         }
-        else if (!at(token_kind::kw_default) &&
+        else if ((conversion || !at(token_kind::kw_default)) &&
                  !at(token_kind::kw_delete)) {
-            return fail(
-                parser_v2_failure_kind::unsupported,
+            return fail(parser_v2_failure_kind::unsupported,
                 "Method declaration supports only '= 0', '= default', or '= delete'");
         }
-        status = consume();
-        if (!succeeded(status)) return status;
+        consumed = consume();
+        if (!succeeded(consumed)) return consumed;
     }
 
-    if (pure && !virtual_prefix && !base_polymorphic) {
-        return fail(
-            parser_v2_failure_kind::semantic,
-            "Pure method requires a polymorphic base or explicit virtual");
+    if ((override_seen || final_seen || pure) &&
+        !virtual_prefix && !base_polymorphic) {
+        return fail(parser_v2_failure_kind::semantic,
+            "override/final/pure method requires a polymorphic base or explicit virtual");
     }
-    if (pure || virtual_prefix) declares_virtual = true;
-
+    if (virtual_prefix || override_seen || final_seen || pure) {
+        declares_virtual = true;
+    }
     if (!at(token_kind::semicolon)) {
-        return fail(
-            parser_v2_failure_kind::unsupported,
+        return fail(parser_v2_failure_kind::unsupported,
             "CXX-CLASS-ABI-V1 stores method declarations only; method bodies are not implemented");
     }
     return consume();
@@ -1835,6 +1909,49 @@ server_status header_parser_v2::parse_record(
             virtual_prefix = true;
             status = consume();
             if (!succeeded(status)) return status;
+        }
+
+        if (at(token_kind::tilde)) {
+            // A destructor has no data-member identity; OLD accepts only a
+            // declaration with the containing record's exact name.
+            status = consume();
+            if (!succeeded(status)) return status;
+            if (!at(token_kind::identifier) ||
+                current()->identifier != record_name) {
+                return fail(parser_v2_failure_kind::syntax,
+                    "Destructor name must match its record");
+            }
+            status = consume();
+            if (!succeeded(status)) return status;
+            status = parse_method_tail(
+                virtual_prefix, base_polymorphic, declares_virtual);
+            if (!succeeded(status)) return status;
+            continue;
+        }
+
+        if (at(token_kind::kw_static)) {
+            return fail(parser_v2_failure_kind::unsupported,
+                "Static data members and static methods are not part of the current instance ABI slice");
+        }
+
+        if (at(token_kind::kw_explicit)) {
+            status = consume();
+            if (!succeeded(status)) return status;
+            if (!at(token_kind::kw_operator)) {
+                return fail(parser_v2_failure_kind::unsupported,
+                    "explicit is supported here only on conversion operator declarations");
+            }
+        }
+        if (at(token_kind::kw_operator)) {
+            status = consume();
+            if (!succeeded(status)) return status;
+            resolved_type conversion_type;
+            status = parse_type(scope, conversion_type);
+            if (!succeeded(status)) return status;
+            status = parse_method_tail(
+                virtual_prefix, base_polymorphic, declares_virtual, true);
+            if (!succeeded(status)) return status;
+            continue;
         }
 
         if (at(token_kind::identifier) &&

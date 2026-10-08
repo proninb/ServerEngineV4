@@ -473,6 +473,26 @@ The independent OLD/V2 differential projection now compares polymorphism and
 base descriptors, in addition to member types and constructors. No Graph ABI,
 compiled.bin, stable-WHERE, or production parser changes.
 
+## HEADER-V2-METHOD-02 — Destructors, method qualifiers and parameter lists
+
+V2 matches the OLD production Header parser for declaration-only ordinary
+methods with balanced, non-persisted parameter token lists; declaration-only
+destructors (including virtual/pure/default/delete where OLD allows them);
+contextual `override`/`final`, method `noexcept(expression)`, and conversion
+operators (`operator int()`, `explicit operator int()`) with `&` or `&&`
+ref-qualifiers. Conversion operators keep OLD's empty parameter restriction.
+
+**Intentional OLD limitation:** ordinary method and destructor `F() &` / `F() &&`
+ref-qualifiers are not accepted by the production parser and remain rejected in
+V2. These are not silently added by V2. Operator overloads other than this
+conversion subset require later dedicated parity work.
+
+Method declarations only set the existing Graph polymorphic flag; methods do
+not allocate Graph member slots or runtime method images. Independent OLD/V2
+fixtures exercise positive and negative diagnostics and compare canonical
+semantic Graph projections. This slice does not change Graph ABI, compiled.bin,
+stable-WHERE or the OLD production parser.
+
 ## Next
 
 1. Header grammar parity.
