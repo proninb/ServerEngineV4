@@ -13,6 +13,9 @@
 #include "project/project_build.hpp"
 #include "project/project_rebuild.hpp"
 #include "project/runtime/project_runtime.hpp"
+#include "project/graph/graph.hpp"
+#include "project/semantic/identity.hpp"
+#include "project/string/string_table.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -21,7 +24,9 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <string>
 #include <string_view>
+#include <vector>
 #include <system_error>
 
 #if defined(_WIN32)
@@ -42,6 +47,7 @@ enum class benchmark_mode {
     build,
     rebuild,
     audit,
+    graph_resolved_profile,
 };
 
 [[nodiscard]] bool parse_mode(
@@ -77,6 +83,13 @@ enum class benchmark_mode {
     }
     if (value == "audit") {
         output = benchmark_mode::audit;
+        return true;
+    }
+
+    if (value == "graph-resolved-profile") {
+        output =
+            benchmark_mode::
+                graph_resolved_profile;
         return true;
     }
 
@@ -231,6 +244,259 @@ path_file_size(
     return !error && result;
 }
 
+
+[[nodiscard]] int run_graph_resolved_profile(
+    std::size_t member_count,
+    std::size_t lookup_count) {
+
+    using namespace cw::server;
+    using clock_type =
+        std::chrono::steady_clock;
+
+    if (member_count == 0 ||
+        member_count >
+            static_cast<std::size_t>(
+                (std::numeric_limits<
+                    std::uint32_t>::max)()) ||
+        lookup_count == 0) {
+
+        std::cerr
+            << "Invalid graph-resolved-profile dimensions\n";
+
+        return 2;
+    }
+
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+
+    string_id type_name;
+
+    if (!succeeded(
+            strings.intern(
+                "__graph_resolved_profile_type",
+                type_name))) {
+        return 3;
+    }
+
+    identity_ref type_identity;
+
+    if (!succeeded(
+            identities.resolve(
+                identities.root(),
+                type_name,
+                identity_kind::type,
+                type_identity))) {
+        return 3;
+    }
+
+    type_handle type;
+
+    if (!succeeded(
+            G.declare_record(
+                type_identity,
+                graph_record_kind::struct_type,
+                type))) {
+        return 3;
+    }
+
+    const auto int_type =
+        G.intrinsic(
+            intrinsic_type::signed_int);
+
+    std::vector<string_id> names;
+    std::vector<member_record> members;
+
+    try {
+        names.reserve(member_count);
+        members.reserve(member_count);
+    }
+    catch (...) {
+        return 3;
+    }
+
+    for (std::size_t index = 0;
+         index < member_count;
+         ++index) {
+
+        const auto spelling =
+            std::string{"member_"} +
+            std::to_string(index);
+
+        string_id name;
+
+        if (!succeeded(
+                strings.intern(
+                    spelling,
+                    name))) {
+            return 3;
+        }
+
+        names.push_back(name);
+
+        members.push_back({
+            name,
+            int_type,
+            graph_member_access::public_access,
+            {},
+        });
+    }
+
+    const auto commit_started =
+        clock_type::now();
+
+    if (!succeeded(
+            G.define_resolved_record(
+                type,
+                graph_record_kind::struct_type,
+                members))) {
+        return 3;
+    }
+
+    const auto commit_finished =
+        clock_type::now();
+
+    std::uint64_t indexed_probes = 0;
+    std::uint64_t indexed_checksum = 0;
+
+    const auto indexed_started =
+        clock_type::now();
+
+    for (std::size_t iteration = 0;
+         iteration < lookup_count;
+         ++iteration) {
+
+        const auto index =
+            static_cast<std::size_t>(
+                (static_cast<std::uint64_t>(iteration) *
+                 11400714819323198485ull) %
+                member_count);
+
+        std::uint32_t probes = 0;
+
+        const auto found =
+            G.find_member_profiled(
+                type,
+                names[index],
+                probes);
+
+        if (!found ||
+            found.value() != index) {
+            std::cerr
+                << "Indexed member lookup mismatch\n";
+            return 3;
+        }
+
+        indexed_probes += probes;
+        indexed_checksum +=
+            static_cast<std::uint64_t>(
+                found.value()) + 1;
+    }
+
+    const auto indexed_finished =
+        clock_type::now();
+
+    const auto values =
+        G.members(type);
+
+    std::uint64_t linear_comparisons = 0;
+    std::uint64_t linear_checksum = 0;
+
+    const auto linear_started =
+        clock_type::now();
+
+    for (std::size_t iteration = 0;
+         iteration < lookup_count;
+         ++iteration) {
+
+        const auto index =
+            static_cast<std::size_t>(
+                (static_cast<std::uint64_t>(iteration) *
+                 11400714819323198485ull) %
+                member_count);
+
+        const auto target =
+            names[index];
+
+        std::size_t found =
+            values.size();
+
+        for (std::size_t member = 0;
+             member < values.size();
+             ++member) {
+
+            ++linear_comparisons;
+
+            if (values[member].name ==
+                target) {
+                found = member;
+                break;
+            }
+        }
+
+        if (found != index) {
+            std::cerr
+                << "Linear member lookup mismatch\n";
+            return 3;
+        }
+
+        linear_checksum +=
+            static_cast<std::uint64_t>(found) + 1;
+    }
+
+    const auto linear_finished =
+        clock_type::now();
+
+    if (indexed_checksum != linear_checksum) {
+        std::cerr
+            << "Lookup checksum mismatch\n";
+        return 3;
+    }
+
+    const auto milliseconds =
+        [](auto duration) noexcept {
+            return std::chrono::duration<
+                double,
+                std::milli>{duration}.count();
+        };
+
+    std::cout
+        << "mode=graph-resolved-profile"
+        << ",members=" << member_count
+        << ",lookups=" << lookup_count
+        << ",record_commit_ms="
+        << milliseconds(
+            commit_finished -
+            commit_started)
+        << ",indexed_lookup_ms="
+        << milliseconds(
+            indexed_finished -
+            indexed_started)
+        << ",indexed_probes="
+        << indexed_probes
+        << ",indexed_avg_probes="
+        << static_cast<double>(
+               indexed_probes) /
+               static_cast<double>(
+                   lookup_count)
+        << ",linear_lookup_ms="
+        << milliseconds(
+            linear_finished -
+            linear_started)
+        << ",linear_comparisons="
+        << linear_comparisons
+        << ",linear_avg_comparisons="
+        << static_cast<double>(
+               linear_comparisons) /
+               static_cast<double>(
+                   lookup_count)
+        << ",checksum="
+        << indexed_checksum
+        << '\n';
+
+    return 0;
+}
+
 void print_usage() {
     std::cerr
         << "Usage:\n"
@@ -241,7 +507,8 @@ void print_usage() {
         << "  ServerEngineV4PublishBenchmark load-profile <project.json> <expected-types>\n"
         << "  ServerEngineV4PublishBenchmark build   <project.json> <expected-types>\n"
         << "  ServerEngineV4PublishBenchmark rebuild <project.json> <expected-types>\n"
-        << "  ServerEngineV4PublishBenchmark audit   <project.json> <expected-types>\n";
+        << "  ServerEngineV4PublishBenchmark audit   <project.json> <expected-types>\n"
+        << "  ServerEngineV4PublishBenchmark graph-resolved-profile <members> <lookups>\n";
 }
 
 }
@@ -263,6 +530,31 @@ int main(
 
         print_usage();
         return 2;
+    }
+
+    if (mode ==
+        benchmark_mode::
+            graph_resolved_profile) {
+
+        std::size_t member_count = 0;
+        std::size_t lookup_count = 0;
+
+        if (!parse_count(
+                argv[2],
+                member_count) ||
+            !parse_count(
+                argv[3],
+                lookup_count)) {
+
+            std::cerr
+                << "Invalid graph-resolved-profile arguments\n";
+
+            return 2;
+        }
+
+        return run_graph_resolved_profile(
+            member_count,
+            lookup_count);
     }
 
     std::size_t expected_types = 0;
@@ -500,7 +792,10 @@ int main(
             << ",source_link_ms=" << ns_to_ms(publish_telemetry.source_link_ns)
             << ",source_endpoint_ms=" << ns_to_ms(publish_telemetry.source_endpoint_ns)
             << ",source_member_ms=" << ns_to_ms(publish_telemetry.source_member_ns)
+            << ",header_member_lookups=" << publish_telemetry.header_member_lookups
+            << ",header_member_lookup_probes=" << publish_telemetry.header_member_lookup_probes
             << ",source_member_lookups=" << publish_telemetry.source_member_lookups
+            << ",source_member_lookup_probes=" << publish_telemetry.source_member_lookup_probes
             << ",source_initialization_commit_ms=" << ns_to_ms(publish_telemetry.source_initialization_commit_ns)
             << ",source_link_commit_ms=" << ns_to_ms(publish_telemetry.source_link_commit_ns)
             << ",source_provenance_ms=" << ns_to_ms(publish_telemetry.source_provenance_ns)
@@ -508,6 +803,33 @@ int main(
             << ",source_intern_ms=" << ns_to_ms(publish_telemetry.source_intern_ns)
             << ",source_token_count=" << publish_telemetry.source_token_count
             << ",source_identifier_count=" << publish_telemetry.source_identifier_count
+            << ",header_scope_ms=" << ns_to_ms(publish_telemetry.header_scope_ns)
+            << ",header_record_ms=" << ns_to_ms(publish_telemetry.header_record_ns)
+            << ",header_declared_type_ms=" << ns_to_ms(publish_telemetry.header_declared_type_ns)
+            << ",header_type_specifier_ms=" << ns_to_ms(publish_telemetry.header_type_specifier_ns)
+            << ",header_declarator_ms=" << ns_to_ms(publish_telemetry.header_declarator_ns)
+            << ",header_scope_calls=" << publish_telemetry.header_scope_calls
+            << ",header_record_count=" << publish_telemetry.header_record_count
+            << ",header_data_members=" << publish_telemetry.header_data_members
+            << ",header_special_member_paths=" << publish_telemetry.header_special_member_paths
+            << ",header_constructors=" << publish_telemetry.header_constructors
+            << ",header_access_labels=" << publish_telemetry.header_access_labels
+            << ",header_advance_calls=" << publish_telemetry.header_advance_calls
+            << ",header_peek_calls=" << publish_telemetry.header_peek_calls
+            << ",header_at_checks=" << publish_telemetry.header_at_checks
+            << ",header_input_next_calls=" << publish_telemetry.header_input_next_calls
+            << ",header_buffered_advance_calls=" << publish_telemetry.header_buffered_advance_calls
+            << ",header_declared_type_calls=" << publish_telemetry.header_declared_type_calls
+            << ",header_type_specifier_calls=" << publish_telemetry.header_type_specifier_calls
+            << ",header_declarator_calls=" << publish_telemetry.header_declarator_calls
+            << ",header_type_identity_lookups=" << publish_telemetry.header_type_identity_lookups
+            << ",header_type_identity_scope_steps=" << publish_telemetry.header_type_identity_scope_steps
+            << ",header_find_type_calls=" << publish_telemetry.header_find_type_calls
+            << ",header_read_type_calls=" << publish_telemetry.header_read_type_calls
+            << ",header_dependency_adds=" << publish_telemetry.header_dependency_adds
+            << ",header_derive_calls=" << publish_telemetry.header_derive_calls
+            << ",header_declare_record_calls=" << publish_telemetry.header_declare_record_calls
+            << ",header_define_record_calls=" << publish_telemetry.header_define_record_calls
             << ",source_root_count=" << publish_telemetry.source_root_count
             << ",source_root_setup_ms=" << ns_to_ms(publish_telemetry.source_root_setup_ns)
             << ",source_replay_ms=" << ns_to_ms(publish_telemetry.source_replay_ns)

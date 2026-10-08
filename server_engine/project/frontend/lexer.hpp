@@ -8,6 +8,7 @@
 #pragma once
 
 #include "lexical_stream.hpp"
+#include "lexical_symbols_v2.hpp"
 
 #include <string_view>
 
@@ -59,7 +60,8 @@ public:
         file_id file,
         std::string_view source,
         lexical_stream& output,
-        lexical_error* error = nullptr) noexcept;
+        lexical_error* error = nullptr,
+        lexical_symbol_stream_v2* symbols = nullptr) noexcept;
 };
 
 }

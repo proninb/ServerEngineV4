@@ -1079,7 +1079,14 @@ server_status construct_full_project(
         telemetry->source_link_ns = semantic_telemetry.source_link_ns;
         telemetry->source_endpoint_ns = semantic_telemetry.source_endpoint_ns;
         telemetry->source_member_ns = semantic_telemetry.source_member_ns;
-        telemetry->source_member_lookups = semantic_telemetry.source_member_lookups;
+        telemetry->header_member_lookups =
+            semantic_telemetry.header_member_lookups;
+        telemetry->header_member_lookup_probes =
+            semantic_telemetry.header_member_lookup_probes;
+        telemetry->source_member_lookups =
+            semantic_telemetry.source_member_lookups;
+        telemetry->source_member_lookup_probes =
+            semantic_telemetry.source_member_lookup_probes;
         telemetry->source_initialization_commit_ns = semantic_telemetry.source_initialization_commit_ns;
         telemetry->source_link_commit_ns = semantic_telemetry.source_link_commit_ns;
         telemetry->source_provenance_ns = semantic_telemetry.source_provenance_ns;
@@ -1087,6 +1094,35 @@ server_status construct_full_project(
         telemetry->source_intern_ns = semantic_telemetry.source_intern_ns;
         telemetry->source_token_count = semantic_telemetry.source_token_count;
         telemetry->source_identifier_count = semantic_telemetry.source_identifier_count;
+
+        telemetry->header_scope_ns = semantic_telemetry.header_scope_ns;
+        telemetry->header_record_ns = semantic_telemetry.header_record_ns;
+        telemetry->header_declared_type_ns = semantic_telemetry.header_declared_type_ns;
+        telemetry->header_type_specifier_ns = semantic_telemetry.header_type_specifier_ns;
+        telemetry->header_declarator_ns = semantic_telemetry.header_declarator_ns;
+        telemetry->header_scope_calls = semantic_telemetry.header_scope_calls;
+        telemetry->header_record_count = semantic_telemetry.header_record_count;
+        telemetry->header_data_members = semantic_telemetry.header_data_members;
+        telemetry->header_special_member_paths = semantic_telemetry.header_special_member_paths;
+        telemetry->header_constructors = semantic_telemetry.header_constructors;
+        telemetry->header_access_labels = semantic_telemetry.header_access_labels;
+        telemetry->header_advance_calls = semantic_telemetry.header_advance_calls;
+        telemetry->header_peek_calls = semantic_telemetry.header_peek_calls;
+        telemetry->header_at_checks = semantic_telemetry.header_at_checks;
+        telemetry->header_input_next_calls = semantic_telemetry.header_input_next_calls;
+        telemetry->header_buffered_advance_calls = semantic_telemetry.header_buffered_advance_calls;
+        telemetry->header_declared_type_calls = semantic_telemetry.header_declared_type_calls;
+        telemetry->header_type_specifier_calls = semantic_telemetry.header_type_specifier_calls;
+        telemetry->header_declarator_calls = semantic_telemetry.header_declarator_calls;
+        telemetry->header_type_identity_lookups = semantic_telemetry.header_type_identity_lookups;
+        telemetry->header_type_identity_scope_steps = semantic_telemetry.header_type_identity_scope_steps;
+        telemetry->header_find_type_calls = semantic_telemetry.header_find_type_calls;
+        telemetry->header_read_type_calls = semantic_telemetry.header_read_type_calls;
+        telemetry->header_dependency_adds = semantic_telemetry.header_dependency_adds;
+        telemetry->header_derive_calls = semantic_telemetry.header_derive_calls;
+        telemetry->header_declare_record_calls = semantic_telemetry.header_declare_record_calls;
+        telemetry->header_define_record_calls = semantic_telemetry.header_define_record_calls;
+
 
         telemetry->source_root_count =
             semantic_telemetry.source_root_count;

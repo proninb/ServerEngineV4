@@ -390,7 +390,24 @@ public:
         std::span<const base_record> bases = {},
         bool declares_virtual = false) noexcept;
 
+    // Parser-resolved producer contract. Source-language member construction
+    // compatibility has already been checked; Graph owns storage/conflicts.
+    [[nodiscard]] server_status define_resolved_record(
+        type_handle type,
+        graph_record_kind kind,
+        std::span<const member_record> definition,
+        std::span<const construction_value> construction = {},
+        std::span<const base_record> bases = {},
+        bool declares_virtual = false) noexcept;
+
     [[nodiscard]] server_status add_object(
+        identity_ref identity,
+        type_ref type,
+        object_handle& output,
+        std::uint32_t flags = 0,
+        construction_value construction = {}) noexcept;
+
+    [[nodiscard]] server_status add_resolved_object(
         identity_ref identity,
         type_ref type,
         object_handle& output,
@@ -423,9 +440,19 @@ public:
         intrinsic_type type) const noexcept;
 
     [[nodiscard]] type_ref named(
+        identity_ref identity) const noexcept;
+
+    [[nodiscard]] type_ref named(
         type_handle type) const noexcept;
 
     [[nodiscard]] server_status derive(
+        type_ref child,
+        derived_type_kind kind,
+        std::uint64_t payload,
+        type_ref& output) noexcept;
+
+    // Parser has already rejected illegal declarator compositions.
+    [[nodiscard]] server_status derive_resolved(
         type_ref child,
         derived_type_kind kind,
         std::uint64_t payload,
@@ -496,6 +523,13 @@ public:
     [[nodiscard]] member_index find_member(
         type_handle type,
         string_id name) const noexcept;
+
+    // Benchmark/profile-only lookup. Production callers use find_member().
+    // probes counts occupied/empty hash slots inspected by this lookup.
+    [[nodiscard]] member_index find_member_profiled(
+        type_handle type,
+        string_id name,
+        std::uint32_t& probes) const noexcept;
 
     [[nodiscard]] const member_record* member(
         type_handle type,
@@ -649,6 +683,14 @@ private:
         endpoint_path_handle path{};
     };
 
+    struct member_name_index_slot final {
+        type_handle type{};
+        string_id name{};
+        member_index member{};
+    };
+
+    static_assert(sizeof(member_name_index_slot) == 12);
+
     struct link_target_index_slot final {
         std::uint64_t key = 0;
         link_handle link{};
@@ -676,6 +718,23 @@ private:
 
     [[nodiscard]] server_status ensure_identity_slot(
         identity_ref identity) noexcept;
+
+    [[nodiscard]] static std::uint64_t hash_member_name(
+        type_handle type,
+        string_id name) noexcept;
+
+    [[nodiscard]] server_status ensure_member_name_index_capacity(
+        std::size_t additional) noexcept;
+
+    void insert_member_name_index(
+        std::vector<member_name_index_slot>& target,
+        type_handle type,
+        string_id name,
+        member_index member) const noexcept;
+
+    [[nodiscard]] member_index find_indexed_member(
+        type_handle type,
+        string_id name) const noexcept;
 
     [[nodiscard]] static std::uint64_t hash_derived(
         type_ref child,
@@ -769,6 +828,10 @@ private:
     std::vector<base_record> base_records;
     std::vector<member_record> member_records;
     std::vector<construction_value> member_construction;
+
+    // Construction-only O(1) lookup accelerator over member_records.
+    std::vector<member_name_index_slot> member_name_index;
+    std::size_t member_name_index_count = 0;
 
     std::vector<object_entry> objects;
     std::vector<identity_ref> object_identities;

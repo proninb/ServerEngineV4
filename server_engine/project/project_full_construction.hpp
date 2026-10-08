@@ -42,7 +42,12 @@ struct full_construction_telemetry final {
     std::uint64_t source_link_ns = 0;
     std::uint64_t source_endpoint_ns = 0;
     std::uint64_t source_member_ns = 0;
+
+    // GRAPH-RESOLVED-V2-PERF-01. Zero-clock lookup shape.
+    std::uint64_t header_member_lookups = 0;
+    std::uint64_t header_member_lookup_probes = 0;
     std::uint64_t source_member_lookups = 0;
+    std::uint64_t source_member_lookup_probes = 0;
     std::uint64_t source_initialization_commit_ns = 0;
     std::uint64_t source_link_commit_ns = 0;
     std::uint64_t source_provenance_ns = 0;
@@ -50,6 +55,42 @@ struct full_construction_telemetry final {
     std::uint64_t source_intern_ns = 0;
     std::uint64_t source_token_count = 0;
     std::uint64_t source_identifier_count = 0;
+
+    // PARSER-PERF-01.
+    // Hot primitives are counters only; detailed sub-parser clocks are
+    // enabled only when detailed_source is true.
+    std::uint64_t header_scope_ns = 0;
+    std::uint64_t header_record_ns = 0;
+    std::uint64_t header_declared_type_ns = 0;
+    std::uint64_t header_type_specifier_ns = 0;
+    std::uint64_t header_declarator_ns = 0;
+
+    std::uint64_t header_scope_calls = 0;
+    std::uint64_t header_record_count = 0;
+    std::uint64_t header_data_members = 0;
+    std::uint64_t header_special_member_paths = 0;
+    std::uint64_t header_constructors = 0;
+    std::uint64_t header_access_labels = 0;
+
+    std::uint64_t header_advance_calls = 0;
+    std::uint64_t header_peek_calls = 0;
+    std::uint64_t header_at_checks = 0;
+    std::uint64_t header_input_next_calls = 0;
+    std::uint64_t header_buffered_advance_calls = 0;
+
+    std::uint64_t header_declared_type_calls = 0;
+    std::uint64_t header_type_specifier_calls = 0;
+    std::uint64_t header_declarator_calls = 0;
+    std::uint64_t header_type_identity_lookups = 0;
+    std::uint64_t header_type_identity_scope_steps = 0;
+    std::uint64_t header_find_type_calls = 0;
+    std::uint64_t header_read_type_calls = 0;
+    std::uint64_t header_dependency_adds = 0;
+    std::uint64_t header_derive_calls = 0;
+    std::uint64_t header_declare_record_calls = 0;
+    std::uint64_t header_define_record_calls = 0;
+
+
 
     // PUBLISH-SOURCE-COARSE-PROFILE-01.
     std::uint64_t source_root_count = 0;

@@ -1123,40 +1123,12 @@ bool graph_delta::contains(
                     identity_kind::type)));
     }
 
-    if (type_value.kind() !=
+    if (type_value.kind() ==
         type_ref_kind::derived) {
 
-        return false;
-    }
-
-    auto current =
-        type_value;
-
-    for (std::size_t depth = 0;
-         depth <=
-            derived_type_count();
-         ++depth) {
-
-        derived_type_record record;
-
-        if (!derived(
-                current,
-                record)) {
-
-            return false;
-        }
-
-        if (record.child.kind() ==
-            type_ref_kind::derived) {
-
-            current =
-                record.child;
-
-            continue;
-        }
-
-        return contains(
-            record.child);
+        return type_value.payload() != 0 &&
+            type_value.payload() <=
+                derived_type_count();
     }
 
     return false;
@@ -2162,6 +2134,18 @@ server_status graph_delta::define_record(
         return server_status::io_error;
     }
 
+    if (!definition.empty()) {
+        const auto member_index_prepared =
+            ensure_member_name_index_capacity(
+                definition.size());
+
+        if (!succeeded(
+                member_index_prepared)) {
+
+            return member_index_prepared;
+        }
+    }
+
     const auto old_member_count =
         member_records.size();
 
@@ -2263,6 +2247,24 @@ server_status graph_delta::define_record(
         patch->value =
             entry;
 
+        for (std::size_t member_position = 0;
+             member_position <
+                definition.size();
+             ++member_position) {
+
+            insert_member_name_index(
+                member_name_index,
+                type_value,
+                definition[
+                    member_position].name,
+                member_index{
+                    static_cast<std::uint32_t>(
+                        member_position)});
+        }
+
+        member_name_index_count +=
+            definition.size();
+
         return server_status::success;
     }
 
@@ -2290,6 +2292,438 @@ server_status graph_delta::define_record(
 
     types[index] =
         entry;
+
+    for (std::size_t member_position = 0;
+         member_position <
+            definition.size();
+         ++member_position) {
+
+        insert_member_name_index(
+            member_name_index,
+            type_value,
+            definition[
+                member_position].name,
+            member_index{
+                static_cast<std::uint32_t>(
+                    member_position)});
+    }
+
+    member_name_index_count +=
+        definition.size();
+
+    return server_status::success;
+}
+
+server_status graph_delta::define_resolved_record(
+    type_handle type_value,
+    graph_record_kind kind,
+    std::span<const member_record> definition,
+    std::span<const construction_value> construction_values,
+    std::span<const base_record> bases_value,
+    bool declares_virtual) noexcept {
+
+    type_entry entry;
+
+    if (!type(
+            type_value,
+            entry) ||
+        entry.kind !=
+            graph_type_kind::record ||
+        !valid_record_kind(kind) ||
+        !compatible_record_kind(
+            entry.record_kind,
+            kind) ||
+        (!construction_values.empty() &&
+         construction_values.size() !=
+            definition.size()) ||
+        (kind ==
+             graph_record_kind::union_type &&
+         (!bases_value.empty() ||
+          declares_virtual))) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    const auto type_identity =
+        identity(
+            type_value);
+
+    if (!type_identity ||
+        type_identity.kind() !=
+            identity_kind::type) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    bool polymorphic_value =
+        declares_virtual;
+
+    for (std::size_t index = 0;
+         index < bases_value.size();
+         ++index) {
+
+        const auto& base_value =
+            bases_value[index];
+
+        const auto base_handle =
+            find_type(
+                base_value.type);
+
+        type_entry base_type;
+
+        if (!base_value.type ||
+            base_value.type.kind() !=
+                identity_kind::type ||
+            base_value.type ==
+                type_identity ||
+            !base_handle ||
+            !type(
+                base_handle,
+                base_type) ||
+            !base_type.defined() ||
+            base_type.kind !=
+                graph_type_kind::record ||
+            base_type.record_kind ==
+                graph_record_kind::union_type ||
+            !valid_member_access(
+                base_value.access) ||
+            (base_value.flags &
+                ~graph_base_flag_mask) != 0 ||
+            base_value.reserved != 0) {
+
+            return server_status::
+                project_configuration_invalid;
+        }
+
+        for (std::size_t previous = 0;
+             previous < index;
+             ++previous) {
+
+            if (bases_value[previous].type ==
+                base_value.type) {
+
+                return server_status::
+                    project_configuration_invalid;
+            }
+        }
+
+        polymorphic_value =
+            polymorphic_value ||
+            base_type.polymorphic();
+    }
+
+    for (std::size_t index = 0;
+         index < definition.size();
+         ++index) {
+
+        if (!definition[index].name ||
+            !contains(definition[index].type) ||
+            !valid_member_access(
+                definition[index].access)) {
+
+            return server_status::
+                project_configuration_invalid;
+        }
+
+        const auto construction =
+            construction_values.empty()
+            ? construction_value{}
+            : construction_values[index];
+
+        if (!valid_construction(
+                construction)) {
+
+            return server_status::
+                project_configuration_invalid;
+        }
+    }
+
+    if (entry.defined()) {
+        if (entry.record_kind !=
+                kind ||
+            entry.polymorphic() !=
+                polymorphic_value ||
+            entry.bases.count !=
+                bases_value.size() ||
+            entry.members.count !=
+                definition.size()) {
+
+            return server_status::
+                project_configuration_invalid;
+        }
+
+        for (std::size_t index = 0;
+             index < bases_value.size();
+             ++index) {
+
+            base_record existing;
+
+            if (!base(
+                    type_value,
+                    static_cast<std::uint32_t>(
+                        index),
+                    existing) ||
+                existing.type !=
+                    bases_value[index].type ||
+                existing.access !=
+                    bases_value[index].access ||
+                existing.flags !=
+                    bases_value[index].flags) {
+
+                return server_status::
+                    project_configuration_invalid;
+            }
+        }
+
+        for (std::size_t index = 0;
+             index < definition.size();
+             ++index) {
+
+            const member_index member_value{
+                static_cast<std::uint32_t>(
+                    index)};
+
+            member_record existing;
+            construction_value existing_construction;
+
+            if (!member(
+                    type_value,
+                    member_value,
+                    existing) ||
+                !construction(
+                    type_value,
+                    member_value,
+                    existing_construction) ||
+                existing.name !=
+                    definition[index].name ||
+                existing.type !=
+                    definition[index].type ||
+                existing.access !=
+                    definition[index].access) {
+
+                return server_status::
+                    project_configuration_invalid;
+            }
+
+            const auto expected =
+                construction_values.empty()
+                ? construction_value{}
+                : construction_values[index];
+
+            if (existing_construction !=
+                expected) {
+
+                return server_status::
+                    project_configuration_invalid;
+            }
+        }
+
+        return server_status::success;
+    }
+
+    const auto maximum =
+        static_cast<std::size_t>(
+            (std::numeric_limits<
+                std::uint32_t>::max)());
+
+    const auto logical_member_begin =
+        member_count();
+
+    const auto logical_base_begin =
+        base_count();
+
+    if (logical_member_begin > maximum ||
+        definition.size() > maximum ||
+        definition.size() >
+            maximum -
+                logical_member_begin ||
+        logical_base_begin > maximum ||
+        bases_value.size() > maximum ||
+        bases_value.size() >
+            maximum -
+                logical_base_begin) {
+
+        return server_status::io_error;
+    }
+
+    if (!definition.empty()) {
+        const auto member_index_prepared =
+            ensure_member_name_index_capacity(
+                definition.size());
+
+        if (!succeeded(
+                member_index_prepared)) {
+
+            return member_index_prepared;
+        }
+    }
+
+    const auto old_member_count =
+        member_records.size();
+
+    const auto old_base_count =
+        base_records.size();
+
+    try {
+        base_records.insert(
+            base_records.end(),
+            bases_value.begin(),
+            bases_value.end());
+
+        member_records.insert(
+            member_records.end(),
+            definition.begin(),
+            definition.end());
+
+        if (construction_values.empty()) {
+            member_construction.resize(
+                member_records.size());
+        }
+        else {
+            member_construction.insert(
+                member_construction.end(),
+                construction_values.begin(),
+                construction_values.end());
+        }
+    }
+    catch (...) {
+        base_records.resize(
+            old_base_count);
+
+        member_records.resize(
+            old_member_count);
+
+        member_construction.resize(
+            old_member_count);
+
+        return server_status::io_error;
+    }
+
+    entry.bases = {
+        static_cast<std::uint32_t>(
+            logical_base_begin),
+        static_cast<std::uint32_t>(
+            bases_value.size()),
+    };
+
+    entry.members = {
+        static_cast<std::uint32_t>(
+            logical_member_begin),
+        static_cast<std::uint32_t>(
+            definition.size()),
+    };
+
+    entry.record_kind =
+        kind;
+
+    entry.flags &=
+        static_cast<std::uint16_t>(
+            ~graph_type_flag_mask);
+
+    entry.flags |=
+        graph_type_defined;
+
+    if (polymorphic_value) {
+        entry.flags |=
+            graph_type_polymorphic;
+    }
+
+    if (type_value.value() <=
+        baseline_type_count) {
+
+        type_patch* patch = nullptr;
+
+        const auto prepared =
+            ensure_type_patch(
+                type_value,
+                patch);
+
+        if (!succeeded(prepared) ||
+            patch == nullptr) {
+
+            base_records.resize(
+                old_base_count);
+
+            member_records.resize(
+                old_member_count);
+
+            member_construction.resize(
+                old_member_count);
+
+            return succeeded(prepared)
+                ? server_status::
+                    project_artifact_invalid
+                : prepared;
+        }
+
+        patch->value =
+            entry;
+
+        for (std::size_t member_position = 0;
+             member_position <
+                definition.size();
+             ++member_position) {
+
+            insert_member_name_index(
+                member_name_index,
+                type_value,
+                definition[
+                    member_position].name,
+                member_index{
+                    static_cast<std::uint32_t>(
+                        member_position)});
+        }
+
+        member_name_index_count +=
+            definition.size();
+
+        return server_status::success;
+    }
+
+    const auto index =
+        static_cast<std::size_t>(
+            type_value.value() -
+            baseline_type_count -
+            1);
+
+    if (index >=
+        types.size()) {
+
+        base_records.resize(
+            old_base_count);
+
+        member_records.resize(
+            old_member_count);
+
+        member_construction.resize(
+            old_member_count);
+
+        return server_status::
+            project_artifact_invalid;
+    }
+
+    types[index] =
+        entry;
+
+    for (std::size_t member_position = 0;
+         member_position <
+            definition.size();
+         ++member_position) {
+
+        insert_member_name_index(
+            member_name_index,
+            type_value,
+            definition[
+                member_position].name,
+            member_index{
+                static_cast<std::uint32_t>(
+                    member_position)});
+    }
+
+    member_name_index_count +=
+        definition.size();
 
     return server_status::success;
 }
@@ -2340,6 +2774,157 @@ std::span<const member_record> graph_delta::members(
     };
 }
 
+
+std::uint64_t graph_delta::hash_member_name(
+    type_handle type,
+    string_id name) noexcept {
+
+    const auto key =
+        (static_cast<std::uint64_t>(
+             type.value()) << 32) |
+        name.value();
+
+    return mix64(key);
+}
+
+server_status graph_delta::ensure_member_name_index_capacity(
+    std::size_t additional) noexcept {
+
+    if (additional >
+        (std::numeric_limits<std::size_t>::max)() -
+            member_name_index_count) {
+
+        return server_status::io_error;
+    }
+
+    const auto required =
+        member_name_index_count +
+        additional;
+
+    if (required == 0) {
+        return server_status::success;
+    }
+
+    if (!member_name_index.empty() &&
+        required <=
+            member_name_index.size() / 2) {
+
+        return server_status::success;
+    }
+
+    const auto capacity =
+        next_index_capacity(
+            required);
+
+    if (capacity == 0) {
+        return server_status::io_error;
+    }
+
+    try {
+        std::vector<member_name_index_slot>
+            candidate(capacity);
+
+        for (const auto& slot :
+             member_name_index) {
+
+            if (!slot.type) {
+                continue;
+            }
+
+            insert_member_name_index(
+                candidate,
+                slot.type,
+                slot.name,
+                slot.member);
+        }
+
+        member_name_index =
+            std::move(candidate);
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
+void graph_delta::insert_member_name_index(
+    std::vector<member_name_index_slot>& target,
+    type_handle type,
+    string_id name,
+    member_index member) const noexcept {
+
+    const auto mask =
+        target.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            hash_member_name(
+                type,
+                name)) &
+        mask;
+
+    while (target[position].type) {
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    target[position] = {
+        type,
+        name,
+        member,
+    };
+}
+
+member_index graph_delta::find_indexed_member(
+    type_handle type,
+    string_id name) const noexcept {
+
+    if (!type ||
+        !name ||
+        member_name_index.empty()) {
+
+        return {};
+    }
+
+    const auto mask =
+        member_name_index.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            hash_member_name(
+                type,
+                name)) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe <
+            member_name_index.size();
+         ++probe) {
+
+        const auto& slot =
+            member_name_index[
+                position];
+
+        if (!slot.type) {
+            return {};
+        }
+
+        if (slot.type == type &&
+            slot.name == name) {
+
+            return slot.member;
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return {};
+}
+
 member_index graph_delta::find_member(
     type_handle type_value,
     string_id name) const noexcept {
@@ -2358,24 +2943,64 @@ member_index graph_delta::find_member(
         return {};
     }
 
-    for (std::uint32_t index = 0;
-         index <
-            entry.members.count;
-         ++index) {
+    if (type_value.value() <=
+            baseline_type_count &&
+        find_type_patch(
+            type_value.value()) ==
+            nullptr) {
 
-        member_record value;
-
-        const member_index member_value{
-            index};
-
-        if (member(
+        return baseline != nullptr
+            ? baseline->find_member(
                 type_value,
-                member_value,
-                value) &&
-            value.name == name) {
+                name)
+            : member_index{};
+    }
 
-            return member_value;
+    if (member_name_index.empty()) {
+        return {};
+    }
+
+    const auto mask =
+        member_name_index.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            hash_member_name(
+                type_value,
+                name)) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe <
+            member_name_index.size();
+         ++probe) {
+
+        const auto& slot =
+            member_name_index[
+                position];
+
+        if (!slot.type) {
+            return {};
         }
+
+        if (slot.type == type_value &&
+            slot.name == name) {
+
+            member_record value;
+
+            if (member(
+                    type_value,
+                    slot.member,
+                    value) &&
+                value.name == name) {
+
+                return slot.member;
+            }
+        }
+
+        position =
+            (position + 1) &
+            mask;
     }
 
     return {};
@@ -2893,6 +3518,308 @@ server_status graph_delta::add_object(
         : notified;
 }
 
+server_status graph_delta::add_resolved_object(
+    identity_ref identity_value,
+    type_ref type_value,
+    object_handle& output,
+    std::uint32_t flags,
+    construction_value initial) noexcept {
+
+    output = {};
+
+    if (!identity_value ||
+        identity_value.kind() !=
+            identity_kind::object ||
+        !contains(type_value) ||
+        (flags &
+            ~graph_object_flag_mask) !=
+            0 ||
+        !valid_construction(initial) ||
+        (!(flags &
+            graph_object_non_default_initializer) &&
+         initial != construction_value{}) ||
+        initial.kind ==
+            construction_kind::
+                member_binding ||
+        initial.kind ==
+            construction_kind::
+                object_binding) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    if (const auto existing =
+            lineage_object(
+                identity_value);
+        existing) {
+
+        if (contains(existing)) {
+            object_entry entry;
+            construction_value existing_initial;
+
+            if (!object(
+                    existing,
+                    entry) ||
+                !construction(
+                    existing,
+                    existing_initial) ||
+                entry.type != type_value ||
+                (entry.state &
+                    graph_object_flag_mask) !=
+                    flags ||
+                existing_initial !=
+                    initial) {
+
+                return server_status::
+                    project_configuration_invalid;
+            }
+
+            output = existing;
+            return server_status::success;
+        }
+
+        if (existing.value() <=
+            baseline_object_count) {
+
+            object_patch* patch = nullptr;
+
+            const auto prepared =
+                ensure_object_patch(
+                    existing,
+                    patch);
+
+            if (!succeeded(prepared) ||
+                patch == nullptr) {
+
+                return succeeded(prepared)
+                    ? server_status::
+                        project_artifact_invalid
+                    : prepared;
+            }
+
+            std::uint32_t construction_slot = 0;
+
+            if ((flags &
+                graph_object_non_default_initializer) !=
+                0) {
+
+                const auto logical_construction_count =
+                    baseline_object_construction_count +
+                    object_construction.size();
+
+                if (logical_construction_count >=
+                    graph_object_construction_slot_mask) {
+
+                    return server_status::
+                        io_error;
+                }
+
+                try {
+                    object_construction.push_back(
+                        initial);
+                }
+                catch (...) {
+                    return server_status::
+                        io_error;
+                }
+
+                construction_slot =
+                    static_cast<std::uint32_t>(
+                        baseline_object_construction_count +
+                        object_construction.size());
+            }
+
+            patch->value = {
+                type_value,
+                flags |
+                    construction_slot,
+            };
+
+            patch->construction =
+                initial;
+
+            patch->live = true;
+        }
+        else {
+            const auto index =
+                static_cast<std::size_t>(
+                    existing.value() -
+                    baseline_object_count -
+                    1);
+
+            if (index >=
+                    objects.size() ||
+                index >=
+                    object_live.size()) {
+
+                return server_status::
+                    project_artifact_invalid;
+            }
+
+            std::uint32_t construction_slot = 0;
+
+            if ((flags &
+                graph_object_non_default_initializer) !=
+                0) {
+
+                const auto logical_construction_count =
+                    baseline_object_construction_count +
+                    object_construction.size();
+
+                if (logical_construction_count >=
+                    graph_object_construction_slot_mask) {
+
+                    return server_status::
+                        io_error;
+                }
+
+                try {
+                    object_construction.push_back(
+                        initial);
+                }
+                catch (...) {
+                    return server_status::
+                        io_error;
+                }
+
+                construction_slot =
+                    static_cast<std::uint32_t>(
+                        baseline_object_construction_count +
+                        object_construction.size());
+            }
+
+            objects[index] = {
+                type_value,
+                flags |
+                    construction_slot,
+            };
+
+            object_live[index] = 1;
+        }
+
+        ++live_object_count_value;
+
+        output = existing;
+
+        const auto notified =
+            notify_object_change(
+                output);
+
+        return succeeded(notified)
+            ? server_status::success
+            : notified;
+    }
+
+    if (object_count() >=
+        object_handle::maximum_slot) {
+
+        return server_status::io_error;
+    }
+
+    const auto old_object_count =
+        objects.size();
+
+    const auto old_identity_count =
+        object_identities.size();
+
+    const auto old_live_count =
+        object_live.size();
+
+    const auto old_construction_count =
+        object_construction.size();
+
+    try {
+        std::uint32_t construction_slot = 0;
+
+        if ((flags &
+            graph_object_non_default_initializer) !=
+            0) {
+
+            const auto logical_construction_count =
+                baseline_object_construction_count +
+                object_construction.size();
+
+            if (logical_construction_count >=
+                graph_object_construction_slot_mask) {
+
+                return server_status::io_error;
+            }
+
+            object_construction.push_back(
+                initial);
+
+            construction_slot =
+                static_cast<std::uint32_t>(
+                    baseline_object_construction_count +
+                    object_construction.size());
+        }
+
+        objects.push_back({
+            type_value,
+            flags |
+                construction_slot,
+        });
+
+        object_identities.push_back(
+            identity_value);
+
+        object_live.push_back(1);
+    }
+    catch (...) {
+        objects.resize(
+            old_object_count);
+
+        object_identities.resize(
+            old_identity_count);
+
+        object_live.resize(
+            old_live_count);
+
+        object_construction.resize(
+            old_construction_count);
+
+        return server_status::io_error;
+    }
+
+    output = object_handle{
+        static_cast<std::uint32_t>(
+            object_count())};
+
+    const auto published =
+        publish_identity_location(
+            identity_value,
+            location_kind::object,
+            output.value());
+
+    if (!succeeded(published)) {
+        objects.resize(
+            old_object_count);
+
+        object_identities.resize(
+            old_identity_count);
+
+        object_live.resize(
+            old_live_count);
+
+        object_construction.resize(
+            old_construction_count);
+
+        output = {};
+        return published;
+    }
+
+    ++live_object_count_value;
+
+    const auto notified =
+        notify_object_change(
+            output);
+
+    return succeeded(notified)
+        ? server_status::success
+        : notified;
+}
+
 server_status graph_delta::retire(
     object_handle object_value) noexcept {
 
@@ -3046,18 +3973,22 @@ type_ref graph_delta::intrinsic(
 }
 
 type_ref graph_delta::named(
-    type_handle type_value) const noexcept {
+    identity_ref identity_value) const noexcept {
 
-    const auto value =
-        identity(type_value);
-
-    return value &&
-        value.kind() ==
+    return identity_value &&
+        identity_value.kind() ==
             identity_kind::type
         ? type_ref::make(
             type_ref_kind::named,
-            value.slot())
+            identity_value.slot())
         : type_ref{};
+}
+
+type_ref graph_delta::named(
+    type_handle type_value) const noexcept {
+
+    return named(
+        identity(type_value));
 }
 
 std::uint64_t graph_delta::hash_derived(
@@ -3285,8 +4216,142 @@ server_status graph_delta::derive(
 
     output = {};
 
-    if (!contains(child) ||
+    const auto incomplete_named_allowed =
+        child.kind() ==
+            type_ref_kind::named &&
+        (kind ==
+             derived_type_kind::const_qualified ||
+         kind ==
+             derived_type_kind::volatile_qualified ||
+         kind ==
+             derived_type_kind::pointer ||
+         kind ==
+             derived_type_kind::lvalue_reference ||
+         kind ==
+             derived_type_kind::rvalue_reference);
+
+    if ((!contains(child) &&
+         !incomplete_named_allowed) ||
         !valid_derived_kind(kind)) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    const auto hash =
+        hash_derived(
+            child,
+            kind,
+            payload);
+
+    const auto fingerprint_value =
+        fingerprint(hash);
+
+    if (const auto existing =
+            find_derived(
+                child,
+                kind,
+                payload,
+                hash,
+                fingerprint_value);
+        existing) {
+
+        output = existing;
+        return server_status::success;
+    }
+
+    if (baseline != nullptr) {
+        const auto existing =
+            baseline->find_derived(
+                child,
+                kind,
+                payload);
+
+        if (existing) {
+            output = existing;
+            return server_status::success;
+        }
+    }
+
+    if (derived_type_count() >=
+        type_ref::maximum_payload) {
+
+        return server_status::io_error;
+    }
+
+    const auto prepared =
+        ensure_derived_index_capacity(1);
+
+    if (!succeeded(prepared)) {
+        return prepared;
+    }
+
+    const auto old_count =
+        derived_types.size();
+
+    try {
+        derived_types.push_back({
+            payload,
+            child,
+            kind,
+            {},
+        });
+
+        output =
+            type_ref::make(
+                type_ref_kind::derived,
+                static_cast<std::uint32_t>(
+                    derived_type_count()));
+
+        insert_derived_index(
+            derived_index,
+            output,
+            hash,
+            fingerprint_value);
+
+        return server_status::success;
+    }
+    catch (...) {
+        derived_types.resize(
+            old_count);
+
+        output = {};
+        return server_status::io_error;
+    }
+}
+
+server_status graph_delta::derive_resolved(
+    type_ref child,
+    derived_type_kind kind,
+    std::uint64_t payload,
+    type_ref& output) noexcept {
+
+    output = {};
+
+    const auto incomplete_named_allowed =
+        child.kind() ==
+            type_ref_kind::named &&
+        (kind ==
+             derived_type_kind::const_qualified ||
+         kind ==
+             derived_type_kind::volatile_qualified ||
+         kind ==
+             derived_type_kind::pointer ||
+         kind ==
+             derived_type_kind::lvalue_reference ||
+         kind ==
+             derived_type_kind::rvalue_reference);
+
+    const auto payload_valid =
+        kind ==
+            derived_type_kind::bounded_array
+        ? payload != 0
+        : payload == 0;
+
+    if ((!contains(child) &&
+         !incomplete_named_allowed) ||
+        !valid_derived_kind(kind) ||
+        !payload_valid) {
 
         return server_status::
             project_configuration_invalid;

@@ -1398,17 +1398,33 @@ server_status source_map::finalize(
                         identities.at_slot(
                             contribution.data.slot());
 
+                    if (!identity ||
+                        identity.kind() !=
+                            identity_kind::type) {
+
+                        return server_status::
+                            project_artifact_invalid;
+                    }
+
                     const auto type =
-                        identity.kind() ==
-                            identity_kind::type
-                        ? G.find_type(
-                            identity)
-                        : type_handle{};
+                        G.find_type(identity);
+
+                    if (!type) {
+                        if (contribution.data.kind() !=
+                            source_data_kind::
+                                type_declaration) {
+
+                            return server_status::
+                                project_artifact_invalid;
+                        }
+
+                        // WHO-only declaration has no WHERE-indexed presence
+                        // slot. Provenance remains in contributions.
+                        continue;
+                    }
 
                     const auto* entry =
-                        type
-                        ? G.find(type)
-                        : nullptr;
+                        G.find(type);
 
                     if (entry == nullptr) {
                         return server_status::

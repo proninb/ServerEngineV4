@@ -82,6 +82,7 @@ add_executable(ServerEngineV4
     server_engine/project/graph/graph_delta.cpp
     server_engine/project/source/source_map.cpp
     server_engine/project/parser/parser.cpp
+    server_engine/project/parser/header_parser_v2.cpp
     server_engine/project/preprocessor/preprocessor.cpp
     server_engine/project/frontend/frontend_input.cpp
     server_engine/project/frontend/semantic_input.cpp
@@ -92,6 +93,9 @@ add_executable(ServerEngineV4
     server_engine/project/assign/assign_input.cpp
     server_engine/project/frontend/lexical_stream.cpp
     server_engine/project/frontend/lexer.cpp
+    server_engine/project/frontend/lexical_symbols_v2.cpp
+    server_engine/project/frontend/prepared_include_v2.cpp
+    server_engine/project/frontend/preprocessor_v2.cpp
     server_engine/project/frontend/lexical_generation.cpp
     server_engine/project/file/file_identity.cpp
     server_engine/project/project_configuration_manifest.cpp
@@ -1037,6 +1041,7 @@ if(BUILD_TESTING)
         server_engine/project/assign/assign_table.cpp
         server_engine/project/persistence/compiled_project.cpp
         server_engine/project/parser/parser.cpp
+        server_engine/project/parser/header_parser_v2.cpp
         server_engine/project/preprocessor/preprocessor.cpp
         server_engine/project/frontend/frontend_input.cpp
         server_engine/project/frontend/semantic_input.cpp
@@ -1044,6 +1049,9 @@ if(BUILD_TESTING)
         server_engine/project/frontend/directive_executor.cpp
         server_engine/project/frontend/lexical_stream.cpp
         server_engine/project/frontend/lexer.cpp
+        server_engine/project/frontend/lexical_symbols_v2.cpp
+        server_engine/project/frontend/prepared_include_v2.cpp
+        server_engine/project/frontend/preprocessor_v2.cpp
         server_engine/project/frontend/lexical_generation.cpp
         server_engine/project/file/file_identity.cpp
         server_engine/project/persistence/source_save_view.cpp

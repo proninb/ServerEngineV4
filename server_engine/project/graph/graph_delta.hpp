@@ -110,6 +110,16 @@ public:
         std::span<const base_record> bases = {},
         bool declares_virtual = false) noexcept;
 
+    // Parser-resolved producer contract. Source-language member construction
+    // compatibility has already been checked; Graph owns storage/conflicts.
+    [[nodiscard]] server_status define_resolved_record(
+        type_handle type,
+        graph_record_kind kind,
+        std::span<const member_record> definition,
+        std::span<const construction_value> construction = {},
+        std::span<const base_record> bases = {},
+        bool declares_virtual = false) noexcept;
+
     [[nodiscard]] server_status clear_definition(
         type_handle type) noexcept;
 
@@ -117,6 +127,13 @@ public:
         type_handle type) noexcept;
 
     [[nodiscard]] server_status add_object(
+        identity_ref identity,
+        type_ref type,
+        object_handle& output,
+        std::uint32_t flags = 0,
+        construction_value construction = {}) noexcept;
+
+    [[nodiscard]] server_status add_resolved_object(
         identity_ref identity,
         type_ref type,
         object_handle& output,
@@ -154,9 +171,19 @@ public:
         intrinsic_type type) const noexcept;
 
     [[nodiscard]] type_ref named(
+        identity_ref identity) const noexcept;
+
+    [[nodiscard]] type_ref named(
         type_handle type) const noexcept;
 
     [[nodiscard]] server_status derive(
+        type_ref child,
+        derived_type_kind kind,
+        std::uint64_t payload,
+        type_ref& output) noexcept;
+
+    // Parser has already rejected illegal declarator compositions.
+    [[nodiscard]] server_status derive_resolved(
         type_ref child,
         derived_type_kind kind,
         std::uint64_t payload,
@@ -593,6 +620,14 @@ private:
         endpoint_path_handle path{};
     };
 
+    struct member_name_index_slot final {
+        type_handle type{};
+        string_id name{};
+        member_index member{};
+    };
+
+    static_assert(sizeof(member_name_index_slot) == 12);
+
     struct sparse_index_slot final {
         std::uint32_t key = 0;
         std::uint32_t value = 0;
@@ -797,6 +832,23 @@ private:
         std::uint64_t key,
         std::uint32_t patch) const noexcept;
 
+    [[nodiscard]] static std::uint64_t hash_member_name(
+        type_handle type,
+        string_id name) noexcept;
+
+    [[nodiscard]] server_status ensure_member_name_index_capacity(
+        std::size_t additional) noexcept;
+
+    void insert_member_name_index(
+        std::vector<member_name_index_slot>& target,
+        type_handle type,
+        string_id name,
+        member_index member) const noexcept;
+
+    [[nodiscard]] member_index find_indexed_member(
+        type_handle type,
+        string_id name) const noexcept;
+
     [[nodiscard]] bool scalar_initialization_target(
         type_ref type) const noexcept;
 
@@ -852,6 +904,10 @@ private:
     std::vector<base_record> base_records;
     std::vector<member_record> member_records;
     std::vector<construction_value> member_construction;
+
+    // Patched/appended definitions only. Untouched baseline lookup stays mmap.
+    std::vector<member_name_index_slot> member_name_index;
+    std::size_t member_name_index_count = 0;
 
     std::vector<object_entry> objects;
     std::vector<identity_ref> object_identities;

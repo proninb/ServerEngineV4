@@ -9,16 +9,12 @@
 #pragma once
 
 #include "frontend_input.hpp"
+#include "source_range.hpp"
 #include "../../server_status.hpp"
 
 #include <cstdint>
 
 namespace cw::server {
-
-struct source_range final {
-    std::uint32_t offset = 0;
-    std::uint32_t length = 0;
-};
 
 enum class directive_kind : std::uint8_t {
     invalid = 0,

@@ -1,9 +1,16 @@
 #include "project/frontend/directive_executor.hpp"
 #include "project/frontend/lexer.hpp"
+#include "project/frontend/lexical_symbols_v2.hpp"
+#include "project/frontend/prepared_frontend_v2.hpp"
+#include "project/frontend/prepared_include_v2.hpp"
+#include "project/frontend/preprocessor_v2.hpp"
 #include "project/frontend/lexical_generation.hpp"
 #include "project/frontend/semantic_input.hpp"
 #include "project/graph/graph.hpp"
+#include "project/graph/graph_delta.hpp"
+#include "project/parser/header_semantic_space.hpp"
 #include "project/parser/parser.hpp"
+#include "project/parser/header_parser_v2.hpp"
 #include "project/preprocessor/preprocessor.hpp"
 #include "project/preprocessor_configuration.hpp"
 #include "project/semantic/identity.hpp"
@@ -294,6 +301,1930 @@ private:
 
     return parse_semantic_project(
         files, lexical, 1, configuration, strings, identities, G, sources, &failure);
+}
+
+
+
+void test_lexical_symbols_v2(
+    test_state& tests) {
+
+    constexpr std::string_view first_source =
+        "Value Value fR69jFyF int Qfjmj25K;";
+
+    constexpr std::string_view second_source =
+        "Output Value Input Qfjmj25K fR69jFyF;";
+
+    lexical_stream first_lexical;
+    lexical_stream second_lexical;
+
+    lexical_symbol_stream_v2 first_symbols;
+    lexical_symbol_stream_v2 second_symbols;
+
+    lexical_error first_error;
+    lexical_error second_error;
+
+    if (!tests.expect(
+            succeeded(
+                lexer::tokenize(
+                    file_id{1},
+                    first_source,
+                    first_lexical,
+                    &first_error,
+                    &first_symbols)) &&
+            succeeded(
+                lexer::tokenize(
+                    file_id{2},
+                    second_source,
+                    second_lexical,
+                    &second_error,
+                    &second_symbols)),
+            "Lexer V2 records file-local symbols without global state")) {
+
+        return;
+    }
+
+    const auto collision_left =
+        first_symbols.identifier_symbol(2);
+
+    const auto collision_right =
+        first_symbols.identifier_symbol(3);
+
+    const auto* collision_left_record =
+        first_symbols.symbol(
+            collision_left);
+
+    const auto* collision_right_record =
+        first_symbols.symbol(
+            collision_right);
+
+    tests.expect(
+        first_symbols.identifier_count() == 4 &&
+        first_symbols.symbol_count() == 3 &&
+        first_symbols.identifier_symbol(0) ==
+            first_symbols.identifier_symbol(1),
+        "Lexer V2 deduplicates repeated identifiers inside one file");
+
+    tests.expect(
+        collision_left &&
+        collision_right &&
+        collision_left != collision_right &&
+        collision_left_record != nullptr &&
+        collision_right_record != nullptr &&
+        collision_left_record->hash ==
+            collision_right_record->hash,
+        "Lexer V2 keeps exact spellings distinct across an FNV32 collision");
+
+    const std::array<lexical_symbol_source_v2, 2>
+        forward{
+            lexical_symbol_source_v2{
+                &first_symbols,
+                first_source},
+            lexical_symbol_source_v2{
+                &second_symbols,
+                second_source},
+        };
+
+    string_table forward_strings;
+
+    std::vector<lexical_symbol_resolution_v2>
+        forward_resolution;
+
+    if (!tests.expect(
+            succeeded(
+                merge_lexical_symbols_v2(
+                    forward,
+                    forward_strings,
+                    forward_resolution)) &&
+            forward_resolution.size() == 2 &&
+            forward_strings.size() == 5,
+            "Lexer V2 deterministically merges unique local spellings")) {
+
+        return;
+    }
+
+    const auto value =
+        forward_strings.find("Value");
+
+    const auto first_collision =
+        forward_strings.find("fR69jFyF");
+
+    const auto second_collision =
+        forward_strings.find("Qfjmj25K");
+
+    tests.expect(
+        value &&
+        first_collision &&
+        second_collision &&
+        first_collision !=
+            second_collision &&
+        forward_resolution[0].
+            resolve_identifier(
+                first_symbols,
+                0) == value &&
+        forward_resolution[0].
+            resolve_identifier(
+                first_symbols,
+                1) == value &&
+        forward_resolution[0].
+            resolve_identifier(
+                first_symbols,
+                2) == first_collision &&
+        forward_resolution[0].
+            resolve_identifier(
+                first_symbols,
+                3) == second_collision,
+        "Lexer V2 resolves identifier occurrences directly through local symbols");
+
+    const std::array<lexical_symbol_source_v2, 2>
+        reverse{
+            lexical_symbol_source_v2{
+                &second_symbols,
+                second_source},
+            lexical_symbol_source_v2{
+                &first_symbols,
+                first_source},
+        };
+
+    string_table reverse_strings;
+
+    std::vector<lexical_symbol_resolution_v2>
+        reverse_resolution;
+
+    if (!tests.expect(
+            succeeded(
+                merge_lexical_symbols_v2(
+                    reverse,
+                    reverse_strings,
+                    reverse_resolution)) &&
+            reverse_resolution.size() == 2 &&
+            reverse_strings.size() ==
+                forward_strings.size(),
+            "Lexer V2 merge accepts reversed file completion order")) {
+
+        return;
+    }
+
+    for (const auto spelling : {
+             std::string_view{"Value"},
+             std::string_view{"Input"},
+             std::string_view{"Output"},
+             std::string_view{"fR69jFyF"},
+             std::string_view{"Qfjmj25K"}}) {
+
+        const auto forward_id =
+            forward_strings.find(
+                spelling);
+
+        const auto reverse_id =
+            reverse_strings.find(
+                spelling);
+
+        tests.expect(
+            forward_id &&
+            reverse_id &&
+            forward_id.value() ==
+                reverse_id.value(),
+            "Lexer V2 global string_id is independent of file completion order");
+    }
+}
+
+
+void test_prepared_include_v2(
+    test_state& tests) {
+
+    const temporary_source included{
+        "prepared_include_leaf",
+        "struct Included { int Value; };\n"};
+
+    const auto include_name =
+        included.path().
+            filename().
+            string();
+
+    const std::string root_text =
+        "#include \"" +
+        include_name +
+        "\"\n"
+        "struct Root { Included* Value; };\n";
+
+    const temporary_source root_source{
+        "prepared_include_root",
+        root_text};
+
+    file_context files;
+    file_id root;
+
+    if (!tests.expect(
+            succeeded(
+                files.resolve(
+                    root_source.path(),
+                    file_kind::header,
+                    root)) &&
+            root,
+            "resolve prepared-include V2 root")) {
+
+        return;
+    }
+
+    preprocessor_configuration configuration;
+    configuration.root_directory =
+        root_source.path().
+            parent_path();
+
+    prepared_include_closure_v2 closure;
+    prepared_include_failure_v2 failure;
+
+    const std::array<file_id, 1>
+        roots{root};
+
+    if (!tests.expect(
+            succeeded(
+                prepare_header_include_closure_v2(
+                    files,
+                    roots,
+                    configuration,
+                    closure,
+                    &failure)),
+            "prepare existing direct include closure before semantic replay")) {
+
+        return;
+    }
+
+    const auto view =
+        closure.view();
+
+    const auto* root_file =
+        view.file(
+            root);
+
+    const auto* include =
+        root_file != nullptr &&
+            root_file->includes.size() == 1
+        ? &root_file->includes[0]
+        : nullptr;
+
+    const auto* included_file =
+        include != nullptr &&
+            include->target
+        ? view.file(
+            include->target)
+        : nullptr;
+
+    tests.expect(
+        closure.file_count() == 2 &&
+        root_file != nullptr &&
+        root_file->symbols != nullptr &&
+        include != nullptr &&
+        include->state ==
+            prepared_include_state_v2::ready &&
+        included_file != nullptr &&
+        included_file->symbols != nullptr &&
+        !included_file->words.empty(),
+        "prepared include closure owns lexical/local-symbol state for target");
+
+    tests.expect(
+        files.dependencies(
+            root).empty() &&
+        (include == nullptr ||
+         !include->target ||
+         files.dependencies(
+             include->target).empty()),
+        "speculative include preparation publishes no semantic dependency edges");
+
+    const auto nonce =
+        std::chrono::steady_clock::now().
+            time_since_epoch().
+            count();
+
+    const auto missing_name =
+        "__server_engine_v4_missing_prepared_v2_" +
+        std::to_string(
+            nonce) +
+        ".hpp";
+
+    const std::string missing_text =
+        "#ifdef NEVER\n"
+        "#include \"" +
+        missing_name +
+        "\"\n"
+        "#endif\n"
+        "struct Keep { int X; };\n";
+
+    const temporary_source missing_root_source{
+        "prepared_include_missing",
+        missing_text};
+
+    file_context missing_files;
+    file_id missing_root;
+
+    if (!tests.expect(
+            succeeded(
+                missing_files.resolve(
+                    missing_root_source.path(),
+                    file_kind::header,
+                    missing_root)) &&
+            missing_root,
+            "resolve missing prepared-include V2 root")) {
+
+        return;
+    }
+
+    preprocessor_configuration
+        missing_configuration;
+
+    missing_configuration.root_directory =
+        missing_root_source.path().
+            parent_path();
+
+    prepared_include_closure_v2
+        missing_closure;
+
+    const std::array<file_id, 1>
+        missing_roots{
+            missing_root};
+
+    if (!tests.expect(
+            succeeded(
+                prepare_header_include_closure_v2(
+                    missing_files,
+                    missing_roots,
+                    missing_configuration,
+                    missing_closure,
+                    &failure)),
+            "speculative missing include does not fail physical preparation")) {
+
+        return;
+    }
+
+    const auto missing_view =
+        missing_closure.view();
+
+    const auto* missing_file =
+        missing_view.file(
+            missing_root);
+
+    const auto* missing_include =
+        missing_file != nullptr &&
+            missing_file->includes.size() == 1
+        ? &missing_file->includes[0]
+        : nullptr;
+
+    tests.expect(
+        missing_closure.file_count() == 1 &&
+        missing_include != nullptr &&
+        missing_include->state ==
+            prepared_include_state_v2::missing &&
+        !missing_include->target &&
+        missing_files.dependencies(
+            missing_root).empty(),
+        "inactive-capable missing include is recorded without semantic publication");
+}
+
+
+void test_preprocessor_v2_include_execution(
+    test_state& tests) {
+
+    // Active include: #define/#ifdef executes, the already-prepared target is
+    // canonicalized only when entered, dependency publication is semantic, and
+    // Header Parser V2 sees the included declaration before the root resumes.
+    const temporary_source included{
+        "preprocessor_v2_active_leaf",
+        "#pragma once\n"
+        "struct Included { int Value; };\n"};
+
+    const auto include_name =
+        included.path().
+            filename().
+            string();
+
+    const std::string active_text =
+        "#define ENABLE_INCLUDE\n"
+        "#ifdef ENABLE_INCLUDE\n"
+        "#include \"" +
+        include_name +
+        "\"\n"
+        "#endif\n"
+        "struct Root { Included* Value; };\n";
+
+    const temporary_source active_root_source{
+        "preprocessor_v2_active_root",
+        active_text};
+
+    file_context active_files;
+    file_id active_root;
+
+    if (!tests.expect(
+            succeeded(
+                active_files.resolve(
+                    active_root_source.path(),
+                    file_kind::header,
+                    active_root)) &&
+            active_root,
+            "resolve PREPROCESSOR-V2 active root")) {
+
+        return;
+    }
+
+    preprocessor_configuration
+        active_configuration;
+
+    active_configuration.root_directory =
+        active_root_source.path().
+            parent_path();
+
+    prepared_include_closure_v2
+        active_closure;
+
+    prepared_include_failure_v2
+        preparation_failure;
+
+    const std::array<file_id, 1>
+        active_roots{
+            active_root};
+
+    if (!tests.expect(
+            succeeded(
+                prepare_header_include_closure_v2(
+                    active_files,
+                    active_roots,
+                    active_configuration,
+                    active_closure,
+                    &preparation_failure)) &&
+            active_closure.file_count() == 2,
+            "prepare PREPROCESSOR-V2 active include closure")) {
+
+        return;
+    }
+
+    const auto active_view =
+        active_closure.view();
+
+    const auto* active_root_file =
+        active_view.file(
+            active_root);
+
+    const auto* active_include =
+        active_root_file != nullptr &&
+            active_root_file->includes.size() == 1
+        ? &active_root_file->includes[0]
+        : nullptr;
+
+    if (!tests.expect(
+            active_include != nullptr &&
+            active_include->state ==
+                prepared_include_state_v2::ready &&
+            active_include->target,
+            "PREPROCESSOR-V2 active include has prepared target")) {
+
+        return;
+    }
+
+    const auto active_target =
+        active_include->target;
+
+    string_table active_strings;
+
+    preprocessor_v2_failure
+        active_preprocessing_failure;
+
+    semantic_preprocessor_v2
+        active_input{
+            active_files,
+            active_view,
+            active_configuration,
+            active_strings,
+            &active_preprocessing_failure};
+
+    if (!tests.expect(
+            succeeded(
+                active_input.start(
+                    active_root)),
+            "start PREPROCESSOR-V2 active include replay")) {
+
+        return;
+    }
+
+    identity_space active_identities{
+        active_strings};
+
+    graph active_graph;
+
+    parser_v2_failure
+        active_parser_failure;
+
+    header_parser_v2 active_parser{
+        active_input,
+        active_identities,
+        active_graph,
+        &active_parser_failure};
+
+    if (!tests.expect(
+            succeeded(
+                active_parser.parse()) &&
+            active_input.finished(),
+            "PREPROCESSOR-V2 active include reaches Header Parser V2")) {
+
+        return;
+    }
+
+    if (!tests.expect(
+            succeeded(
+                active_files.
+                    finalize_dependency_topology()),
+            "finalize PREPROCESSOR-V2 active dependency topology")) {
+
+        return;
+    }
+
+    const auto active_dependencies =
+        active_files.dependencies(
+            active_root);
+
+    tests.expect(
+        active_dependencies.size() == 1 &&
+        active_dependencies[0] ==
+            active_target &&
+        active_strings.find(
+            "Included") &&
+        active_strings.find(
+            "Root") &&
+        active_graph.find_type(
+            active_identities.find(
+                active_identities.root(),
+                active_strings.find(
+                    "Included"),
+                identity_kind::type)) &&
+        active_graph.find_type(
+            active_identities.find(
+                active_identities.root(),
+                active_strings.find(
+                    "Root"),
+                identity_kind::type)),
+        "active include publishes dependency and semantic target");
+
+    // Inactive existing include: physical preparation is allowed, but semantic
+    // replay must neither publish the edge nor allocate the target's spellings.
+    const temporary_source unused{
+        "preprocessor_v2_unused_leaf",
+        "struct Unused { int Hidden; };\n"};
+
+    const auto unused_name =
+        unused.path().
+            filename().
+            string();
+
+    const std::string inactive_text =
+        "#ifdef NEVER\n"
+        "#include \"" +
+        unused_name +
+        "\"\n"
+        "#endif\n"
+        "struct Keep { int X; };\n";
+
+    const temporary_source inactive_root_source{
+        "preprocessor_v2_inactive_root",
+        inactive_text};
+
+    file_context inactive_files;
+    file_id inactive_root;
+
+    if (!tests.expect(
+            succeeded(
+                inactive_files.resolve(
+                    inactive_root_source.path(),
+                    file_kind::header,
+                    inactive_root)) &&
+            inactive_root,
+            "resolve PREPROCESSOR-V2 inactive root")) {
+
+        return;
+    }
+
+    preprocessor_configuration
+        inactive_configuration;
+
+    inactive_configuration.root_directory =
+        inactive_root_source.path().
+            parent_path();
+
+    prepared_include_closure_v2
+        inactive_closure;
+
+    const std::array<file_id, 1>
+        inactive_roots{
+            inactive_root};
+
+    if (!tests.expect(
+            succeeded(
+                prepare_header_include_closure_v2(
+                    inactive_files,
+                    inactive_roots,
+                    inactive_configuration,
+                    inactive_closure,
+                    &preparation_failure)) &&
+            inactive_closure.file_count() == 2,
+            "prepare speculative inactive include target")) {
+
+        return;
+    }
+
+    string_table inactive_strings;
+
+    preprocessor_v2_failure
+        inactive_preprocessing_failure;
+
+    semantic_preprocessor_v2
+        inactive_input{
+            inactive_files,
+            inactive_closure.view(),
+            inactive_configuration,
+            inactive_strings,
+            &inactive_preprocessing_failure};
+
+    if (!tests.expect(
+            succeeded(
+                inactive_input.start(
+                    inactive_root)),
+            "start PREPROCESSOR-V2 inactive replay")) {
+
+        return;
+    }
+
+    identity_space inactive_identities{
+        inactive_strings};
+
+    graph inactive_graph;
+
+    parser_v2_failure
+        inactive_parser_failure;
+
+    header_parser_v2 inactive_parser{
+        inactive_input,
+        inactive_identities,
+        inactive_graph,
+        &inactive_parser_failure};
+
+    if (!tests.expect(
+            succeeded(
+                inactive_parser.parse()) &&
+            inactive_input.finished() &&
+            succeeded(
+                inactive_files.
+                    finalize_dependency_topology()),
+            "inactive prepared include is skipped semantically")) {
+
+        return;
+    }
+
+    tests.expect(
+        inactive_files.dependencies(
+            inactive_root).empty() &&
+        !inactive_strings.find(
+            "Unused") &&
+        inactive_strings.find(
+            "Keep") &&
+        inactive_graph.find_type(
+            inactive_identities.find(
+                inactive_identities.root(),
+                inactive_strings.find(
+                    "Keep"),
+                identity_kind::type)),
+        "inactive include publishes no edge and allocates no target strings");
+
+    // Active missing include: physical preparation succeeds, semantic execution
+    // is the point where absence becomes a real error.
+    const auto nonce =
+        std::chrono::steady_clock::now().
+            time_since_epoch().
+            count();
+
+    const auto missing_name =
+        "__server_engine_v4_active_missing_v2_" +
+        std::to_string(
+            nonce) +
+        ".hpp";
+
+    const std::string missing_text =
+        "#include \"" +
+        missing_name +
+        "\"\n"
+        "struct NeverReached { int X; };\n";
+
+    const temporary_source missing_root_source{
+        "preprocessor_v2_missing_root",
+        missing_text};
+
+    file_context missing_files;
+    file_id missing_root;
+
+    if (!tests.expect(
+            succeeded(
+                missing_files.resolve(
+                    missing_root_source.path(),
+                    file_kind::header,
+                    missing_root)) &&
+            missing_root,
+            "resolve PREPROCESSOR-V2 active missing root")) {
+
+        return;
+    }
+
+    preprocessor_configuration
+        missing_configuration;
+
+    missing_configuration.root_directory =
+        missing_root_source.path().
+            parent_path();
+
+    prepared_include_closure_v2
+        missing_closure;
+
+    const std::array<file_id, 1>
+        missing_roots{
+            missing_root};
+
+    if (!tests.expect(
+            succeeded(
+                prepare_header_include_closure_v2(
+                    missing_files,
+                    missing_roots,
+                    missing_configuration,
+                    missing_closure,
+                    &preparation_failure)),
+            "physical preparation tolerates active-capable missing candidate")) {
+
+        return;
+    }
+
+    string_table missing_strings;
+
+    preprocessor_v2_failure
+        missing_failure;
+
+    semantic_preprocessor_v2
+        missing_input{
+            missing_files,
+            missing_closure.view(),
+            missing_configuration,
+            missing_strings,
+            &missing_failure};
+
+    tests.expect(
+        !succeeded(
+            missing_input.start(
+                missing_root)) &&
+        missing_failure.kind ==
+            preprocessor_v2_failure_kind::
+                active_include_missing &&
+        missing_files.dependencies(
+            missing_root).empty(),
+        "active missing include fails only during semantic preprocessing");
+}
+
+
+void test_graph_resolved_v2(
+    test_state& tests) {
+
+    string_table strings;
+    identity_space identities{
+        strings};
+
+    string_id type_name;
+
+    if (!tests.expect(
+            succeeded(
+                strings.intern(
+                    "ResolvedIndexedType",
+                    type_name)),
+            "Graph resolved V2 interns test type name")) {
+
+        return;
+    }
+
+    identity_ref type_identity;
+
+    if (!tests.expect(
+            succeeded(
+                identities.resolve(
+                    identities.root(),
+                    type_name,
+                    identity_kind::type,
+                    type_identity)) &&
+            type_identity,
+            "Graph resolved V2 creates type WHO")) {
+
+        return;
+    }
+
+    std::vector<string_id>
+        member_names;
+
+    std::vector<member_record>
+        members;
+
+    graph G;
+
+    type_handle type;
+
+    if (!tests.expect(
+            succeeded(
+                G.declare_record(
+                    type_identity,
+                    graph_record_kind::
+                        struct_type,
+                    type)) &&
+            type,
+            "Graph resolved V2 declares test record")) {
+
+        return;
+    }
+
+    const auto int_type =
+        G.intrinsic(
+            intrinsic_type::
+                signed_int);
+
+    try {
+        member_names.reserve(128);
+        members.reserve(128);
+    }
+    catch (...) {
+        (void)tests.expect(
+            false,
+            "Graph resolved V2 reserves member vectors");
+        return;
+    }
+
+    for (std::uint32_t index = 0;
+         index < 128;
+         ++index) {
+
+        const auto spelling =
+            std::string{"Member"} +
+            std::to_string(index);
+
+        string_id name;
+
+        if (!tests.expect(
+                succeeded(
+                    strings.intern(
+                        spelling,
+                        name)) &&
+                name,
+                "Graph resolved V2 interns member name")) {
+
+            return;
+        }
+
+        member_names.push_back(
+            name);
+
+        members.push_back({
+            name,
+            int_type,
+            graph_member_access::
+                public_access,
+            {},
+        });
+    }
+
+    if (!tests.expect(
+            succeeded(
+                G.define_resolved_record(
+                    type,
+                    graph_record_kind::
+                        struct_type,
+                    members)),
+            "Graph resolved V2 commits resolved record")) {
+
+        return;
+    }
+
+    const auto first =
+        G.find_member(
+            type,
+            member_names[0]);
+
+    const auto middle =
+        G.find_member(
+            type,
+            member_names[63]);
+
+    const auto last =
+        G.find_member(
+            type,
+            member_names[127]);
+
+    if (!tests.expect(
+            first &&
+            first.value() == 0 &&
+            middle &&
+            middle.value() == 63 &&
+            last &&
+            last.value() == 127,
+            "Graph resolved V2 member-name index returns local positions")) {
+
+        return;
+    }
+
+    type_ref pointer;
+
+    if (!tests.expect(
+            succeeded(
+                G.derive_resolved(
+                    G.named(type),
+                    derived_type_kind::pointer,
+                    0,
+                    pointer)) &&
+            pointer,
+            "Graph resolved V2 canonicalizes resolved derived type")) {
+
+        return;
+    }
+
+    string_id object_name;
+    identity_ref object_identity;
+    object_handle object;
+
+    if (!tests.expect(
+            succeeded(
+                strings.intern(
+                    "ResolvedIndexedObject",
+                    object_name)) &&
+            succeeded(
+                identities.resolve(
+                    identities.root(),
+                    object_name,
+                    identity_kind::object,
+                    object_identity)) &&
+            succeeded(
+                G.add_resolved_object(
+                    object_identity,
+                    G.named(type),
+                    object)) &&
+            object,
+            "Graph resolved V2 commits resolved object")) {
+
+        return;
+    }
+
+    graph_delta delta;
+
+    type_handle delta_type;
+
+    if (!tests.expect(
+            succeeded(
+                delta.declare_record(
+                    type_identity,
+                    graph_record_kind::
+                        struct_type,
+                    delta_type)) &&
+            delta_type &&
+            succeeded(
+                delta.define_resolved_record(
+                    delta_type,
+                    graph_record_kind::
+                        struct_type,
+                    members)),
+            "Graph delta resolved V2 commits record")) {
+
+        return;
+    }
+
+    const auto delta_middle =
+        delta.find_member(
+            delta_type,
+            member_names[63]);
+
+    type_ref delta_pointer;
+    object_handle delta_object;
+
+    if (!tests.expect(
+            delta_middle &&
+            delta_middle.value() == 63 &&
+            succeeded(
+                delta.derive_resolved(
+                    delta.named(
+                        delta_type),
+                    derived_type_kind::pointer,
+                    0,
+                    delta_pointer)) &&
+            delta_pointer &&
+            succeeded(
+                delta.add_resolved_object(
+                    object_identity,
+                    delta.named(
+                        delta_type),
+                    delta_object)) &&
+            delta_object,
+            "Graph delta resolved V2 uses local index and resolved producers")) {
+
+        return;
+    }
+}
+
+
+
+void test_header_parser_v2_parity_02(
+    test_state& tests) {
+
+    const auto parse_v2 =
+        [&](const std::string& text,
+            string_table& strings,
+            identity_space& identities,
+            graph& G,
+            parser_v2_failure& failure) {
+
+            const temporary_source source{
+                "header_v2_parity_02",
+                text};
+
+            file_context files;
+            file_id root;
+
+            if (!succeeded(
+                    files.resolve(
+                        source.path(),
+                        file_kind::header,
+                        root)) ||
+                !root) {
+
+                return server_status::io_error;
+            }
+
+            preprocessor_configuration
+                configuration;
+
+            configuration.root_directory =
+                source.path().
+                    parent_path();
+
+            prepared_include_closure_v2
+                closure;
+
+            prepared_include_failure_v2
+                preparation_failure;
+
+            const std::array<file_id, 1>
+                roots{root};
+
+            const auto prepared =
+                prepare_header_include_closure_v2(
+                    files,
+                    roots,
+                    configuration,
+                    closure,
+                    &preparation_failure);
+
+            if (!succeeded(prepared)) {
+                return prepared;
+            }
+
+            preprocessor_v2_failure
+                preprocessing_failure;
+
+            semantic_preprocessor_v2 input{
+                files,
+                closure.view(),
+                configuration,
+                strings,
+                &preprocessing_failure};
+
+            const auto started =
+                input.start(
+                    root);
+
+            if (!succeeded(started)) {
+                return started;
+            }
+
+            header_parser_v2 parser{
+                input,
+                identities,
+                G,
+                &failure};
+
+            return parser.parse();
+        };
+
+    {
+        string_table strings;
+        identity_space identities{
+            strings};
+        graph G;
+        parser_v2_failure failure;
+
+        const auto status =
+            parse_v2(
+                "class C {\n"
+                "public:\n"
+                "    const int Value = 7;\n"
+                "private:\n"
+                "    volatile int Hidden{};\n"
+                "};\n"
+                "union U { int A; int B; };\n",
+                strings,
+                identities,
+                G,
+                failure);
+
+        const auto c =
+            G.find_type(
+                identities.find(
+                    identities.root(),
+                    strings.find("C"),
+                    identity_kind::type));
+
+        const auto u =
+            G.find_type(
+                identities.find(
+                    identities.root(),
+                    strings.find("U"),
+                    identity_kind::type));
+
+        const auto* c_entry =
+            G.find(c);
+
+        const auto* u_entry =
+            G.find(u);
+
+        const auto value =
+            G.find_member(
+                c,
+                strings.find("Value"));
+
+        const auto hidden =
+            G.find_member(
+                c,
+                strings.find("Hidden"));
+
+        const auto a =
+            G.find_member(
+                u,
+                strings.find("A"));
+
+        const auto* value_member =
+            G.member(
+                c,
+                value);
+
+        const auto* hidden_member =
+            G.member(
+                c,
+                hidden);
+
+        const auto* union_member =
+            G.member(
+                u,
+                a);
+
+        const auto* value_initial =
+            G.construction(
+                c,
+                value);
+
+        const auto* hidden_initial =
+            G.construction(
+                c,
+                hidden);
+
+        tests.expect(
+            succeeded(status) &&
+            c_entry != nullptr &&
+            c_entry->record_kind ==
+                graph_record_kind::class_type &&
+            u_entry != nullptr &&
+            u_entry->record_kind ==
+                graph_record_kind::union_type &&
+            value_member != nullptr &&
+            value_member->access ==
+                graph_member_access::public_access &&
+            hidden_member != nullptr &&
+            hidden_member->access ==
+                graph_member_access::private_access &&
+            union_member != nullptr &&
+            union_member->access ==
+                graph_member_access::public_access &&
+            value_initial != nullptr &&
+            value_initial->kind ==
+                construction_kind::unsigned_integer &&
+            value_initial->bits() == 7 &&
+            hidden_initial != nullptr &&
+            hidden_initial->kind ==
+                construction_kind::zero,
+            "Header V2 class/union access, cv and integer member defaults");
+    }
+
+    {
+        string_table strings;
+        identity_space identities{
+            strings};
+        graph G;
+        parser_v2_failure failure;
+
+        const auto status =
+            parse_v2(
+                "struct Arrays {\n"
+                "    int Matrix[2][3];\n"
+                "    int* Pointers[4];\n"
+                "};\n",
+                strings,
+                identities,
+                G,
+                failure);
+
+        const auto type =
+            G.find_type(
+                identities.find(
+                    identities.root(),
+                    strings.find("Arrays"),
+                    identity_kind::type));
+
+        const auto matrix =
+            G.find_member(
+                type,
+                strings.find("Matrix"));
+
+        const auto pointers =
+            G.find_member(
+                type,
+                strings.find("Pointers"));
+
+        const auto* matrix_member =
+            G.member(
+                type,
+                matrix);
+
+        const auto* pointers_member =
+            G.member(
+                type,
+                pointers);
+
+        derived_type_record
+            matrix_outer;
+        derived_type_record
+            matrix_inner;
+        derived_type_record
+            pointer_array;
+        derived_type_record
+            pointer_element;
+
+        tests.expect(
+            succeeded(status) &&
+            matrix_member != nullptr &&
+            G.derived(
+                matrix_member->type,
+                matrix_outer) &&
+            matrix_outer.kind ==
+                derived_type_kind::bounded_array &&
+            matrix_outer.payload == 2 &&
+            G.derived(
+                matrix_outer.child,
+                matrix_inner) &&
+            matrix_inner.kind ==
+                derived_type_kind::bounded_array &&
+            matrix_inner.payload == 3 &&
+            pointers_member != nullptr &&
+            G.derived(
+                pointers_member->type,
+                pointer_array) &&
+            pointer_array.kind ==
+                derived_type_kind::bounded_array &&
+            pointer_array.payload == 4 &&
+            G.derived(
+                pointer_array.child,
+                pointer_element) &&
+            pointer_element.kind ==
+                derived_type_kind::pointer,
+            "Header V2 prepared numeric sidecar drives bounded array declarators");
+    }
+
+    {
+        string_table strings;
+        identity_space identities{
+            strings};
+        graph G;
+        parser_v2_failure failure;
+
+        const auto status =
+            parse_v2(
+                "struct Managed {\n"
+                "    int X = 1;\n"
+                "    int Y{2};\n"
+                "    Managed() : X(7) { Y = 9; }\n"
+                "};\n",
+                strings,
+                identities,
+                G,
+                failure);
+
+        const auto type =
+            G.find_type(
+                identities.find(
+                    identities.root(),
+                    strings.find("Managed"),
+                    identity_kind::type));
+
+        const auto x =
+            G.find_member(
+                type,
+                strings.find("X"));
+
+        const auto y =
+            G.find_member(
+                type,
+                strings.find("Y"));
+
+        const auto* x_initial =
+            G.construction(
+                type,
+                x);
+
+        const auto* y_initial =
+            G.construction(
+                type,
+                y);
+
+        tests.expect(
+            succeeded(status) &&
+            x_initial != nullptr &&
+            x_initial->kind ==
+                construction_kind::unsigned_integer &&
+            x_initial->bits() == 7 &&
+            y_initial != nullptr &&
+            y_initial->kind ==
+                construction_kind::unsigned_integer &&
+            y_initial->bits() == 9,
+            "Header V2 basic managed constructor overrides member defaults");
+    }
+
+    {
+        string_table strings;
+        identity_space identities{
+            strings};
+        graph G;
+        parser_v2_failure failure;
+
+        const auto status =
+            parse_v2(
+                "class Forward;\n"
+                "struct Forward { int X; };\n",
+                strings,
+                identities,
+                G,
+                failure);
+
+        const auto type =
+            G.find_type(
+                identities.find(
+                    identities.root(),
+                    strings.find("Forward"),
+                    identity_kind::type));
+
+        tests.expect(
+            succeeded(status) &&
+            type,
+            "Header V2 class/struct forward declarations share the non-union record family");
+    }
+
+    {
+        string_table strings;
+        identity_space identities{
+            strings};
+        graph G;
+        parser_v2_failure failure;
+
+        const auto status =
+            parse_v2(
+                "union Conflict;\n"
+                "struct Conflict { int X; };\n",
+                strings,
+                identities,
+                G,
+                failure);
+
+        const auto identity =
+            identities.find(
+                identities.root(),
+                strings.find("Conflict"),
+                identity_kind::type);
+
+        tests.expect(
+            status ==
+                server_status::
+                    project_configuration_invalid &&
+            failure.kind ==
+                parser_v2_failure_kind::semantic &&
+            failure.detail ==
+                "Header Parser V2 record key conflicts with prior declaration" &&
+            identity &&
+            !G.find_type(identity),
+            "Header V2 rejects union/non-union key conflict before WHERE materialization");
+    }
+
+    {
+        string_table strings;
+        identity_space identities{
+            strings};
+        graph G;
+        parser_v2_failure failure;
+
+        const auto status =
+            parse_v2(
+                "struct Invalid { int A, B; };\n",
+                strings,
+                identities,
+                G,
+                failure);
+
+        tests.expect(
+            status ==
+                server_status::
+                    project_configuration_invalid &&
+            failure.kind ==
+                parser_v2_failure_kind::unsupported &&
+            failure.detail ==
+                "Header Parser V2 multiple data declarators are not part of the current Header subset",
+            "Header V2 does not silently expand beyond the old single-declarator member subset");
+    }
+}
+
+void test_header_parser_v2_parity_01(
+    test_state& tests) {
+
+    const auto parse_v2 =
+        [&](const std::string& text,
+            string_table& strings,
+            identity_space& identities,
+            graph& G,
+            parser_v2_failure& failure) {
+
+            const temporary_source source{
+                "header_v2_parity_01",
+                text};
+
+            file_context files;
+            file_id root;
+
+            if (!succeeded(
+                    files.resolve(
+                        source.path(),
+                        file_kind::header,
+                        root)) ||
+                !root) {
+
+                return server_status::io_error;
+            }
+
+            preprocessor_configuration
+                configuration;
+
+            configuration.root_directory =
+                source.path().
+                    parent_path();
+
+            prepared_include_closure_v2
+                closure;
+
+            prepared_include_failure_v2
+                preparation_failure;
+
+            const std::array<file_id, 1>
+                roots{root};
+
+            const auto prepared =
+                prepare_header_include_closure_v2(
+                    files,
+                    roots,
+                    configuration,
+                    closure,
+                    &preparation_failure);
+
+            if (!succeeded(prepared)) {
+                return prepared;
+            }
+
+            preprocessor_v2_failure
+                preprocessing_failure;
+
+            semantic_preprocessor_v2 input{
+                files,
+                closure.view(),
+                configuration,
+                strings,
+                &preprocessing_failure};
+
+            const auto started =
+                input.start(
+                    root);
+
+            if (!succeeded(started)) {
+                return started;
+            }
+
+            header_parser_v2 parser{
+                input,
+                identities,
+                G,
+                &failure};
+
+            return parser.parse();
+        };
+
+    // Forward declaration establishes WHO only. A definition appears before B,
+    // therefore stable WHERE order must be A then B.
+    {
+        string_table strings;
+        identity_space identities{
+            strings};
+        graph G;
+        parser_v2_failure failure;
+
+        const auto status =
+            parse_v2(
+                "struct B;\n"
+                "struct A { B* Value; };\n"
+                "struct B { int X; };\n",
+                strings,
+                identities,
+                G,
+                failure);
+
+        const auto a_identity =
+            identities.find(
+                identities.root(),
+                strings.find("A"),
+                identity_kind::type);
+
+        const auto b_identity =
+            identities.find(
+                identities.root(),
+                strings.find("B"),
+                identity_kind::type);
+
+        const auto a =
+            G.find_type(
+                a_identity);
+
+        const auto b =
+            G.find_type(
+                b_identity);
+
+        const auto value =
+            G.find_member(
+                a,
+                strings.find(
+                    "Value"));
+
+        const auto* value_record =
+            G.member(
+                a,
+                value);
+
+        derived_type_record
+            pointer;
+
+        type_handle referent;
+
+        tests.expect(
+            succeeded(status) &&
+            a_identity &&
+            b_identity &&
+            a &&
+            b &&
+            a.value() <
+                b.value() &&
+            value_record != nullptr &&
+            G.derived(
+                value_record->type,
+                pointer) &&
+            pointer.kind ==
+                derived_type_kind::pointer &&
+            G.named(
+                pointer.child,
+                referent) &&
+            referent == b,
+            "Header V2 forward declaration preserves WHO without early WHERE");
+    }
+
+    // WHO exists, but direct storage still requires a defined WHERE.
+    {
+        string_table strings;
+        identity_space identities{
+            strings};
+        graph G;
+        parser_v2_failure failure;
+
+        const auto status =
+            parse_v2(
+                "struct B;\n"
+                "struct A { B Value; };\n",
+                strings,
+                identities,
+                G,
+                failure);
+
+        const auto b_identity =
+            identities.find(
+                identities.root(),
+                strings.find("B"),
+                identity_kind::type);
+
+        tests.expect(
+            status ==
+                server_status::
+                    project_configuration_invalid &&
+            failure.kind ==
+                parser_v2_failure_kind::
+                    semantic &&
+            failure.detail ==
+                "Header Parser V2 incomplete type cannot be stored by value" &&
+            b_identity &&
+            !G.find_type(
+                b_identity),
+            "Header V2 rejects incomplete by-value use without materializing B WHERE");
+    }
+
+    // A use before any declaration has neither semantic WHO nor WHERE.
+    {
+        string_table strings;
+        identity_space identities{
+            strings};
+        graph G;
+        parser_v2_failure failure;
+
+        const auto status =
+            parse_v2(
+                "struct A { B Value; };\n"
+                "struct B { int X; };\n",
+                strings,
+                identities,
+                G,
+                failure);
+
+        tests.expect(
+            status ==
+                server_status::
+                    project_configuration_invalid &&
+            failure.kind ==
+                parser_v2_failure_kind::
+                    semantic &&
+            failure.detail ==
+                "Header Parser V2 named type is unknown",
+            "Header V2 rejects named type use before WHO declaration");
+    }
+
+    // Exercise both duplicate-detector modes: the 33rd member promotes the
+    // record-local scan to an ephemeral hash set, then a late duplicate must
+    // still be rejected exactly.
+    {
+        std::string text{
+            "struct Many {\n"};
+
+        for (std::size_t index = 0;
+             index < 40;
+             ++index) {
+
+            text +=
+                "int M" +
+                std::to_string(index) +
+                ";\n";
+        }
+
+        text +=
+            "int M17;\n"
+            "};\n";
+
+        string_table strings;
+        identity_space identities{
+            strings};
+        graph G;
+        parser_v2_failure failure;
+
+        const auto status =
+            parse_v2(
+                text,
+                strings,
+                identities,
+                G,
+                failure);
+
+        tests.expect(
+            status ==
+                server_status::
+                    project_configuration_invalid &&
+            failure.kind ==
+                parser_v2_failure_kind::
+                    semantic &&
+            failure.detail ==
+                "Header Parser V2 data-member name is duplicated",
+            "Header V2 record-local member set rejects duplicate after hash promotion");
+    }
+
+    // A large unique record must survive the same promotion with no false hit.
+    {
+        std::string text{
+            "struct Wide {\n"};
+
+        for (std::size_t index = 0;
+             index < 80;
+             ++index) {
+
+            text +=
+                "int M" +
+                std::to_string(index) +
+                ";\n";
+        }
+
+        text +=
+            "};\n";
+
+        string_table strings;
+        identity_space identities{
+            strings};
+        graph G;
+        parser_v2_failure failure;
+
+        const auto status =
+            parse_v2(
+                text,
+                strings,
+                identities,
+                G,
+                failure);
+
+        const auto wide =
+            G.find_type(
+                identities.find(
+                    identities.root(),
+                    strings.find("Wide"),
+                    identity_kind::type));
+
+        tests.expect(
+            succeeded(status) &&
+            wide &&
+            G.members(
+                wide).size() == 80,
+            "Header V2 record-local member set accepts unique wide record");
+    }
+}
+
+void test_header_parser_v2_minimal(
+    test_state& tests) {
+
+    const temporary_source header{
+        "header_parser_v2_minimal",
+        "namespace A { struct B { int X; B* Next; }; }\n"};
+
+    file_context files;
+    file_id root;
+
+    if (!tests.expect(
+            succeeded(
+                files.resolve(
+                    header.path(),
+                    file_kind::header,
+                    root)) &&
+            root,
+            "resolve Header Parser V2 minimal root")) {
+
+        return;
+    }
+
+    preprocessor_configuration configuration;
+    configuration.root_directory =
+        header.path().
+            parent_path();
+
+    prepared_include_closure_v2 closure;
+    prepared_include_failure_v2
+        preparation_failure;
+
+    const std::array<file_id, 1>
+        roots{root};
+
+    if (!tests.expect(
+            succeeded(
+                prepare_header_include_closure_v2(
+                    files,
+                    roots,
+                    configuration,
+                    closure,
+                    &preparation_failure)),
+            "prepare Header Parser V2 minimal physical input")) {
+
+        return;
+    }
+
+    string_table strings;
+    preprocessor_v2_failure
+        preprocessing_failure;
+
+    semantic_preprocessor_v2 input{
+        files,
+        closure.view(),
+        configuration,
+        strings,
+        &preprocessing_failure};
+
+    if (!tests.expect(
+            succeeded(
+                input.start(
+                    root)),
+            "start Header Parser V2 semantic preprocessing")) {
+
+        return;
+    }
+
+    const auto string_count_after_start =
+        strings.size();
+
+    identity_space identities{
+        strings};
+
+    graph G;
+
+    parser_v2_failure failure;
+
+    header_parser_v2 parser{
+        input,
+        identities,
+        G,
+        &failure};
+
+    if (!tests.expect(
+            succeeded(
+                parser.parse()) &&
+            input.finished() &&
+            strings.size() ==
+                string_count_after_start,
+            "Header Parser V2 consumes prepared preprocessing stream")) {
+
+        return;
+    }
+
+    const auto namespace_name =
+        strings.find("A");
+
+    const auto record_name =
+        strings.find("B");
+
+    const auto first_member_name =
+        strings.find("X");
+
+    const auto second_member_name =
+        strings.find("Next");
+
+    const auto namespace_identity =
+        identities.find(
+            identities.root(),
+            namespace_name,
+            identity_kind::
+                namespace_scope);
+
+    const auto type_identity =
+        identities.find(
+            namespace_identity,
+            record_name,
+            identity_kind::type);
+
+    const auto type =
+        G.find_type(
+            type_identity);
+
+    const auto members =
+        G.members(
+            type);
+
+    derived_type_record pointer;
+    type_handle referent;
+
+    tests.expect(
+        namespace_name &&
+        record_name &&
+        first_member_name &&
+        second_member_name &&
+        namespace_identity &&
+        type_identity &&
+        type &&
+        members.size() == 2 &&
+        members[0].name ==
+            first_member_name &&
+        members[0].type ==
+            G.intrinsic(
+                intrinsic_type::signed_int) &&
+        members[1].name ==
+            second_member_name &&
+        G.derived(
+            members[1].type,
+            pointer) &&
+        pointer.kind ==
+            derived_type_kind::pointer &&
+        G.named(
+            pointer.child,
+            referent) &&
+        referent == type,
+        "Header Parser V2 preprocessing path preserves expected WHO/WHERE Graph");
 }
 
 void test_conversion_operators(test_state& tests) {
@@ -1713,6 +3644,17 @@ void test_record_scratch_isolation(test_state& tests) {
     check("C", 3, "y", 0);
     check("C", 3, "z", 5);
     check("D", 1, "x", 13);
+
+    const auto forward_identity =
+        identities.find(
+            identities.root(),
+            strings.find("Forward"),
+            identity_kind::type);
+
+    tests.expect(
+        forward_identity &&
+        !G.find_type(forward_identity),
+        "declaration-only Header WHO has no Graph WHERE");
 }
 
 void test_header_streaming_order(
@@ -1861,7 +3803,9 @@ void test_header_streaming_order(
             "Header streaming reports undeclared earlier type");
     }
 
-    // Valid: a prior declaration is sufficient for pointer use.
+    // Valid: a prior declaration establishes WHO for pointer use without
+    // allocating WHERE. A is defined before B, so WHERE(A) must precede
+    // WHERE(B) after B is finally defined.
     {
         const temporary_source source{
             "header_stream_forward_pointer",
@@ -1869,15 +3813,119 @@ void test_header_streaming_order(
             "struct A { B* Value; };\n"
             "struct B { int X; };\n"};
 
+        file_context files;
+        lexical_generation lexical;
+        file_id root;
+
+        if (!prepare_root(
+                tests,
+                source.path(),
+                files,
+                lexical,
+                root)) {
+
+            return;
+        }
+
+        preprocessor_configuration configuration;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        parser_failure failure;
+
+        if (!tests.expect(
+                succeeded(
+                    parse_semantic_project(
+                        files,
+                        lexical,
+                        1,
+                        configuration,
+                        strings,
+                        identities,
+                        G,
+                        sources,
+                        &failure)),
+                "Header streaming accepts prior WHO for pointer type")) {
+
+            return;
+        }
+
+        const auto a_identity =
+            identities.find(
+                identities.root(),
+                strings.find("A"),
+                identity_kind::type);
+
+        const auto b_identity =
+            identities.find(
+                identities.root(),
+                strings.find("B"),
+                identity_kind::type);
+
+        const auto a_type =
+            G.find_type(
+                a_identity);
+
+        const auto b_type =
+            G.find_type(
+                b_identity);
+
+        const auto value =
+            G.find_member(
+                a_type,
+                strings.find("Value"));
+
+        const auto* member =
+            G.member(
+                a_type,
+                value);
+
+        derived_type_record pointer;
+        type_handle resolved;
+
+        tests.expect(
+            a_identity &&
+            b_identity &&
+            a_type &&
+            b_type &&
+            a_type.value() <
+                b_type.value(),
+            "Forward declaration does not allocate Graph WHERE");
+
+        tests.expect(
+            member != nullptr &&
+            G.derived(
+                member->type,
+                pointer) &&
+            pointer.kind ==
+                derived_type_kind::pointer &&
+            G.named(
+                pointer.child,
+                resolved) &&
+            resolved ==
+                b_type,
+            "Forward pointer retains named WHO through later materialization");
+    }
+
+    // A forward WHO is not a complete by-value object type.
+    {
+        const temporary_source source{
+            "header_stream_forward_by_value",
+            "struct B;\n"
+            "struct A { B Value; };\n"
+            "struct B { int X; };\n"};
+
         parser_failure failure;
 
         tests.expect(
-            succeeded(
-                parse_file(
-                    tests,
-                    source.path(),
-                    failure)),
-            "Header streaming accepts prior declaration for pointer type");
+            parse_file(
+                tests,
+                source.path(),
+                failure) ==
+                server_status::
+                    project_configuration_invalid,
+            "Forward declaration is incomplete for by-value member storage");
     }
 }
 
@@ -3793,6 +5841,47 @@ void test_semantic_type_diagnostics(
     }
 }
 
+
+// HEADER-SEMANTIC-SPACE-01 test
+void test_header_semantic_space(test_state& tests) {
+    tests.expect(
+        classify_header_scope_symbol(token_kind::kw_struct, false) ==
+            header_scope_symbol::record_declaration &&
+        classify_header_scope_symbol(token_kind::kw_class, false) ==
+            header_scope_symbol::record_declaration &&
+        classify_header_scope_symbol(token_kind::kw_union, false) ==
+            header_scope_symbol::record_declaration,
+        "Header semantic space classifies record declarations");
+
+    tests.expect(
+        classify_header_scope_symbol(token_kind::kw_int, true) ==
+            header_scope_symbol::object_declaration &&
+        classify_header_scope_symbol(token_kind::kw_const, true) ==
+            header_scope_symbol::object_declaration &&
+        classify_header_scope_symbol(token_kind::identifier, true) ==
+            header_scope_symbol::object_declaration,
+        "Header semantic space collapses object declaration starts");
+
+    tests.expect(
+        header_scope_transition(
+            false,
+            header_scope_symbol::end_of_stream) ==
+            header_scope_action::finish_root &&
+        header_scope_transition(
+            true,
+            header_scope_symbol::end_of_stream) ==
+            header_scope_action::fail_unclosed_scope &&
+        header_scope_transition(
+            true,
+            header_scope_symbol::close_scope) ==
+            header_scope_action::close_scope &&
+        header_scope_transition(
+            false,
+            header_scope_symbol::close_scope) ==
+            header_scope_action::reject,
+        "Header semantic space preserves scope boundary semantics");
+}
+
 void test_parser_provenance(test_state &tests) {
     const temporary_source common{"common_provenance", "struct Shared { int field; };"};
     const auto include = "#include \"" + common.path().filename().string() + "\"\n";
@@ -3866,8 +5955,31 @@ int main() {
     try {
         test_state tests;
 
+        test_lexical_symbols_v2(
+            tests);
+
+        test_prepared_include_v2(
+            tests);
+
+        test_preprocessor_v2_include_execution(
+            tests);
+
+        test_graph_resolved_v2(
+            tests);
+
+        test_header_parser_v2_parity_01(
+            tests);
+
+        test_header_parser_v2_parity_02(
+            tests);
+
+        test_header_parser_v2_minimal(
+            tests);
+
         test_header_source_semantic_split(
             tests);
+
+        test_header_semantic_space(tests);
 
         test_sparse_semantic_replay_order(
             tests);

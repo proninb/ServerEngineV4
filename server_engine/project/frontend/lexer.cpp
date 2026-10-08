@@ -71,9 +71,10 @@ namespace {
 }
 
 [[nodiscard]] token_kind keyword_kind(
-    std::string_view value) noexcept {
+    std::string_view value,
+    std::uint32_t hash) noexcept {
 
-    switch (spelling_hash(value)) {
+    switch (hash) {
     case 0x0b069958u: return value == "false" ? token_kind::kw_false : token_kind::identifier;
     case 0x0bbde79eu: return value == "nullptr" ? token_kind::kw_nullptr : token_kind::identifier;
     case 0x0c547726u: return value == "unsigned" ? token_kind::kw_unsigned : token_kind::identifier;
@@ -530,7 +531,8 @@ server_status lexer::tokenize(
     file_id file,
     std::string_view source,
     lexical_stream& output,
-    lexical_error* error) noexcept {
+    lexical_error* error,
+    lexical_symbol_stream_v2* symbols) noexcept {
 
     if (error != nullptr) {
         *error = {};
@@ -558,6 +560,17 @@ server_status lexer::tokenize(
 
     if (!succeeded(reset)) {
         return reset;
+    }
+
+    if (symbols != nullptr) {
+        const auto symbol_reset =
+            symbols->reset(
+                file,
+                source.size());
+
+        if (!succeeded(symbol_reset)) {
+            return symbol_reset;
+        }
     }
 
     std::size_t position = 0;
@@ -846,12 +859,36 @@ server_status lexer::tokenize(
             const auto spelling =
                 source.substr(start, position - start);
 
+            const auto hash =
+                spelling_hash(
+                    spelling);
+
             auto kind =
-                keyword_kind(spelling);
+                keyword_kind(
+                    spelling,
+                    hash);
 
             if (in_directive &&
                 spelling == "defined") {
                 kind = token_kind::pp_defined;
+            }
+
+            if (kind ==
+                    token_kind::identifier &&
+                symbols != nullptr) {
+
+                const auto symbolic =
+                    symbols->record_identifier(
+                        source,
+                        hash,
+                        static_cast<std::uint32_t>(
+                            start),
+                        static_cast<std::uint32_t>(
+                            position - start));
+
+                if (!succeeded(symbolic)) {
+                    return symbolic;
+                }
             }
 
             const auto status =

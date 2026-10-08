@@ -255,6 +255,9 @@
     <ClCompile Include="server_engine\project\parser\parser.cpp">
       <Filter>server_engine\project\parser</Filter>
     </ClCompile>
+    <ClCompile Include="server_engine\project\parser\header_parser_v2.cpp">
+      <Filter>server_engine\project\parser</Filter>
+    </ClCompile>
     <ClCompile Include="server_engine\project\preprocessor\preprocessor.cpp">
       <Filter>server_engine\project\preprocessor</Filter>
     </ClCompile>
@@ -286,6 +289,15 @@
       <Filter>server_engine\project\frontend</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\project\frontend\lexer.cpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\frontend\lexical_symbols_v2.cpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\frontend\prepared_include_v2.cpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClCompile>
+    <ClCompile Include="server_engine\project\frontend\preprocessor_v2.cpp">
       <Filter>server_engine\project\frontend</Filter>
     </ClCompile>
     <ClCompile Include="server_engine\project\frontend\lexical_generation.cpp">
@@ -635,6 +647,30 @@
     <ClInclude Include="server_engine\project\parser\parser.hpp">
       <Filter>server_engine\project\parser</Filter>
     </ClInclude>
+    <ClInclude Include="server_engine\project\parser\header_parser_v2.hpp">
+      <Filter>server_engine\project\parser</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\file\file_id.hpp">
+      <Filter>server_engine\project\file</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\frontend\source_range.hpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\frontend\prepared_token.hpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\frontend\semantic_cursor_v2.hpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\frontend\prepared_frontend_v2.hpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\frontend\prepared_include_v2.hpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\frontend\preprocessor_v2.hpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClInclude>
     <ClInclude Include="server_engine\project\graph\type_handle.hpp">
       <Filter>server_engine\project\graph</Filter>
     </ClInclude>
@@ -681,6 +717,9 @@
       <Filter>server_engine\project\frontend</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\frontend\lexer.hpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\frontend\lexical_symbols_v2.hpp">
       <Filter>server_engine\project\frontend</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\frontend\lexical_generation.hpp">

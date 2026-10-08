@@ -9,6 +9,7 @@
 #pragma once
 
 #include "file_identity.hpp"
+#include "file_id.hpp"
 #include "file_kind.hpp"
 #include "../project_path.hpp"
 #include "../../filesystem_path.hpp"
@@ -29,40 +30,6 @@ using file_path_char =
 
 using file_path_view =
     std::basic_string_view<file_path_char>;
-
-// Dense construction-lineage identity of one Project input file. REBUILD creates
-// a fresh identity space. BUILD restores existing slots and appends only new
-// identities; existing IDs are never renumbered or recycled within the lineage.
-class file_id final {
-public:
-    constexpr file_id() noexcept = default;
-
-    explicit constexpr file_id(
-        std::uint32_t value) noexcept
-        : id(value) {
-    }
-
-    [[nodiscard]] constexpr std::uint32_t value() const noexcept {
-        return id;
-    }
-
-    [[nodiscard]] constexpr bool valid() const noexcept {
-        return id != 0;
-    }
-
-    [[nodiscard]] explicit constexpr operator bool() const noexcept {
-        return valid();
-    }
-
-    friend constexpr bool operator==(
-        const file_id&,
-        const file_id&) noexcept = default;
-
-private:
-    std::uint32_t id = 0;
-};
-
-static_assert(sizeof(file_id) == 4);
 
 // Direct adjacency range inside one global file_id edge arena.
 struct file_edge_range final {

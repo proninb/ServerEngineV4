@@ -694,6 +694,18 @@ server_status graph::define_record(
         return server_status::io_error;
     }
 
+    if (!definition.empty()) {
+        const auto member_index_prepared =
+            ensure_member_name_index_capacity(
+                definition.size());
+
+        if (!succeeded(
+                member_index_prepared)) {
+
+            return member_index_prepared;
+        }
+    }
+
     const auto old_member_count =
         member_records.size();
 
@@ -756,6 +768,321 @@ server_status graph::define_record(
         entry->flags |=
             graph_type_polymorphic;
     }
+
+    for (std::size_t index = 0;
+         index < definition.size();
+         ++index) {
+
+        insert_member_name_index(
+            member_name_index,
+            type,
+            definition[index].name,
+            member_index{
+                static_cast<std::uint32_t>(
+                    index)});
+    }
+
+    member_name_index_count +=
+        definition.size();
+
+    return server_status::success;
+}
+
+server_status graph::define_resolved_record(
+    type_handle type,
+    graph_record_kind kind,
+    std::span<const member_record> definition,
+    std::span<const construction_value> construction_values,
+    std::span<const base_record> bases_value,
+    bool declares_virtual) noexcept {
+
+    auto* entry =
+        contains(type)
+        ? &types[type.value() - 1]
+        : nullptr;
+
+    if (entry == nullptr ||
+        entry->kind != graph_type_kind::record ||
+        !valid_record_kind(kind) ||
+        !compatible_record_kind(
+            entry->record_kind,
+            kind) ||
+        (!construction_values.empty() &&
+         construction_values.size() != definition.size()) ||
+        (kind ==
+             graph_record_kind::union_type &&
+         (!bases_value.empty() ||
+          declares_virtual))) {
+
+        return server_status::project_configuration_invalid;
+    }
+
+    const auto type_identity =
+        identity(type);
+
+    if (!type_identity ||
+        type_identity.kind() !=
+            identity_kind::type) {
+
+        return server_status::project_configuration_invalid;
+    }
+
+    bool polymorphic_value =
+        declares_virtual;
+
+    for (std::size_t index = 0;
+         index < bases_value.size();
+         ++index) {
+
+        const auto& base =
+            bases_value[index];
+
+        const auto base_handle =
+            find_type(
+                base.type);
+
+        const auto* base_entry =
+            find(base_handle);
+
+        if (!base.type ||
+            base.type.kind() !=
+                identity_kind::type ||
+            base.type == type_identity ||
+            !base_handle ||
+            base_entry == nullptr ||
+            !base_entry->defined() ||
+            base_entry->kind !=
+                graph_type_kind::record ||
+            base_entry->record_kind ==
+                graph_record_kind::union_type ||
+            !valid_member_access(
+                base.access) ||
+            (base.flags &
+                ~graph_base_flag_mask) != 0 ||
+            base.reserved != 0) {
+
+            return server_status::project_configuration_invalid;
+        }
+
+        for (std::size_t previous = 0;
+             previous < index;
+             ++previous) {
+
+            if (bases_value[previous].type ==
+                base.type) {
+
+                return server_status::
+                    project_configuration_invalid;
+            }
+        }
+
+        polymorphic_value =
+            polymorphic_value ||
+            base_entry->polymorphic();
+    }
+
+    for (std::size_t index = 0;
+         index < definition.size();
+         ++index) {
+
+        if (!definition[index].name ||
+            !contains(definition[index].type) ||
+            !valid_member_access(
+                definition[index].access)) {
+
+            return server_status::
+                project_configuration_invalid;
+        }
+
+        const auto construction =
+            construction_values.empty()
+            ? construction_value{}
+            : construction_values[index];
+
+        if (!valid_construction(
+                construction)) {
+
+            return server_status::
+                project_configuration_invalid;
+        }
+    }
+
+    if (entry->defined()) {
+        if (entry->record_kind != kind ||
+            entry->polymorphic() !=
+                polymorphic_value) {
+
+            return server_status::project_configuration_invalid;
+        }
+
+        const auto existing_bases =
+            bases(type);
+
+        if (existing_bases.size() !=
+            bases_value.size()) {
+
+            return server_status::project_configuration_invalid;
+        }
+
+        for (std::size_t index = 0;
+             index < existing_bases.size();
+             ++index) {
+
+            if (existing_bases[index].type !=
+                    bases_value[index].type ||
+                existing_bases[index].access !=
+                    bases_value[index].access ||
+                existing_bases[index].flags !=
+                    bases_value[index].flags) {
+
+                return server_status::project_configuration_invalid;
+            }
+        }
+
+        const auto existing =
+            members(type);
+
+        if (existing.size() != definition.size()) {
+            return server_status::project_configuration_invalid;
+        }
+
+        for (std::size_t index = 0;
+             index < existing.size();
+             ++index) {
+
+            if (existing[index].name != definition[index].name ||
+                existing[index].type != definition[index].type ||
+                existing[index].access != definition[index].access) {
+
+                return server_status::project_configuration_invalid;
+            }
+
+            const auto expected =
+                construction_values.empty()
+                ? construction_value{}
+                : construction_values[index];
+
+            const auto position =
+                static_cast<std::size_t>(
+                    entry->members.begin) +
+                index;
+
+            if (position >= member_construction.size() ||
+                member_construction[position] != expected) {
+
+                return server_status::project_configuration_invalid;
+            }
+        }
+
+        return server_status::success;
+    }
+
+    const auto maximum =
+        static_cast<std::size_t>(
+            (std::numeric_limits<std::uint32_t>::max)());
+
+    if (member_records.size() > maximum ||
+        definition.size() > maximum ||
+        definition.size() >
+            maximum - member_records.size() ||
+        base_records.size() > maximum ||
+        bases_value.size() > maximum ||
+        bases_value.size() >
+            maximum - base_records.size()) {
+
+        return server_status::io_error;
+    }
+
+    if (!definition.empty()) {
+        const auto member_index_prepared =
+            ensure_member_name_index_capacity(
+                definition.size());
+
+        if (!succeeded(
+                member_index_prepared)) {
+
+            return member_index_prepared;
+        }
+    }
+
+    const auto old_member_count =
+        member_records.size();
+
+    const auto old_base_count =
+        base_records.size();
+
+    try {
+        base_records.insert(
+            base_records.end(),
+            bases_value.begin(),
+            bases_value.end());
+
+        member_records.insert(
+            member_records.end(),
+            definition.begin(),
+            definition.end());
+
+        if (construction_values.empty()) {
+            member_construction.resize(
+                member_records.size());
+        }
+        else {
+            member_construction.insert(
+                member_construction.end(),
+                construction_values.begin(),
+                construction_values.end());
+        }
+    }
+    catch (...) {
+        base_records.resize(
+            old_base_count);
+
+        member_records.resize(
+            old_member_count);
+
+        member_construction.resize(
+            old_member_count);
+
+        return server_status::io_error;
+    }
+
+    entry->bases = {
+        static_cast<std::uint32_t>(
+            old_base_count),
+        static_cast<std::uint32_t>(
+            bases_value.size()),
+    };
+
+    entry->members = {
+        static_cast<std::uint32_t>(
+            old_member_count),
+        static_cast<std::uint32_t>(
+            definition.size()),
+    };
+
+    entry->record_kind = kind;
+    entry->flags |= graph_type_defined;
+
+    if (polymorphic_value) {
+        entry->flags |=
+            graph_type_polymorphic;
+    }
+
+    for (std::size_t index = 0;
+         index < definition.size();
+         ++index) {
+
+        insert_member_name_index(
+            member_name_index,
+            type,
+            definition[index].name,
+            member_index{
+                static_cast<std::uint32_t>(
+                    index)});
+    }
+
+    member_name_index_count +=
+        definition.size();
 
     return server_status::success;
 }
@@ -915,6 +1242,157 @@ server_status graph::add_object(
     }
 }
 
+server_status graph::add_resolved_object(
+    identity_ref identity,
+    type_ref type,
+    object_handle& output,
+    std::uint32_t flags,
+    construction_value initial) noexcept {
+
+    output = {};
+
+    if (!identity ||
+        identity.kind() != identity_kind::object ||
+        !contains(type) ||
+        (flags & ~graph_object_flag_mask) != 0 ||
+        !valid_construction(initial) ||
+        (!(flags &
+            graph_object_non_default_initializer) &&
+         initial != construction_value{}) ||
+        initial.kind ==
+            construction_kind::member_binding ||
+        initial.kind ==
+            construction_kind::object_binding) {
+
+        return server_status::project_configuration_invalid;
+    }
+
+    if (const auto existing =
+            find_object(identity);
+        existing) {
+
+        const auto* entry =
+            find(existing);
+
+        construction_value existing_initial;
+
+        if (entry == nullptr ||
+            !construction(
+                existing,
+                existing_initial) ||
+            entry->type != type ||
+            (entry->state &
+                graph_object_flag_mask) != flags ||
+            existing_initial != initial) {
+
+            return server_status::project_configuration_invalid;
+        }
+
+        output = existing;
+        return server_status::success;
+    }
+
+    if (objects.size() >=
+        object_handle::maximum_slot) {
+
+        return server_status::io_error;
+    }
+
+    const auto has_initial =
+        (flags &
+            graph_object_non_default_initializer) != 0;
+
+    if (has_initial &&
+        object_construction.size() >=
+            graph_object_construction_slot_mask) {
+
+        return server_status::io_error;
+    }
+
+    const auto old_location_count =
+        identity_locations.size();
+
+    const auto prepared =
+        ensure_identity_slot(identity);
+
+    if (!succeeded(prepared)) {
+        return prepared;
+    }
+
+    if (identity_locations[identity.slot()] != 0) {
+        if (identity_locations.size() >
+            old_location_count) {
+
+            identity_locations.resize(
+                old_location_count);
+        }
+
+        return server_status::project_configuration_invalid;
+    }
+
+    const auto old_object_count =
+        objects.size();
+
+    const auto old_identity_count =
+        object_identities.size();
+
+    const auto old_construction_count =
+        object_construction.size();
+
+    try {
+        std::uint32_t construction_slot = 0;
+
+        if (has_initial) {
+            object_construction.push_back(
+                initial);
+
+            construction_slot =
+                static_cast<std::uint32_t>(
+                    object_construction.size());
+        }
+
+        objects.push_back({
+            type,
+            flags |
+                construction_slot,
+        });
+
+        object_identities.push_back(
+            identity);
+
+        output = object_handle{
+            static_cast<std::uint32_t>(
+                objects.size())};
+
+        identity_locations[identity.slot()] =
+            encode_location(
+                location_kind::object,
+                output.value());
+
+        return server_status::success;
+    }
+    catch (...) {
+        objects.resize(
+            old_object_count);
+
+        object_identities.resize(
+            old_identity_count);
+
+        object_construction.resize(
+            old_construction_count);
+
+        if (identity_locations.size() >
+            old_location_count) {
+
+            identity_locations.resize(
+                old_location_count);
+        }
+
+        output = {};
+        return server_status::io_error;
+    }
+}
+
 type_ref graph::intrinsic(
     intrinsic_type type) const noexcept {
 
@@ -927,18 +1405,22 @@ type_ref graph::intrinsic(
 }
 
 type_ref graph::named(
-    type_handle type) const noexcept {
+    identity_ref identity_value) const noexcept {
 
-    const auto value =
-        identity(type);
-
-    return value &&
-        value.kind() ==
+    return identity_value &&
+        identity_value.kind() ==
             identity_kind::type
         ? type_ref::make(
             type_ref_kind::named,
-            value.slot())
+            identity_value.slot())
         : type_ref{};
+}
+
+type_ref graph::named(
+    type_handle type) const noexcept {
+
+    return named(
+        identity(type));
 }
 
 std::uint64_t graph::hash_derived(
@@ -1154,7 +1636,22 @@ server_status graph::derive(
         ? payload != 0
         : payload == 0;
 
-    if (!contains(child) ||
+    const auto incomplete_named_allowed =
+        child.kind() ==
+            type_ref_kind::named &&
+        (kind ==
+             derived_type_kind::const_qualified ||
+         kind ==
+             derived_type_kind::volatile_qualified ||
+         kind ==
+             derived_type_kind::pointer ||
+         kind ==
+             derived_type_kind::lvalue_reference ||
+         kind ==
+             derived_type_kind::rvalue_reference);
+
+    if ((!contains(child) &&
+         !incomplete_named_allowed) ||
         !valid_derived_kind(kind) ||
         !payload_valid) {
 
@@ -1233,6 +1730,112 @@ server_status graph::derive(
              derived_type_kind::bounded_array ||
          kind ==
              derived_type_kind::unbounded_array)) {
+
+        return server_status::
+            project_configuration_invalid;
+    }
+
+    const auto hash =
+        hash_derived(
+            child,
+            kind,
+            payload);
+
+    const auto fingerprint_value =
+        fingerprint(hash);
+
+    if (const auto existing =
+            find_derived(
+                child,
+                kind,
+                payload,
+                hash,
+                fingerprint_value);
+        existing) {
+
+        output = existing;
+        return server_status::success;
+    }
+
+    if (derived_types.size() >=
+        type_ref::maximum_payload) {
+
+        return server_status::io_error;
+    }
+
+    const auto prepared =
+        ensure_derived_index_capacity(1);
+
+    if (!succeeded(prepared)) {
+        return prepared;
+    }
+
+    const auto old_count =
+        derived_types.size();
+
+    try {
+        derived_types.push_back({
+            payload,
+            child,
+            kind,
+            {},
+        });
+
+        output =
+            type_ref::make(
+                type_ref_kind::derived,
+                static_cast<std::uint32_t>(
+                    derived_types.size()));
+
+        insert_derived_index(
+            derived_index,
+            output,
+            hash,
+            fingerprint_value);
+
+        return server_status::success;
+    }
+    catch (...) {
+        derived_types.resize(
+            old_count);
+
+        output = {};
+        return server_status::io_error;
+    }
+}
+
+server_status graph::derive_resolved(
+    type_ref child,
+    derived_type_kind kind,
+    std::uint64_t payload,
+    type_ref& output) noexcept {
+
+    output = {};
+
+    const auto payload_valid =
+        kind ==
+            derived_type_kind::bounded_array
+        ? payload != 0
+        : payload == 0;
+
+    const auto incomplete_named_allowed =
+        child.kind() ==
+            type_ref_kind::named &&
+        (kind ==
+             derived_type_kind::const_qualified ||
+         kind ==
+             derived_type_kind::volatile_qualified ||
+         kind ==
+             derived_type_kind::pointer ||
+         kind ==
+             derived_type_kind::lvalue_reference ||
+         kind ==
+             derived_type_kind::rvalue_reference);
+
+    if ((!contains(child) &&
+         !incomplete_named_allowed) ||
+        !valid_derived_kind(kind) ||
+        !payload_valid) {
 
         return server_status::
             project_configuration_invalid;
@@ -1386,6 +1989,157 @@ std::span<const member_record> graph::members(
     };
 }
 
+
+std::uint64_t graph::hash_member_name(
+    type_handle type,
+    string_id name) noexcept {
+
+    const auto key =
+        (static_cast<std::uint64_t>(
+             type.value()) << 32) |
+        name.value();
+
+    return mix64(key);
+}
+
+server_status graph::ensure_member_name_index_capacity(
+    std::size_t additional) noexcept {
+
+    if (additional >
+        (std::numeric_limits<std::size_t>::max)() -
+            member_name_index_count) {
+
+        return server_status::io_error;
+    }
+
+    const auto required =
+        member_name_index_count +
+        additional;
+
+    if (required == 0) {
+        return server_status::success;
+    }
+
+    if (!member_name_index.empty() &&
+        required <=
+            member_name_index.size() / 2) {
+
+        return server_status::success;
+    }
+
+    const auto capacity =
+        next_index_capacity(
+            required);
+
+    if (capacity == 0) {
+        return server_status::io_error;
+    }
+
+    try {
+        std::vector<member_name_index_slot>
+            candidate(capacity);
+
+        for (const auto& slot :
+             member_name_index) {
+
+            if (!slot.type) {
+                continue;
+            }
+
+            insert_member_name_index(
+                candidate,
+                slot.type,
+                slot.name,
+                slot.member);
+        }
+
+        member_name_index =
+            std::move(candidate);
+
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+}
+
+void graph::insert_member_name_index(
+    std::vector<member_name_index_slot>& target,
+    type_handle type,
+    string_id name,
+    member_index member) const noexcept {
+
+    const auto mask =
+        target.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            hash_member_name(
+                type,
+                name)) &
+        mask;
+
+    while (target[position].type) {
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    target[position] = {
+        type,
+        name,
+        member,
+    };
+}
+
+member_index graph::find_indexed_member(
+    type_handle type,
+    string_id name) const noexcept {
+
+    if (!type ||
+        !name ||
+        member_name_index.empty()) {
+
+        return {};
+    }
+
+    const auto mask =
+        member_name_index.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            hash_member_name(
+                type,
+                name)) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe <
+            member_name_index.size();
+         ++probe) {
+
+        const auto& slot =
+            member_name_index[
+                position];
+
+        if (!slot.type) {
+            return {};
+        }
+
+        if (slot.type == type &&
+            slot.name == name) {
+
+            return slot.member;
+        }
+
+        position =
+            (position + 1) &
+            mask;
+    }
+
+    return {};
+}
+
 member_index graph::find_member(
     type_handle type,
     string_id name) const noexcept {
@@ -1394,18 +2148,114 @@ member_index graph::find_member(
         return {};
     }
 
-    const auto values =
-        members(type);
+    const auto* entry =
+        find(type);
 
-    for (std::size_t index = 0;
-         index < values.size();
-         ++index) {
+    if (entry == nullptr ||
+        !entry->defined()) {
 
-        if (values[index].name == name) {
-            return member_index{
-                static_cast<std::uint32_t>(
-                    index)};
+        return {};
+    }
+
+    const auto member_value =
+        find_indexed_member(
+            type,
+            name);
+
+    if (!member_value ||
+        member_value.value() >=
+            entry->members.count) {
+
+        return {};
+    }
+
+    const auto global =
+        static_cast<std::size_t>(
+            entry->members.begin) +
+        member_value.value();
+
+    return global <
+                member_records.size() &&
+            member_records[global].name ==
+                name
+        ? member_value
+        : member_index{};
+}
+
+
+member_index graph::find_member_profiled(
+    type_handle type,
+    string_id name,
+    std::uint32_t& probes) const noexcept {
+
+    probes = 0;
+
+    if (!name) {
+        return {};
+    }
+
+    const auto* entry =
+        find(type);
+
+    if (entry == nullptr ||
+        !entry->defined() ||
+        member_name_index.empty()) {
+
+        return {};
+    }
+
+    const auto mask =
+        member_name_index.size() - 1;
+
+    auto position =
+        static_cast<std::size_t>(
+            hash_member_name(
+                type,
+                name)) &
+        mask;
+
+    for (std::size_t probe = 0;
+         probe <
+            member_name_index.size();
+         ++probe) {
+
+        ++probes;
+
+        const auto& slot =
+            member_name_index[
+                position];
+
+        if (!slot.type) {
+            return {};
         }
+
+        if (slot.type == type &&
+            slot.name == name) {
+
+            if (!slot.member ||
+                slot.member.value() >=
+                    entry->members.count) {
+
+                return {};
+            }
+
+            const auto global =
+                static_cast<std::size_t>(
+                    entry->members.begin) +
+                slot.member.value();
+
+            return global <
+                        member_records.size() &&
+                    member_records[
+                        global].name ==
+                        name
+                ? slot.member
+                : member_index{};
+        }
+
+        position =
+            (position + 1) &
+            mask;
     }
 
     return {};

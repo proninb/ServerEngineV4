@@ -1661,9 +1661,10 @@ Header preprocessing executes once through `semantic_input`. Source begins only
 after the Header barrier and continues to use its own compile-time parser
 specialization.
 
-This slice intentionally keeps the existing `parse_record()` Graph construction
-boundary. Forward declarations still use the current Graph declaration path.
-Separating semantic WHO from physical WHERE is a later independent slice.
+`HEADER-WHO-STREAM-01` intentionally stopped at the then-existing
+`parse_record()` Graph construction boundary. `HEADER-WHO-WHERE-01` below
+supersedes that forward-declaration boundary while preserving the same
+single-pass streaming parser.
 
 No persisted format changes are introduced by this streaming correction.
 
@@ -1676,4 +1677,68 @@ HEADER-WHO-STREAM-01 Header     ~421 ms
 
 Therefore the full effective-token arena / global pre-index / replay design is
 rejected for the production Header path.
+
+## Header WHO / WHERE separation (HEADER-WHO-WHERE-01)
+
+Header forward declarations now create semantic identity only.
+
+```text
+struct B;
+    |
+    +--> identity_space -> WHO(B)
+    |
+    `--> no Graph WHERE
+
+struct A {
+    B* Value;
+};
+    |
+    +--> named type_ref payload = WHO(B).slot
+    +--> pointer derived type may target incomplete WHO(B)
+    `--> WHERE(A) materializes when A definition begins
+
+struct B {
+    int X;
+};
+    |
+    `--> declare/reuse WHERE(B) when B definition begins
+```
+
+`identity_ref` remains WHO. `type_handle` remains WHERE. A forward declaration
+does not allocate, reactivate, or otherwise consume a Graph type slot.
+
+Named `type_ref` construction therefore has a WHO overload in both `graph` and
+`graph_delta`. The persisted four-byte representation is unchanged: named
+payload is still the semantic identity slot.
+
+Derived type construction may temporarily reference a named WHO whose WHERE is
+not materialized yet. This is valid only where C++ permits an incomplete target,
+notably behind pointer/reference indirection. By-value record storage, cv-only
+by-value storage, and array element storage still require a complete named type.
+
+The final definition materializes the type through the existing
+`declare_record(identity, kind, handle)` operation. On sparse BUILD this keeps
+the stable-WHERE contract: an existing WHO reuses/reactivates its lineage WHERE;
+a genuinely new WHO appends WHERE only when its definition is reached.
+
+Header declaration-kind compatibility is tracked in semantic identity space so
+`struct`/`class` versus `union` conflicts are still diagnosed without allocating
+WHERE for a forward declaration.
+
+The slice keeps:
+
+```text
+single forward Header stream
+C++ declaration order
+Header barrier before Source
+stable-WHERE
+Source parser unchanged
+compiled.bin/runtime.bin format versions unchanged
+```
+
+A declaration-only type that never reaches a materialized definition remains
+outside this slice's final-project support; current final Graph/persistence
+validation may still reject such an unresolved terminal WHO. The production
+case established here is forward declaration -> incomplete use -> later
+definition, without an early WHERE allocation.
 

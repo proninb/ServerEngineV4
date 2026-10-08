@@ -1,4 +1,5 @@
 #include "parser.hpp"
+#include "header_semantic_space.hpp"
 
 #include "../frontend/semantic_input.hpp"
 #include "../graph/construction_semantics.hpp"
@@ -279,10 +280,72 @@ public:
 
 private:
 
+    [[nodiscard]] type_handle find_type_profiled(
+        identity_ref identity) const noexcept {
+
+        if constexpr (
+            Domain == semantic_domain::header) {
+
+            if (coarse_telemetry != nullptr) {
+                ++coarse_telemetry->
+                    header_find_type_calls;
+            }
+        }
+
+        return G.find_type(
+            identity);
+    }
+
+    [[nodiscard]] server_status add_dependency_profiled(
+        identity_ref identity) noexcept {
+
+        if constexpr (
+            Domain == semantic_domain::header) {
+
+            if (coarse_telemetry != nullptr) {
+                ++coarse_telemetry->
+                    header_dependency_adds;
+            }
+        }
+
+        return sources.add_dependency(
+            identity);
+    }
+
+    [[nodiscard]] server_status derive_profiled(
+        type_ref child,
+        derived_type_kind kind,
+        std::uint64_t payload,
+        type_ref& output) noexcept {
+
+        if constexpr (
+            Domain == semantic_domain::header) {
+
+            if (coarse_telemetry != nullptr) {
+                ++coarse_telemetry->
+                    header_derive_calls;
+            }
+        }
+
+        return G.derive(
+            child,
+            kind,
+            payload,
+            output);
+    }
 
     [[nodiscard]] bool read_type(
         type_handle type,
         type_entry& output) const noexcept {
+
+        if constexpr (
+            Domain == semantic_domain::header) {
+
+            if (coarse_telemetry != nullptr) {
+                ++coarse_telemetry->
+                    header_read_type_calls;
+            }
+        }
 
         output = {};
 
@@ -306,6 +369,161 @@ private:
         }
     }
 
+    [[nodiscard]] server_status
+    validate_record_declaration(
+        identity_ref identity,
+        graph_record_kind kind) noexcept {
+
+        if (!identity ||
+            identity.kind() !=
+                identity_kind::type) {
+
+            return server_status::
+                project_configuration_invalid;
+        }
+
+        const auto existing =
+            find_type_profiled(
+                identity);
+
+        if (existing) {
+            type_entry entry;
+
+            if (!read_type(
+                    existing,
+                    entry) ||
+                entry.kind !=
+                    graph_type_kind::record ||
+                ((entry.record_kind ==
+                      graph_record_kind::union_type) !=
+                 (kind ==
+                      graph_record_kind::union_type))) {
+
+                return fail(
+                    parser_failure_kind::semantic,
+                    "Record declaration conflicts with existing semantic type");
+            }
+        }
+
+        const auto slot =
+            static_cast<std::size_t>(
+                identity.slot());
+
+        const auto declaration_kind =
+            static_cast<std::uint8_t>(
+                kind ==
+                    graph_record_kind::union_type
+                ? 2
+                : 1);
+
+        try {
+            if (record_declaration_kinds.size() <=
+                slot) {
+
+                record_declaration_kinds.resize(
+                    slot + 1);
+            }
+        }
+        catch (...) {
+            return server_status::io_error;
+        }
+
+        auto& existing_kind =
+            record_declaration_kinds[
+                slot];
+
+        if (existing_kind != 0 &&
+            existing_kind !=
+                declaration_kind) {
+
+            return fail(
+                parser_failure_kind::semantic,
+                "Record declaration conflicts with existing semantic type");
+        }
+
+        existing_kind =
+            declaration_kind;
+
+        return server_status::success;
+    }
+
+    [[nodiscard]] bool complete_storage_type(
+        type_ref type) const noexcept {
+
+        auto current_type = type;
+
+        for (std::size_t depth = 0;
+             depth <= G.derived_type_count();
+             ++depth) {
+
+            if (!current_type) {
+                return false;
+            }
+
+            if (current_type.kind() ==
+                type_ref_kind::intrinsic) {
+
+                return current_type.payload() !=
+                    static_cast<std::uint32_t>(
+                        intrinsic_type::void_type);
+            }
+
+            if (current_type.kind() ==
+                type_ref_kind::named) {
+
+                const auto identity =
+                    identities.at_slot(
+                        current_type.payload());
+
+                if (!identity ||
+                    identity.kind() !=
+                        identity_kind::type) {
+
+                    return false;
+                }
+
+                const auto handle =
+                    find_type_profiled(identity);
+
+                type_entry entry;
+
+                return handle &&
+                    read_type(handle, entry) &&
+                    entry.defined();
+            }
+
+            if (current_type.kind() !=
+                type_ref_kind::derived) {
+
+                return false;
+            }
+
+            derived_type_record derived;
+
+            if (!G.derived(current_type, derived)) {
+                return false;
+            }
+
+            switch (derived.kind) {
+            case derived_type_kind::pointer:
+            case derived_type_kind::lvalue_reference:
+            case derived_type_kind::rvalue_reference:
+                return true;
+
+            case derived_type_kind::const_qualified:
+            case derived_type_kind::volatile_qualified:
+            case derived_type_kind::bounded_array:
+                current_type = derived.child;
+                break;
+
+            case derived_type_kind::unbounded_array:
+                return false;
+            }
+        }
+
+        return false;
+    }
+
     [[nodiscard]] server_status inherited_member_path(type_handle record, string_id name,
         std::vector<endpoint_path_step>& path, type_handle& owner, member_index& member,
         std::size_t depth = 0) noexcept {
@@ -315,7 +533,7 @@ private:
         // The endpoint registers the selected record before consuming '.name'.
         // Only inherited records still need registration here.
         if (depth != 0) {
-            const auto dependency = sources.add_dependency(G.identity(record));
+            const auto dependency = add_dependency_profiled(G.identity(record));
             if (!succeeded(dependency)) { return dependency; }
         }
         {
@@ -329,9 +547,51 @@ private:
                     source_member_lookups;
             }
 
-            member = G.find_member(
-                record,
-                name);
+            if constexpr (
+                std::is_same_v<Graph, graph>) {
+
+                if (coarse_telemetry !=
+                    nullptr) {
+
+                    std::uint32_t probes = 0;
+
+                    member =
+                        G.find_member_profiled(
+                            record,
+                            name,
+                            probes);
+
+                    if constexpr (
+                        Domain ==
+                            semantic_domain::
+                                header) {
+
+                        ++coarse_telemetry->
+                            header_member_lookups;
+
+                        coarse_telemetry->
+                            header_member_lookup_probes +=
+                            probes;
+                    }
+                    else {
+                        coarse_telemetry->
+                            source_member_lookup_probes +=
+                            probes;
+                    }
+                }
+                else {
+                    member =
+                        G.find_member(
+                            record,
+                            name);
+                }
+            }
+            else {
+                member =
+                    G.find_member(
+                        record,
+                        name);
+            }
         }
         if (member) { owner = record; return server_status::success; }
         type_entry entry;
@@ -344,7 +604,7 @@ private:
             std::vector<endpoint_path_step> candidate;
             type_handle candidate_owner;
             member_index candidate_member;
-            const auto status = inherited_member_path(G.find_type(base.type), name, candidate,
+            const auto status = inherited_member_path(find_type_profiled(base.type), name, candidate,
                 candidate_owner, candidate_member, depth + 1);
             if (!succeeded(status)) { return status; }
             if (!candidate_member) { continue; }
@@ -754,7 +1014,7 @@ private:
         }
 
         const auto dependency =
-            sources.add_dependency(
+            add_dependency_profiled(
                 object_identity);
 
         if (!succeeded(dependency)) {
@@ -801,9 +1061,26 @@ private:
 
     [[nodiscard]] server_status advance() noexcept {
 
+        if constexpr (
+            Domain == semantic_domain::header) {
+
+            if (coarse_telemetry != nullptr) {
+                ++coarse_telemetry->
+                    header_advance_calls;
+            }
+        }
+
         current = {};
 
         if (has_buffered) {
+            if constexpr (
+                Domain == semantic_domain::header) {
+
+                if (coarse_telemetry != nullptr) {
+                    ++coarse_telemetry->
+                        header_buffered_advance_calls;
+                }
+            }
             current = buffered;
             buffered = {};
             has_buffered = false;
@@ -812,6 +1089,15 @@ private:
 
         if (input.finished()) {
             return server_status::success;
+        }
+
+        if constexpr (
+            Domain == semantic_domain::header) {
+
+            if (coarse_telemetry != nullptr) {
+                ++coarse_telemetry->
+                    header_input_next_calls;
+            }
         }
 
         const auto result =
@@ -826,6 +1112,15 @@ private:
     [[nodiscard]] server_status peek(
         semantic_token& output) noexcept {
 
+        if constexpr (
+            Domain == semantic_domain::header) {
+
+            if (coarse_telemetry != nullptr) {
+                ++coarse_telemetry->
+                    header_peek_calls;
+            }
+        }
+
         output = {};
 
         if (has_buffered) {
@@ -835,6 +1130,15 @@ private:
 
         if (input.finished()) {
             return server_status::success;
+        }
+
+        if constexpr (
+            Domain == semantic_domain::header) {
+
+            if (coarse_telemetry != nullptr) {
+                ++coarse_telemetry->
+                    header_input_next_calls;
+            }
         }
 
         const auto result =
@@ -853,6 +1157,15 @@ private:
 
     [[nodiscard]] bool at(
         token_kind kind) const noexcept {
+
+        if constexpr (
+            Domain == semantic_domain::header) {
+
+            if (coarse_telemetry != nullptr) {
+                ++coarse_telemetry->
+                    header_at_checks;
+            }
+        }
 
         return current.kind == kind;
     }
@@ -904,9 +1217,26 @@ private:
         identity_ref scope,
         string_id name) const noexcept {
 
+        if constexpr (
+            Domain == semantic_domain::header) {
+
+            if (coarse_telemetry != nullptr) {
+                ++coarse_telemetry->
+                    header_type_identity_lookups;
+            }
+        }
+
         auto current_scope = scope;
 
         while (current_scope) {
+            if constexpr (
+                Domain == semantic_domain::header) {
+
+                if (coarse_telemetry != nullptr) {
+                    ++coarse_telemetry->
+                        header_type_identity_scope_steps;
+                }
+            }
             if (const auto found =
                     identities.find(
                         current_scope,
@@ -1166,7 +1496,7 @@ private:
         if (const_qualified) {
             type_ref wrapped;
             const auto status =
-                G.derive(
+                derive_profiled(
                     type,
                     derived_type_kind::const_qualified,
                     0,
@@ -1181,7 +1511,7 @@ private:
         if (volatile_qualified) {
             type_ref wrapped;
             const auto status =
-                G.derive(
+                derive_profiled(
                     type,
                     derived_type_kind::volatile_qualified,
                     0,
@@ -1199,6 +1529,22 @@ private:
     [[nodiscard]] server_status parse_type_specifier(
         identity_ref scope,
         type_ref& output) noexcept {
+
+        parser_stage_timer timer{
+            Domain == semantic_domain::header &&
+                coarse_telemetry != nullptr &&
+                coarse_telemetry->detailed_source
+            ? &coarse_telemetry->header_type_specifier_ns
+            : nullptr};
+
+        if constexpr (
+            Domain == semantic_domain::header) {
+
+            if (coarse_telemetry != nullptr) {
+                ++coarse_telemetry->
+                    header_type_specifier_calls;
+            }
+        }
 
         output = {};
 
@@ -1248,25 +1594,52 @@ private:
             }
 
             const auto handle =
-                G.find_type(identity);
+                find_type_profiled(identity);
 
-            if (!handle) {
+            if (handle) {
+            }
+
+            if (!handle &&
+                Domain ==
+                    semantic_domain::source) {
+
                 return fail(
                     parser_failure_kind::semantic,
                     "Named semantic identity has no type in G");
             }
 
             const auto dependency =
-                sources.add_dependency(
+                add_dependency_profiled(
                     identity);
 
             if (!succeeded(dependency)) {
                 return dependency;
             }
 
-            type_entry entry;
-            if (!read_type(handle, entry)) { return server_status::project_artifact_invalid; }
-            output = entry.kind == graph_type_kind::intrinsic_alias ? G.intrinsic(entry.alias_intrinsic()) : G.named(handle);
+            if (handle) {
+                type_entry entry;
+
+                if (!read_type(
+                        handle,
+                        entry)) {
+
+                    return server_status::
+                        project_artifact_invalid;
+                }
+
+                output =
+                    entry.kind ==
+                        graph_type_kind::intrinsic_alias
+                    ? G.intrinsic(
+                        entry.alias_intrinsic())
+                    : G.named(
+                        identity);
+            }
+            else {
+                output =
+                    G.named(
+                        identity);
+            }
 
             const auto advanced = advance();
             if (!succeeded(advanced)) {
@@ -1356,6 +1729,25 @@ private:
         std::size_t depth,
         bool allow_named_operator = false,
         string_id enclosing_record = {}) noexcept {
+
+        parser_stage_timer timer{
+            Domain == semantic_domain::header &&
+                depth == 0 &&
+                coarse_telemetry != nullptr &&
+                coarse_telemetry->detailed_source
+            ? &coarse_telemetry->header_declarator_ns
+            : nullptr};
+
+        if constexpr (
+            Domain == semantic_domain::header) {
+
+            if (depth == 0 &&
+                coarse_telemetry != nullptr) {
+
+                ++coarse_telemetry->
+                    header_declarator_calls;
+            }
+        }
 
         if (depth >=
             declarator_depth_limit) {
@@ -1726,7 +2118,7 @@ private:
             type_ref wrapped;
 
             const auto derived =
-                G.derive(
+                derive_profiled(
                     output,
                     modifier.kind,
                     modifier.payload,
@@ -1758,6 +2150,22 @@ private:
         parsed_declarator& declarator,
         bool allow_named_operator = false,
         string_id enclosing_record = {}) noexcept {
+
+        parser_stage_timer timer{
+            Domain == semantic_domain::header &&
+                coarse_telemetry != nullptr &&
+                coarse_telemetry->detailed_source
+            ? &coarse_telemetry->header_declared_type_ns
+            : nullptr};
+
+        if constexpr (
+            Domain == semantic_domain::header) {
+
+            if (coarse_telemetry != nullptr) {
+                ++coarse_telemetry->
+                    header_declared_type_calls;
+            }
+        }
 
         output = {};
         declarator = {};
@@ -2892,6 +3300,17 @@ private:
     [[nodiscard]] server_status parse_record(
         identity_ref scope) noexcept {
 
+        parser_stage_timer header_record_timer{
+            Domain == semantic_domain::header &&
+                coarse_telemetry != nullptr
+            ? &coarse_telemetry->header_record_ns
+            : nullptr};
+
+        if (coarse_telemetry != nullptr) {
+            ++coarse_telemetry->
+                header_record_count;
+        }
+
         if (Domain != semantic_domain::header) {
             return fail(
                 parser_failure_kind::unsupported,
@@ -2933,19 +3352,16 @@ private:
             return status;
         }
 
-        type_handle handle;
-
         status =
-            G.declare_record(
+            validate_record_declaration(
                 identity,
-                kind,
-                handle);
+                kind);
 
         if (!succeeded(status)) {
-            return fail(
-                parser_failure_kind::semantic,
-                "Record declaration conflicts with existing semantic type");
+            return status;
         }
+
+        type_handle handle;
 
         status = advance();
         if (!succeeded(status)) {
@@ -3045,10 +3461,14 @@ private:
                     current.identifier);
 
             const auto base =
-                G.find_type(
+                find_type_profiled(
                     base_identity);
 
             type_entry base_type;
+
+            if (base_identity &&
+                base) {
+            }
 
             if (!base_identity ||
                 !base ||
@@ -3065,7 +3485,7 @@ private:
             }
 
             const auto dependency =
-                sources.add_dependency(
+                add_dependency_profiled(
                     base_identity);
 
             if (!succeeded(dependency)) {
@@ -3126,6 +3546,23 @@ private:
             return status;
         }
 
+        if (coarse_telemetry != nullptr) {
+            ++coarse_telemetry->
+                header_declare_record_calls;
+        }
+
+        status =
+            G.declare_record(
+                identity,
+                kind,
+                handle);
+
+        if (!succeeded(status)) {
+            return fail(
+                parser_failure_kind::semantic,
+                "Record declaration conflicts with existing semantic type");
+        }
+
         status = advance();
         if (!succeeded(status)) {
             return status;
@@ -3143,9 +3580,12 @@ private:
         bool constructor_seen = false;
         bool declares_virtual = false;
 
+        if (!bases.empty()) {
+        }
+
         const auto base_handle =
             !bases.empty()
-            ? G.find_type(
+            ? find_type_profiled(
                 bases.front().type)
             : type_handle{};
 
@@ -3169,6 +3609,11 @@ private:
                 bool assignment_operator = false,
                 bool subscript_operator = false,
                 bool binary_operator = false) -> server_status {
+                if (coarse_telemetry != nullptr) {
+                    ++coarse_telemetry->
+                        header_special_member_paths;
+                }
+
                 if (!at(token_kind::l_paren)) {
                     return fail(
                         parser_failure_kind::syntax,
@@ -3441,6 +3886,11 @@ private:
                     return status;
                 }
 
+                if (coarse_telemetry != nullptr) {
+                    ++coarse_telemetry->
+                        header_access_labels;
+                }
+
                 status =
                     expect(
                         token_kind::colon,
@@ -3479,6 +3929,11 @@ private:
                     }
 
                     constructor_seen = true;
+
+                    if (coarse_telemetry != nullptr) {
+                        ++coarse_telemetry->
+                            header_constructors;
+                    }
 
                     status =
                         parse_constructor(
@@ -3575,7 +4030,7 @@ private:
                             "Invalid pointer or reference conversion target");
                     }
                     type_ref wrapped;
-                    status = G.derive(conversion_type, modifier, 0, wrapped);
+                    status = derive_profiled(conversion_type, modifier, 0, wrapped);
                     if (!succeeded(status)) {
                         return status;
                     }
@@ -3644,6 +4099,13 @@ private:
                     "virtual must declare a member function");
             }
 
+            if (!complete_storage_type(member_type)) {
+                return fail_at(
+                    parser_failure_kind::semantic,
+                    "Record member requires a complete object type unless it is behind pointer/reference indirection",
+                    declarator.location);
+            }
+
             const auto name =
                 declarator.name;
 
@@ -3679,6 +4141,11 @@ private:
 
             if (!succeeded(status)) {
                 return status;
+            }
+
+            if (coarse_telemetry != nullptr) {
+                ++coarse_telemetry->
+                    header_data_members;
             }
 
             try {
@@ -3773,6 +4240,11 @@ private:
             return status;
         }
 
+        if (coarse_telemetry != nullptr) {
+            ++coarse_telemetry->
+                header_define_record_calls;
+        }
+
         status =
             G.define_record(
                 handle,
@@ -3863,6 +4335,15 @@ private:
 
         if (!succeeded(status)) {
             return status;
+        }
+
+        if (Domain == semantic_domain::header &&
+            !complete_storage_type(type)) {
+
+            return fail_at(
+                parser_failure_kind::semantic,
+                "Header object requires a complete object type unless it is behind pointer/reference indirection",
+                declarator.location);
         }
 
         const auto object_file =
@@ -4124,7 +4605,7 @@ private:
         }
 
         auto dependency =
-            sources.add_dependency(
+            add_dependency_profiled(
                 object_identity);
 
         if (!succeeded(dependency)) {
@@ -4301,7 +4782,7 @@ private:
                 }
 
                 dependency =
-                    sources.add_dependency(
+                    add_dependency_profiled(
                         G.identity(record));
 
                 if (!succeeded(dependency)) {
@@ -4912,6 +5393,21 @@ private:
         bool expect_close,
         std::size_t scope_depth) noexcept {
 
+        parser_stage_timer header_scope_timer{
+            Domain == semantic_domain::header &&
+                coarse_telemetry != nullptr
+            ? &coarse_telemetry->header_scope_ns
+            : nullptr};
+
+        if constexpr (
+            Domain == semantic_domain::header) {
+
+            if (coarse_telemetry != nullptr) {
+                ++coarse_telemetry->
+                    header_scope_calls;
+            }
+        }
+
         if constexpr (Domain == semantic_domain::source) {
             return parse_source_scope(
                 scope,
@@ -5045,6 +5541,7 @@ private:
     bool has_buffered = false;
 
     std::vector<declarator_modifier> declarator_modifiers;
+    std::vector<std::uint8_t> record_declaration_kinds;
 
     std::vector<endpoint_path_step> endpoint_steps;
     std::vector<base_record> record_bases;
@@ -5147,7 +5644,7 @@ server_status parse_semantic_project(
                 telemetry != nullptr
                     ? &input_telemetry
                     : nullptr,
-                nullptr,
+                telemetry,
                 telemetry};
 
         const auto started =
