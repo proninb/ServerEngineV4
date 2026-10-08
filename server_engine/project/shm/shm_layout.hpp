@@ -132,10 +132,12 @@ private:
 
     struct value_slot final {
         std::uint64_t size = 0;
-        std::uint32_t alignment = 0;
+        // Construction-only MSVC nonvirtual extent, not sizeof(record).
+        // The persisted SHM ABI columns still contain size/alignment/flags.
+        std::uint32_t nonvirtual_size = 0;
+        std::uint16_t alignment = 0;
         slot_state state = slot_state::empty;
         bool empty_record = false;
-        std::uint8_t reserved[2]{};
     };
 
     static_assert(sizeof(value_slot) == 16);

@@ -1270,8 +1270,7 @@ private:
         }
 
         plan.value = {};
-        plan.size =
-            properties.pointer_size;
+        plan.size = static_cast<std::uint8_t>(properties.pointer_size);
 
         return shm_runtime_v2_result::
             success;
@@ -3929,6 +3928,10 @@ prepare_shm_runtime_v2_persisted(
     shm_runtime_v2_prepare_telemetry* telemetry) noexcept {
 
     output = shm_runtime_v2{};
+
+    if (layout.target() != abi.target) {
+        return shm_runtime_v2_result::incompatible_abi;
+    }
 
     const auto result =
         attach_shm_type_batch_physical_columns(

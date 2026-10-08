@@ -378,7 +378,9 @@ private:
         constexpr std::uint32_t no_primary = (std::numeric_limits<std::uint32_t>::max)();
         std::uint32_t primary_local = no_primary;
         std::uint32_t record_alignment = 1;
-        bool single_empty_base = false;
+        bool all_bases_empty = base_count != 0;
+        bool previous_base_empty = false;
+        std::uint64_t previous_empty_end = 0;
 
         for (std::uint32_t local = 0; local < type.bases.count; ++local) {
             const auto global = base_begin + local;
@@ -391,10 +393,8 @@ private:
             shm_value_layout base_layout;
             const auto result = resolve_record(base_handle, base_layout);
             if (result != shm_layout_result::success) return result;
-            if (output.type_slots[base_handle.value() - 1].empty_record) {
-                if (base_count != 1) return shm_layout_result::unsupported_type;
-                single_empty_base = true;
-            }
+            all_bases_empty = all_bases_empty &&
+                output.type_slots[base_handle.value() - 1].empty_record;
             const auto effective_alignment = (std::min)(base_layout.alignment, abi.pack);
             if (effective_alignment == 0) return shm_layout_result::invalid_input;
             record_alignment = (std::max)(record_alignment, effective_alignment);
@@ -448,8 +448,33 @@ private:
             std::uint64_t aligned = 0;
             if (!align_up(cursor, effective_alignment, aligned)) return shm_layout_result::overflow;
             if (aligned >= invalid_record_offset) return shm_layout_result::overflow;
+            const auto& base_slot =
+                output.type_slots[base_handle.value() - 1];
+            const bool is_empty = base_slot.empty_record;
+            if (is_empty && previous_base_empty &&
+                aligned <= previous_empty_end) {
+                if (!add_u64(previous_empty_end, 1, aligned)) {
+                    return shm_layout_result::overflow;
+                }
+            }
+            if (aligned >= invalid_record_offset) {
+                return shm_layout_result::overflow;
+            }
             output.base_offsets[global] = static_cast<shm_record_offset>(aligned);
-            if (!add_u64(aligned, single_empty_base ? 0 : base_layout.size, cursor)) return shm_layout_result::overflow;
+            if (is_empty) {
+                previous_base_empty = true;
+                // Mirrors Runtime's default MSVC ABI empty-base placement.
+                // Nested empty records may have nonzero nonvirtual extent.
+                if (!add_u64(aligned, base_slot.nonvirtual_size, cursor)) {
+                    return shm_layout_result::overflow;
+                }
+                previous_empty_end = cursor;
+            } else {
+                previous_base_empty = false;
+                if (!add_u64(aligned, base_layout.size, cursor)) {
+                    return shm_layout_result::overflow;
+                }
+            }
             return shm_layout_result::success;
         };
 
@@ -511,14 +536,16 @@ private:
             if (!add_u64(aligned, member_layout.size, cursor)) return shm_layout_result::overflow;
         }
 
+        const auto nonvirtual_size = cursor;
         if (cursor == 0) cursor = 1;
         std::uint64_t final_size = 0;
         if (!align_up(cursor, record_alignment, final_size) || final_size > (std::numeric_limits<shm_record_offset>::max)()) {
             return shm_layout_result::overflow;
         }
         slot.size = final_size;
-        slot.alignment = record_alignment;
-        slot.empty_record = single_empty_base && type.members.count == 0 && !type.polymorphic();
+        slot.nonvirtual_size = static_cast<std::uint32_t>(nonvirtual_size);
+        slot.alignment = static_cast<std::uint16_t>(record_alignment);
+        slot.empty_record = all_bases_empty && type.members.count == 0 && !type.polymorphic();
         slot.state = shm_layout::slot_state::ready;
         value = {final_size, record_alignment, 0};
         return shm_layout_result::success;
@@ -538,8 +565,12 @@ private:
         if (type.kind == graph_type_kind::intrinsic_alias) {
             const auto result = intrinsic_layout(type.alias_intrinsic(), abi.target, value);
             if (result == shm_layout_result::success) {
+                if (value.alignment >
+                    (std::numeric_limits<std::uint16_t>::max)()) {
+                    return shm_layout_result::overflow;
+                }
                 slot.size = value.size;
-                slot.alignment = value.alignment;
+                slot.alignment = static_cast<std::uint16_t>(value.alignment);
                 slot.state = shm_layout::slot_state::ready;
             }
             return result;
@@ -592,7 +623,9 @@ private:
             slot = {}; return shm_layout_result::overflow;
         }
         slot.size = final_size;
-        slot.alignment = record_alignment;
+        slot.nonvirtual_size = static_cast<std::uint32_t>(
+            is_union ? union_size : cursor);
+        slot.alignment = static_cast<std::uint16_t>(record_alignment);
         slot.empty_record = !is_union && type.members.count == 0;
         slot.state = shm_layout::slot_state::ready;
         value = {final_size, record_alignment, 0};
@@ -647,9 +680,13 @@ private:
             result = shm_layout_result::unsupported_type; break;
         }
         if (result != shm_layout_result::success) { slot = {}; return result; }
-        if (resolved.size > (std::numeric_limits<shm_record_offset>::max)()) { slot = {}; return shm_layout_result::overflow; }
+        if (resolved.size > (std::numeric_limits<shm_record_offset>::max)() ||
+            resolved.alignment > (std::numeric_limits<std::uint16_t>::max)()) {
+            slot = {};
+            return shm_layout_result::overflow;
+        }
         slot.size = resolved.size;
-        slot.alignment = resolved.alignment;
+        slot.alignment = static_cast<std::uint16_t>(resolved.alignment);
         slot.state = shm_layout::slot_state::ready;
         value = resolved;
         return shm_layout_result::success;
@@ -1260,7 +1297,12 @@ shm_layout_result load_shm_layout_image(
     const auto read_slots = [&](auto& slots) {
         for (auto& slot : slots) {
             slot.size = layout_image_read_u64(image.data() + cursor);
-            slot.alignment = layout_image_read_u32(image.data() + cursor + 8);
+            const auto alignment =
+                layout_image_read_u32(image.data() + cursor + 8);
+            if (alignment > (std::numeric_limits<std::uint16_t>::max)()) {
+                return false;
+            }
+            slot.alignment = static_cast<std::uint16_t>(alignment);
             const auto flags = layout_image_read_u32(image.data() + cursor + 12);
 
             if ((flags & ~3u) != 0 ||

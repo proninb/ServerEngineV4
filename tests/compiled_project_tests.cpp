@@ -162,11 +162,39 @@ void test_nested_defaults_persistence(test_state& tests) {
     }
     (void)f.G.add_object(identity("instance", identity_kind::object), f.G.named(owner), instance);
     (void)f.G.add_object(identity("second", identity_kind::object), f.G.named(owner), instance);
+    // SHM-MULTI-BASE-REF-02: put the linked Owner reference behind TWO
+    // empty bases, and put a separate self-bound native reference into the
+    // fourth direct base. This tests real nonzero base offsets in both engines.
+    const auto empty_first_id = identity("EmptyRefPrefix0", identity_kind::type);
+    const auto empty_second_id = identity("EmptyRefPrefix1", identity_kind::type);
+    const auto local_id = identity("LocalReferenceBase", identity_kind::type);
+    type_handle empty_first, empty_second, local_record;
+    const std::array<member_record, 2> local_members{{
+        {name("local_value"), f.G.intrinsic(intrinsic_type::signed_int), graph_member_access::public_access},
+        {name("local_ref"), reference, graph_member_access::public_access}}};
+    const std::array<construction_value, 2> local_construction{{
+        construction_value::constant(construction_kind::unsigned_integer, 12),
+        construction_value::member_binding(1)}};
+    if (!tests.expect(
+            succeeded(f.G.declare_record(empty_first_id, graph_record_kind::struct_type, empty_first)) &&
+            succeeded(f.G.declare_record(empty_second_id, graph_record_kind::struct_type, empty_second)) &&
+            succeeded(f.G.declare_record(local_id, graph_record_kind::struct_type, local_record)) &&
+            succeeded(f.G.define_record(empty_first, graph_record_kind::struct_type, {})) &&
+            succeeded(f.G.define_record(empty_second, graph_record_kind::struct_type, {})) &&
+            succeeded(f.G.define_record(local_record, graph_record_kind::struct_type,
+                                        local_members, local_construction)),
+            "SHM-MULTI-BASE-REF-02 define empty and self-bound reference bases")) return;
     type_handle derived_owner;
     const auto derived_id = identity("DerivedOwner", identity_kind::type);
-    (void)f.G.declare_record(derived_id, graph_record_kind::struct_type, derived_owner);
-    const std::array<base_record, 1> bases{{{owner_id, graph_member_access::public_access, 0, 0}}};
-    (void)f.G.define_record(derived_owner, graph_record_kind::struct_type, {}, {}, bases);
+    const std::array<base_record, 4> bases{{
+        {empty_first_id, graph_member_access::public_access, 0, 0},
+        {empty_second_id, graph_member_access::public_access, 0, 0},
+        {owner_id, graph_member_access::public_access, 0, 0},
+        {local_id, graph_member_access::public_access, 0, 0}}};
+    if (!tests.expect(
+            succeeded(f.G.declare_record(derived_id, graph_record_kind::struct_type, derived_owner)) &&
+            succeeded(f.G.define_record(derived_owner, graph_record_kind::struct_type, {}, {}, bases)),
+            "SHM-MULTI-BASE-REF-02 define four-base DerivedOwner")) return;
     const auto derived_object = identity("derived", identity_kind::object);
     (void)f.G.add_object(derived_object, f.G.named(derived_owner), instance);
     const auto scalar_id = identity("scalar", identity_kind::object);
@@ -179,7 +207,7 @@ void test_nested_defaults_persistence(test_state& tests) {
         construction_value::constant(construction_kind::unsigned_integer, 73), replaced);
     const auto ref_index = f.G.find_member(owner, name("ref"));
     const std::array<endpoint_path_step, 2> reference_steps{{
-        {0, endpoint_path_step_kind::base, {}}, {ref_index.value(), endpoint_path_step_kind::member, {}}}};
+        {2, endpoint_path_step_kind::base, {}}, {ref_index.value(), endpoint_path_step_kind::member, {}}}};
     endpoint_path_handle reference_path;
     (void)f.G.intern_endpoint_path(f.G.named(derived_owner), reference_steps, reference_path);
     link_handle link;
@@ -213,7 +241,7 @@ void test_nested_defaults_persistence(test_state& tests) {
     tests.expect(succeeded(f.G.add_initialization({wrapper_object, endpoint_ref::from_path(dereference_path)},
         construction_value::constant(construction_kind::unsigned_integer, 19), replaced)), "initialize through record reference");
     const auto text_index = f.G.find_member(owner, name("text"));
-    std::array<endpoint_path_step, 3> steps{{{0, endpoint_path_step_kind::base, {}},
+    std::array<endpoint_path_step, 3> steps{{{2, endpoint_path_step_kind::base, {}},
         {text_index.value(), endpoint_path_step_kind::member, {}}, {0, endpoint_path_step_kind::array_index, {}}}};
     const char expected_text[8] = "0.0.3";
     for (std::size_t i = 0; i < 8; ++i) {
@@ -223,6 +251,20 @@ void test_nested_defaults_persistence(test_state& tests) {
         tests.expect(succeeded(f.G.add_initialization({derived_object, endpoint_ref::from_path(path)},
             construction_value::constant(construction_kind::unsigned_integer, expected_text[i]), replaced)), "inherited string byte initialization");
     }
+    // Dereference the native member-binding in the FOURTH base and initialize
+    // the referent only after object construction and Graph link resolution.
+    const std::array<endpoint_path_step, 3> local_steps{{
+        {3, endpoint_path_step_kind::base, {}},
+        {1, endpoint_path_step_kind::member, {}},
+        {0, endpoint_path_step_kind::dereference, {}}}};
+    endpoint_path_handle local_path;
+    tests.expect(
+        succeeded(f.G.intern_endpoint_path(f.G.named(derived_owner), local_steps, local_path)) &&
+        succeeded(f.G.add_initialization(
+            {derived_object, endpoint_ref::from_path(local_path)},
+            construction_value::constant(construction_kind::unsigned_integer, 31), replaced)),
+        "SHM-MULTI-BASE-REF-02 initialize through fourth-base native reference");
+
     (void)f.sources.finalize(f.files.size(), f.identities, f.G);
     compiled_test_image image;
     compiled_project_view view;
@@ -262,14 +304,26 @@ void test_nested_defaults_persistence(test_state& tests) {
         bound.bits == 73, "top-level reference resolves to initialized scalar");
     tests.expect(get_runtime_value(view, bindings, runtime, "derived.ref", bound) == runtime_query_result::success &&
         bound.bits == 73, "persisted whole-object link resolves through inherited reference");
+    runtime_value local_value{}, local_referent{};
+    tests.expect(
+        get_runtime_value(view, bindings, runtime, "derived.local_value", local_value) == runtime_query_result::success &&
+        get_runtime_value(view, bindings, runtime, "derived.local_ref", local_referent) == runtime_query_result::success &&
+        local_value.bits == 31 && local_referent.bits == 31,
+        "SHM-MULTI-BASE-REF-02 Fixed Direct initializes self-bound fourth-base reference");
     runtime_offset derived_offset;
-    type_entry persisted_owner;
-    record_offset text_offset;
+    type_entry persisted_owner, persisted_derived;
+    record_offset text_offset = 0, owner_base_offset = 0;
     if (tests.expect(bindings.object_offset(view.find_object(derived_object), derived_offset) &&
         view.type(view.find_type(owner_id), persisted_owner) &&
-        bindings.member_offset(persisted_owner.members.begin + text_index.value(), text_offset), "locate inherited string")) {
-        tests.expect(std::memcmp(runtime.data() + derived_offset + text_offset, expected_text, 8) == 0,
-            "persisted string bytes and trailing zeros reach Runtime");
+        view.type(view.find_type(derived_id), persisted_derived) &&
+        persisted_derived.bases.count == 4 &&
+        bindings.base_offset(persisted_derived.bases.begin + 2, owner_base_offset) &&
+        owner_base_offset != 0 &&
+        bindings.member_offset(persisted_owner.members.begin + text_index.value(), text_offset),
+        "SHM-MULTI-BASE-REF-02 locate nonzero third-base inherited string")) {
+        tests.expect(std::memcmp(runtime.data() + derived_offset + owner_base_offset + text_offset,
+                                 expected_text, 8) == 0,
+            "SHM-MULTI-BASE-REF-02 inherited third-base bytes reach Fixed Direct");
     }
     for (const auto path : {"instance.p.value", "second.p.value"}) {
         runtime_value result;
@@ -506,6 +560,69 @@ void test_nested_defaults_persistence(test_state& tests) {
         v2_initialization_telemetry.writes ==
             view.initialization_count(),
         "Runtime V2 preserves constructor/link/initialization ordering");
+
+    // Verify actual native addresses, not only value-level Graph parity.
+    // SHM Runtime V2 must resolve both nonzero base offsets without semantic
+    // lookups in the execution path.
+    const auto derived_handle = view.find_type(derived_id);
+    const auto local_handle = view.find_type(local_id);
+    type_entry derived_entry{}, local_entry{};
+    shm_offset derived_where = 0;
+    shm_record_offset owner_in_derived = 0, local_in_derived = 0;
+    shm_record_offset ref_in_owner = 0, text_in_owner = 0;
+    shm_record_offset local_value_in_base = 0, local_ref_in_base = 0;
+    if (!tests.expect(
+            derived_handle && local_handle &&
+            view.type(derived_handle, derived_entry) &&
+            view.type(local_handle, local_entry) &&
+            derived_entry.bases.count == 4 &&
+            local_entry.members.count == 2 &&
+            v2_layout.object_offset(view.find_object(derived_object), derived_where) &&
+            v2_layout.base_offset(derived_entry.bases.begin + 2, owner_in_derived) &&
+            v2_layout.base_offset(derived_entry.bases.begin + 3, local_in_derived) &&
+            v2_layout.member_offset(persisted_owner.members.begin + ref_index.value(), ref_in_owner) &&
+            v2_layout.member_offset(persisted_owner.members.begin + text_index.value(), text_in_owner) &&
+            v2_layout.member_offset(local_entry.members.begin, local_value_in_base) &&
+            v2_layout.member_offset(local_entry.members.begin + 1, local_ref_in_base) &&
+            owner_in_derived != 0 && local_in_derived != 0,
+            "SHM-MULTI-BASE-REF-02 resolve third/fourth-base physical offsets")) return;
+
+    const auto owner_root = derived_where + owner_in_derived;
+    const auto local_root = derived_where + local_in_derived;
+    const auto inherited_ref_slot = owner_root + ref_in_owner;
+    const auto local_ref_slot = local_root + local_ref_in_base;
+    const auto local_value_slot = local_root + local_value_in_base;
+    const auto derived_default_slot = owner_root + p_where + value_where;
+    const auto inherited_text_slot = owner_root + text_in_owner;
+    const auto fits = [&](std::uint64_t at, std::size_t bytes) {
+        return at <= v2_runtime.size() && bytes <= v2_runtime.size() - at;
+    };
+    if (!tests.expect(
+            fits(inherited_ref_slot, sizeof(std::uintptr_t)) &&
+            fits(local_ref_slot, sizeof(std::uintptr_t)) &&
+            fits(local_value_slot, sizeof(int)) &&
+            fits(derived_default_slot, sizeof(int)) &&
+            fits(inherited_text_slot, sizeof(expected_text)) &&
+            fits(scalar_where, sizeof(int)),
+            "SHM-MULTI-BASE-REF-02 physical slots are within Runtime image")) return;
+
+    std::uintptr_t inherited_link_address = 0, self_reference_address = 0;
+    int native_local_value = 0, native_inherited_default = 0;
+    std::memcpy(&inherited_link_address, v2_runtime.data() + inherited_ref_slot,
+                sizeof(inherited_link_address));
+    std::memcpy(&self_reference_address, v2_runtime.data() + local_ref_slot,
+                sizeof(self_reference_address));
+    std::memcpy(&native_local_value, v2_runtime.data() + local_value_slot,
+                sizeof(native_local_value));
+    std::memcpy(&native_inherited_default, v2_runtime.data() + derived_default_slot,
+                sizeof(native_inherited_default));
+    tests.expect(
+        inherited_link_address == reinterpret_cast<std::uintptr_t>(v2_runtime.data() + scalar_where) &&
+        self_reference_address == reinterpret_cast<std::uintptr_t>(v2_runtime.data() + local_value_slot) &&
+        native_local_value == 31 && native_inherited_default == 42 &&
+        std::memcmp(v2_runtime.data() + inherited_text_slot,
+                    expected_text, sizeof(expected_text)) == 0,
+        "SHM-MULTI-BASE-REF-02 native links/refs/defaults/initializations in later bases");
 }
 
 void test_class_abi_persistence(
@@ -10592,6 +10709,13 @@ void test_runtime_multiple_empty_bases_01(test_state& tests) {
                       "MULTI-EMPTY-01 Windows Runtime layout accepts empty multi-base")) {
         return;
     }
+    shm_layout v2_layout;
+    if (!tests.expect(
+            prepare_shm_layout(view, windows_abi, v2_layout) ==
+                shm_layout_result::success,
+            "MULTI-EMPTY-01 SHM V2 layout accepts empty multi-base")) {
+        return;
+    }
     const auto compare = [&](type_handle handle, std::uint64_t native_size,
                              std::uint32_t native_align,
                              std::initializer_list<record_offset> expected_bases,
@@ -10599,15 +10723,22 @@ void test_runtime_multiple_empty_bases_01(test_state& tests) {
         const auto derived = view.find_type(f.G.identity(handle));
         type_entry entry;
         runtime_value_layout actual;
+        shm_value_layout v2_actual;
         const bool persisted = derived && view.type(derived, entry);
         const bool ready = persisted && layout.type(derived, actual);
-        if (!tests.expect(ready &&
+        const bool v2_ready = persisted && v2_layout.type(derived, v2_actual);
+        if (!tests.expect(ready && v2_ready &&
                           actual.size == native_size &&
                           actual.alignment == native_align &&
+                          v2_actual.size == actual.size &&
+                          v2_actual.alignment == actual.alignment &&
                           entry.bases.count == expected_bases.size(),
                           "MULTI-EMPTY-01 size/align/base count")) {
             std::cerr << "MULTI-EMPTY-01 handle=" << handle.value()
                       << " persisted=" << persisted << " layout-ready=" << ready
+                      << " shm-ready=" << v2_ready
+                      << " shm-size=" << v2_actual.size
+                      << " shm-align=" << v2_actual.alignment
                       << " expected-size=" << native_size << " actual-size=" << actual.size
                       << " expected-align=" << native_align << " actual-align=" << actual.alignment
                       << " expected-bases=" << expected_bases.size()
@@ -10617,15 +10748,20 @@ void test_runtime_multiple_empty_bases_01(test_state& tests) {
         std::size_t position = 0;
         for (const auto expected : expected_bases) {
             record_offset offset = 99999;
+            shm_record_offset v2_offset = 99999;
             tests.expect(layout.base_offset(entry.bases.begin + position, offset) &&
-                         offset == expected, "MULTI-EMPTY-01 direct base offset");
+                         v2_layout.base_offset(entry.bases.begin + position, v2_offset) &&
+                         offset == expected && v2_offset == expected,
+                         "MULTI-EMPTY-01 Runtime/SHM direct base offset");
             ++position;
         }
         if (entry.members.count != 0) {
             record_offset offset = 99999;
+            shm_record_offset v2_offset = 99999;
             tests.expect(layout.member_offset(entry.members.begin, offset) &&
-                         offset == expected_member,
-                         "MULTI-EMPTY-01 member offset");
+                         v2_layout.member_offset(entry.members.begin, v2_offset) &&
+                         offset == expected_member && v2_offset == expected_member,
+                         "MULTI-EMPTY-01 Runtime/SHM member offset");
         }
     };
 
@@ -10678,6 +10814,29 @@ void test_runtime_multiple_empty_bases_01(test_state& tests) {
     // Non-MSVC builds only check that persisted layouts can be computed;
     // native ABI reference must be tested with MSVC Win32/x64.
     (void)compare;
+#endif
+#if defined(_MSC_VER) && defined(_WIN32)
+    shm_runtime_v2 v2;
+    if (!tests.expect(
+            prepare_shm_runtime_v2(view, windows_abi, v2_layout, v2) ==
+                shm_runtime_v2_result::success,
+            "MULTI-EMPTY-01 prepare production SHM Runtime V2")) {
+        return;
+    }
+    std::vector<std::byte> bytes(
+        static_cast<std::size_t>(v2_layout.size()), std::byte{0});
+    tests.expect(
+        materialize_shm_runtime_v2_canonical(v2, windows_abi, v2_layout, bytes) ==
+            shm_runtime_v2_result::success &&
+        mark_shm_runtime_v2_links(v2, windows_abi, v2_layout, bytes) ==
+            shm_runtime_v2_result::success &&
+        materialize_shm_runtime_v2_objects(v2, windows_abi, v2_layout, bytes) ==
+            shm_runtime_v2_result::success &&
+        materialize_shm_runtime_v2_links(v2, windows_abi, v2_layout, bytes) ==
+            shm_runtime_v2_result::success &&
+        materialize_shm_runtime_v2_initializations(v2, windows_abi, v2_layout, bytes) ==
+            shm_runtime_v2_result::success,
+        "MULTI-EMPTY-01 production SHM Runtime V2 materializes all empty bases");
 #endif
 }
 
