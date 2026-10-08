@@ -42,13 +42,22 @@ semantic_preprocessor_v2::semantic_preprocessor_v2(
     prepared_include_view_v2 prepared_value,
     const preprocessor_configuration& configuration_value,
     string_table& strings_value,
-    preprocessor_v2_failure* failure_value) noexcept
+    preprocessor_v2_failure* failure_value
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+    // PARSER-V2-CURSOR-PERF-07: profiler is benchmark-only.
+    , semantic_preprocessor_v2_perf07_profile* profile_value
+#endif
+    ) noexcept
     : files(files_value),
       prepared(prepared_value),
       configuration(configuration_value),
       strings(strings_value),
       preprocessing(strings_value),
-      failure(failure_value) {
+      failure(failure_value)
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+      , profile(profile_value)
+#endif
+      {
 }
 
 bool semantic_preprocessor_v2::contextual_identifier(
@@ -681,7 +690,12 @@ server_status semantic_preprocessor_v2::enter_file(
 
     const auto started_input =
         target.cursor.start(
-            input);
+            input
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+            , profile != nullptr ? &profile->decode : nullptr
+            , profile != nullptr ? &profile->cursor_advance : nullptr
+#endif
+            );
 
     if (!succeeded(started_input)) {
         target = {};
@@ -1412,6 +1426,10 @@ server_status semantic_preprocessor_v2::consume_directive(
 }
 
 server_status semantic_preprocessor_v2::seek_next() noexcept {
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+    cursor_v2_perf07_probe perf07_seek_probe(
+        profile != nullptr ? &profile->seek_next : nullptr);
+#endif
 
     current_value = {};
     current_valid = false;
@@ -1448,12 +1466,48 @@ server_status semantic_preprocessor_v2::seek_next() noexcept {
                 "Prepared Header cursor has no current token");
         }
 
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+        if (profile != nullptr) ++profile->raw_tokens_seen;
+#endif
         if (directive_start_v2(
                 raw->kind)) {
-
-            const auto executed =
-                consume_directive(
-                    input);
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+            // PARSER-V2-CURSOR-AB-DIRECTIVE-10: dispatch groups counted
+            // before execution, including inactive conditional branches.
+            if (profile != nullptr) {
+                switch (raw->kind) {
+                case token_kind::pp_include:
+                    ++profile->perf10_include;
+                    break;
+                case token_kind::pp_pragma:
+                    ++profile->perf10_pragma;
+                    break;
+                case token_kind::pp_define:
+                case token_kind::pp_undef:
+                    ++profile->perf10_define_undef;
+                    break;
+                case token_kind::pp_if:
+                case token_kind::pp_ifdef:
+                case token_kind::pp_ifndef:
+                case token_kind::pp_elif:
+                case token_kind::pp_else:
+                case token_kind::pp_endif:
+                    ++profile->perf10_conditional;
+                    break;
+                default:
+                    ++profile->perf10_other;
+                    break;
+                }
+            }
+#endif
+            server_status executed;
+            {
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+                cursor_v2_perf07_probe perf07_directive_probe(
+                    profile != nullptr ? &profile->directive : nullptr);
+#endif
+                executed = consume_directive(input);
+            }
 
             if (!succeeded(executed)) {
                 return executed;
@@ -1463,6 +1517,9 @@ server_status semantic_preprocessor_v2::seek_next() noexcept {
         }
 
         if (!active()) {
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+            if (profile != nullptr) ++profile->inactive_tokens_skipped;
+#endif
             const auto skipped =
                 input.cursor.advance();
 
@@ -1478,14 +1535,24 @@ server_status semantic_preprocessor_v2::seek_next() noexcept {
 
         if (raw->kind ==
             token_kind::identifier) {
-
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+            if (profile != nullptr) {
+                ++profile->identifiers_seen;
+                if (preprocessing.size() != 0)
+                    ++profile->identifiers_with_definitions;
+            }
+#endif
             preprocessor_expansion
                 expansion;
 
-            const auto expanded =
-                preprocessing.expand(
-                    raw->identifier,
-                    expansion);
+            server_status expanded;
+            {
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+                cursor_v2_perf07_probe perf07_expand_probe(
+                    profile != nullptr ? &profile->macro_expand : nullptr);
+#endif
+                expanded = preprocessing.expand(raw->identifier, expansion);
+            }
 
             if (!succeeded(expanded)) {
                 return fail(
@@ -1500,6 +1567,16 @@ server_status semantic_preprocessor_v2::seek_next() noexcept {
                     expanded);
             }
 
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+            if (profile != nullptr) {
+                if (expansion.kind == preprocessor_expansion_kind::empty)
+                    ++profile->identifiers_elided;
+                else if (expansion.identifier != raw->identifier)
+                    ++profile->identifiers_replaced;
+                else
+                    ++profile->identifiers_unchanged;
+            }
+#endif
             if (expansion.kind ==
                 preprocessor_expansion_kind::
                     empty) {

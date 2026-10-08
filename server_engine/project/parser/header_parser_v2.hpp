@@ -23,6 +23,48 @@ namespace cw::server {
 
 inline constexpr std::size_t parser_v2_scope_depth_limit = 256;
 
+// Benchmark-only parser counters and sampled timings. Not part of Graph ABI.
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+struct header_parser_v2_profile final {
+    // PARSER-V2-SEMANTIC-DETAIL-06: benchmark only; sampled subphase probes.
+    std::uint64_t identity_lookup_calls = 0;
+    std::uint64_t identity_lookup_samples = 0;
+    double identity_lookup_sample_ms = 0;
+    std::uint64_t named_resolution_calls = 0;
+    std::uint64_t named_resolution_samples = 0;
+    double named_resolution_sample_ms = 0;
+    std::uint64_t intrinsic_parse_calls = 0;
+    std::uint64_t intrinsic_parse_samples = 0;
+    double intrinsic_parse_sample_ms = 0;
+    std::uint64_t type_tail_calls = 0;
+    std::uint64_t type_tail_samples = 0;
+    double type_tail_sample_ms = 0;
+    std::uint64_t member_name_calls = 0;
+    std::uint64_t member_name_samples = 0;
+    double member_name_sample_ms = 0;
+    std::uint64_t member_initializer_calls = 0;
+    std::uint64_t member_initializer_samples = 0;
+    double member_initializer_sample_ms = 0;
+    std::uint64_t member_append_calls = 0;
+    std::uint64_t member_append_samples = 0;
+    double member_append_sample_ms = 0;
+    std::uint64_t advance_calls = 0;
+    std::uint64_t advance_samples = 0;
+    double advance_sample_ms = 0;
+    std::uint64_t type_calls = 0;
+    std::uint64_t type_samples = 0;
+    double type_sample_ms = 0;
+    std::uint64_t member_calls = 0;
+    std::uint64_t member_samples = 0;
+    double member_sample_ms = 0;
+    std::uint64_t constructor_calls = 0;
+    double constructor_ms = 0;
+    std::uint64_t graph_define_calls = 0;
+    std::uint64_t graph_defined_members = 0;
+    double graph_define_ms = 0;
+};
+#endif
+
 enum class parser_v2_failure_kind : std::uint8_t {
     none = 0,
     syntax,
@@ -44,7 +86,11 @@ public:
         semantic_preprocessor_v2& input,
         identity_space& identities,
         graph& G,
-        parser_v2_failure* failure = nullptr) noexcept;
+        parser_v2_failure* failure = nullptr
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+        , header_parser_v2_profile* profile = nullptr
+#endif
+        ) noexcept;
 
     header_parser_v2(
         const header_parser_v2&) = delete;
@@ -327,6 +373,9 @@ private:
         record_kind_slots;
 
     parser_v2_failure* failure = nullptr;
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+    header_parser_v2_profile* profile = nullptr;
+#endif
 };
 
 }

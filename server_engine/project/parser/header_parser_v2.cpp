@@ -3,6 +3,9 @@
 #include "../graph/construction_semantics.hpp"
 
 #include <limits>
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+#include <chrono>
+#endif
 #include <algorithm>
 #include <string>
 #include <utility>
@@ -33,17 +36,74 @@ namespace {
     }
 }
 
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+struct header_v2_timed_probe final {
+    double* elapsed_ms = nullptr;
+    std::chrono::steady_clock::time_point started{};
+
+    explicit header_v2_timed_probe(double* value) noexcept
+        : elapsed_ms(value),
+          started(value ? std::chrono::steady_clock::now()
+                        : std::chrono::steady_clock::time_point{}) {}
+
+    ~header_v2_timed_probe() noexcept {
+        if (elapsed_ms != nullptr) {
+            *elapsed_ms += std::chrono::duration<double, std::milli>{
+                std::chrono::steady_clock::now() - started}.count();
+        }
+    }
+};
+// PARSER-V2-SEMANTIC-DETAIL-06: sample every 128th operation.
+// An independent counter is used per operation; measured regions can be
+// nested (in particular advance inside parse_type/parse_member_declarator).
+// Sum of these metrics is NOT an exclusive, additive wall-time breakdown.
+struct header_v2_detail_probe final {
+    using counter_member = std::uint64_t header_parser_v2_profile::*;
+    using time_member = double header_parser_v2_profile::*;
+
+    [[nodiscard]] static double* choose(
+        header_parser_v2_profile* profile,
+        counter_member calls,
+        counter_member samples,
+        time_member elapsed) noexcept {
+        if (profile == nullptr) return nullptr;
+        auto& value = profile->*calls;
+        ++value;
+        if ((value & 127u) != 0) return nullptr;
+        ++(profile->*samples);
+        return &(profile->*elapsed);
+    }
+
+    header_v2_timed_probe timer;
+
+    header_v2_detail_probe(
+        header_parser_v2_profile* profile,
+        counter_member calls,
+        counter_member samples,
+        time_member elapsed) noexcept
+        : timer(choose(profile, calls, samples, elapsed)) {}
+};
+#endif
+
 } // namespace
 
 header_parser_v2::header_parser_v2(
     semantic_preprocessor_v2& input_value,
     identity_space& identities_value,
     graph& graph_value,
-    parser_v2_failure* failure_value) noexcept
+    parser_v2_failure* failure_value
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+    , header_parser_v2_profile* profile_value
+#endif
+    ) noexcept
     : input(input_value),
       identities(identities_value),
       G(graph_value),
-      failure(failure_value) {
+      failure(failure_value)
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+    , profile(profile_value)
+#endif
+    {
 }
 
 const prepared_token*
@@ -58,6 +118,13 @@ bool header_parser_v2::at(
 }
 
 server_status header_parser_v2::consume() noexcept {
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+    header_v2_detail_probe perf06_probe(
+        profile,
+        &header_parser_v2_profile::advance_calls,
+        &header_parser_v2_profile::advance_samples,
+        &header_parser_v2_profile::advance_sample_ms);
+#endif
     return input.advance();
 }
 
@@ -631,6 +698,14 @@ server_status header_parser_v2::parse_intrinsic(
 server_status header_parser_v2::parse_type(
     identity_ref scope,
     resolved_type& output) noexcept {
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+    // Every 128th call only: low-overhead estimate, NOT exact wall-time.
+    if (profile != nullptr) ++profile->type_calls;
+    const bool sampled = profile != nullptr &&
+        (profile->type_calls % 128u) == 0;
+    header_v2_timed_probe probe(sampled ? &profile->type_sample_ms : nullptr);
+    if (sampled) ++profile->type_samples;
+#endif
 
     output = {};
 
@@ -658,7 +733,17 @@ server_status header_parser_v2::parse_type(
     if ((first != nullptr && header_v2_builtin_start(first->kind)) ||
         input.contextual_identifier("__int64")) {
         intrinsic_type intrinsic = intrinsic_type::none;
-        const auto status = parse_intrinsic(intrinsic);
+        server_status status;
+        {
+        #ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+            header_v2_detail_probe perf06_probe(
+                profile,
+                &header_parser_v2_profile::intrinsic_parse_calls,
+                &header_parser_v2_profile::intrinsic_parse_samples,
+                &header_parser_v2_profile::intrinsic_parse_sample_ms);
+        #endif
+            status = parse_intrinsic(intrinsic);
+        }
         if (!succeeded(status)) return status;
         output.type = G.intrinsic(intrinsic);
         if (!output.type) {
@@ -680,10 +765,17 @@ server_status header_parser_v2::parse_type(
                 "Header Parser V2 expected a supported type");
         }
 
-        const auto identity =
-            find_type_identity(
-                scope,
-                token->identifier);
+        identity_ref identity;
+        {
+        #ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+            header_v2_detail_probe perf06_probe(
+                profile,
+                &header_parser_v2_profile::identity_lookup_calls,
+                &header_parser_v2_profile::identity_lookup_samples,
+                &header_parser_v2_profile::identity_lookup_sample_ms);
+        #endif
+            identity = find_type_identity(scope, token->identifier);
+        }
 
         if (!identity) {
             return fail(
@@ -691,10 +783,17 @@ server_status header_parser_v2::parse_type(
                 "Header Parser V2 named type is unknown");
         }
 
-        const auto resolved =
-            resolve_named_type(
-                identity,
-                output);
+        server_status resolved;
+        {
+        #ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+            header_v2_detail_probe perf06_probe(
+                profile,
+                &header_parser_v2_profile::named_resolution_calls,
+                &header_parser_v2_profile::named_resolution_samples,
+                &header_parser_v2_profile::named_resolution_sample_ms);
+        #endif
+            resolved = resolve_named_type(identity, output);
+        }
 
         if (!succeeded(resolved)) {
             return resolved;
@@ -708,10 +807,18 @@ server_status header_parser_v2::parse_type(
         }
     }
 
-    return parse_type_tail(
-        output,
-        const_qualified,
-        volatile_qualified);
+    server_status tail_status;
+    {
+    #ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+        header_v2_detail_probe perf06_probe(
+            profile,
+            &header_parser_v2_profile::type_tail_calls,
+            &header_parser_v2_profile::type_tail_samples,
+            &header_parser_v2_profile::type_tail_sample_ms);
+    #endif
+        tail_status = parse_type_tail(output, const_qualified, volatile_qualified);
+    }
+    return tail_status;
 }
 
 
@@ -1255,6 +1362,13 @@ server_status header_parser_v2::parse_member_declarator(
     bool virtual_prefix,
     bool base_polymorphic,
     bool& declares_virtual) noexcept {
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+    if (profile != nullptr) ++profile->member_calls;
+    const bool sampled = profile != nullptr &&
+        (profile->member_calls % 128u) == 0;
+    header_v2_timed_probe probe(sampled ? &profile->member_sample_ms : nullptr);
+    if (sampled) ++profile->member_samples;
+#endif
 
     // HEADER-V2-DECLARATOR-09: a parenthesized prefix binds *outside* the
     // following array suffix: short (&A)[6] => reference(array(short, 6)).
@@ -1367,11 +1481,16 @@ server_status header_parser_v2::parse_member_declarator(
 
     bool inserted = false;
 
-    status =
-        names.insert(
-            members,
-            member_name,
-            inserted);
+    {
+    #ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+        header_v2_detail_probe perf06_probe(
+            profile,
+            &header_parser_v2_profile::member_name_calls,
+            &header_parser_v2_profile::member_name_samples,
+            &header_parser_v2_profile::member_name_sample_ms);
+    #endif
+        status = names.insert(members, member_name, inserted);
+    }
 
     if (!succeeded(status)) {
         return status;
@@ -1390,10 +1509,16 @@ server_status header_parser_v2::parse_member_declarator(
         at(token_kind::assign) || at(token_kind::l_brace);
     constructor_operation initial;
 
-    status =
-        parse_member_initializer(
-            type.type,
-            initial);
+    {
+    #ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+        header_v2_detail_probe perf06_probe(
+            profile,
+            &header_parser_v2_profile::member_initializer_calls,
+            &header_parser_v2_profile::member_initializer_samples,
+            &header_parser_v2_profile::member_initializer_sample_ms);
+    #endif
+        status = parse_member_initializer(type.type, initial);
+    }
 
     if (!succeeded(status)) {
         return status;
@@ -1416,11 +1541,20 @@ server_status header_parser_v2::parse_member_declarator(
 
     // HEADER-V2-REFERENCE-08: resolve declaration default immediately when
     // possible; defer only a forward referent, keyed by its compact name ID.
-    try {
-        members.push_back({member_name, type.type, access, {}});
-        construction.push_back({});
+    {
+    #ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+        header_v2_detail_probe perf06_probe(
+            profile,
+            &header_parser_v2_profile::member_append_calls,
+            &header_parser_v2_profile::member_append_samples,
+            &header_parser_v2_profile::member_append_sample_ms);
+    #endif
+        try {
+            members.push_back({member_name, type.type, access, {}});
+            construction.push_back({});
+        }
+        catch (...) { return server_status::io_error; }
     }
-    catch (...) { return server_status::io_error; }
 
     const auto index = members.size() - 1;
     if (has_initializer) {
@@ -1900,6 +2034,10 @@ server_status header_parser_v2::parse_constructor(
     pending_constructor_operations& pending,
     record_reference_state& references,
     record_nested_state& nested) noexcept {
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+    if (profile != nullptr) ++profile->constructor_calls;
+    header_v2_timed_probe probe(profile != nullptr ? &profile->constructor_ms : nullptr);
+#endif
 
     if (!record_name ||
         !at(token_kind::l_paren)) {
@@ -2728,14 +2866,25 @@ server_status header_parser_v2::parse_record(
         return status;
     }
 
-    status =
-        G.define_resolved_record(
-            handle,
-            kind,
-            members,
-            construction,
-            bases,
-            declares_virtual);
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+    {
+        header_v2_timed_probe probe(profile != nullptr ? &profile->graph_define_ms : nullptr);
+#endif
+        status =
+            G.define_resolved_record(
+                handle,
+                kind,
+                members,
+                construction,
+                bases,
+                declares_virtual);
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+    }
+    if (succeeded(status) && profile != nullptr) {
+        ++profile->graph_define_calls;
+        profile->graph_defined_members += members.size();
+    }
+#endif
 
     if (!succeeded(status)) {
         return fail(

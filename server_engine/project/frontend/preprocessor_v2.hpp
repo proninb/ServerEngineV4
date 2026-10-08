@@ -47,6 +47,30 @@ struct preprocessor_v2_failure final {
     std::string_view detail;
 };
 
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+// PARSER-V2-CURSOR-PERF-07: benchmark-only measurements and macro outcomes.
+struct semantic_preprocessor_v2_perf07_profile final {
+    cursor_v2_perf07_counter decode;
+    cursor_v2_perf07_counter cursor_advance;
+    cursor_v2_perf07_counter seek_next;
+    cursor_v2_perf07_counter macro_expand;
+    cursor_v2_perf07_counter directive;
+    std::uint64_t raw_tokens_seen = 0;
+    std::uint64_t identifiers_seen = 0;
+    std::uint64_t identifiers_unchanged = 0;
+    std::uint64_t identifiers_replaced = 0;
+    std::uint64_t identifiers_elided = 0;
+    std::uint64_t identifiers_with_definitions = 0;
+    std::uint64_t inactive_tokens_skipped = 0;
+    // PARSER-V2-CURSOR-AB-DIRECTIVE-10: exact dispatch counts only.
+    std::uint64_t perf10_include = 0;
+    std::uint64_t perf10_pragma = 0;
+    std::uint64_t perf10_define_undef = 0;
+    std::uint64_t perf10_conditional = 0;
+    std::uint64_t perf10_other = 0;
+};
+#endif
+
 class semantic_preprocessor_v2 final {
 public:
     semantic_preprocessor_v2(
@@ -54,7 +78,11 @@ public:
         prepared_include_view_v2 prepared,
         const preprocessor_configuration& configuration,
         string_table& strings,
-        preprocessor_v2_failure* failure = nullptr) noexcept;
+        preprocessor_v2_failure* failure = nullptr
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+        , semantic_preprocessor_v2_perf07_profile* profile = nullptr
+#endif
+        ) noexcept;
 
     semantic_preprocessor_v2(
         const semantic_preprocessor_v2&) = delete;
@@ -207,6 +235,9 @@ private:
     preprocessor preprocessing;
 
     preprocessor_v2_failure* failure = nullptr;
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+    semantic_preprocessor_v2_perf07_profile* profile = nullptr;
+#endif
 
     std::array<frame, preprocessor_v2_include_depth_limit>
         frames{};
