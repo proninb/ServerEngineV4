@@ -1,0 +1,18 @@
+{
+  "experiment": "V3-37R31",
+  "repository": "proninb/ServerEngineV4",
+  "pinned_head": "6f50a4e2a2963f1dab46b993203cc579d71a3415",
+  "control": "V3-37",
+  "candidate": "V3-37R",
+  "warmups": 2,
+  "pairs": 31,
+  "fields_diagnostics": "separate C++ executable",
+  "full_PUBLISH_gate": "PARTIAL",
+  "production_modified": false,
+  "frozen_sha256": {
+    "v3_37_graph_producer.inc": "7b122b66427bd6a5883835b1ef8f2f99d977b871cc62e1de544f05ab3c4c6579",
+    "v3_37r_graph_producer.inc": "59f602ebd9d65d93f0e4022f2f696793812be3e0308f43066c7b9a67c1818e45",
+    "v3_37r_perf_benchmark.cpp": "e78af5901e3d91b7535c067604ca5416afd304185ea244dd4a7ad41752bfc679",
+    "header_syntax_v3_06.hpp": "a0e0522b8c941dbaba70f99780adf62ed16b5d063ef73609fa286e1277dff5e0"
+  }
+}

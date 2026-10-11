@@ -1,0 +1,12 @@
+{
+  "baseline_sha256": "d208d9617a7576efb4d535274671e807420578d20967f6678af9465d991451a9",
+  "experiment": "V342 lazy type_spec initialization",
+  "changed_files": [
+    "benchmarks/v3_42_canonical.hpp",
+    "benchmarks/v3_42_fast_type.hpp",
+    "benchmarks/v3_42_scope_chain.hpp",
+    "benchmarks/v3_42_graph_producer.inc",
+    "benchmarks/v3_42_perf_benchmark.cpp"
+  ],
+  "full_publish_gate": "PARTIAL"
+}

@@ -1,0 +1,20 @@
+{
+  "experiment": "V3-38",
+  "checkpoint": "6f50a4e2a2963f1dab46b993203cc579d71a3415",
+  "control": "V3-37",
+  "variants": {
+    "V3-38A": "only events.reserve()",
+    "V3-38B": "only Graph reserve owned_declaration_count()"
+  },
+  "full_publish_parity": "PARTIAL",
+  "sha256": {
+    "v3_31_graph_producer.inc": "97d3b813e120486fcd804e21f1d28fba1fab430ab057cee213625ef4c668333d",
+    "v3_37_graph_producer.inc": "7b122b66427bd6a5883835b1ef8f2f99d977b871cc62e1de544f05ab3c4c6579",
+    "v3_37r_graph_producer.inc": "59f602ebd9d65d93f0e4022f2f696793812be3e0308f43066c7b9a67c1818e45",
+    "header_syntax_v3_06.hpp": "a0e0522b8c941dbaba70f99780adf62ed16b5d063ef73609fa286e1277dff5e0",
+    "v3_38a_graph_producer.inc": "d208d9617a7576efb4d535274671e807420578d20967f6678af9465d991451a9",
+    "v3_38b_graph_producer.inc": "3fb181f08b6a66c996cef8ce1c637940c2a709345e3b3cac1909138a11747e80",
+    "v3_38a_perf_benchmark.cpp": "f9028ea106d46cac161bd97413bcb3e80706a4aff538e26ff4995165ceb82876",
+    "v3_38b_perf_benchmark.cpp": "649de016f708d3b5463ebaf14ca427a6ea87eb16a11229adfd4c5d15650cdf99"
+  }
+}

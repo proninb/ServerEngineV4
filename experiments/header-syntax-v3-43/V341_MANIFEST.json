@@ -1,0 +1,10 @@
+{
+  "experiment": "V3-41",
+  "base_commit": "6f50a4e2a2963f1dab46b993203cc579d71a3415",
+  "baseline": "V3-38A unchanged",
+  "kind": "diagnostic_only",
+  "baseline_sha256": "d208d9617a7576efb4d535274671e807420578d20967f6678af9465d991451a9",
+  "v340_parent_sha256": "451b5f38819c54dfa1bde2586dd64b7a6e892d76315f14852d089c0dd7b21382",
+  "candidate_sha256": "75395ac28c7820dff1d0a702f1b9b98316370ffb19721cf50421313cd1e3a721",
+  "benchmark_sha256": "cb7142738e3d5db456b138528952e347b37ae982b2adae26247e7a12e45c6ea8"
+}

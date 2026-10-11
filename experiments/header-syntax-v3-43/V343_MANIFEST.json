@@ -1,0 +1,9 @@
+{
+  "experiment": "V343 Verification V342 lazy type_spec",
+  "checkpoint": "6f50a4e2a2963f1dab46b993203cc579d71a3415",
+  "baseline": "V3-38A",
+  "candidate": "V3-42",
+  "frozen_control_sha256": "d208d9617a7576efb4d535274671e807420578d20967f6678af9465d991451a9",
+  "frozen_candidate_sha256": "9226057808ab3aabfc13389d29437824c209e1f3dce5dc6a861bcb9b84a734b4",
+  "full_publish_gate": "PARTIAL"
+}

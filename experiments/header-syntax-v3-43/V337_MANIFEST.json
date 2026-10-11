@@ -1,0 +1,10 @@
+{
+  "checkpoint": "6f50a4e2a2963f1dab46b993203cc579d71a3415",
+  "baseline_sha256": "97d3b813e120486fcd804e21f1d28fba1fab430ab057cee213625ef4c668333d",
+  "mode": "isolated_ab",
+  "candidate": "v337",
+  "baseline": "v331",
+  "release_status": "UNVERIFIED_UNITPROXL",
+  "full_publish_gate": "PARTIAL",
+  "output_directory": "<RepoRoot>/build/benchmarks"
+}

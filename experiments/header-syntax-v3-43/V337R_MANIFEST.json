@@ -1,0 +1,8 @@
+{
+  "experiment": "V3-37R",
+  "control": "frozen V3-37",
+  "candidate": "V3-37R",
+  "files": 120,
+  "control_sha256": "7b122b66427bd6a5883835b1ef8f2f99d977b871cc62e1de544f05ab3c4c6579",
+  "production_modified": false
+}

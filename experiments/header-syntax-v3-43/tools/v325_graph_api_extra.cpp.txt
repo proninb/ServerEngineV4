@@ -1,0 +1,83 @@
+server_status graph::commit_prevalidated_record(type_handle type,
+    graph_record_kind kind, std::span<const base_record> bases_value,
+    bool declares_virtual) noexcept {
+    auto* entry = contains(type) ? &types[type.value() - 1] : nullptr;
+    if (!entry || entry->defined() ||
+        entry->kind != graph_type_kind::record ||
+        !valid_record_kind(kind) ||
+        !compatible_record_kind(entry->record_kind, kind) ||
+        (kind == graph_record_kind::union_type &&
+         (!bases_value.empty() || declares_virtual)) ||
+        static_cast<std::size_t>(entry->members.begin) + entry->members.count !=
+            member_records.size() ||
+        member_records.size() != member_construction.size())
+        return server_status::project_configuration_invalid;
+    const auto type_identity = identity(type);
+    if (!type_identity || type_identity.kind() != identity_kind::type)
+        return server_status::project_configuration_invalid;
+    bool polymorphic_value = declares_virtual;
+    for (std::size_t i = 0; i < bases_value.size(); ++i) {
+        const auto& base = bases_value[i];
+        const auto base_handle = find_type(base.type);
+        const auto* base_entry = find(base_handle);
+        if (!base.type || base.type.kind() != identity_kind::type ||
+            base.type == type_identity || !base_handle || !base_entry ||
+            !base_entry->defined() || base_entry->kind != graph_type_kind::record ||
+            base_entry->record_kind == graph_record_kind::union_type ||
+            !valid_member_access(base.access) ||
+            (base.flags & ~graph_base_flag_mask) != 0 || base.reserved != 0)
+            return server_status::project_configuration_invalid;
+        for (std::size_t previous = 0; previous < i; ++previous)
+            if (bases_value[previous].type == base.type)
+                return server_status::project_configuration_invalid;
+        polymorphic_value = polymorphic_value || base_entry->polymorphic();
+    }
+    // Each member was checked on append and each value on set; no mutable member access.
+    const auto maximum = static_cast<std::size_t>(
+        std::numeric_limits<std::uint32_t>::max());
+    if (base_records.size() > maximum ||
+        bases_value.size() > maximum - base_records.size())
+        return server_status::io_error;
+    // Member-name index deferred to finish_prevalidated_member_index().
+    const auto base_begin = base_records.size();
+    try { base_records.insert(base_records.end(),bases_value.begin(),bases_value.end()); }
+    catch (...) { return server_status::io_error; }
+    entry->bases = {static_cast<std::uint32_t>(base_begin),
+        static_cast<std::uint32_t>(bases_value.size())};
+    entry->record_kind = kind;
+    entry->flags |= graph_type_defined;
+    if (polymorphic_value) entry->flags |= graph_type_polymorphic;
+    return server_status::success;
+}
+
+
+// V3-25: one allocation, one insertion pass, identical final lookup table.
+// Only valid for the isolated Header Graph producer; no interleaved Graph writers.
+server_status graph::finish_prevalidated_member_index() noexcept {
+    if (member_name_index_count != 0 || !member_name_index.empty() ||
+        member_records.size() != member_construction.size())
+        return server_status::project_configuration_invalid;
+    const auto prepared = ensure_member_name_index_capacity(member_records.size());
+    if (!succeeded(prepared)) return prepared;
+    std::size_t seen=0;
+    for (std::size_t ti=0;ti<types.size();++ti) {
+        const auto& entry=types[ti];
+        if (entry.kind != graph_type_kind::record || !entry.defined()) continue;
+        const auto begin=static_cast<std::size_t>(entry.members.begin);
+        const auto count=static_cast<std::size_t>(entry.members.count);
+        if (begin>member_records.size() || count>member_records.size()-begin)
+            return server_status::project_configuration_invalid;
+        const type_handle type{static_cast<std::uint32_t>(ti+1)};
+        for (std::size_t mi=0;mi<count;++mi) {
+            const auto& member=member_records[begin+mi];
+            // No repeated semantic validation: only structural range checking.
+            insert_member_name_index(member_name_index,type,member.name,
+                member_index{static_cast<std::uint32_t>(mi)});
+        }
+        seen+=count;
+    }
+    if (seen != member_records.size())
+        return server_status::project_configuration_invalid;
+    member_name_index_count=seen;
+    return server_status::success;
+}
