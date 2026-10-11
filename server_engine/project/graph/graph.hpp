@@ -414,6 +414,13 @@ public:
         std::uint32_t flags = 0,
         construction_value construction = {}) noexcept;
 
+    // SOURCE-V2-SINGLE-PASS-STRICT-01: complete a preceding extern declaration
+    // in the SAME object WHERE. The provisional object has state==0.
+    [[nodiscard]] server_status complete_resolved_extern_object(
+        identity_ref identity, type_ref type, object_handle& output,
+        std::uint32_t flags = 0,
+        construction_value construction = {}) noexcept;
+
     [[nodiscard]] server_status add_link(
         object_endpoint source,
         object_endpoint target,
@@ -428,6 +435,11 @@ public:
     // against the immutable Type domain. Conflict handling remains in Graph.
     [[nodiscard]] server_status add_resolved_link(
         object_endpoint source, object_endpoint target, link_handle& output) noexcept;
+    // SOURCE-V2-UNIT-BIND-01: Source producer may rebind the same target.
+    // Existing link handle (WHERE) is preserved; other producers stay strict.
+    [[nodiscard]] server_status rebind_resolved_link(
+        object_endpoint source, object_endpoint target,
+        link_handle& output, bool& replaced) noexcept;
     [[nodiscard]] server_status add_resolved_initialization(
         object_endpoint target, type_ref target_type,
         construction_value value, bool& replaced) noexcept;

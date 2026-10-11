@@ -5,6 +5,62 @@ project(ServerEngineV4
     LANGUAGES CXX
 )
 
+option(SERVER_ENGINE_SOURCE_PARSER_V2
+    "Use separate Source Parser V2 during PUBLISH (experimental)" OFF)
+if(SERVER_ENGINE_SOURCE_PARSER_V2)
+    add_compile_definitions(CW_SOURCE_PARSER_V2=1)
+endif()
+
+option(SERVER_ENGINE_SOURCE_IDENT_CACHE_V2
+    "Experimental per-Source-root identifier string_id cache (PUBLISH benchmark only)" OFF)
+if(SERVER_ENGINE_SOURCE_IDENT_CACHE_V2 AND NOT SERVER_ENGINE_SOURCE_PARSER_V2)
+    message(FATAL_ERROR "Source ident cache requires SERVER_ENGINE_SOURCE_PARSER_V2=ON")
+endif()
+
+option(SERVER_ENGINE_SOURCE_PREDECODE_PARALLEL_V2
+    "Parallel per-file lexical token decoding before deterministic Source V2 binding (experimental)" OFF)
+if(SERVER_ENGINE_SOURCE_PREDECODE_PARALLEL_V2)
+    add_compile_definitions(CW_SOURCE_PREDECODE_PARALLEL_V2=1)
+endif()
+
+option(SERVER_ENGINE_SOURCE_PREBIND_PARALLEL_V2
+    "Read-only parallel string_id binding for names already in Header G (experimental)" OFF)
+if(SERVER_ENGINE_SOURCE_PREBIND_PARALLEL_V2)
+    if(NOT SERVER_ENGINE_SOURCE_PREDECODE_PARALLEL_V2)
+        message(FATAL_ERROR "SOURCE_PREBIND_PARALLEL_V2 requires SOURCE_PREDECODE_PARALLEL_V2=ON")
+    endif()
+    add_compile_definitions(CW_SOURCE_PREBIND_PARALLEL_V2=1)
+endif()
+
+option(SERVER_ENGINE_SOURCE_MODEL_V2
+    "Build per-file raw Source Model in parallel before canonical G validation (experimental)" OFF)
+option(SERVER_ENGINE_SOURCE_MODEL_DIRECT_V2
+    "Read Source Model directly and validate scalar/link endpoint paths without token parser (experimental)" OFF)
+if(SERVER_ENGINE_SOURCE_MODEL_DIRECT_V2)
+    if(NOT SERVER_ENGINE_SOURCE_MODEL_V2)
+        message(FATAL_ERROR "SOURCE-V2-MODEL-02 requires SERVER_ENGINE_SOURCE_MODEL_V2=ON")
+    endif()
+    add_compile_definitions(CW_SOURCE_MODEL_DIRECT_V2=1)
+endif()
+if(SERVER_ENGINE_SOURCE_MODEL_V2)
+    add_compile_definitions(CW_SOURCE_MODEL_V2=1)
+endif()
+
+option(SERVER_ENGINE_HEADER_MODEL_V2
+    "Build read-only per-file Header syntax models with worker lanes (experimental)" OFF)
+if(SERVER_ENGINE_HEADER_MODEL_V2)
+    add_compile_definitions(CW_HEADER_MODEL_V2=1)
+endif()
+
+option(SERVER_ENGINE_HEADER_MODEL_EFFECTIVE_V2
+    "Experimental effective-token parallel Header record model" OFF)
+if(SERVER_ENGINE_HEADER_MODEL_EFFECTIVE_V2)
+    if(NOT SERVER_ENGINE_HEADER_MODEL_V2)
+        message(FATAL_ERROR "HEADER_MODEL_EFFECTIVE_V2 requires HEADER_MODEL_V2")
+    endif()
+    add_compile_definitions(CW_HEADER_MODEL_EFFECTIVE_V2=1)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -82,6 +138,7 @@ add_executable(ServerEngineV4
     server_engine/project/graph/graph_delta.cpp
     server_engine/project/source/source_map.cpp
     server_engine/project/parser/parser.cpp
+        server_engine/project/parser/source_parser_v2.cpp
     server_engine/project/parser/header_parser_v2.cpp
     server_engine/project/preprocessor/preprocessor.cpp
     server_engine/project/frontend/frontend_input.cpp
@@ -207,6 +264,11 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
         benchmarks/publish_benchmark.cpp
         ${SERVER_ENGINE_V4_BENCHMARK_SOURCES}
     )
+    # SOURCE-V2-IDENT-CACHE-01: benchmark-only opt-in, production unchanged.
+    if(SERVER_ENGINE_SOURCE_IDENT_CACHE_V2)
+        target_compile_definitions(
+            ServerEngineV4PublishBenchmark PRIVATE CW_SOURCE_IDENT_CACHE_V2=1)
+    endif()
 
     # PARSER-V2-PERF-02: real project.json Header-only profile + OLD/V2 oracle.
     # Benchmark target is opt-in and shares production sources without changes.
@@ -1191,6 +1253,7 @@ if(BUILD_TESTING)
         server_engine/project/assign/assign_table.cpp
         server_engine/project/persistence/compiled_project.cpp
         server_engine/project/parser/parser.cpp
+        server_engine/project/parser/source_parser_v2.cpp
         server_engine/project/parser/header_parser_v2.cpp
         server_engine/project/preprocessor/preprocessor.cpp
         server_engine/project/frontend/frontend_input.cpp

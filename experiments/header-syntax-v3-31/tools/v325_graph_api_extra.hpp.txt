@@ -1,0 +1,5 @@
+    // Isolated benchmark-only API. append/set validate each element once.
+    [[nodiscard]] server_status commit_prevalidated_record(type_handle type,
+        graph_record_kind kind, std::span<const base_record> bases,
+        bool declares_virtual) noexcept;
+    [[nodiscard]] server_status finish_prevalidated_member_index() noexcept;

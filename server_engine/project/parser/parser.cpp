@@ -1,4 +1,14 @@
 #include "parser.hpp"
+#include "header_parser_v2.hpp"
+#ifdef CW_HEADER_MODEL_V2
+#include "header_model_v2.hpp"
+#ifdef CW_HEADER_MODEL_EFFECTIVE_V2
+#include "header_effective_model_v2.hpp"
+#endif
+#endif
+#include "source_parser_v2.hpp"
+#include "../frontend/prepared_include_v2.hpp"
+#include "../frontend/preprocessor_v2.hpp"
 #include "header_semantic_space.hpp"
 
 #include "../frontend/semantic_input.hpp"
@@ -5597,7 +5607,8 @@ server_status parse_semantic_project(
     source_map& sources,
     parser_failure* failure,
     std::vector<parser_warning>* warnings,
-    semantic_parse_telemetry* telemetry) noexcept {
+    semantic_parse_telemetry* telemetry,
+    bool publish_header_v2) noexcept {
 
     if (telemetry != nullptr) {
         const auto detailed =
@@ -5626,6 +5637,84 @@ server_status parse_semantic_project(
             project_configuration_invalid;
     }
 
+    // Physical V2 preparation is speculative. It may add File Context IDs,
+    // but active includes alone publish file dependencies during replay.
+    prepared_include_closure_v2 v2_closure;
+    prepared_include_profile_v2 v2_physical_profile;
+    header_v2_publication_stats v2_publication_stats;
+    std::vector<file_id> v2_header_roots;
+    if (publish_header_v2) {
+        if (telemetry != nullptr) telemetry->header_v2_selected = 1;
+        try {
+            v2_header_roots.reserve(frontend_root_count);
+            for (std::size_t index = 0; index < frontend_root_count; ++index) {
+                const file_id root{static_cast<std::uint32_t>(index + 1)};
+                if (files.kind(root) == file_kind::header)
+                    v2_header_roots.push_back(root);
+            }
+        }
+        catch (...) { return server_status::io_error; }
+
+        if (telemetry != nullptr)
+            telemetry->header_v2_roots = v2_header_roots.size();
+        if (!v2_header_roots.empty()) {
+            prepared_include_failure_v2 physical_failure;
+            const auto physical_started = telemetry != nullptr
+                ? clock_type::now() : clock_type::time_point{};
+            const auto prepared = prepare_header_include_closure_v2(
+                files, v2_header_roots, configuration, v2_closure,
+                &physical_failure,
+                telemetry != nullptr ? &v2_physical_profile : nullptr);
+            if (!succeeded(prepared)) {
+                if (failure != nullptr) {
+                    *failure = {
+                        parser_failure_kind::preprocessing,
+                        physical_failure.file,
+                        physical_failure.source,
+                        "PUBLISH Header V2 physical preparation failed",
+                    };
+                }
+                return prepared;
+            }
+            if (telemetry != nullptr) {
+                telemetry->header_v2_physical_ns = static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        clock_type::now() - physical_started).count());
+                telemetry->header_v2_prepared_files = v2_physical_profile.ready_files;
+                telemetry->header_v2_lexed_files = v2_physical_profile.lexed_files;
+                telemetry->header_v2_include_records = v2_physical_profile.include_records;
+            }
+        }
+    }
+
+#ifdef CW_HEADER_MODEL_V2
+    header_model_batch header_models;
+    if (publish_header_v2 && !v2_header_roots.empty()) {
+        const auto model_started = telemetry != nullptr
+            ? clock_type::now() : clock_type::time_point{};
+        const auto built = header_models.build(
+            v2_closure.view(), std::span<const file_id>{v2_header_roots},
+            configuration.predefines.empty());
+        if (!succeeded(built)) return built;
+        if (telemetry != nullptr) {
+            telemetry->header_v2_model_ns = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    clock_type::now() - model_started).count());
+            telemetry->header_v2_model_files = header_models.eligible_files();
+            telemetry->header_v2_model_declarations = header_models.declarations();
+            const auto excluded = header_models.exclusions();
+            telemetry->header_v2_model_roots = excluded.roots;
+            telemetry->header_v2_model_missing = excluded.missing;
+            telemetry->header_v2_model_decode_failed = excluded.decode_failed;
+            telemetry->header_v2_model_directives = excluded.directives;
+            telemetry->header_v2_model_syntax = excluded.syntax;
+            telemetry->header_v2_model_predefines = excluded.predefines;
+            telemetry->header_v2_model_allocations = excluded.allocations;
+            telemetry->header_v2_model_empty = excluded.empty;
+        }
+    }
+#endif
+
     const auto source_reset =
         sources.reset(
             files.size());
@@ -5639,7 +5728,106 @@ server_status parse_semantic_project(
         telemetry != nullptr &&
         telemetry->detailed_source;
 
-    {
+    if (publish_header_v2) {
+        preprocessor_v2_failure preprocessing_failure;
+        parser_v2_failure header_failure;
+        semantic_preprocessor_v2 input{
+            files, v2_closure.view(), configuration, strings,
+            &preprocessing_failure};
+        const auto started = telemetry != nullptr
+            ? clock_type::now() : clock_type::time_point{};
+
+        for (std::size_t root_ordinal = 0;
+             root_ordinal < v2_header_roots.size(); ++root_ordinal) {
+            const auto root = v2_header_roots[root_ordinal];
+            auto status = sources.begin_root(root);
+            if (!succeeded(status)) return status;
+
+            header_failure = {};
+            status = input.start(root);
+            if (succeeded(status)) {
+                header_parser_v2 parser{input, identities, G, &header_failure};
+                parser.set_provenance(&sources);
+#ifdef CW_HEADER_MODEL_V2
+                parser.set_header_model(header_models.root(root_ordinal));
+#endif
+#ifdef CW_HEADER_MODEL_EFFECTIVE_V2
+                header_effective_model_v2 effective_model;
+                // 02B2: scan immutable physical lexical words in parallel.
+                // Do NOT advance the active semantic preprocessor ahead of G.
+                const auto model_started = telemetry != nullptr
+                    ? clock_type::now() : clock_type::time_point{};
+                status = effective_model.build(input.model_files(), input.model_prepared());
+                if (!succeeded(status)) return status;
+                if (telemetry != nullptr) {
+                    telemetry->header_v2_effective_model_ns += static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            clock_type::now() - model_started).count());
+                    telemetry->header_v2_effective_records += effective_model.record_count();
+                    telemetry->header_v2_effective_fields += effective_model.field_count();
+                    telemetry->header_v2_effective_constructors += effective_model.constructor_count();
+                }
+                parser.set_header_model(nullptr); // supersede physical model
+                parser.set_effective_model(&effective_model);
+#endif
+                parser.set_publication_stats(
+                    telemetry != nullptr ? &v2_publication_stats : nullptr);
+                status = parser.parse();
+#ifdef CW_HEADER_MODEL_V2
+                if (telemetry != nullptr)
+                    telemetry->header_v2_model_dispatched += parser.header_model_dispatched();
+#endif
+#ifdef CW_HEADER_MODEL_EFFECTIVE_V2
+                if (telemetry != nullptr)
+                    telemetry->header_v2_effective_committed += parser.effective_fields_committed();
+#endif
+                if (succeeded(status) && !input.finished())
+                    status = server_status::project_configuration_invalid;
+            }
+            if (!succeeded(status)) {
+                if (failure != nullptr) {
+                    if (header_failure.file) {
+                        *failure = {
+                            header_failure.kind == parser_v2_failure_kind::unsupported
+                                ? parser_failure_kind::unsupported
+                                : header_failure.kind == parser_v2_failure_kind::syntax
+                                    ? parser_failure_kind::syntax
+                                    : parser_failure_kind::semantic,
+                            header_failure.file, header_failure.source,
+                            header_failure.detail,
+                        };
+                    }
+                    else {
+                        *failure = {
+                            parser_failure_kind::preprocessing,
+                            preprocessing_failure.file ? preprocessing_failure.file : root,
+                            preprocessing_failure.source,
+                            preprocessing_failure.detail.empty()
+                                ? std::string_view{"Header V2 replay failed"}
+                                : preprocessing_failure.detail,
+                        };
+                    }
+                }
+                return status;
+            }
+            status = sources.end_root();
+            if (!succeeded(status)) return status;
+            if (telemetry != nullptr)
+                telemetry->header_v2_active_includes += input.active_include_count();
+        }
+        if (telemetry != nullptr) {
+            telemetry->header_v2_definitions = v2_publication_stats.record_definitions;
+            telemetry->header_v2_aliases = v2_publication_stats.intrinsic_aliases;
+            telemetry->header_record_count = v2_publication_stats.record_definitions;
+            telemetry->header_data_members = v2_publication_stats.data_members;
+            telemetry->header_declare_record_calls = v2_publication_stats.record_declarations;
+            telemetry->header_define_record_calls = v2_publication_stats.record_definitions;
+            telemetry->header_ns = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    clock_type::now() - started).count());
+        }
+    }
+    else {
         header_parser<
             graph,
             source_map>
@@ -5697,6 +5885,29 @@ server_status parse_semantic_project(
         }
     }
 
+#ifdef CW_SOURCE_PARSER_V2
+    // Only PUBLISH, only after Header V2 has populated the SAME G.
+    // BUILD and REBUILD retain their original Source parser.
+    if (publish_header_v2) {
+        const auto result = parse_source_roots_v2(
+            files, lexical, frontend_root_count, configuration,
+            strings, identities, G, sources, failure, warnings, telemetry);
+        if (!succeeded(result)) return result;
+
+        // SOURCE-V2-PERF-02-PRESERVE-INPUT-COUNTERS:
+        // The shared finalization below reads input_telemetry (OLD Source).
+        // Standalone Source V2 stores input statistics in telemetry instead.
+        // Carry those four measurements into the common finalization buffer.
+        // The original OLD Source path remains unchanged.
+        if (telemetry != nullptr) {
+            input_telemetry.source_decode_ns = telemetry->source_decode_ns;
+            input_telemetry.source_intern_ns = telemetry->source_intern_ns;
+            input_telemetry.source_token_count = telemetry->source_token_count;
+            input_telemetry.source_identifier_count = telemetry->source_identifier_count;
+        }
+    }
+    else
+#endif
     {
         source_parser<
             graph,

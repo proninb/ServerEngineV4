@@ -1,0 +1,147 @@
+// V3-24 EXPERIMENT ONLY. Added to a private copied tree by the benchmark runner.
+// Invariant: between begin and commit this record must be the only append writer.
+// Graph/Type/WHO/WHERE layout is unchanged and no persisted artifact is written.
+server_status graph::begin_direct_record(type_handle type,
+    std::size_t maximum_members) noexcept {
+    auto* entry = contains(type) ? &types[type.value() - 1] : nullptr;
+    if (!entry || entry->kind != graph_type_kind::record || entry->defined() ||
+        entry->members.count != 0 ||
+        member_records.size() != member_construction.size())
+        return server_status::project_configuration_invalid;
+    const auto maximum = static_cast<std::size_t>(
+        std::numeric_limits<std::uint32_t>::max());
+    if (member_records.size() > maximum ||
+        maximum_members > maximum - member_records.size())
+        return server_status::io_error;
+    // FIX3: amortized growth instead of reallocating for every record.
+    // Same sized logical slices; only vector capacity changes.
+    const auto required = member_records.size() + maximum_members;
+    try {
+        if (!v324_capacity::ensure(member_records, required) ||
+            !v324_capacity::ensure(member_construction, required))
+            return server_status::io_error;
+    } catch (...) { return server_status::io_error; }
+    entry->members = {static_cast<std::uint32_t>(member_records.size()), 0};
+    return server_status::success;
+}
+
+server_status graph::append_direct_member(type_handle type,
+    member_record member, construction_value value) noexcept {
+    auto* entry = contains(type) ? &types[type.value() - 1] : nullptr;
+    if (!entry || entry->defined() || entry->kind != graph_type_kind::record ||
+        !member.name || !contains(member.type) ||
+        !valid_member_access(member.access) || !valid_construction(value) ||
+        static_cast<std::size_t>(entry->members.begin) + entry->members.count !=
+            member_records.size() ||
+        member_records.size() != member_construction.size() ||
+        entry->members.count == (std::numeric_limits<std::uint32_t>::max)())
+        return server_status::project_configuration_invalid;
+    try {
+        member_records.push_back(member);
+        try { member_construction.push_back(value); }
+        catch (...) { member_records.pop_back(); throw; }
+    } catch (...) { return server_status::io_error; }
+    ++entry->members.count;
+    return server_status::success;
+}
+
+member_record* graph::direct_record_member(type_handle type,
+    std::size_t local_index) noexcept {
+    auto* entry = contains(type) ? &types[type.value() - 1] : nullptr;
+    if (!entry || local_index >= entry->members.count) return nullptr;
+    const auto absolute = static_cast<std::size_t>(entry->members.begin) + local_index;
+    return absolute < member_records.size() ? &member_records[absolute] : nullptr;
+}
+
+server_status graph::set_direct_construction(type_handle type,
+    std::size_t local_index, construction_value value) noexcept {
+    auto* entry = contains(type) ? &types[type.value() - 1] : nullptr;
+    if (!entry || entry->defined() || local_index >= entry->members.count ||
+        !valid_construction(value)) return server_status::project_configuration_invalid;
+    const auto absolute = static_cast<std::size_t>(entry->members.begin) + local_index;
+    if (absolute >= member_construction.size())
+        return server_status::project_configuration_invalid;
+    member_construction[absolute] = value;
+    return server_status::success;
+}
+
+void graph::abort_direct_record(type_handle type) noexcept {
+    auto* entry = contains(type) ? &types[type.value() - 1] : nullptr;
+    if (!entry || entry->defined()) return;
+    const auto begin = static_cast<std::size_t>(entry->members.begin);
+    if (begin <= member_records.size() &&
+        begin + entry->members.count == member_records.size()) {
+        member_records.resize(begin);
+        member_construction.resize(begin);
+    }
+    entry->members = {};
+}
+
+server_status graph::commit_direct_record(type_handle type,
+    graph_record_kind kind, std::span<const base_record> bases_value,
+    bool declares_virtual) noexcept {
+    auto* entry = contains(type) ? &types[type.value() - 1] : nullptr;
+    if (!entry || entry->defined() ||
+        entry->kind != graph_type_kind::record ||
+        !valid_record_kind(kind) ||
+        !compatible_record_kind(entry->record_kind, kind) ||
+        (kind == graph_record_kind::union_type &&
+         (!bases_value.empty() || declares_virtual)) ||
+        static_cast<std::size_t>(entry->members.begin) + entry->members.count !=
+            member_records.size() ||
+        member_records.size() != member_construction.size())
+        return server_status::project_configuration_invalid;
+    const auto type_identity = identity(type);
+    if (!type_identity || type_identity.kind() != identity_kind::type)
+        return server_status::project_configuration_invalid;
+    bool polymorphic_value = declares_virtual;
+    for (std::size_t i = 0; i < bases_value.size(); ++i) {
+        const auto& base = bases_value[i];
+        const auto base_handle = find_type(base.type);
+        const auto* base_entry = find(base_handle);
+        if (!base.type || base.type.kind() != identity_kind::type ||
+            base.type == type_identity || !base_handle || !base_entry ||
+            !base_entry->defined() || base_entry->kind != graph_type_kind::record ||
+            base_entry->record_kind == graph_record_kind::union_type ||
+            !valid_member_access(base.access) ||
+            (base.flags & ~graph_base_flag_mask) != 0 || base.reserved != 0)
+            return server_status::project_configuration_invalid;
+        for (std::size_t previous = 0; previous < i; ++previous)
+            if (bases_value[previous].type == base.type)
+                return server_status::project_configuration_invalid;
+        polymorphic_value = polymorphic_value || base_entry->polymorphic();
+    }
+    for (std::size_t i = 0; i < entry->members.count; ++i) {
+        const auto absolute = static_cast<std::size_t>(entry->members.begin) + i;
+        const auto& member = member_records[absolute];
+        if (!member.name || !contains(member.type) ||
+            !valid_member_access(member.access) ||
+            !valid_construction(member_construction[absolute]))
+            return server_status::project_configuration_invalid;
+    }
+    const auto maximum = static_cast<std::size_t>(
+        std::numeric_limits<std::uint32_t>::max());
+    if (base_records.size() > maximum ||
+        bases_value.size() > maximum - base_records.size())
+        return server_status::io_error;
+    // This is the same index capacity gate as define_resolved_record().
+    if (entry->members.count != 0) {
+        const auto prepared = ensure_member_name_index_capacity(entry->members.count);
+        if (!succeeded(prepared)) return prepared;
+    }
+    const auto base_begin = base_records.size();
+    try { base_records.insert(base_records.end(),bases_value.begin(),bases_value.end()); }
+    catch (...) { return server_status::io_error; }
+    entry->bases = {static_cast<std::uint32_t>(base_begin),
+        static_cast<std::uint32_t>(bases_value.size())};
+    entry->record_kind = kind;
+    entry->flags |= graph_type_defined;
+    if (polymorphic_value) entry->flags |= graph_type_polymorphic;
+    for (std::size_t i = 0; i < entry->members.count; ++i) {
+        const auto absolute = static_cast<std::size_t>(entry->members.begin) + i;
+        insert_member_name_index(member_name_index,type,member_records[absolute].name,
+            member_index{static_cast<std::uint32_t>(i)});
+    }
+    member_name_index_count += entry->members.count;
+    return server_status::success;
+}

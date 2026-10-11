@@ -1,0 +1,15 @@
+    // V3-24 experimental API: direct append into contiguous Graph storage.
+    // No change to graph object layout, persisted ABI or normal PUBLISH path.
+    // A record is not defined/visible until commit_direct_record() succeeds.
+    [[nodiscard]] server_status begin_direct_record(type_handle type,
+        std::size_t maximum_members) noexcept;
+    [[nodiscard]] server_status append_direct_member(type_handle type,
+        member_record member, construction_value construction) noexcept;
+    [[nodiscard]] member_record* direct_record_member(type_handle type,
+        std::size_t local_index) noexcept;
+    [[nodiscard]] server_status set_direct_construction(type_handle type,
+        std::size_t local_index, construction_value value) noexcept;
+    [[nodiscard]] server_status commit_direct_record(type_handle type,
+        graph_record_kind kind, std::span<const base_record> bases,
+        bool declares_virtual) noexcept;
+    void abort_direct_record(type_handle type) noexcept;

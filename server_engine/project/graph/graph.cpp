@@ -1242,6 +1242,40 @@ server_status graph::add_object(
     }
 }
 
+// SOURCE-V2-SINGLE-PASS-STRICT-01: a typed extern WHO reserves one object
+// handle. A later definition completes that same object in-place.
+server_status graph::complete_resolved_extern_object(
+    identity_ref identity, type_ref type, object_handle& output,
+    std::uint32_t flags, construction_value initial) noexcept {
+    output = {};
+    if (!identity || identity.kind() != identity_kind::object ||
+        !contains(type) ||
+        (flags & ~graph_object_non_default_initializer) != 0 ||
+        !valid_construction(initial) ||
+        (!(flags & graph_object_non_default_initializer) &&
+         initial != construction_value{}) ||
+        initial.kind == construction_kind::member_binding ||
+        initial.kind == construction_kind::object_binding)
+        return server_status::project_configuration_invalid;
+    const auto existing = find_object(identity);
+    if (!existing || existing.value() > objects.size())
+        return server_status::project_configuration_invalid;
+    auto& entry = objects[existing.value() - 1];
+    if (entry.type != type || entry.state != 0)
+        return server_status::project_configuration_invalid;
+    if (flags != 0) {
+        if (object_construction.size() >=
+            graph_object_construction_slot_mask)
+            return server_status::io_error;
+        try { object_construction.push_back(initial); }
+        catch (...) { return server_status::io_error; }
+        entry.state = flags |
+            static_cast<std::uint32_t>(object_construction.size());
+    }
+    output = existing;
+    return server_status::success;
+}
+
 server_status graph::add_resolved_object(
     identity_ref identity,
     type_ref type,
@@ -3476,6 +3510,27 @@ server_status graph::add_resolved_link(
     insert_link_target_index(link_target_index, key, output);
     ++link_target_index_count;
     return server_status::success;
+}
+
+// SOURCE-V2-UNIT-BIND-01: overwrite existing target in its stable Graph slot;
+// never append a replacement link or mutate the target hash index.
+server_status graph::rebind_resolved_link(
+    object_endpoint source, object_endpoint target,
+    link_handle& output, bool& replaced) noexcept {
+    output = {};
+    replaced = false;
+    if (!source.object || !source.member || !target.object || !target.member)
+        return server_status::project_configuration_invalid;
+    if (const auto existing = find_link_target(target); existing) {
+        const auto slot = static_cast<std::size_t>(existing.value());
+        if (slot == 0 || slot > links.size() || links[slot - 1].target != target)
+            return server_status::project_artifact_invalid;
+        links[slot - 1].source = source;
+        output = existing;
+        replaced = true;
+        return server_status::success;
+    }
+    return add_resolved_link(source, target, output);
 }
 
 }

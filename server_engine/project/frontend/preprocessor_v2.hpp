@@ -19,6 +19,7 @@
 #include <memory>
 #include <string_view>
 #include <vector>
+#include <span>
 
 namespace cw::server {
 
@@ -93,17 +94,32 @@ public:
     [[nodiscard]] server_status start(
         file_id root) noexcept;
 
+    // Active #include directives published by the current semantic root.
+    [[nodiscard]] std::uint64_t active_include_count() const noexcept {
+        return active_include_directives;
+    }
+
     [[nodiscard]] bool finished() const noexcept {
-        return started &&
-            !current_valid &&
-            frame_depth == 0;
+        return started && !current_valid && frame_depth == 0;
     }
 
     [[nodiscard]] const prepared_token* current() const noexcept {
-        return current_valid
-            ? &current_value
-            : nullptr;
+        return current_valid ? &current_value : nullptr;
     }
+
+#ifdef CW_HEADER_MODEL_EFFECTIVE_V2
+    // Read-only prepared physical closure. No active include traversal,
+    // string interning or macro processing happens on syntax worker lanes.
+    [[nodiscard]] prepared_include_view_v2 model_prepared() const noexcept {
+        return prepared;
+    }
+    [[nodiscard]] const file_context& model_files() const noexcept {
+        return files;
+    }
+    [[nodiscard]] bool model_macro_defined(string_id name) const noexcept {
+        return preprocessing.defined(name);
+    }
+#endif
 
     // HEADER-V2-NESTED-CONSTRUCTOR-10: expose the existing Project-local
     // string table to semantic consumers, not to lexical/physical preparation.
@@ -252,6 +268,7 @@ private:
 
     std::vector<file_id> once_index;
     std::size_t once_count = 0;
+    std::uint64_t active_include_directives = 0;
 
     prepared_token current_value;
     bool started = false;

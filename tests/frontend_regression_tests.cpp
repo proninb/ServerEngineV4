@@ -2060,6 +2060,7 @@ void test_header_v2_differential_01(test_state& tests) {
         file_id old_root;
         parser_failure old_failure;
         source_map old_sources;
+        old_sources.set_build_acceleration_capture(true);
         preprocessor_configuration old_config;
         old_config.root_directory = source.path().parent_path();
         if (!prepare_root(tests, source.path(), old_files, old_lexical, old_root)) return;
@@ -2089,7 +2090,14 @@ void test_header_v2_differential_01(test_state& tests) {
             v2_files, closure.view(), v2_config, v2_strings, &preprocessor_failure};
         const auto started = input.start(v2_root);
         if (!tests.expect(succeeded(started), "DIFF start V2 fixture")) return;
+        source_map v2_sources;
+        v2_sources.set_build_acceleration_capture(true);
+        if (!tests.expect(succeeded(v2_sources.reset(v2_files.size())),
+                "DIFF reset V2 provenance")) return;
+        if (!tests.expect(succeeded(v2_sources.begin_root(v2_root)),
+                "DIFF begin V2 provenance root")) return;
         header_parser_v2 parser{input, v2_ids, v2_graph, &v2_failure};
+        parser.set_provenance(&v2_sources);
         const auto v2_status = parser.parse();
         const auto context = std::string{"HEADER-V2-DIFFERENTIAL-01/"} + f.id;
         const bool old_ok = succeeded(old_status);
@@ -2132,6 +2140,39 @@ void test_header_v2_differential_01(test_state& tests) {
             for (const auto& row : v2_view) std::cerr << row << '\n';
         }
         tests.expect(old_view == v2_view, context + "/semantic-graph");
+
+        if (!tests.expect(succeeded(v2_sources.end_root()),
+                context + "/end-provenance-root")) continue;
+        if (!tests.expect(succeeded(v2_sources.finalize(
+                v2_files.size(), v2_ids, v2_graph)),
+                context + "/finalize-provenance")) continue;
+
+        // Compare canonical contributions, not just Graph counts. This also
+        // checks the file where each Header declaration/definition originated.
+        const auto old_items = old_sources.root(old_root);
+        const auto new_items = v2_sources.root(v2_root);
+        bool same_contributions = old_items.size() == new_items.size();
+        if (same_contributions) {
+            for (std::size_t i = 0; i < old_items.size(); ++i) {
+                if (old_items[i].file != new_items[i].file ||
+                    old_items[i].data.raw() != new_items[i].data.raw()) {
+                    same_contributions = false;
+                    break;
+                }
+            }
+        }
+        tests.expect(same_contributions, context + "/source-contributions");
+
+        // Semantic dependency observations are root-owned and order-independent.
+        const auto dependency_keys = [](auto entries) {
+            std::vector<std::uint32_t> keys;
+            for (const auto item : entries) keys.push_back(item.raw());
+            std::sort(keys.begin(), keys.end());
+            return keys;
+        };
+        const auto expected = dependency_keys(old_sources.root_dependencies(old_root));
+        const auto actual = dependency_keys(v2_sources.root_dependencies(v2_root));
+        tests.expect(expected == actual, context + "/semantic-dependencies");
     }
 }
 

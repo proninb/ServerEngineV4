@@ -18,7 +18,9 @@
 #include "../../string_id.hpp"
 
 #include <cstdint>
+#include <vector>
 #include <string_view>
+#include <span>
 #include <unordered_set>
 #include <unordered_map>
 #include "../construction/execution_lanes.hpp"
@@ -29,6 +31,22 @@ enum class semantic_input_mode : std::uint8_t {
     header,
     source,
 };
+
+// No AST/WHO. Parallel workers may resolve ONLY names already present
+// after Header completion; new Source names are interned in canonical order.
+struct source_predecoded_token final {
+    std::uint32_t source_offset = 0;
+    std::uint32_t source_length = 0;
+    token_kind kind = token_kind::invalid;
+#ifdef CW_SOURCE_PREBIND_PARALLEL_V2
+    string_id known_identifier{};
+#endif
+};
+#ifdef CW_SOURCE_PREBIND_PARALLEL_V2
+static_assert(sizeof(source_predecoded_token) == 16);
+#else
+static_assert(sizeof(source_predecoded_token) == 12);
+#endif
 
 struct semantic_token final {
     file_id file{};
@@ -86,6 +104,15 @@ public:
     [[nodiscard]] server_status start(
         file_id root,
         semantic_input_mode mode) noexcept;
+
+    // The prepared tokens belong to one immutable lexical root. Called only
+    // after start(root, source) and never during Header preprocessing.
+    void set_predecoded_source(
+        std::span<const source_predecoded_token> tokens) noexcept {
+        source_predecoded = tokens;
+        source_predecoded_offset = 0;
+        source_predecoded_active = true;
+    }
 
     [[nodiscard]] server_status next(
         semantic_token& output) noexcept;
@@ -160,6 +187,9 @@ private:
     // Source has no include stack or lexical mutation while a root is consumed.
     lexical_word_view source_words;
     std::span<const std::uint32_t> source_native_words;
+    std::span<const source_predecoded_token> source_predecoded{};
+    std::size_t source_predecoded_offset = 0;
+    bool source_predecoded_active = false;
     file_id source_root{};
     std::uint32_t source_word_offset = 0;
     std::uint32_t source_offset = 0;
@@ -181,6 +211,20 @@ private:
 
     file_id source_cache_file{};
     std::string_view source_cache;
+
+#ifdef CW_SOURCE_IDENT_CACHE_V2
+    // SOURCE-V2-IDENT-CACHE-01: strings remain owned by File Context.
+    // Per-root epoch prevents dereferencing spellings belonging to old roots.
+    struct source_name_cache_entry final {
+        std::string_view spelling{};
+        string_id id{};
+        std::uint32_t hash = 0;
+        std::uint32_t epoch = 0;
+    };
+    static constexpr std::size_t source_name_cache_capacity = 4096;
+    std::vector<source_name_cache_entry> source_name_cache;
+    std::uint32_t source_name_cache_epoch = 0;
+#endif
 
     bool header_passthrough = false;
     bool started = false;

@@ -1065,10 +1065,38 @@ server_status construct_full_project(
             context.sources,
             &semantic_failure,
             &semantic_warnings,
-            telemetry != nullptr ? &semantic_telemetry : nullptr);
+            telemetry != nullptr ? &semantic_telemetry : nullptr,
+            mode == full_construction_mode::publish);
     if (telemetry != nullptr) {
         telemetry->semantic_ns = elapsed_ns(semantic_started);
         telemetry->header_ns = semantic_telemetry.header_ns;
+        telemetry->header_v2_selected = semantic_telemetry.header_v2_selected;
+        telemetry->header_v2_model_ns = semantic_telemetry.header_v2_model_ns;
+        telemetry->header_v2_model_files = semantic_telemetry.header_v2_model_files;
+        telemetry->header_v2_model_declarations = semantic_telemetry.header_v2_model_declarations;
+        telemetry->header_v2_model_dispatched = semantic_telemetry.header_v2_model_dispatched;
+        telemetry->header_v2_model_roots = semantic_telemetry.header_v2_model_roots;
+        telemetry->header_v2_model_missing = semantic_telemetry.header_v2_model_missing;
+        telemetry->header_v2_model_decode_failed = semantic_telemetry.header_v2_model_decode_failed;
+        telemetry->header_v2_model_directives = semantic_telemetry.header_v2_model_directives;
+        telemetry->header_v2_model_syntax = semantic_telemetry.header_v2_model_syntax;
+        telemetry->header_v2_model_predefines = semantic_telemetry.header_v2_model_predefines;
+        telemetry->header_v2_model_allocations = semantic_telemetry.header_v2_model_allocations;
+        telemetry->header_v2_model_empty = semantic_telemetry.header_v2_model_empty;
+        telemetry->header_v2_effective_ns = semantic_telemetry.header_v2_effective_ns;
+        telemetry->header_v2_effective_model_ns = semantic_telemetry.header_v2_effective_model_ns;
+        telemetry->header_v2_effective_records = semantic_telemetry.header_v2_effective_records;
+        telemetry->header_v2_effective_fields = semantic_telemetry.header_v2_effective_fields;
+        telemetry->header_v2_effective_constructors = semantic_telemetry.header_v2_effective_constructors;
+        telemetry->header_v2_effective_committed = semantic_telemetry.header_v2_effective_committed;
+        telemetry->header_v2_roots = semantic_telemetry.header_v2_roots;
+        telemetry->header_v2_physical_ns = semantic_telemetry.header_v2_physical_ns;
+        telemetry->header_v2_prepared_files = semantic_telemetry.header_v2_prepared_files;
+        telemetry->header_v2_lexed_files = semantic_telemetry.header_v2_lexed_files;
+        telemetry->header_v2_include_records = semantic_telemetry.header_v2_include_records;
+        telemetry->header_v2_active_includes = semantic_telemetry.header_v2_active_includes;
+        telemetry->header_v2_definitions = semantic_telemetry.header_v2_definitions;
+        telemetry->header_v2_aliases = semantic_telemetry.header_v2_aliases;
         telemetry->include_ns = semantic_telemetry.include_ns;
         telemetry->include_count = semantic_telemetry.include_count;
         telemetry->include_lexical_ns = semantic_telemetry.include_lexical_ns;
@@ -1138,6 +1166,8 @@ server_status construct_full_project(
             semantic_telemetry.source_value_assignment_statements;
         telemetry->source_link_statements =
             semantic_telemetry.source_link_statements;
+        telemetry->source_model_direct_assignments =
+            semantic_telemetry.source_model_direct_assignments;
         telemetry->source_string_assignment_statements =
             semantic_telemetry.source_string_assignment_statements;
         telemetry->source_string_assignment_elements =

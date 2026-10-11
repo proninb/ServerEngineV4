@@ -799,6 +799,11 @@ server_status header_parser_v2::parse_type(
             return resolved;
         }
 
+        if (provenance != nullptr) {
+            const auto dependency = provenance->add_dependency(identity);
+            if (!succeeded(dependency)) return dependency;
+        }
+
         const auto status =
             consume();
 
@@ -1577,6 +1582,123 @@ server_status header_parser_v2::parse_member_declarator(
     if (!succeeded(status)) return status;
     return resolve_waiting_nested(member_name, members, names, nested);
 }
+
+#ifdef CW_HEADER_MODEL_EFFECTIVE_V2
+server_status header_parser_v2::try_effective_field(
+    identity_ref scope,
+    graph_member_access access,
+    std::vector<member_record>& members,
+    std::vector<construction_value>& construction,
+    pending_constructor_operations& pending,
+    record_reference_state& references,
+    record_nested_state& nested,
+    record_member_name_set& names,
+    bool& handled) noexcept {
+
+    handled = false;
+    if (effective_model == nullptr) return server_status::success;
+    const auto* token = current();
+    if (token == nullptr) return server_status::success;
+    // A physical offset is stable across preprocessing. Token ordinals are not.
+    const auto* field = effective_model->find(token->file, token->source_offset);
+    if (field == nullptr || field->builtin != token->kind)
+        return server_status::success;
+
+    // At this point the current physical file has already been interned by the
+    // *original streaming* preprocessor. Reuse its canonical string_id, do not
+    // create another string or depend on the future include visitation order.
+    auto& strings = input.semantic_strings();
+    const auto raw_name = effective_model->spelling(
+        field->file, field->name_offset, field->name_length);
+    if (raw_name.empty()) return server_status::success;
+    const auto member_name = strings.find(raw_name);
+    if (!member_name || input.model_macro_defined(member_name))
+        return server_status::success;
+
+    resolved_type type;
+    if (field->builtin == token_kind::identifier) {
+        const auto raw_type = effective_model->spelling(
+            field->file, field->type_offset, field->type_length);
+        if (raw_type.empty()) return server_status::success;
+        const auto type_name = strings.find(raw_type);
+        // Even a macro expanding to itself must follow the old parser.
+        if (!type_name || input.model_macro_defined(type_name) ||
+            token->identifier != type_name) return server_status::success;
+        const auto identity = find_type_identity(scope, type_name);
+        if (!identity) return server_status::success;
+        const auto status = resolve_named_type(identity, type);
+        if (!succeeded(status)) return status;
+    } else {
+        intrinsic_type intrinsic = intrinsic_type::none;
+        switch (field->builtin) {
+        case token_kind::kw_bool: intrinsic = intrinsic_type::bool_type; break;
+        case token_kind::kw_int: intrinsic = intrinsic_type::signed_int; break;
+        case token_kind::kw_short: intrinsic = intrinsic_type::signed_short; break;
+        case token_kind::kw_long: intrinsic = intrinsic_type::signed_long; break;
+        case token_kind::kw_float: intrinsic = intrinsic_type::float_type; break;
+        case token_kind::kw_double: intrinsic = intrinsic_type::double_type; break;
+        case token_kind::kw_char: intrinsic = intrinsic_type::char_type; break;
+        default: return server_status::success;
+        }
+        type.type = G.intrinsic(intrinsic);
+    }
+    if (!type.type || type.type == G.intrinsic(intrinsic_type::void_type))
+        return server_status::success;
+
+    // No directive lies between the three *consecutive physical lexical*
+    // tokens. Both potential macro identifiers are currently undefined.
+    // Consume the existing effective stream once, and verify it has exactly
+    // the physical spelling/positions required by the candidate.
+    const auto first = *token;
+    auto status = consume();
+    if (!succeeded(status)) return status;
+    const auto* name = current();
+    if (name == nullptr || name->kind != token_kind::identifier ||
+        name->file != field->file ||
+        name->source_offset != field->name_offset ||
+        name->source_length != field->name_length ||
+        name->identifier != member_name)
+        return fail(parser_v2_failure_kind::syntax,
+            "Physical field model encountered a changed member token");
+    status = consume();
+    if (!succeeded(status)) return status;
+    const auto* ending = current();
+    if (ending == nullptr || ending->kind != token_kind::semicolon ||
+        ending->file != field->file ||
+        ending->source_offset != field->semicolon_offset)
+        return fail(parser_v2_failure_kind::syntax,
+            "Physical field model encountered a changed field terminator");
+    status = consume();
+    if (!succeeded(status)) return status;
+
+    bool inserted = false;
+    status = names.insert(members, member_name, inserted);
+    if (!succeeded(status)) return status;
+    if (!inserted)
+        return fail_at(parser_v2_failure_kind::semantic,
+            "Header Parser V2 data-member name is duplicated",
+            field->file, {field->name_offset, field->name_length});
+    try {
+        members.push_back({member_name, type.type, access, {}});
+        construction.push_back({});
+    } catch (...) { return server_status::io_error; }
+    const auto pending_it = pending.find(member_name.value());
+    if (pending_it != pending.end()) {
+        status = apply_record_operand(members.size() - 1, pending_it->second,
+            members, construction, names, references);
+        if (!succeeded(status)) return status;
+        pending.erase(pending_it);
+    }
+    status = resolve_waiting_references(member_name, members, construction,
+        references);
+    if (!succeeded(status)) return status;
+    status = resolve_waiting_nested(member_name, members, names, nested);
+    if (!succeeded(status)) return status;
+    handled = true;
+    ++effective_direct_fields;
+    return server_status::success;
+}
+#endif
 
 server_status header_parser_v2::parse_member(
     identity_ref scope,
@@ -2369,6 +2491,7 @@ server_status header_parser_v2::parse_record(
             "Header Parser V2 expected a record declaration");
     }
 
+    const auto record_file = key->file;
     const auto kind =
         record_kind(
             key->kind);
@@ -2504,6 +2627,11 @@ server_status header_parser_v2::parse_record(
                     "Base class must name a complete non-union record type");
             }
 
+            if (provenance != nullptr) {
+                const auto dependency = provenance->add_dependency(base_identity);
+                if (!succeeded(dependency)) return dependency;
+            }
+
             for (const auto& previous : bases) {
                 if (previous.type == base_identity) {
                     return fail(
@@ -2541,6 +2669,11 @@ server_status header_parser_v2::parse_record(
 
     if (at(token_kind::semicolon)) {
         // WHO-only declaration. Do not allocate Graph WHERE.
+        if (provenance != nullptr) {
+            const auto recorded = provenance->add(
+                record_file, source_data_ref::type(identity, false));
+            if (!succeeded(recorded)) return recorded;
+        }
         return consume();
     }
 
@@ -2568,6 +2701,8 @@ server_status header_parser_v2::parse_record(
             parser_v2_failure_kind::semantic,
             "Header Parser V2 record definition conflicts with G");
     }
+    if (publication_stats != nullptr)
+        ++publication_stats->record_declarations;
 
     std::vector<member_record>
         members;
@@ -2749,6 +2884,16 @@ server_status header_parser_v2::parse_record(
                 return status;
             }
 
+            // OLD parse_type_specifier records this dependency even when
+            // the named type is the enclosing record itself.
+            if (provenance != nullptr) {
+                const auto dependency =
+                    provenance->add_dependency(identity);
+                if (!succeeded(dependency)) {
+                    return dependency;
+                }
+            }
+
             status =
                 parse_type_tail(
                     self_type);
@@ -2786,6 +2931,16 @@ server_status header_parser_v2::parse_record(
             continue;
         }
 
+#ifdef CW_HEADER_MODEL_EFFECTIVE_V2
+        if (!virtual_prefix && effective_model != nullptr) {
+            bool handled = false;
+            const auto fast = try_effective_field(
+                scope, access, members, construction, pending,
+                references, nested, names, handled);
+            if (!succeeded(fast)) return fast;
+            if (handled) continue;
+        }
+#endif
         status =
             parse_member(
                 scope,
@@ -2890,6 +3045,17 @@ server_status header_parser_v2::parse_record(
         return fail(
             parser_v2_failure_kind::semantic,
             "Header Parser V2 record definition conflicts with G");
+    }
+
+    if (provenance != nullptr) {
+        const auto recorded = provenance->add(
+            record_file, source_data_ref::type(identity, true));
+        if (!succeeded(recorded)) return recorded;
+    }
+
+    if (publication_stats != nullptr) {
+        ++publication_stats->record_definitions;
+        publication_stats->data_members += members.size();
     }
 
     // Cold sparse defaults only, emitted with the existing Graph ABI.
@@ -3025,6 +3191,13 @@ server_status header_parser_v2::parse_typedef(
             "Typedef conflicts with existing type in G",
             alias_file, alias_source);
     }
+    if (provenance != nullptr) {
+        const auto recorded = provenance->add(
+            alias_file, source_data_ref::type(identity, true));
+        if (!succeeded(recorded)) return recorded;
+    }
+    if (publication_stats != nullptr)
+        ++publication_stats->intrinsic_aliases;
     return server_status::success;
 }
 
@@ -3048,6 +3221,31 @@ server_status header_parser_v2::parse_scope(
             return consume();
         }
 
+#ifdef CW_HEADER_MODEL_V2
+        if (model != nullptr) {
+            const auto* op = model->at(model_cursor);
+            const auto* token = current();
+            if (op != nullptr && token != nullptr &&
+                op->file == token->file &&
+                op->offset == token->source_offset &&
+                op->kind == token->kind) {
+                ++model_cursor;
+                ++model_dispatches;
+                server_status model_result = server_status::project_configuration_invalid;
+                if (op->kind == token_kind::kw_namespace)
+                    model_result = parse_namespace(scope, depth);
+                else if (op->kind == token_kind::kw_typedef)
+                    model_result = parse_typedef(scope);
+                else
+                    model_result = parse_record(scope);
+                if (!succeeded(model_result)) return model_result;
+                continue;
+            }
+            // For any syntactic mismatch, the ORIGINAL semantic parser retains
+            // complete responsibility for diagnostics and Graph publication.
+            model = nullptr;
+        }
+#endif
         // HEADER-V2-TYPEDEF-07: Header-scope alias declaration.
         if (at(token_kind::kw_typedef)) {
             const auto status = parse_typedef(scope);

@@ -1125,6 +1125,8 @@ server_status semantic_preprocessor_v2::execute_include(
             staged);
     }
 
+    ++active_include_directives;
+
     if (once_contains(
             record->target)) {
 
@@ -1622,6 +1624,7 @@ server_status semantic_preprocessor_v2::start(
 
     once_index.clear();
     once_count = 0;
+    active_include_directives = 0;
 
     preprocessing.reset();
 
@@ -1664,7 +1667,6 @@ server_status semantic_preprocessor_v2::start(
 }
 
 server_status semantic_preprocessor_v2::advance() noexcept {
-
     if (!started ||
         !current_valid ||
         frame_depth == 0) {

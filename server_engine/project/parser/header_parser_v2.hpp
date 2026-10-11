@@ -7,9 +7,16 @@
 #pragma once
 
 #include "../frontend/preprocessor_v2.hpp"
+#ifdef CW_HEADER_MODEL_V2
+#include "header_model_v2.hpp"
+#ifdef CW_HEADER_MODEL_EFFECTIVE_V2
+#include "header_effective_model_v2.hpp"
+#endif
+#endif
 #include "../frontend/source_range.hpp"
 #include "../graph/graph.hpp"
 #include "../semantic/identity.hpp"
+#include "../source/source_map.hpp"
 #include "../../server_status.hpp"
 
 #include <cstddef>
@@ -80,6 +87,14 @@ struct parser_v2_failure final {
     std::string_view detail;
 };
 
+// Zero-clock production counts; optional, no second graph/source pass.
+struct header_v2_publication_stats final {
+    std::uint64_t record_declarations = 0;
+    std::uint64_t record_definitions = 0;
+    std::uint64_t data_members = 0;
+    std::uint64_t intrinsic_aliases = 0;
+};
+
 class header_parser_v2 final {
 public:
     header_parser_v2(
@@ -99,6 +114,31 @@ public:
         const header_parser_v2&) = delete;
 
     [[nodiscard]] server_status parse() noexcept;
+#ifdef CW_HEADER_MODEL_EFFECTIVE_V2
+    void set_effective_model(const header_effective_model_v2* value) noexcept {
+        effective_model = value;
+        effective_direct_fields = 0;
+    }
+    [[nodiscard]] std::uint64_t effective_fields_committed() const noexcept {
+        return effective_direct_fields;
+    }
+#endif
+#ifdef CW_HEADER_MODEL_V2
+    void set_header_model(const header_model_file* value) noexcept {
+        model = value;
+        model_cursor = 0;
+        model_dispatches = 0;
+    }
+    [[nodiscard]] std::uint64_t header_model_dispatched() const noexcept {
+        return model_dispatches;
+    }
+#endif
+
+    // Optional production provenance sink. Benchmark use remains unchanged.
+    void set_provenance(source_map* value) noexcept { provenance = value; }
+    void set_publication_stats(header_v2_publication_stats* value) noexcept {
+        publication_stats = value;
+    }
 
 private:
     struct resolved_type final {
@@ -336,6 +376,19 @@ private:
         bool base_polymorphic,
         bool& declares_virtual) noexcept;
 
+#ifdef CW_HEADER_MODEL_EFFECTIVE_V2
+    // Returns success with handled=false for all non-fast-path syntax.
+    [[nodiscard]] server_status try_effective_field(
+        identity_ref scope,
+        graph_member_access access,
+        std::vector<member_record>& members,
+        std::vector<construction_value>& construction,
+        pending_constructor_operations& pending,
+        record_reference_state& references,
+        record_nested_state& nested,
+        record_member_name_set& names,
+        bool& handled) noexcept;
+#endif
     [[nodiscard]] server_status parse_member(
         identity_ref scope,
         string_id enclosing_record,
@@ -363,9 +416,20 @@ private:
         identity_ref scope,
         string_id name) const noexcept;
 
+#ifdef CW_HEADER_MODEL_V2
+    const header_model_file* model = nullptr;
+    std::size_t model_cursor = 0;
+    std::uint64_t model_dispatches = 0;
+#endif
+#ifdef CW_HEADER_MODEL_EFFECTIVE_V2
+    const header_effective_model_v2* effective_model = nullptr;
+    std::uint64_t effective_direct_fields = 0;
+#endif
     semantic_preprocessor_v2& input;
     identity_space& identities;
     graph& G;
+    source_map* provenance = nullptr;
+    header_v2_publication_stats* publication_stats = nullptr;
 
     // One byte per semantic WHO touched by this Header Parser V2 instance.
     // 0 = unseen, 1 = struct/class family, 2 = union.

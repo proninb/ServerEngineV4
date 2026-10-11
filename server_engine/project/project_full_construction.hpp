@@ -32,6 +32,37 @@ struct full_construction_telemetry final {
     std::uint64_t assign_ns = 0;
     std::uint64_t semantic_ns = 0;
     std::uint64_t header_ns = 0;
+    // PUBLISH Header V2 path. Physical preparation is separate from header_ns.
+    // Legacy include_ns/include_count describe the OLD semantic input only.
+    std::uint64_t header_v2_selected = 0;
+    std::uint64_t header_v2_model_ns = 0;
+    std::uint64_t header_v2_model_files = 0;
+    std::uint64_t header_v2_model_declarations = 0;
+    std::uint64_t header_v2_model_dispatched = 0;
+    // HEADER-MODEL-V2-02A: per-root physical model exclusion reasons.
+    std::uint64_t header_v2_model_roots = 0;
+    std::uint64_t header_v2_model_missing = 0;
+    std::uint64_t header_v2_model_decode_failed = 0;
+    std::uint64_t header_v2_model_directives = 0;
+    std::uint64_t header_v2_model_syntax = 0;
+    std::uint64_t header_v2_model_predefines = 0;
+    std::uint64_t header_v2_model_allocations = 0;
+    std::uint64_t header_v2_model_empty = 0;
+    // HEADER-MODEL-V2-02B1: effective stream and direct field counts.
+    std::uint64_t header_v2_effective_ns = 0;
+    std::uint64_t header_v2_effective_model_ns = 0;
+    std::uint64_t header_v2_effective_records = 0;
+    std::uint64_t header_v2_effective_fields = 0;
+    std::uint64_t header_v2_effective_constructors = 0;
+    std::uint64_t header_v2_effective_committed = 0;
+    std::uint64_t header_v2_roots = 0;
+    std::uint64_t header_v2_physical_ns = 0;
+    std::uint64_t header_v2_prepared_files = 0;
+    std::uint64_t header_v2_lexed_files = 0;
+    std::uint64_t header_v2_include_records = 0;
+    std::uint64_t header_v2_active_includes = 0;
+    std::uint64_t header_v2_definitions = 0;
+    std::uint64_t header_v2_aliases = 0;
     std::uint64_t include_ns = 0;
     std::uint64_t include_count = 0;
     std::uint64_t include_lexical_ns = 0;
@@ -100,6 +131,7 @@ struct full_construction_telemetry final {
     std::uint64_t source_object_statements = 0;
     std::uint64_t source_value_assignment_statements = 0;
     std::uint64_t source_link_statements = 0;
+    std::uint64_t source_model_direct_assignments = 0;
     std::uint64_t source_string_assignment_statements = 0;
     std::uint64_t source_string_assignment_elements = 0;
     std::uint64_t source_endpoint_count = 0;

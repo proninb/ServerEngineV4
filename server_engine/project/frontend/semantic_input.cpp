@@ -118,6 +118,9 @@ server_status semantic_input::start(
     mode_value = mode;
     source_cache_file = {};
     source_cache = {};
+    source_predecoded = {};
+    source_predecoded_offset = 0;
+    source_predecoded_active = false;
     header_passthrough = false;
     started = false;
     finished_value = false;
@@ -158,6 +161,23 @@ server_status semantic_input::start(
     once_files.clear();
 
     if (mode == semantic_input_mode::source) {
+#ifdef CW_SOURCE_IDENT_CACHE_V2
+        // SOURCE-V2-IDENT-CACHE-01: allocate once, never clear 4096 entries
+        // on each of thousands of Source roots. Failed allocation is reported.
+        if (source_name_cache.empty()) {
+            try {
+                source_name_cache.resize(source_name_cache_capacity);
+            }
+            catch (...) {
+                return server_status::io_error;
+            }
+        }
+        ++source_name_cache_epoch;
+        if (source_name_cache_epoch == 0) {
+            for (auto& entry : source_name_cache) entry.epoch = 0;
+            source_name_cache_epoch = 1;
+        }
+#endif
         source_root = root;
         source_words = lexical.words(root);
         source_native_words = source_words.native_words();
@@ -894,6 +914,37 @@ server_status semantic_input::physical_identifier(
     using clock_type = std::chrono::steady_clock;
     const bool measure = telemetry != nullptr && telemetry->detailed_source && mode_value == semantic_input_mode::source;
     const auto started_at = measure ? clock_type::now() : clock_type::time_point{};
+#ifdef CW_SOURCE_IDENT_CACHE_V2
+    if (mode_value == semantic_input_mode::source && !source_name_cache.empty()) {
+        // SOURCE-V2-IDENT-CACHE-01: same FNV-1a hashing as string_table;
+        // hash collision is never accepted without full spelling equality.
+        std::uint32_t hash = 2166136261u;
+        for (const char c : spelling) {
+            hash ^= static_cast<unsigned char>(c);
+            hash *= 16777619u;
+        }
+        if (hash == 0) hash = 1;
+        auto& entry = source_name_cache[
+            hash & (source_name_cache_capacity - 1)];
+        if (entry.epoch == source_name_cache_epoch &&
+            entry.hash == hash && entry.spelling == spelling) {
+            output = entry.id;
+            if (measure) telemetry->source_intern_ns += static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(clock_type::now() - started_at).count());
+            return server_status::success;
+        }
+        const auto cached_status = strings.intern(spelling, output);
+        if (succeeded(cached_status)) {
+            entry.spelling = spelling;
+            entry.id = output;
+            entry.hash = hash;
+            entry.epoch = source_name_cache_epoch;
+        }
+        if (measure) telemetry->source_intern_ns += static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(clock_type::now() - started_at).count());
+        return cached_status;
+    }
+#endif
     const auto status = strings.intern(spelling, output);
     if (measure) telemetry->source_intern_ns += static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(clock_type::now() - started_at).count());
@@ -946,19 +997,35 @@ server_status semantic_input::effective_identifier(
 }
 
 server_status semantic_input::next_source(semantic_token& output) noexcept {
-    if (source_word_offset == source_words.size()) {
+    if (source_predecoded_active
+        ? source_predecoded_offset == source_predecoded.size()
+        : source_word_offset == source_words.size()) {
         finished_value = true;
         return server_status::success;
     }
     using clock_type = std::chrono::steady_clock;
     const bool measure = telemetry != nullptr && telemetry->detailed_source;
     const auto started_at = measure ? clock_type::now() : clock_type::time_point{};
-    const auto advanced = !source_native_words.empty()
-        ? decode_frontend_token(source_native_words, source_root, source_word_offset, source_offset, output)
-        : decode_frontend_token(source_words, source_root, source_word_offset, source_offset, output);
+    server_status advanced = server_status::success;
+    if (source_predecoded_active) {
+        // One producer per file; workers never touch string_table, identity or G.
+        const auto& value = source_predecoded[source_predecoded_offset++];
+        output = {source_root, value.kind, value.source_offset,
+            value.source_length, {}};
+#ifdef CW_SOURCE_PREBIND_PARALLEL_V2
+        output.identifier = value.known_identifier;
+#endif
+    } else {
+        advanced = !source_native_words.empty()
+            ? decode_frontend_token(source_native_words, source_root, source_word_offset, source_offset, output)
+            : decode_frontend_token(source_words, source_root, source_word_offset, source_offset, output);
+    }
     if (telemetry != nullptr) {
-        if (measure) telemetry->source_decode_ns += static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(clock_type::now() - started_at).count());
+        // Parallel decode is measured once as source_root_setup_ms, not as
+        // a misleading sum of clocks collected across worker threads.
+        if (measure && !source_predecoded_active)
+            telemetry->source_decode_ns += static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(clock_type::now() - started_at).count());
         if (succeeded(advanced)) ++telemetry->source_token_count;
     }
     if (!succeeded(advanced)) return fail(source_root, {},
@@ -969,6 +1036,12 @@ server_status semantic_input::next_source(semantic_token& output) noexcept {
         server_status::project_configuration_invalid);
     if (output.kind == token_kind::identifier) {
         if (telemetry != nullptr) ++telemetry->source_identifier_count;
+#ifdef CW_SOURCE_PREBIND_PARALLEL_V2
+        // Safe: prebind only saw the read-only Header string table and used
+        // string_table::find(). A hit returns exactly the ID intern() would.
+        if (source_predecoded_active && output.identifier)
+            return server_status::success;
+#endif
         return physical_identifier({output.file, output.kind, output.source_offset, output.source_length},
             output.identifier);
     }

@@ -334,6 +334,15 @@ server_status preprocessor::expand(
             project_configuration_invalid;
     }
 
+    // PARSER-V2-MACRO-FASTPATH-08: no active definition can expand a name.
+    // Keep the string_table validation above. A cleared table can retain
+    // allocated slots after reset() or the last undefine().
+    if (definition_count == 0) {
+        output.kind = preprocessor_expansion_kind::identifier;
+        output.identifier = name;
+        return server_status::success;
+    }
+
     const auto terminal =
         [&](transition_kind kind,
             string_id identifier) noexcept {
