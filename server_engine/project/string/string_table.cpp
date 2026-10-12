@@ -317,8 +317,23 @@ server_status string_table::ensure_index_capacity(
     }
 }
 
+// HEADER-V2-OPT-08: legacy entrypoint preserves hash and validity contracts.
 server_status string_table::intern(
     std::string_view value,
+    string_id& output) noexcept {
+    return intern_prehashed(value, hash_text(value), output);
+}
+
+string_id string_table::find_prehashed(
+    std::string_view value,
+    std::uint32_t lexical_hash) const noexcept {
+    return value.empty() ? string_id{} :
+        find_hashed(value, lexical_hash == 0 ? 1u : lexical_hash);
+}
+
+server_status string_table::intern_prehashed(
+    std::string_view value,
+    std::uint32_t lexical_hash,
     string_id& output) noexcept {
 
     output = {};
@@ -328,7 +343,7 @@ server_status string_table::intern(
             project_configuration_invalid;
     }
 
-    const auto hash = hash_text(value);
+    const auto hash = lexical_hash == 0 ? 1u : lexical_hash;
 
     if (const auto existing = find_hashed(value, hash);
         existing) {

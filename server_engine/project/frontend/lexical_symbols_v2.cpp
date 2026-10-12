@@ -176,9 +176,37 @@ server_status merge_lexical_symbols_v2(
         }
     }
 
+    // HEADER-V2-OPT-08: avoid sorting symbols which already have canonical
+    // string_id. Every initial lookup uses exactly the hash recorded by Lexer.
+    // Missing symbols retain the original deterministic total ordering.
+    std::vector<merge_candidate> pending;
+    try {
+    for (const auto& candidate : candidates) {
+        const auto spelling = candidate_spelling(candidate, sources);
+        if (spelling.empty()) {
+            return server_status::project_configuration_invalid;
+        }
+        const auto existing = strings.find_prehashed(spelling, candidate.hash);
+        if (existing) {
+            const auto bound = resolutions[candidate.source].set(
+                local_symbol_id_v2{candidate.local}, existing);
+            if (!succeeded(bound)) return bound;
+        }
+        else {
+            pending.push_back(candidate);
+        }
+    }
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+
+    // Same comparator as previous all-candidate sort. It preserves first
+    // occurrence order for newly assigned string_id values, including
+    // collisions, identical spellings in different files and tie breakers.
     std::sort(
-        candidates.begin(),
-        candidates.end(),
+        pending.begin(),
+        pending.end(),
         [&sources](
             const merge_candidate& left,
             const merge_candidate& right) noexcept {
@@ -227,58 +255,29 @@ server_status merge_lexical_symbols_v2(
     std::string_view previous_spelling;
     string_id current_global;
 
-    for (const auto& candidate :
-         candidates) {
-
-        const auto spelling =
-            candidate_spelling(
-                candidate,
-                sources);
-
+    for (const auto& candidate : pending) {
+        const auto spelling = candidate_spelling(candidate, sources);
         if (spelling.empty()) {
-            return server_status::
-                project_configuration_invalid;
+            return server_status::project_configuration_invalid;
         }
-
-        const auto same =
-            have_previous &&
-            previous_hash ==
-                candidate.hash &&
-            previous_spelling ==
-                spelling;
-
+        const bool same = have_previous &&
+            previous_hash == candidate.hash &&
+            previous_spelling == spelling;
         if (!same) {
-            const auto interned =
-                strings.intern(
-                    spelling,
-                    current_global);
-
-            if (!succeeded(interned) ||
-                !current_global) {
-
+            const auto interned = strings.intern_prehashed(
+                spelling, candidate.hash, current_global);
+            if (!succeeded(interned) || !current_global) {
                 return succeeded(interned)
-                    ? server_status::
-                        project_configuration_invalid
+                    ? server_status::project_configuration_invalid
                     : interned;
             }
-
             have_previous = true;
-            previous_hash =
-                candidate.hash;
-            previous_spelling =
-                spelling;
+            previous_hash = candidate.hash;
+            previous_spelling = spelling;
         }
-
-        const auto resolved =
-            resolutions[
-                candidate.source].set(
-                    local_symbol_id_v2{
-                        candidate.local},
-                    current_global);
-
-        if (!succeeded(resolved)) {
-            return resolved;
-        }
+        const auto bound = resolutions[candidate.source].set(
+            local_symbol_id_v2{candidate.local}, current_global);
+        if (!succeeded(bound)) return bound;
     }
 
     for (const auto& resolution :

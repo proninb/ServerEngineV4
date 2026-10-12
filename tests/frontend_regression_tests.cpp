@@ -6930,6 +6930,158 @@ void test_parser_provenance(test_state &tests) {
     rejected("struct T { int a; };", "struct T { double a; };", 1);
     rejected("static int value;", "static double value;", 1);
 }
+// HEADER-V2-OPT-08-VALIDATE: adversarial exact-ID oracle, using real V2 APIs.
+// An independent old merge orders ALL local candidates before interning;
+// this must agree with OPT08 for every exact string_id and spelling.
+static std::uint32_t opt08_validation_hash(std::string_view value) noexcept {
+    std::uint32_t h = 2166136261u;
+    for (unsigned char c : value) {
+        h ^= c;
+        h *= 16777619u;
+    }
+    return h == 0 ? 1u : h;
+}
+
+static void test_opt08_validate_canonical(test_state& tests) {
+    constexpr std::string_view collision_a = "symbol_2358134358169914857";
+    constexpr std::string_view collision_b = "symbol_10434063315635585752";
+    tests.expect(collision_a != collision_b &&
+                 opt08_validation_hash(collision_a) == opt08_validation_hash(collision_b),
+                 "OPT08 actual 32-bit FNV-1a collision fixture");
+
+    // Four configurations: empty and prepopulated global dictionaries,
+    // with varied physical file counts and collision placement.
+    for (std::uint32_t scenario = 0; scenario < 4; ++scenario) {
+        const std::size_t count = scenario == 0 ? 1u : scenario == 1 ? 2u :
+                                  scenario == 2 ? 5u : 7u;
+        std::vector<std::string> bytes(count);
+        std::vector<std::vector<std::string>> names(count);
+        std::vector<std::vector<std::uint32_t>> offsets(count);
+        std::vector<std::unique_ptr<lexical_symbol_stream_v2>> streams;
+        streams.reserve(count);
+        std::vector<lexical_symbol_source_v2> inputs;
+        inputs.reserve(count);
+
+        for (std::size_t file = 0; file < count; ++file) {
+            auto& items = names[file];
+            items.push_back(std::string{collision_a});
+            items.push_back(std::string{collision_b});
+            // Duplicate names within and across physical files; include
+            // colliding items again to stress exact-equality probing.
+            for (std::uint32_t i = 0; i < 384; ++i) {
+                auto name = std::string{"identifier_"} +
+                    std::to_string((i * 23u + static_cast<std::uint32_t>(file) * 11u) % 271u);
+                items.push_back(std::move(name));
+                if ((i % 7u) == 0u) items.push_back(items.back());
+            }
+            items.push_back(std::string{collision_b});
+            items.push_back(std::string{collision_a});
+
+            auto& data = bytes[file];
+            for (const auto& name : items) {
+                offsets[file].push_back(static_cast<std::uint32_t>(data.size()));
+                data += name;
+                data += ' ';
+            }
+        }
+
+        for (std::size_t file = 0; file < count; ++file) {
+            auto stream = std::make_unique<lexical_symbol_stream_v2>();
+            const auto id = file_id{static_cast<std::uint32_t>(3 + file * 17)};
+            bool ok = succeeded(stream->reset(id, bytes[file].size()));
+            if (!tests.expect(ok, "OPT08 initialize local symbols")) return;
+            for (std::size_t i = 0; i < names[file].size(); ++i) {
+                const auto& name = names[file][i];
+                ok = succeeded(stream->record_identifier(
+                    bytes[file], opt08_validation_hash(name), offsets[file][i],
+                    static_cast<std::uint32_t>(name.size())));
+                if (!tests.expect(ok, "OPT08 append real local symbol")) return;
+            }
+            inputs.push_back({stream.get(), bytes[file]});
+            streams.push_back(std::move(stream));
+        }
+
+        string_table original, candidate;
+        // Prepopulate with a deliberately different insertion order, including
+        // one colliding spelling while the other remains initially absent.
+        std::vector<std::string> seed;
+        if (scenario != 0) {
+            seed.push_back("unrelated_prepop");
+            seed.push_back(std::string{collision_a});
+            for (std::uint32_t i = 0; i < 200; ++i)
+                seed.push_back(std::string{"identifier_"} + std::to_string((i * 37u) % 271u));
+        }
+        if (scenario == 3) seed.push_back(std::string{collision_b});
+        for (const auto& name : seed) {
+            string_id left, right;
+            if (!tests.expect(succeeded(original.intern(name, left)) &&
+                              succeeded(candidate.intern(name, right)) && left == right,
+                              "OPT08 seed global string_table")) return;
+        }
+
+        struct reference_candidate {
+            std::uint32_t hash, length, source, local;
+            std::string_view spelling;
+        };
+        std::vector<reference_candidate> all;
+        for (std::size_t f = 0; f < count; ++f) {
+            auto records = streams[f]->symbols();
+            for (std::size_t n = 0; n < records.size(); ++n) {
+                auto& item = records[n];
+                all.push_back({item.hash, item.source_length,
+                               static_cast<std::uint32_t>(f),
+                               static_cast<std::uint32_t>(n + 1),
+                               streams[f]->spelling(local_symbol_id_v2{
+                                    static_cast<std::uint32_t>(n+1)}, bytes[f])});
+            }
+        }
+        std::sort(all.begin(), all.end(), [&](const auto& a, const auto& b) {
+            if (a.hash != b.hash) return a.hash < b.hash;
+            if (a.length != b.length) return a.length < b.length;
+            if (a.spelling != b.spelling) return a.spelling < b.spelling;
+            const auto af = streams[a.source]->file().value();
+            const auto bf = streams[b.source]->file().value();
+            return af != bf ? af < bf : a.local < b.local;
+        });
+
+        std::vector<std::vector<string_id>> old_ids(count);
+        for (std::size_t f = 0; f < count; ++f)
+            old_ids[f].resize(streams[f]->symbol_count());
+        std::string_view previous;
+        std::uint32_t previous_hash = 0;
+        bool have_previous = false;
+        string_id global;
+        for (const auto& c : all) {
+            if (!have_previous || c.hash != previous_hash || c.spelling != previous) {
+                if (!tests.expect(succeeded(original.intern(c.spelling, global)) && global,
+                                  "OPT08 original all-sort intern oracle")) return;
+                previous = c.spelling;
+                previous_hash = c.hash;
+                have_previous = true;
+            }
+            old_ids[c.source][c.local - 1] = global;
+        }
+        std::vector<lexical_symbol_resolution_v2> actual;
+        if (!tests.expect(succeeded(merge_lexical_symbols_v2(inputs, candidate, actual)) &&
+                          actual.size() == count,
+                          "OPT08 native multi-file optimized merge")) return;
+        for (std::size_t f = 0; f < count; ++f) {
+            for (std::size_t j = 0; j < old_ids[f].size(); ++j) {
+                const auto obtained = actual[f].resolve(
+                    local_symbol_id_v2{static_cast<std::uint32_t>(j+1)});
+                if (!tests.expect(obtained == old_ids[f][j],
+                                  "OPT08 exact local-to-global ID parity")) return;
+            }
+        }
+        if (!tests.expect(original.size() == candidate.size(),
+                          "OPT08 canonical table size parity")) return;
+        for (std::size_t id = 1; id <= original.size(); ++id) {
+            const auto lhs = original.spelling(static_cast<std::uint32_t>(id));
+            const auto rhs = candidate.spelling(static_cast<std::uint32_t>(id));
+            if (!tests.expect(lhs == rhs, "OPT08 exact global ID ordering")) return;
+        }
+    }
+}
 }
 }
 
@@ -6945,6 +7097,7 @@ int main() {
             tests);
 
         test_lexical_symbols_v2_growth_04(tests);
+        test_opt08_validate_canonical(tests); // HEADER-V2-OPT-08-VALIDATE
 
         test_prepared_include_v2(
             tests);

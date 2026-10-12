@@ -34,6 +34,18 @@ public:
         std::string_view value,
         string_id& output) noexcept;
 
+    // HEADER-V2-OPT-08: trusted lexical FNV-1a hash (zero normalized to 1).
+    // Equality is always verified against the complete spelling.
+    // These do not change string_id identity or BUILD lineage semantics.
+    [[nodiscard]] string_id find_prehashed(
+        std::string_view value,
+        std::uint32_t lexical_hash) const noexcept;
+
+    [[nodiscard]] server_status intern_prehashed(
+        std::string_view value,
+        std::uint32_t lexical_hash,
+        string_id& output) noexcept;
+
     [[nodiscard]] string_id find(
         std::string_view value) const noexcept;
 
