@@ -34,10 +34,18 @@ struct source_preparation_failure final {
     lexical_error lexical;
 };
 
+// PUBLISH uses Header V2 physical preparation, so its legacy lexical
+// generation contains Source roots only. Header bytes still materialize.
+enum class initial_lexical_scope : std::uint8_t {
+    all_roots,
+    source_only,
+};
+
 [[nodiscard]] server_status prepare_source_lexical_state(
     file_context& files,
     lexical_generation& lexical,
-    source_preparation_failure* failure = nullptr) noexcept;
+    source_preparation_failure* failure = nullptr,
+    initial_lexical_scope scope = initial_lexical_scope::all_roots) noexcept;
 
 struct source_replacement_metrics final {
     std::uint64_t masked_files = 0;

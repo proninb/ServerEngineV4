@@ -94,10 +94,18 @@ public:
     source_preparation(
         file_context& files,
         lexical_generation& lexical,
-        source_preparation_failure* failure) noexcept
+        source_preparation_failure* failure,
+        initial_lexical_scope scope_value) noexcept
         : files(files),
           lexical(lexical),
-          failure(failure) {
+          failure(failure),
+          scope(scope_value) {
+    }
+
+    [[nodiscard]] bool selected_for_lexing(file_kind kind) const noexcept {
+        return lexical_kind(kind) &&
+            (scope == initial_lexical_scope::all_roots ||
+             kind == file_kind::source);
     }
 
     [[nodiscard]] server_status run() noexcept {
@@ -338,6 +346,12 @@ private:
                 return materialized;
             }
 
+            // Header bytes remain available to Header V2 (including parallel
+            // acquisition), but do not count towards old lexer work.
+            if (!selected_for_lexing(files.kind(file))) {
+                continue;
+            }
+
             const auto size =
                 files.content(file)
                     .size();
@@ -400,7 +414,7 @@ private:
                 static_cast<std::uint32_t>(
                     index + 1)};
 
-            if (!lexical_kind(
+            if (!selected_for_lexing(
                     files.kind(file))) {
 
                 continue;
@@ -511,7 +525,7 @@ private:
                 static_cast<std::uint32_t>(
                     index + 1)};
 
-            if (!lexical_kind(
+            if (!selected_for_lexing(
                     files.kind(file))) {
 
                 continue;
@@ -593,6 +607,7 @@ private:
     file_context& files;
     lexical_generation& lexical;
     source_preparation_failure* failure = nullptr;
+    initial_lexical_scope scope = initial_lexical_scope::all_roots;
 
     std::size_t lane_capacity = 0;
 
@@ -1102,12 +1117,14 @@ private:
 server_status prepare_source_lexical_state(
     file_context& files,
     lexical_generation& lexical,
-    source_preparation_failure* failure) noexcept {
+    source_preparation_failure* failure,
+    initial_lexical_scope scope) noexcept {
 
     source_preparation preparation{
         files,
         lexical,
-        failure};
+        failure,
+        scope};
 
     return preparation.run();
 }

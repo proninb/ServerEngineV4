@@ -5,6 +5,7 @@
 #include "project/frontend/prepared_include_v2.hpp"
 #include "project/frontend/preprocessor_v2.hpp"
 #include "project/frontend/lexical_generation.hpp"
+#include "project/frontend/source_discovery.hpp"
 #include "project/frontend/semantic_input.hpp"
 #include "project/graph/graph.hpp"
 #include "project/graph/graph_delta.hpp"
@@ -912,6 +913,89 @@ void test_prepared_include_v2(
         "inactive-capable missing include is recorded without semantic publication");
 }
 
+
+void test_publish_physical_01(test_state& tests) {
+    const temporary_source header{
+        "publish_physical_01_header",
+        "struct PublishPhysical01 { int Value; };\n"};
+    const temporary_source source{
+        "publish_physical_01_source",
+        "PublishPhysical01 Instance;\n"};
+
+    for (const auto scope : {
+        initial_lexical_scope::all_roots,
+        initial_lexical_scope::source_only}) {
+
+        file_context files;
+        file_id header_id;
+        file_id source_id;
+        if (!tests.expect(
+                succeeded(files.resolve(header.path(), file_kind::header,
+                                        header_id)) && header_id &&
+                succeeded(files.resolve(source.path(), file_kind::source,
+                                        source_id)) && source_id,
+                "PHYSICAL01 resolve Header and Source")) return;
+
+        lexical_generation lexical;
+        source_preparation_failure failure;
+        if (!tests.expect(
+                succeeded(prepare_source_lexical_state(
+                    files, lexical, &failure, scope)),
+                "PHYSICAL01 initial physical preparation")) return;
+
+        const bool all = scope == initial_lexical_scope::all_roots;
+        if (!tests.expect(
+                files.size() == 2 &&
+                files.content_available(header_id) &&
+                files.content_available(source_id) &&
+                lexical.contains(header_id) == all &&
+                lexical.contains(source_id),
+                "PHYSICAL01 Header materialized, only selected lexed")) return;
+
+        if (!all) {
+            preprocessor_configuration configuration;
+            prepared_include_closure_v2 closure;
+            std::array<file_id, 1> roots{header_id};
+            if (!tests.expect(
+                    succeeded(prepare_header_include_closure_v2(
+                        files, roots, configuration, closure)),
+                    "PHYSICAL01 Header V2 independently prepares")) return;
+            string_table strings;
+            identity_space identities{strings};
+            graph G;
+            preprocessor_v2_failure preprocessing_failure;
+            semantic_preprocessor_v2 input{
+                files, closure.view(), configuration, strings,
+                &preprocessing_failure};
+            parser_v2_failure parse_failure;
+            if (!tests.expect(
+                    succeeded(input.start(header_id)),
+                    "PHYSICAL01 Header V2 starts without old lexical")) return;
+            header_parser_v2 parser{input, identities, G, &parse_failure};
+            if (!tests.expect(
+                    succeeded(parser.parse()) && input.finished() &&
+                    G.type_count() > 0,
+                    "PHYSICAL01 Header V2 publishes Graph")) return;
+        }
+    }
+
+    // Header-only projects must still materialize Header bytes when the
+    // selected legacy lexer has zero work and starts no worker lanes.
+    file_context header_files;
+    file_id header_id;
+    if (!tests.expect(
+            succeeded(header_files.resolve(header.path(), file_kind::header,
+                                           header_id)) && header_id,
+            "PHYSICAL01 resolve Header-only root")) return;
+    lexical_generation header_lexical;
+    if (!tests.expect(
+            succeeded(prepare_source_lexical_state(
+                header_files, header_lexical, nullptr,
+                initial_lexical_scope::source_only)) &&
+            header_files.content_available(header_id) &&
+            !header_lexical.contains(header_id),
+            "PHYSICAL01 Header-only zero legacy lexical lanes")) return;
+}
 
 // PARSER-V2-MACRO-FASTPATH-08: validate zero active definitions, including
 // after undefine/reset when the hash table may retain allocated slots.
@@ -7188,6 +7272,7 @@ int main() {
             tests);
 
         test_lexical_symbols_v2_growth_04(tests);
+        test_publish_physical_01(tests);
         test_opt08_validate_canonical(tests); // HEADER-V2-OPT-08-VALIDATE
 
         test_prepared_include_v2(

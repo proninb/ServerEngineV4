@@ -1266,6 +1266,7 @@ if(BUILD_TESTING)
         server_engine/project/frontend/prepared_include_v2.cpp
         server_engine/project/frontend/preprocessor_v2.cpp
         server_engine/project/frontend/lexical_generation.cpp
+        server_engine/project/frontend/source_discovery.cpp
         server_engine/project/file/file_identity.cpp
         server_engine/project/persistence/source_save_view.cpp
         server_engine/project/file/file_context.cpp

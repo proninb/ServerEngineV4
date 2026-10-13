@@ -961,7 +961,10 @@ server_status construct_full_project(
         prepare_source_lexical_state(
             context.files,
             context.lexical,
-            &failure);
+            &failure,
+            mode == full_construction_mode::publish
+                ? initial_lexical_scope::source_only
+                : initial_lexical_scope::all_roots);
     if (telemetry != nullptr) { telemetry->lexical_ns = elapsed_ns(lexical_started); }
 
     if (!succeeded(prepared_sources)) {
