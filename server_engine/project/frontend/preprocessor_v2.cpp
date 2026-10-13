@@ -1544,6 +1544,27 @@ server_status semantic_preprocessor_v2::seek_next() noexcept {
                     ++profile->identifiers_with_definitions;
             }
 #endif
+            // HEADER-V2-SEMANTIC-14: skip expansion machinery only when
+            // there are no active macro bindings. This is equivalent to the
+            // zero-definition branch of preprocessor::expand. Preserve its
+            // string_id validity check, error diagnostic, and profile counts.
+            // Active definitions still use the original expansion path.
+            if (preprocessing.size() == 0) {
+                if (!strings.contains(raw->identifier)) {
+                    return fail(
+                        preprocessor_v2_failure_kind::invalid_input,
+                        raw->file,
+                        {raw->source_offset, raw->source_length},
+                        "Identifier macro expansion failed",
+                        server_status::project_configuration_invalid);
+                }
+#ifdef CW_HEADER_V2_SEMANTIC_PROFILE
+                if (profile != nullptr) ++profile->identifiers_unchanged;
+#endif
+                current_valid = true;
+                return server_status::success;
+            }
+
             preprocessor_expansion
                 expansion;
 

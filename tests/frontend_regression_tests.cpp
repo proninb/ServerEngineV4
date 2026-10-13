@@ -983,6 +983,97 @@ void test_macro_fastpath_08(test_state& tests) {
 // FRONTEND-PHYSICAL-11: directive anchor ordinal regression.
 // Lexical data contains a >64KiB gap and a >255-byte identifier in an
 // inactive branch; only direct #include directive ordinals are collected.
+// HEADER-V2-SEMANTIC-14: exercise both the zero-definition bypass and the
+// original active-macro path in one semantic preprocessor replay. This test
+// uses production code; it does not depend on benchmark-only profiling.
+void test_header_v2_semantic14_macro_transition(test_state& tests) {
+    const auto scenario = [&](std::string_view name,
+                              std::string_view source_text,
+                              bool configured,
+                              const std::vector<std::string>& expected) {
+        const temporary_source source{name, source_text};
+        file_context files;
+        file_id root;
+        if (!tests.expect(succeeded(files.resolve(
+                source.path(), file_kind::header, root)) && root,
+                "SEMANTIC-14 resolve fixture")) return;
+
+        preprocessor_configuration cfg;
+        cfg.root_directory = source.path().parent_path();
+        if (configured) {
+            cfg.predefines.push_back({"ALIAS", "ConfiguredName"});
+        }
+        const std::array<file_id, 1> roots{root};
+        prepared_include_closure_v2 closure;
+        prepared_include_failure_v2 physical_failure;
+        if (!tests.expect(succeeded(prepare_header_include_closure_v2(
+                files, roots, cfg, closure, &physical_failure)),
+                "SEMANTIC-14 prepare fixture")) return;
+
+        string_table strings;
+        preprocessor_v2_failure error;
+        semantic_preprocessor_v2 input{
+            files, closure.view(), cfg, strings, &error};
+
+        // A second start() proves reset clears the prior definition state.
+        for (unsigned replay = 0; replay < 2; ++replay) {
+            if (!tests.expect(succeeded(input.start(root)),
+                    "SEMANTIC-14 start fixture")) return;
+            std::vector<std::string> actual;
+            std::size_t steps = 0;
+            while (!input.finished() && steps++ < 256) {
+                const auto* token = input.current();
+                if (!tests.expect(token != nullptr,
+                        "SEMANTIC-14 current token present")) return;
+                if (token->kind == token_kind::identifier) {
+                    if (!tests.expect(token->identifier &&
+                            strings.contains(token->identifier),
+                            "SEMANTIC-14 valid identifier")) return;
+                    actual.emplace_back(strings.get(token->identifier));
+                }
+                if (!tests.expect(succeeded(input.advance()),
+                        "SEMANTIC-14 advance fixture")) return;
+            }
+            if (!tests.expect(input.finished() && steps <= 256,
+                    "SEMANTIC-14 fixture completes")) return;
+            if (!tests.expect(actual == expected,
+                    "SEMANTIC-14 exact expansion and bypass ordering")) return;
+        }
+    };
+
+    scenario("semantic14_local_transition",
+        "Before\n"
+        "#define ALIAS ActiveName\n"
+        "ALIAS\n"
+        "#ifdef ALIAS\n"
+        "InBranch\n"
+        "#endif\n"
+        "#define ERASER\n"
+        "ERASER\n"
+        "#undef ALIAS\n"
+        "ALIAS\n"
+        "#undef ERASER\n"
+        "After\n",
+        false,
+        {"Before", "ActiveName", "InBranch", "ALIAS", "After"});
+
+    scenario("semantic14_config_transition",
+        "Before\n"
+        "ALIAS\n"
+        "#ifdef ALIAS\n"
+        "InBranch\n"
+        "#endif\n"
+        "#undef ALIAS\n"
+        "ALIAS\n"
+        "#define ALIAS AfterRedefine\n"
+        "ALIAS\n"
+        "#undef ALIAS\n"
+        "After\n",
+        true,
+        {"Before", "ConfiguredName", "InBranch", "ALIAS",
+         "AfterRedefine", "After"});
+}
+
 void test_prepared_include_anchor_replay_11(test_state& tests) {
     const temporary_source leaf_a{
         "physical_11_a", "#pragma once\nstruct Physical11A { int A; };\n"};
@@ -7103,6 +7194,7 @@ int main() {
             tests);
 
         test_macro_fastpath_08(tests);
+        test_header_v2_semantic14_macro_transition(tests); // HEADER-V2-SEMANTIC-14
 
         test_include_positive_resolution_reuse_12(tests);
         test_include_form_search_order_12(tests);
