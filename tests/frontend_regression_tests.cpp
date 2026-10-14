@@ -1736,6 +1736,109 @@ void test_preprocessor_v2_include_execution(
 }
 
 
+// HEADER-V2-PRAGMA-ONCE-29: test the existing V2 streaming implementation.
+// Do not move #pragma handling into Header grammar or physical preparation.
+void test_header_v2_pragma_once_29(test_state& tests) {
+    const auto check_stream = [&tests](
+        const std::filesystem::path& path,
+        std::size_t expected_structs,
+        bool expected_valid,
+        std::string_view label) {
+
+        file_context files;
+        file_id root;
+        if (!tests.expect(
+                succeeded(files.resolve(path, file_kind::header, root)) &&
+                    root,
+                "PRAGMA-ONCE-29 resolve root")) return;
+
+        preprocessor_configuration configuration;
+        configuration.root_directory = path.parent_path();
+        prepared_include_closure_v2 closure;
+        prepared_include_failure_v2 physical_failure;
+        const std::array<file_id, 1> roots{root};
+        if (!tests.expect(
+                succeeded(prepare_header_include_closure_v2(
+                    files, roots, configuration, closure, &physical_failure)),
+                "PRAGMA-ONCE-29 prepare physical closure")) return;
+
+        string_table strings;
+        preprocessor_v2_failure preprocessor_failure;
+        semantic_preprocessor_v2 input{
+            files, closure.view(), configuration, strings,
+            &preprocessor_failure};
+
+        // Reusing the same V2 input verifies that once state is per start().
+        for (int replay = 0; replay < 2; ++replay) {
+            server_status status = input.start(root);
+            std::size_t struct_count = 0;
+            while (succeeded(status) && !input.finished()) {
+                const auto* current = input.current();
+                if (!tests.expect(current != nullptr,
+                        "PRAGMA-ONCE-29 valid current token")) return;
+                if (current->kind == token_kind::kw_struct)
+                    ++struct_count;
+                status = input.advance();
+            }
+
+            if (expected_valid) {
+                tests.expect(succeeded(status) && input.finished() &&
+                        struct_count == expected_structs, label);
+            } else {
+                tests.expect(!succeeded(status) &&
+                        preprocessor_failure.kind ==
+                            preprocessor_v2_failure_kind::unsupported_directive,
+                        label);
+            }
+        }
+    };
+
+    // Two spellings of the same physical Header must emit its tokens once.
+    const temporary_source shared{
+        "v2_once29_shared",
+        "#pragma once // trailing comment\n"
+        "struct Once29Leaf { int X; };\n"};
+    const auto shared_name = shared.path().filename().string();
+    const temporary_source root{
+        "v2_once29_root",
+        "#include \"" + shared_name + "\"\n"
+        "#include \"./" + shared_name + "\"\n"
+        "struct Once29Root { Once29Leaf* P; };\n"};
+    check_stream(root.path(), 2, true,
+        "PRAGMA-ONCE-29 duplicate canonical include skipped (both replays)");
+
+    // A pragma in an inactive conditional must not suppress a second include.
+    const temporary_source inactive{
+        "v2_once29_inactive",
+        "#ifdef NEVER_DEFINED_29\n#pragma once\n#endif\n"
+        "struct Once29Inactive { int X; };\n"};
+    const auto inactive_name = inactive.path().filename().string();
+    const temporary_source inactive_root{
+        "v2_once29_inactive_root",
+        "#include \"" + inactive_name + "\"\n"
+        "#include \"" + inactive_name + "\"\n"};
+    check_stream(inactive_root.path(), 2, true,
+        "PRAGMA-ONCE-29 inactive pragma does not suppress include");
+
+    // A root can include itself safely once its pragma has been evaluated.
+    const temporary_source self{"v2_once29_self", ""};
+    {
+        std::ofstream stream{self.path(), std::ios::binary | std::ios::trunc};
+        if (!stream) throw std::runtime_error{"Cannot rewrite pragma once self test"};
+        stream << "#pragma once\n#include \""
+               << self.path().filename().string()
+               << "\"\nstruct Once29Self { int X; };\n";
+    }
+    check_stream(self.path(), 1, true,
+        "PRAGMA-ONCE-29 self include terminates");
+
+    // The restricted frontend must still reject unsupported pragma operands.
+    const temporary_source invalid{"v2_once29_invalid",
+        "#pragma once extra\n"};
+    check_stream(invalid.path(), 0, false,
+        "PRAGMA-ONCE-29 unsupported pragma is diagnosed");
+}
+
 void test_graph_resolved_v2(
     test_state& tests) {
 
@@ -7292,6 +7395,8 @@ int main() {
 
         test_preprocessor_v2_include_execution(
             tests);
+
+        test_header_v2_pragma_once_29(tests);
 
         test_graph_resolved_v2(
             tests);
