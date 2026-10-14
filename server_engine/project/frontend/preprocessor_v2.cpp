@@ -1433,7 +1433,8 @@ server_status semantic_preprocessor_v2::seek_next() noexcept {
         profile != nullptr ? &profile->seek_next : nullptr);
 #endif
 
-    current_value = {};
+    // A token is published only after assigning current_value and setting
+    // current_valid=true. The previous value is hidden during the search.
     current_valid = false;
 
     for (;;) {
@@ -1611,8 +1612,8 @@ server_status semantic_preprocessor_v2::seek_next() noexcept {
                     return skipped;
                 }
 
-                current_value = {};
-
+                // Still invalid: skip the elided token without clearing
+                // the hidden value. The next published token overwrites it.
                 continue;
             }
 

@@ -395,7 +395,8 @@ void test_semantic_cursor_v2_decode_09(test_state& tests) {
         !current->identifier && !current->number.valid(),
         "CURSOR-DECODE-09 no stale identifier or number");
     tests.expect(succeeded(cursor.advance()) && cursor.finished() &&
-        cursor.current() == nullptr && !succeeded(cursor.advance()),
+        cursor.current() == nullptr && !cursor.at(token_kind::semicolon) &&
+        !succeeded(cursor.advance()),
         "CURSOR-DECODE-09 EOF and rejection after EOF");
 
     // Separate stream: both escape words, including on the very first token.
@@ -441,7 +442,8 @@ void test_semantic_cursor_v2_decode_09(test_state& tests) {
     const prepared_lexical_input_v2 malformed_input{
         file, too_far, &empty_symbols, &empty_resolution, &empty_numbers};
     tests.expect(succeeded(invalid_tail.start(malformed_input)) &&
-        !succeeded(invalid_tail.advance()) && invalid_tail.current() == nullptr,
+        !succeeded(invalid_tail.advance()) && invalid_tail.current() == nullptr &&
+        !invalid_tail.at(token_kind::semicolon),
         "CURSOR-DECODE-09 truncated nonfirst escape rejected");
 
     const std::array<std::uint32_t, 2> out_of_bounds{
@@ -1118,7 +1120,9 @@ void test_header_v2_semantic14_macro_transition(test_state& tests) {
                 if (!tests.expect(succeeded(input.advance()),
                         "SEMANTIC-14 advance fixture")) return;
             }
-            if (!tests.expect(input.finished() && steps <= 256,
+            if (!tests.expect(input.finished() && steps <= 256 &&
+                    input.current() == nullptr &&
+                    !input.at(token_kind::identifier),
                     "SEMANTIC-14 fixture completes")) return;
             if (!tests.expect(actual == expected,
                     "SEMANTIC-14 exact expansion and bypass ordering")) return;

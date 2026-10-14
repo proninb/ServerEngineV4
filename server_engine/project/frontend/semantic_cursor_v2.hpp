@@ -131,8 +131,10 @@ public:
                 project_configuration_invalid;
         }
 
+        // current()/at() are gated by current_valid. decode_current() writes
+        // every field on success; do not clear the hidden prior token first.
+        // On decode failure the old payload remains unobservable.
         current_valid = false;
-        current_value = {};
         ++token_offset;
 
         if (word_offset ==
