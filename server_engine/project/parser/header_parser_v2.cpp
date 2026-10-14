@@ -1555,6 +1555,12 @@ server_status header_parser_v2::parse_member_declarator(
             &header_parser_v2_profile::member_append_sample_ms);
     #endif
         try {
+            // HEADER-V2-MEMBER-RESERVE-PROMOTE-26: reserve lazily on the
+            // first data member; empty and method-only records allocate nothing.
+            if (members.empty()) {
+                members.reserve(16);
+                construction.reserve(16);
+            }
             members.push_back({member_name, type.type, access, {}});
             construction.push_back({});
         }
