@@ -5,17 +5,12 @@ project(ServerEngineV4
     LANGUAGES CXX
 )
 
-option(SERVER_ENGINE_SOURCE_PARSER_V2
-    "Use separate Source Parser V2 during PUBLISH (experimental)" OFF)
-if(SERVER_ENGINE_SOURCE_PARSER_V2)
-    add_compile_definitions(CW_SOURCE_PARSER_V2=1)
-endif()
+# PUBLISH uses Header Parser V2 + Source Parser V2 unconditionally.
+# REBUILD and incremental BUILD retain their existing semantic backends.
 
 option(SERVER_ENGINE_SOURCE_IDENT_CACHE_V2
     "Experimental per-Source-root identifier string_id cache (PUBLISH benchmark only)" OFF)
-if(SERVER_ENGINE_SOURCE_IDENT_CACHE_V2 AND NOT SERVER_ENGINE_SOURCE_PARSER_V2)
-    message(FATAL_ERROR "Source ident cache requires SERVER_ENGINE_SOURCE_PARSER_V2=ON")
-endif()
+# The optional identifier-cache experiment targets the PUBLISH benchmark only.
 
 option(SERVER_ENGINE_SOURCE_PREDECODE_PARALLEL_V2
     "Parallel per-file lexical token decoding before deterministic Source V2 binding (experimental)" OFF)

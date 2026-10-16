@@ -193,7 +193,7 @@ struct semantic_parse_telemetry final {
     parser_failure* failure = nullptr,
     std::vector<parser_warning>* warnings = nullptr,
     semantic_parse_telemetry* telemetry = nullptr,
-    bool publish_header_v2 = false) noexcept;
+    bool publish_frontend_v2 = false) noexcept;
 
 // Replays only selected BUILD semantic roots. Input roots must be unique and
 // ascending by file_id; execution is canonical Header pass first, then Source

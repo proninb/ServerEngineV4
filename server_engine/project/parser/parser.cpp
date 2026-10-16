@@ -5608,7 +5608,7 @@ server_status parse_semantic_project(
     parser_failure* failure,
     std::vector<parser_warning>* warnings,
     semantic_parse_telemetry* telemetry,
-    bool publish_header_v2) noexcept {
+    bool publish_frontend_v2) noexcept {
 
     if (telemetry != nullptr) {
         const auto detailed =
@@ -5643,7 +5643,7 @@ server_status parse_semantic_project(
     prepared_include_profile_v2 v2_physical_profile;
     header_v2_publication_stats v2_publication_stats;
     std::vector<file_id> v2_header_roots;
-    if (publish_header_v2) {
+    if (publish_frontend_v2) {
         if (telemetry != nullptr) telemetry->header_v2_selected = 1;
         try {
             v2_header_roots.reserve(frontend_root_count);
@@ -5689,7 +5689,7 @@ server_status parse_semantic_project(
 
 #ifdef CW_HEADER_MODEL_V2
     header_model_batch header_models;
-    if (publish_header_v2 && !v2_header_roots.empty()) {
+    if (publish_frontend_v2 && !v2_header_roots.empty()) {
         const auto model_started = telemetry != nullptr
             ? clock_type::now() : clock_type::time_point{};
         const auto built = header_models.build(
@@ -5728,7 +5728,7 @@ server_status parse_semantic_project(
         telemetry != nullptr &&
         telemetry->detailed_source;
 
-    if (publish_header_v2) {
+    if (publish_frontend_v2) {
         preprocessor_v2_failure preprocessing_failure;
         parser_v2_failure header_failure;
         semantic_preprocessor_v2 input{
@@ -5885,10 +5885,10 @@ server_status parse_semantic_project(
         }
     }
 
-#ifdef CW_SOURCE_PARSER_V2
-    // Only PUBLISH, only after Header V2 has populated the SAME G.
-    // BUILD and REBUILD retain their original Source parser.
-    if (publish_header_v2) {
+    // PUBLISH always uses Source Parser V2 after Header Parser V2 has
+    // populated the same Graph. REBUILD still uses OLD Source below;
+    // incremental BUILD is implemented separately in parse_semantic_roots().
+    if (publish_frontend_v2) {
         const auto result = parse_source_roots_v2(
             files, lexical, frontend_root_count, configuration,
             strings, identities, G, sources, failure, warnings, telemetry);
@@ -5906,9 +5906,7 @@ server_status parse_semantic_project(
             input_telemetry.source_identifier_count = telemetry->source_identifier_count;
         }
     }
-    else
-#endif
-    {
+    else {
         source_parser<
             graph,
             source_map>
