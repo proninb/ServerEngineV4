@@ -60,6 +60,42 @@ semantic_preprocessor_v2::semantic_preprocessor_v2(
       {
 }
 
+server_status semantic_preprocessor_v2::record_reuse(
+    reuse_event event, file_id file, std::uint32_t value, bool eligible,
+    bool* reused) noexcept {
+    bool result = false;
+    const auto status = reuse_handler == nullptr ? server_status::success :
+        reuse_handler(reuse_context, event, file, value, eligible, result);
+    if (reused != nullptr) *reused = result;
+    return status;
+}
+
+server_status semantic_preprocessor_v2::reuse_include(file_id source, file_id target) noexcept {
+    const auto status = files.add_dependency(source, target);
+    if (succeeded(status)) ++active_include_directives;
+    return status;
+}
+
+server_status semantic_preprocessor_v2::configure_semantic_once(
+    void* context,
+    semantic_once_replay_fn replay,
+    std::size_t file_count) noexcept {
+
+    if (started || frame_depth != 0 || !context || !replay ||
+        file_count == (std::numeric_limits<std::size_t>::max)()) {
+        return server_status::project_configuration_invalid;
+    }
+    try {
+        semantic_once_seen.assign(file_count + 1, 0);
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+    semantic_once_context = context;
+    semantic_once_replay = replay;
+    return server_status::success;
+}
+
 bool semantic_preprocessor_v2::contextual_identifier(
     std::string_view spelling) const noexcept {
 
@@ -632,6 +668,31 @@ server_status semantic_preprocessor_v2::enter_file(
             "Prepared Header input is unavailable");
     }
 
+    const bool reuse_eligible = preprocessing.size() == 0 && cpp_depth == 0 &&
+        cpp_boundary && (frame_depth == 0 || frames[frame_depth - 1].reuse_eligible);
+    bool reused = false;
+    const auto reuse_status = record_reuse(reuse_event::begin, file, 0,
+        reuse_eligible, &reused);
+    if (!succeeded(reuse_status)) return reuse_status;
+    if (reused) return server_status::success;
+
+    // Only a completely empty macro table may reuse a previously validated
+    // leaf. The callback performs Source Map replay before skipping tokens.
+    // No root-global #pragma once state is retained between start() calls.
+    if (semantic_once_replay != nullptr && preprocessing.size() == 0) {
+        semantic_once_result reuse;
+        const auto replay_status = semantic_once_replay(
+            semantic_once_context, file, reuse);
+        if (!succeeded(replay_status)) {
+            return fail(preprocessor_v2_failure_kind::invalid_input,
+                file, {}, "Header semantic-once provenance replay failed",
+                replay_status);
+        }
+        if (reuse.reused) {
+            return mark_once(file);
+        }
+    }
+
     lexical_symbol_resolution_v2*
         resolution = nullptr;
 
@@ -675,6 +736,10 @@ server_status semantic_preprocessor_v2::enter_file(
     target = {};
     target.file =
         file;
+    target.semantic_once_eligible =
+        semantic_once_replay != nullptr && preprocessing.size() == 0;
+
+    target.reuse_eligible = reuse_eligible;
 
     target.conditional_floor =
         conditional_depth;
@@ -743,6 +808,23 @@ server_status semantic_preprocessor_v2::leave_file() noexcept {
             source,
             "Conditional preprocessing group is not closed");
     }
+
+    if (semantic_once_replay != nullptr && leaving.file &&
+        leaving.file.value() < semantic_once_seen.size()) {
+        auto& state = semantic_once_seen[leaving.file.value()];
+        if (!leaving.semantic_once_eligible ||
+            !leaving.semantic_once_pragma) {
+            state = 2;
+        }
+        else if (state == 0) {
+            state = 1;
+        }
+    }
+
+    const auto reuse_status = record_reuse(reuse_event::end, leaving.file, 0,
+        leaving.reuse_eligible && leaving.semantic_once_pragma &&
+        cpp_depth == 0 && cpp_boundary && preprocessing.size() == 0);
+    if (!succeeded(reuse_status)) return reuse_status;
 
     frames[
         frame_depth - 1] = {};
@@ -902,6 +984,10 @@ server_status semantic_preprocessor_v2::parse_define(
     if (!active()) {
         return server_status::success;
     }
+
+    // Active macro writes invalidate the entire enclosing include subtree,
+    // even if a later #undef would restore an empty table.
+    for (std::size_t i = 0; i < frame_depth; ++i) frames[i].reuse_eligible = false;
 
     const auto status =
         count == 1
@@ -1127,6 +1213,10 @@ server_status semantic_preprocessor_v2::execute_include(
 
     ++active_include_directives;
 
+    const auto reuse_status = record_reuse(reuse_event::include, file,
+        record->target.value());
+    if (!succeeded(reuse_status)) return reuse_status;
+
     if (once_contains(
             record->target)) {
 
@@ -1157,6 +1247,12 @@ server_status semantic_preprocessor_v2::consume_directive(
 
     const auto kind =
         first->kind;
+
+    // No file containing a macro/conditional/include directive can be
+    // skipped. #pragma once alone has an explicitly reproduced state effect.
+    if (kind != token_kind::pp_pragma) {
+        input.semantic_once_eligible = false;
+    }
 
     const source_range source{
         first->source_offset,
@@ -1373,6 +1469,9 @@ server_status semantic_preprocessor_v2::consume_directive(
             strings.get(name) ==
                 "once") {
 
+            input.semantic_once_pragma = true;
+            const auto reuse_status = record_reuse(reuse_event::once, input.file);
+            if (!succeeded(reuse_status)) return reuse_status;
             return mark_once(
                 input.file);
         }
@@ -1647,6 +1746,9 @@ server_status semantic_preprocessor_v2::start(
     once_index.clear();
     once_count = 0;
     active_include_directives = 0;
+    std::fill(semantic_once_seen.begin(), semantic_once_seen.end(), 0);
+    cpp_depth = 0;
+    cpp_boundary = true;
 
     preprocessing.reset();
 
@@ -1696,6 +1798,16 @@ server_status semantic_preprocessor_v2::advance() noexcept {
         return server_status::
             project_configuration_invalid;
     }
+
+    // Track consumed C++ boundaries, not pre-fetched tokens. Namespace and
+    // fragment includes retain the normal parser so cached global identities
+    // can never leak into another semantic scope.
+    if (current_value.kind == token_kind::kw_namespace) {
+        for (std::size_t i = 0; i < frame_depth; ++i) frames[i].reuse_eligible = false;
+    }
+    if (current_value.kind == token_kind::l_brace) ++cpp_depth;
+    if (current_value.kind == token_kind::r_brace && cpp_depth != 0) --cpp_depth;
+    cpp_boundary = cpp_depth == 0 && current_value.kind == token_kind::semicolon;
 
     auto& input =
         frames[

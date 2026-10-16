@@ -106,6 +106,18 @@ header_parser_v2::header_parser_v2(
     {
 }
 
+server_status header_parser_v2::record_dependency(identity_ref identity) noexcept {
+    auto status = input.record_reuse(semantic_preprocessor_v2::reuse_event::dependency,
+        current() != nullptr ? current()->file : file_id{}, identity.value());
+    return succeeded(status) ? provenance->add_dependency(identity) : status;
+}
+
+server_status header_parser_v2::record_contribution(file_id file, source_data_ref data) noexcept {
+    auto status = input.record_reuse(semantic_preprocessor_v2::reuse_event::contribution,
+        file, data.raw());
+    return succeeded(status) ? provenance->add(file, data) : status;
+}
+
 const prepared_token*
 header_parser_v2::current() const noexcept {
     return input.current();
@@ -800,7 +812,7 @@ server_status header_parser_v2::parse_type(
         }
 
         if (provenance != nullptr) {
-            const auto dependency = provenance->add_dependency(identity);
+            const auto dependency = record_dependency(identity);
             if (!succeeded(dependency)) return dependency;
         }
 
@@ -2634,7 +2646,7 @@ server_status header_parser_v2::parse_record(
             }
 
             if (provenance != nullptr) {
-                const auto dependency = provenance->add_dependency(base_identity);
+                const auto dependency = record_dependency(base_identity);
                 if (!succeeded(dependency)) return dependency;
             }
 
@@ -2676,7 +2688,7 @@ server_status header_parser_v2::parse_record(
     if (at(token_kind::semicolon)) {
         // WHO-only declaration. Do not allocate Graph WHERE.
         if (provenance != nullptr) {
-            const auto recorded = provenance->add(
+            const auto recorded = record_contribution(
                 record_file, source_data_ref::type(identity, false));
             if (!succeeded(recorded)) return recorded;
         }
@@ -2894,7 +2906,7 @@ server_status header_parser_v2::parse_record(
             // the named type is the enclosing record itself.
             if (provenance != nullptr) {
                 const auto dependency =
-                    provenance->add_dependency(identity);
+                    record_dependency(identity);
                 if (!succeeded(dependency)) {
                     return dependency;
                 }
@@ -3018,13 +3030,11 @@ server_status header_parser_v2::parse_record(
             earliest->second.file, earliest->second.source);
     }
 
-    status =
-        expect(
-            token_kind::semicolon,
+    // Commit this declaration before advancing through following includes or
+    // EOF: the preprocessor's file-completion event closes its replay tape.
+    if (!at(token_kind::semicolon)) {
+        return fail(parser_v2_failure_kind::syntax,
             "Header Parser V2 expected ';' after record definition");
-
-    if (!succeeded(status)) {
-        return status;
     }
 
 #ifdef CW_HEADER_V2_SEMANTIC_PROFILE
@@ -3054,7 +3064,7 @@ server_status header_parser_v2::parse_record(
     }
 
     if (provenance != nullptr) {
-        const auto recorded = provenance->add(
+        const auto recorded = record_contribution(
             record_file, source_data_ref::type(identity, true));
         if (!succeeded(recorded)) return recorded;
     }
@@ -3072,7 +3082,7 @@ server_status header_parser_v2::parse_record(
                 "Nested constructor default conflicts with Graph");
         }
     }
-    return server_status::success;
+    return consume();
 }
 
 
@@ -3177,9 +3187,8 @@ server_status header_parser_v2::parse_typedef(
     status = consume();
     if (!succeeded(status)) return status;
 
-    status = expect(token_kind::semicolon,
-        "Expected ';' after typedef");
-    if (!succeeded(status)) return status;
+    if (!at(token_kind::semicolon))
+        return fail(parser_v2_failure_kind::syntax, "Expected ';' after typedef");
 
     identity_ref identity;
     status = identities.resolve(
@@ -3198,13 +3207,13 @@ server_status header_parser_v2::parse_typedef(
             alias_file, alias_source);
     }
     if (provenance != nullptr) {
-        const auto recorded = provenance->add(
+        const auto recorded = record_contribution(
             alias_file, source_data_ref::type(identity, true));
         if (!succeeded(recorded)) return recorded;
     }
     if (publication_stats != nullptr)
         ++publication_stats->intrinsic_aliases;
-    return server_status::success;
+    return consume();
 }
 
 server_status header_parser_v2::parse_scope(

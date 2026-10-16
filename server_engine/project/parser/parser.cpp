@@ -24,10 +24,115 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <unordered_set>
 #include <vector>
 
 namespace cw::server {
 namespace {
+
+// PUBLISH-only semantic event replay. The preprocessor admits only complete
+// global declarations evaluated with an empty, unmodified macro environment.
+// Includes and #pragma once remain an ordered program, not a global seen set.
+struct header_v2_semantic_reuse_cache final {
+    using event_kind = semantic_preprocessor_v2::reuse_event;
+    struct event final { event_kind kind{}; file_id file{}; std::uint32_t value = 0; };
+    struct entry final { bool ready = false; std::vector<event> events; };
+    struct capture final {
+        file_id file{};
+        bool eligible = false;
+        std::vector<event> events;
+        std::unordered_set<std::uint64_t> seen;
+    };
+    source_map& sources;
+    semantic_preprocessor_v2& input;
+    std::vector<entry> entries;
+    std::vector<capture> stack;
+    std::vector<std::uint8_t> simulated_once;
+
+    server_status reset(std::size_t count) noexcept {
+        try { entries.resize(count + 1); simulated_once.resize(count + 1); }
+        catch (...) { return server_status::io_error; }
+        return server_status::success;
+    }
+    bool preflight(file_id file, std::size_t depth = 0) {
+        if (!file || file.value() >= entries.size() || depth >= preprocessor_v2_include_depth_limit)
+            return false;
+        const auto& cached = entries[file.value()];
+        if (!cached.ready) return false;
+        for (const auto& e : cached.events) {
+            if (e.kind == event_kind::once) simulated_once[e.file.value()] = 1;
+            if (e.kind == event_kind::include) {
+                const file_id child{e.value};
+                if (!child || child.value() >= entries.size()) return false;
+                if (!simulated_once[child.value()] && !preflight(child, depth + 1)) return false;
+            }
+        }
+        return true;
+    }
+    server_status replay(file_id file) noexcept {
+        for (const auto& e : entries[file.value()].events) {
+            server_status status = server_status::success;
+            switch (e.kind) {
+            case event_kind::once: status = input.reuse_mark_once(e.file); break;
+            case event_kind::include: {
+                const file_id target{e.value};
+                status = input.reuse_include(e.file, target);
+                if (succeeded(status) && !input.reuse_once(target)) status = replay(target);
+                break;
+            }
+            case event_kind::contribution:
+                status = sources.add(e.file, source_data_ref::from_raw(e.value)); break;
+            case event_kind::dependency:
+                status = sources.add_dependency(identity_ref::from_raw(e.value)); break;
+            default: return server_status::project_configuration_invalid;
+            }
+            if (!succeeded(status)) return status;
+        }
+        return server_status::success;
+    }
+    static server_status dispatch(void* context, event_kind kind, file_id file,
+        std::uint32_t value, bool eligible, bool& reused) noexcept {
+        auto& self = *static_cast<header_v2_semantic_reuse_cache*>(context);
+        try { return self.execute(kind, file, value, eligible, reused); }
+        catch (...) { return server_status::io_error; }
+    }
+    server_status execute(event_kind kind, file_id file, std::uint32_t value,
+        bool eligible, bool& reused) {
+        if (kind == event_kind::begin) {
+            if (eligible && entries[file.value()].ready) {
+                for (std::size_t i = 1; i < entries.size(); ++i)
+                    simulated_once[i] = input.reuse_once(file_id{static_cast<std::uint32_t>(i)});
+                if (preflight(file, input.reuse_depth())) {
+                    const auto status = replay(file);
+                    reused = succeeded(status);
+                    return status;
+                }
+            }
+            stack.push_back(capture{file, eligible});
+            return server_status::success;
+        }
+        if (stack.empty()) return server_status::project_configuration_invalid;
+        if (kind == event_kind::end) {
+            auto completed = std::move(stack.back()); stack.pop_back();
+            if (completed.file != file) return server_status::project_configuration_invalid;
+            if (eligible && completed.eligible) {
+                auto& cached = entries[file.value()];
+                if (!cached.ready) {
+                    cached.events = std::move(completed.events); cached.ready = true;
+                }
+            } else if (!stack.empty()) stack.back().eligible = false;
+            return server_status::success;
+        }
+        auto& current = stack.back();
+        if (!current.eligible) return server_status::success;
+        if (kind == event_kind::contribution || kind == event_kind::dependency) {
+            const auto key = (static_cast<std::uint64_t>(kind) << 32) | value;
+            if (!current.seen.insert(key).second) return server_status::success;
+        }
+        current.events.push_back(event{kind, file, value});
+        return server_status::success;
+    }
+};
 
 struct parser_stage_timer final {
     using clock_type = std::chrono::steady_clock;
@@ -5734,6 +5839,10 @@ server_status parse_semantic_project(
         semantic_preprocessor_v2 input{
             files, v2_closure.view(), configuration, strings,
             &preprocessing_failure};
+        header_v2_semantic_reuse_cache semantic_reuse{sources, input};
+        auto reuse_status = semantic_reuse.reset(files.size());
+        if (!succeeded(reuse_status)) return reuse_status;
+        input.configure_reuse(&semantic_reuse, &header_v2_semantic_reuse_cache::dispatch);
         const auto started = telemetry != nullptr
             ? clock_type::now() : clock_type::time_point{};
 

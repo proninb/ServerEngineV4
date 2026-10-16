@@ -141,6 +141,8 @@ public:
     }
 
 private:
+    [[nodiscard]] server_status record_dependency(identity_ref identity) noexcept;
+    [[nodiscard]] server_status record_contribution(file_id file, source_data_ref data) noexcept;
     struct resolved_type final {
         type_ref type{};
         bool named = false;

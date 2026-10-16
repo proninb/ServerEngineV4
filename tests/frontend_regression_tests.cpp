@@ -1738,6 +1738,101 @@ void test_preprocessor_v2_include_execution(
 
 // HEADER-V2-PRAGMA-ONCE-29: test the existing V2 streaming implementation.
 // Do not move #pragma handling into Header grammar or physical preparation.
+// HEADER-V2-SEMANTIC-ONCE-01: verify macro-free per-root pragma reuse and
+// active-macro fallback without altering the default preprocessor API.
+void test_header_v2_semantic_once_01(test_state& tests) {
+    const temporary_source shared{
+        "semantic_once_01_shared",
+        "#pragma once\nstruct Once01Shared { int Value; };\n"};
+    const auto filename = shared.path().filename().string();
+    const temporary_source first{
+        "semantic_once_01_first",
+        "#include \"" + filename + "\"\nstruct Once01First { int X; };\n"};
+    const temporary_source second{
+        "semantic_once_01_second",
+        "#include \"" + filename + "\"\nstruct Once01Second { int X; };\n"};
+    const temporary_source macros{
+        "semantic_once_01_macros",
+        "#define ACTIVE_01\n#include \"" + filename +
+        "\"\nstruct Once01Macro { int X; };\n"};
+
+    file_context files;
+    file_id r1, r2, rm;
+    if (!tests.expect(
+            succeeded(files.resolve(first.path(), file_kind::header, r1)) &&
+            succeeded(files.resolve(second.path(), file_kind::header, r2)) &&
+            succeeded(files.resolve(macros.path(), file_kind::header, rm)),
+            "SEMANTIC-ONCE-01 resolve roots")) return;
+    const std::array<file_id, 3> roots{r1, r2, rm};
+    preprocessor_configuration cfg;
+    cfg.root_directory = first.path().parent_path();
+    prepared_include_closure_v2 closure;
+    prepared_include_failure_v2 physical_failure;
+    if (!tests.expect(succeeded(prepare_header_include_closure_v2(
+            files, roots, cfg, closure, &physical_failure)),
+            "SEMANTIC-ONCE-01 physical closure")) return;
+
+    const auto* p1 = closure.view().file(r1);
+    if (!tests.expect(p1 && p1->includes.size() == 1 &&
+            p1->includes[0].target,
+            "SEMANTIC-ONCE-01 prepared leaf")) return;
+    const auto leaf = p1->includes[0].target;
+    struct state final {
+        file_id leaf{};
+        bool ready = false;
+        unsigned replays = 0;
+    } cache{leaf};
+
+    string_table strings;
+    preprocessor_v2_failure failure;
+    semantic_preprocessor_v2 input{
+        files, closure.view(), cfg, strings, &failure};
+    const auto callback = +[](void* ptr, file_id file,
+            semantic_preprocessor_v2::semantic_once_result& result) noexcept
+            -> server_status {
+        auto& self = *static_cast<state*>(ptr);
+        if (self.ready && file.value() == self.leaf.value()) {
+            result.reused = true;
+            ++self.replays;
+        }
+        return server_status::success;
+    };
+    if (!tests.expect(succeeded(input.configure_semantic_once(
+            &cache, callback, files.size())),
+            "SEMANTIC-ONCE-01 enable guarded replay")) return;
+
+    const auto scan = [&](file_id root, std::size_t expected,
+                          std::string_view label) {
+        auto status = input.start(root);
+        std::size_t structs = 0;
+        while (succeeded(status) && !input.finished()) {
+            const auto* token = input.current();
+            if (token == nullptr) break;
+            if (token->kind == token_kind::kw_struct) ++structs;
+            status = input.advance();
+        }
+        return tests.expect(succeeded(status) && input.finished() &&
+            structs == expected, label);
+    };
+
+    if (!scan(r1, 2, "SEMANTIC-ONCE-01 first root parses leaf")) return;
+    const auto completed = input.semantic_once_completed();
+    if (!tests.expect(leaf.value() < completed.size() &&
+            completed[leaf.value()] == 1,
+            "SEMANTIC-ONCE-01 clean pragma leaf eligible")) return;
+    cache.ready = true;
+    if (!scan(r2, 1, "SEMANTIC-ONCE-01 second root reuses leaf")) return;
+    if (!tests.expect(cache.replays == 1,
+            "SEMANTIC-ONCE-01 successful replay callback")) return;
+    if (!scan(rm, 2, "SEMANTIC-ONCE-01 active macro forces replay")) return;
+    if (!tests.expect(cache.replays == 1 &&
+            input.semantic_once_completed()[leaf.value()] == 2,
+            "SEMANTIC-ONCE-01 macro-dependent fallback")) return;
+    scan(r1, 1, "SEMANTIC-ONCE-01 once reset and replay restored");
+    tests.expect(cache.replays == 2,
+        "SEMANTIC-ONCE-01 later macro-free root uses cache");
+}
+
 void test_header_v2_pragma_once_29(test_state& tests) {
     const auto check_stream = [&tests](
         const std::filesystem::path& path,
@@ -7148,6 +7243,134 @@ void test_header_semantic_space(test_state& tests) {
         "Header semantic space preserves scope boundary semantics");
 }
 
+// PUBLISH reuse must preserve root-local provenance and macro/scope behavior.
+void test_header_v2_context_reuse(test_state& tests) {
+    const auto execute = [&](const std::vector<std::filesystem::path>& paths,
+        std::size_t type_count, std::uint64_t definitions,
+        std::size_t contribution_count, bool success = true) {
+        file_context files;
+        lexical_generation lexical;
+        std::vector<file_id> roots;
+        for (const auto& path : paths) {
+            file_id id;
+            if (!tests.expect(succeeded(files.resolve(path, file_kind::header, id)),
+                    "reuse resolve roots")) return;
+            roots.push_back(id);
+        }
+        if (!prepare_all_roots(tests, files, lexical, roots)) return;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        preprocessor_configuration configuration;
+        parser_failure failure;
+        semantic_parse_telemetry telemetry;
+        const auto status = parse_semantic_project(files, lexical, roots.size(),
+            configuration, strings, identities, G, sources, &failure,
+            nullptr, &telemetry, true);
+        if (!tests.expect(succeeded(status) == success,
+                "reuse preserves success and failure")) {
+            std::cerr << "reuse failure: " << failure.detail << '\n';
+            return;
+        }
+        if (!success) return;
+        (void)tests.expect(G.type_count() == type_count,
+            "reuse preserves unique Graph types");
+        (void)tests.expect(telemetry.header_v2_definitions == definitions,
+            "reuse skips only eligible semantic definitions");
+        (void)tests.expect(sources.finalized() &&
+            sources.contribution_entries().size() == contribution_count,
+            "reuse retains every root's ordered provenance");
+        const auto shared_name = strings.find("ReuseShared");
+        if (shared_name && roots.size() == 3) {
+            const auto shared = identities.find(identities.root(), shared_name,
+                identity_kind::type);
+            for (std::size_t i = 0; i < roots.size(); ++i) {
+                const auto contributions = sources.root(roots[i]);
+                const auto dependencies = sources.root_dependencies(roots[i]);
+                (void)tests.expect(!contributions.empty() &&
+                    contributions[0].file == roots[2] &&
+                    contributions[0].data == source_data_ref::type(shared, true),
+                    "reuse retains include-site contribution order and owner");
+                (void)tests.expect(i == 2 ? dependencies.empty() :
+                    dependencies.size() == 1 &&
+                    dependencies[0] == source_dependency_ref::type(shared),
+                    "reuse retains root-local semantic dependencies");
+            }
+        }
+    };
+    const auto include = [](const temporary_source& file) {
+        return "#include \"" + file.path().filename().string() + "\"\n";
+    };
+    {
+        const temporary_source shared{"reuse_conditional",
+            "#pragma once\n#ifdef UNUSED\n#undef UNUSED\n#endif\n"
+            "struct ReuseShared { int value; };\n"};
+        const temporary_source a{"reuse_a", "#pragma once\n" + include(shared) +
+            "struct ReuseA { ReuseShared value; };\n"};
+        const temporary_source b{"reuse_b", "#pragma once\n" + include(shared) +
+            "struct ReuseB { ReuseShared value; };\n"};
+        // Common, A and B are defined once, including a standalone Common root.
+        execute({a.path(), b.path(), shared.path()}, 3, 3, 5);
+    }
+    {
+        const temporary_source shared{"reuse_macro_branch",
+            "#pragma once\n#ifdef SWITCH\nstruct ReuseAlternate { int x; };\n"
+            "#else\nstruct ReuseCommon { int x; };\n#endif\n"};
+        const temporary_source a{"reuse_macro_a", "#pragma once\n" + include(shared)};
+        const temporary_source b{"reuse_macro_b", "#define SWITCH\n" + include(shared)};
+        execute({a.path(), b.path()}, 2, 2, 2);
+    }
+    {
+        const temporary_source shared{"reuse_scoped", "#pragma once\nstruct ReuseScoped {};\n"};
+        const temporary_source scope{"reuse_namespace", "namespace N {\n" + include(shared) + "}\n"};
+        execute({shared.path(), scope.path()}, 2, 2, 2);
+    }
+    {
+        const temporary_source shared{"reuse_active_write",
+            "#pragma once\n#define LOCAL\n#undef LOCAL\nstruct ReuseWrite {};\n"};
+        const temporary_source a{"reuse_write_a", "#pragma once\n" + include(shared)};
+        const temporary_source b{"reuse_write_b", "#pragma once\n" + include(shared)};
+        execute({a.path(), b.path()}, 1, 2, 2);
+    }
+    {
+        const temporary_source shared{"reuse_no_once", "struct ReuseNoOnce {};\n"};
+        const temporary_source a{"reuse_no_once_a", "#pragma once\n" + include(shared)};
+        const temporary_source b{"reuse_no_once_b", "#pragma once\n" + include(shared)};
+        execute({a.path(), b.path()}, 1, 2, 2);
+    }
+    {
+        const temporary_source shared{"reuse_missing",
+            "#pragma once\n#ifdef MISSING\n#include \"not-a-real-reuse-header.hpp\"\n"
+            "#endif\nstruct ReuseMissing {};\n"};
+        const temporary_source a{"reuse_missing_a", "#pragma once\n" + include(shared)};
+        const temporary_source b{"reuse_missing_b", "#define MISSING\n" + include(shared)};
+        execute({a.path(), b.path()}, 0, 0, 0, false);
+    }
+    {
+        // A previously cached shallow subtree must not bypass the include
+        // depth limit when reached through a much deeper second root.
+        std::vector<std::unique_ptr<temporary_source>> chain;
+        chain.push_back(std::make_unique<temporary_source>("reuse_depth_leaf",
+            "#pragma once\nstruct ReuseDepth {};\n"));
+        for (std::size_t i = 0; i < 270; ++i) {
+            chain.push_back(std::make_unique<temporary_source>(
+                "reuse_depth", "#pragma once\n" + include(*chain.back())));
+        }
+        execute({chain[20]->path(), chain.back()->path()}, 0, 0, 0, false);
+    }
+    {
+        const temporary_source shared{"reuse_self", ""};
+        {
+            std::ofstream file{shared.path(), std::ios::binary | std::ios::trunc};
+            file << "#pragma once\n" << include(shared) << "struct ReuseSelf {};\n";
+        }
+        const temporary_source a{"reuse_self_a", "#pragma once\n" + include(shared)};
+        const temporary_source b{"reuse_self_b", "#pragma once\n" + include(shared)};
+        execute({a.path(), b.path(), shared.path()}, 1, 1, 3);
+    }
+}
+
 void test_parser_provenance(test_state &tests) {
     const temporary_source common{"common_provenance", "struct Shared { int field; };"};
     const auto include = "#include \"" + common.path().filename().string() + "\"\n";
@@ -7397,6 +7620,7 @@ int main() {
             tests);
 
         test_header_v2_pragma_once_29(tests);
+        test_header_v2_semantic_once_01(tests);
 
         test_graph_resolved_v2(
             tests);
@@ -7471,6 +7695,7 @@ int main() {
         test_semantic_type_diagnostics(
             tests);
 
+        test_header_v2_context_reuse(tests);
         test_parser_provenance(tests);
 
         test_header_name_diagnostics(

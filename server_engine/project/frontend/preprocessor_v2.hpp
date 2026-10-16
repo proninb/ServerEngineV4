@@ -99,6 +99,41 @@ public:
         return active_include_directives;
     }
 
+    // PUBLISH-only, guarded semantic-once callback. The callback replays
+    // canonical per-root provenance; a successful reuse still preserves the
+    // current root's #pragma once state. Disabled by default.
+    struct semantic_once_result final {
+        bool reused = false;
+    };
+    using semantic_once_replay_fn = server_status (*)(
+        void*, file_id, semantic_once_result&) noexcept;
+
+    [[nodiscard]] server_status configure_semantic_once(
+        void* context,
+        semantic_once_replay_fn replay,
+        std::size_t file_count) noexcept;
+
+    // 0: unseen; 1: eligible leaf with active #pragma once and no macros;
+    // 2: seen in a context or with directives that forbid reuse.
+    [[nodiscard]] std::span<const std::uint8_t>
+    semantic_once_completed() const noexcept {
+        return semantic_once_seen;
+    }
+
+    // PUBLISH replay records semantic/provenance events separately from G.
+    enum class reuse_event : std::uint8_t { begin, end, include, once, contribution, dependency };
+    using reuse_callback = server_status (*)(void*, reuse_event, file_id,
+        std::uint32_t, bool, bool&) noexcept;
+    void configure_reuse(void* context, reuse_callback callback) noexcept {
+        reuse_context = context; reuse_handler = callback;
+    }
+    [[nodiscard]] server_status record_reuse(reuse_event event, file_id file,
+        std::uint32_t value = 0, bool eligible = true, bool* reused = nullptr) noexcept;
+    [[nodiscard]] std::size_t reuse_depth() const noexcept { return frame_depth; }
+    [[nodiscard]] bool reuse_once(file_id file) const noexcept { return once_contains(file); }
+    [[nodiscard]] server_status reuse_mark_once(file_id file) noexcept { return mark_once(file); }
+    [[nodiscard]] server_status reuse_include(file_id source, file_id target) noexcept;
+
     [[nodiscard]] bool finished() const noexcept {
         return started && !current_valid && frame_depth == 0;
     }
@@ -144,6 +179,9 @@ private:
         semantic_cursor_v2 cursor;
         std::size_t conditional_floor = 0;
         std::size_t include_occurrence = 0;
+        bool semantic_once_eligible = false;
+        bool semantic_once_pragma = false;
+        bool reuse_eligible = false;
     };
 
     struct conditional_frame final {
@@ -269,6 +307,15 @@ private:
     std::vector<file_id> once_index;
     std::size_t once_count = 0;
     std::uint64_t active_include_directives = 0;
+
+    void* reuse_context = nullptr;
+    reuse_callback reuse_handler = nullptr;
+    std::size_t cpp_depth = 0;
+    bool cpp_boundary = true;
+
+    void* semantic_once_context = nullptr;
+    semantic_once_replay_fn semantic_once_replay = nullptr;
+    std::vector<std::uint8_t> semantic_once_seen;
 
     prepared_token current_value;
     bool started = false;
