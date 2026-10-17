@@ -4,6 +4,9 @@
 
 #include <filesystem>
 #include <chrono>
+#ifdef CW_SOURCE_TOKEN_FAST_01
+#include <cstdio>
+#endif
 #include <string_view>
 
 namespace cw::server {
@@ -92,6 +95,19 @@ semantic_input::semantic_input(
       telemetry(telemetry_value) {
 }
 
+#ifdef CW_SOURCE_TOKEN_FAST_01
+semantic_input::~semantic_input() noexcept {
+    if (token_fast_lookups != 0) {
+        std::fprintf(stderr,
+            "SV2_TOKEN_FAST_01,lookups=%llu,hits=%llu,collisions=%llu,slots=%zu\n",
+            static_cast<unsigned long long>(token_fast_lookups),
+            static_cast<unsigned long long>(token_fast_hits),
+            static_cast<unsigned long long>(token_fast_signature_collisions),
+            token_fast_capacity);
+    }
+}
+#endif
+
 server_status semantic_input::fail(
     file_id file,
     source_range source,
@@ -161,6 +177,14 @@ server_status semantic_input::start(
     once_files.clear();
 
     if (mode == semantic_input_mode::source) {
+#ifdef CW_SOURCE_TOKEN_FAST_01
+        // One allocation for the entire canonical Source pass, not per root.
+        // Failure only disables the optimization; semantic parsing continues.
+        if (token_fast_slots.empty()) {
+            try { token_fast_slots.resize(token_fast_capacity); }
+            catch (...) { /* Original intern path remains available. */ }
+        }
+#endif
 #ifdef CW_SOURCE_IDENT_CACHE_V2
         // SOURCE-V2-IDENT-CACHE-01: allocate once, never clear 4096 entries
         // on each of thousands of Source roots. Failed allocation is reported.
@@ -914,6 +938,49 @@ server_status semantic_input::physical_identifier(
     using clock_type = std::chrono::steady_clock;
     const bool measure = telemetry != nullptr && telemetry->detailed_source && mode_value == semantic_input_mode::source;
     const auto started_at = measure ? clock_type::now() : clock_type::time_point{};
+#ifdef CW_SOURCE_TOKEN_FAST_01
+    if (mode_value == semantic_input_mode::source && !token_fast_slots.empty()) {
+        // Short fingerprint, at most eight characters for long identifiers.
+        // An unequal identifier with the same signature is ALWAYS rejected by
+        // full spelling equality below. No source text is stored in the cache.
+        std::uint32_t signature = 2166136261u;
+        const std::size_t prefix = spelling.size() < 4 ? spelling.size() : 4;
+        for (std::size_t i = 0; i < prefix; ++i) {
+            signature ^= static_cast<unsigned char>(spelling[i]);
+            signature *= 16777619u;
+        }
+        const std::size_t suffix = spelling.size() > 8
+            ? spelling.size() - 4 : prefix;
+        for (std::size_t i = suffix; i < spelling.size(); ++i) {
+            signature ^= static_cast<unsigned char>(spelling[i]);
+            signature *= 16777619u;
+        }
+        signature ^= static_cast<std::uint32_t>(spelling.size());
+        signature *= 16777619u;
+        if (signature == 0) signature = 1;
+
+        auto& slot = token_fast_slots[
+            signature & (token_fast_capacity - 1)];
+        ++token_fast_lookups;
+        if (slot.id && slot.signature == signature) {
+            if (strings.get(slot.id) == spelling) {
+                ++token_fast_hits;
+                output = slot.id;
+                if (measure) telemetry->source_intern_ns += static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        clock_type::now() - started_at).count());
+                return server_status::success;
+            }
+            ++token_fast_signature_collisions;
+        }
+        const auto result = strings.intern(spelling, output);
+        if (succeeded(result)) slot = {output, signature};
+        if (measure) telemetry->source_intern_ns += static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                clock_type::now() - started_at).count());
+        return result;
+    }
+#endif
 #ifdef CW_SOURCE_IDENT_CACHE_V2
     if (mode_value == semantic_input_mode::source && !source_name_cache.empty()) {
         // SOURCE-V2-IDENT-CACHE-01: same FNV-1a hashing as string_table;

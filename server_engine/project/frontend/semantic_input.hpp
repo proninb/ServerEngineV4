@@ -98,6 +98,9 @@ public:
         string_table& strings,
         semantic_input_telemetry* telemetry = nullptr) noexcept;
 
+#ifdef CW_SOURCE_TOKEN_FAST_01
+    ~semantic_input() noexcept;
+#endif
     semantic_input(const semantic_input&) = delete;
     semantic_input& operator=(const semantic_input&) = delete;
 
@@ -224,6 +227,21 @@ private:
     static constexpr std::size_t source_name_cache_capacity = 4096;
     std::vector<source_name_cache_entry> source_name_cache;
     std::uint32_t source_name_cache_epoch = 0;
+#endif
+
+#ifdef CW_SOURCE_TOKEN_FAST_01
+    // SOURCE-V2-TOKEN-FAST-01: construction-only direct-mapped string_id cache.
+    // No borrowed string_view: string_table::get() checks the CURRENT value.
+    // Survives Source root boundaries while string ids remain stable.
+    struct token_fast_slot final {
+        string_id id{};
+        std::uint32_t signature = 0;
+    };
+    static constexpr std::size_t token_fast_capacity = 8192;
+    std::vector<token_fast_slot> token_fast_slots;
+    std::uint64_t token_fast_lookups = 0;
+    std::uint64_t token_fast_hits = 0;
+    std::uint64_t token_fast_signature_collisions = 0;
 #endif
 
     bool header_passthrough = false;
