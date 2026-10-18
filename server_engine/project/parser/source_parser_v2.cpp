@@ -244,6 +244,69 @@ public:
         input_profile.detailed_source = t != nullptr && t->detailed_source;
     }
 
+#ifdef CW_SOURCE_V2_STRING_PATH_REUSE_01
+    // Source string paths use immutable root TYPE and the full typed prefix,
+    // never object WHO, to identify canonical Graph endpoint paths.
+    // Lookup uses a non-owning view: no temporary key allocations on hits.
+    struct string_path_view final {
+        type_ref root{};
+        type_ref array{};
+        std::span<const endpoint_path_step> prefix{};
+    };
+    struct string_path_key final {
+        type_ref root{};
+        type_ref array{};
+        std::vector<endpoint_path_step> prefix;
+    };
+    struct string_path_hash final {
+        using is_transparent = void;
+        [[nodiscard]] static std::size_t calculate(string_path_view k) noexcept {
+            std::uint64_t hash = 14695981039346656037ULL;
+            const auto mix = [&](std::uint64_t v) noexcept {
+                hash ^= v;
+                hash *= 1099511628211ULL;
+            };
+            mix(k.root.value());
+            mix(k.array.value());
+            mix(k.prefix.size());
+            for (const auto& step : k.prefix) {
+                mix(step.value);
+                mix(static_cast<std::uint8_t>(step.kind));
+                // Equality includes reserved[]; a hash collision cannot
+                // produce a false positive.
+            }
+            return static_cast<std::size_t>(hash);
+        }
+        [[nodiscard]] std::size_t operator()(string_path_view k) const noexcept {
+            return calculate(k);
+        }
+        [[nodiscard]] std::size_t operator()(const string_path_key& k) const noexcept {
+            return calculate({k.root, k.array, k.prefix});
+        }
+    };
+    struct string_path_equal final {
+        using is_transparent = void;
+        [[nodiscard]] static string_path_view view(string_path_view k) noexcept {
+            return k;
+        }
+        [[nodiscard]] static string_path_view view(const string_path_key& k) noexcept {
+            return {k.root, k.array, k.prefix};
+        }
+        template<class Left, class Right>
+        [[nodiscard]] bool operator()(const Left& left, const Right& right) const noexcept {
+            const auto a = view(left);
+            const auto b = view(right);
+            return a.root == b.root && a.array == b.array &&
+                a.prefix.size() == b.prefix.size() &&
+                std::equal(a.prefix.begin(), a.prefix.end(), b.prefix.begin());
+        }
+    };
+    using string_path_cache_type = std::unordered_map<string_path_key,
+        std::vector<endpoint_path_handle>, string_path_hash, string_path_equal>;
+    static constexpr std::size_t string_path_max_prefixes = 8192;
+    static constexpr std::uint64_t string_path_max_bound = 256;
+#endif
+
     void export_input_profile(semantic_parse_telemetry& result) const noexcept {
         result.source_decode_ns += input_profile.source_decode_ns;
         result.source_intern_ns += input_profile.source_intern_ns;
@@ -1663,13 +1726,51 @@ private:
             path_steps = steps;
             path_steps.push_back({0, endpoint_path_step_kind::array_index, {}});
         } catch (...) { return server_status::io_error; }
+#ifdef CW_SOURCE_V2_STRING_PATH_REUSE_01
+        std::vector<endpoint_path_handle>* cached_elements = nullptr;
+        if (array.payload <= string_path_max_bound) {
+            try {
+                const string_path_view lookup{target.object_type, target.type,
+                    std::span<const endpoint_path_step>{steps}};
+                auto found = string_path_cache.find(lookup);
+                if (found != string_path_cache.end()) {
+                    cached_elements = &found->second;
+                } else if (string_path_cache.size() < string_path_max_prefixes) {
+                    string_path_key key;
+                    key.root = target.object_type;
+                    key.array = target.type;
+                    key.prefix.assign(steps.begin(), steps.end());
+                    std::vector<endpoint_path_handle> handles(
+                        static_cast<std::size_t>(array.payload));
+                    auto inserted = string_path_cache.try_emplace(
+                        std::move(key), std::move(handles));
+                    cached_elements = &inserted.first->second;
+                }
+            } catch (...) {
+                // Cache allocation failure: original Graph path remains valid.
+                cached_elements = nullptr;
+            }
+        }
+#endif
         bool any_replaced = false;
         for (std::uint64_t i = 0; i < array.payload; ++i) {
             path_steps.back().value = i;
             endpoint_path_handle path;
+#ifdef CW_SOURCE_V2_STRING_PATH_REUSE_01
+            const auto slot = static_cast<std::size_t>(i);
+            if (cached_elements && (*cached_elements)[slot]) {
+                path = (*cached_elements)[slot];
+            } else {
+                status = G.intern_resolved_endpoint_path(target.object_type,
+                    path_steps, array.child, path);
+                if (!succeeded(status)) return status;
+                if (cached_elements) (*cached_elements)[slot] = path;
+            }
+#else
             status = G.intern_resolved_endpoint_path(target.object_type,
                 path_steps, array.child, path);
             if (!succeeded(status)) return status;
+#endif
             const object_endpoint element{target.unit.who, endpoint_ref::from_path(path)};
             const auto value = construction_value::constant(construction_kind::unsigned_integer,
                 i < bytes.size() ? bytes[static_cast<std::size_t>(i)] : 0);
@@ -1936,6 +2037,10 @@ private:
     std::vector<endpoint_path_step> steps;
     // Typed transitions are reused across Source roots; G's Header types are
     // immutable for this pass. Cache/pool are never persisted to compiled.bin.
+#ifdef CW_SOURCE_V2_STRING_PATH_REUSE_01
+    // Source-pass-local cache: never serialized; no profiler counters.
+    string_path_cache_type string_path_cache;
+#endif
     std::vector<member_transition> member_transitions;
     std::vector<endpoint_path_step> transition_bases;
     bool transition_allocation_attempted = false;

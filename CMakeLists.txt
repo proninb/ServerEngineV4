@@ -12,6 +12,14 @@ option(SERVER_ENGINE_SOURCE_IDENT_CACHE_V2
     "Experimental per-Source-root identifier string_id cache (PUBLISH benchmark only)" OFF)
 # The optional identifier-cache experiment targets the PUBLISH benchmark only.
 
+# SOURCE-V2-STRING-PATH-REUSE-01: type/path cache in canonical Source V2.
+# Default ON across server, benchmarks and tests; OFF is the exact baseline.
+option(SERVER_ENGINE_SOURCE_STRING_PATH_REUSE_V2
+    "Reuse Graph endpoint path handles across repeated char-array Source initializations" ON)
+if(SERVER_ENGINE_SOURCE_STRING_PATH_REUSE_V2)
+    add_compile_definitions(CW_SOURCE_V2_STRING_PATH_REUSE_01=1)
+endif()
+
 option(SERVER_ENGINE_SOURCE_PREDECODE_PARALLEL_V2
     "Parallel per-file lexical token decoding before deterministic Source V2 binding (experimental)" OFF)
 if(SERVER_ENGINE_SOURCE_PREDECODE_PARALLEL_V2)
