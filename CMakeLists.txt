@@ -8,6 +8,14 @@ project(ServerEngineV4
 # PUBLISH uses Header Parser V2 + Source Parser V2 unconditionally.
 # REBUILD and incremental BUILD retain their existing semantic backends.
 
+# PUBLISH-NO-SYNC-FLUSH-01: data remains mmap-readable without a
+# synchronous durability barrier. REBUILD and other writes still sync.
+option(SERVER_ENGINE_PUBLISH_NO_SYNC_FLUSH
+    "Skip synchronous compiled.bin/runtime.bin mmap flush in PUBLISH only" ON)
+if(SERVER_ENGINE_PUBLISH_NO_SYNC_FLUSH)
+    add_compile_definitions(CW_PUBLISH_NO_SYNC_FLUSH_01=1)
+endif()
+
 option(SERVER_ENGINE_SOURCE_IDENT_CACHE_V2
     "Experimental per-Source-root identifier string_id cache (PUBLISH benchmark only)" OFF)
 # The optional identifier-cache experiment targets the PUBLISH benchmark only.

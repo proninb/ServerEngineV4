@@ -287,7 +287,8 @@ struct physical_plan_job final {
 persist_compiled(
     const project_artifact_layout& paths,
     const full_construction_context& context,
-    full_construction_telemetry* telemetry = nullptr) noexcept {
+    full_construction_telemetry* telemetry,
+    bool synchronous_flush) noexcept {
 
     using clock_type = std::chrono::steady_clock;
     auto stage_started = telemetry != nullptr ? clock_type::now() : clock_type::time_point{};
@@ -487,10 +488,13 @@ persist_compiled(
             telemetry->compiled_type_encode_ns + telemetry->compiled_runtime_encode_ns;
     }
 
-    if (mapping.flush() !=
-            writable_file_mapping_result::success ||
-        runtime_mapping.flush() !=
-            writable_file_mapping_result::success) {
+    // PUBLISH-NO-SYNC-FLUSH-01: mapped content has already been encoded
+    // and validated. An explicit storage durability barrier is optional only
+    // for PUBLISH. REBUILD retains synchronous flush on both artifacts.
+    // The mapping destructor still unmaps/closes both files normally.
+    if (synchronous_flush &&
+        (mapping.flush() != writable_file_mapping_result::success ||
+         runtime_mapping.flush() != writable_file_mapping_result::success)) {
 
         return persistence_io_failure(
             full_persistence_stage::flush);
@@ -731,6 +735,7 @@ struct full_persistence_job final {
     std::size_t active_lanes = 1;
     std::size_t artifact_count =
         full_persistence_artifact_count;
+    bool synchronous_compiled_flush = true;
 
     std::array<
         full_persistence_result,
@@ -759,7 +764,8 @@ void persist_full_artifacts(
                 persist_compiled(
                     job.paths,
                     job.context,
-                    job.telemetry);
+                    job.telemetry,
+                    job.synchronous_compiled_flush);
             break;
 
         case full_persistence_artifact::source:
@@ -1284,6 +1290,11 @@ server_status construct_full_project(
         ? 1
         : full_persistence_artifact_count;
 
+#if defined(CW_PUBLISH_NO_SYNC_FLUSH_01)
+    persistence.synchronous_compiled_flush =
+        mode != full_construction_mode::publish;
+#endif
+
     auto active_lanes =
         execution_lane_capacity();
 
@@ -1348,7 +1359,8 @@ server_status construct_full_project(
                     persist_compiled(
                         layout,
                         context,
-                        telemetry);
+                        telemetry,
+                        persistence.synchronous_compiled_flush);
         }
 
         for (std::size_t index = 1;
