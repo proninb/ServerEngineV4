@@ -1107,6 +1107,75 @@ file_token_result capture_file_change_checkpoint(
 #endif
 }
 
+file_content_result acquire_file_content_fast(
+    const std::filesystem::path& path,
+    std::string& output) noexcept {
+
+    output.clear();
+    try {
+#if defined(_WIN32)
+        // The file handle is used only for reading; no re-open, USN or hash.
+        windows_handle file{CreateFileW(path.c_str(), GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL |
+            FILE_FLAG_SEQUENTIAL_SCAN, nullptr)};
+        if (!file) {
+            const auto error = GetLastError();
+            return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND
+                ? file_content_result::missing : file_content_result::failed;
+        }
+        LARGE_INTEGER size{};
+        if (GetFileSizeEx(file.get(), &size) == 0 || size.QuadPart < 0 ||
+            static_cast<std::uint64_t>(size.QuadPart) >
+                (std::numeric_limits<std::uint32_t>::max)()) {
+            return file_content_result::failed;
+        }
+        output.resize(static_cast<std::size_t>(size.QuadPart));
+        std::size_t offset = 0;
+        while (offset < output.size()) {
+            const auto chunk = static_cast<DWORD>((std::min<std::size_t>)(
+                output.size() - offset, std::size_t{1024u * 1024u * 1024u}));
+            DWORD count = 0;
+            if (ReadFile(file.get(), output.data() + offset, chunk,
+                    &count, nullptr) == 0 || count != chunk) {
+                return file_content_result::failed;
+            }
+            offset += count;
+        }
+#else
+        std::error_code error;
+        const auto size = std::filesystem::file_size(path, error);
+        if (error) {
+            return error == std::errc::no_such_file_or_directory
+                ? file_content_result::missing : file_content_result::failed;
+        }
+        if (size > (std::numeric_limits<std::uint32_t>::max)()) {
+            return file_content_result::failed;
+        }
+        std::ifstream stream(path, std::ios::binary);
+        if (!stream) return file_content_result::failed;
+        output.resize(static_cast<std::size_t>(size));
+        if (!output.empty()) {
+            stream.read(output.data(), static_cast<std::streamsize>(output.size()));
+            if (!stream || stream.gcount() !=
+                    static_cast<std::streamsize>(output.size())) {
+                return file_content_result::failed;
+            }
+        }
+#endif
+        return file_content_result::acquired;
+    }
+    catch (const std::bad_alloc&) {
+        return file_content_result::allocation_failed;
+    }
+    catch (const std::length_error&) {
+        return file_content_result::allocation_failed;
+    }
+    catch (...) {
+        return file_content_result::failed;
+    }
+}
+
 file_content_result acquire_file_content(
     const std::filesystem::path& path,
     file_content_snapshot& output) noexcept {

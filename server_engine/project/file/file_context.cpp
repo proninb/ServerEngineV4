@@ -2096,6 +2096,7 @@ server_status file_context::prepare_acquire(
 
     output.file = file;
     output.path = path(file);
+    output.publish_fast = publish_fast_acquisition;
     output.baseline_present =
         state->present();
     output.baseline_token_available =
@@ -2119,12 +2120,13 @@ void file_context::execute_acquire(
 
     output = {};
     output.file = job.file;
+    output.publish_fast = job.publish_fast;
 
     try {
         const auto file_path =
             make_path(job.path);
 
-        if (job.baseline_present &&
+        if (!job.publish_fast && job.baseline_present &&
             job.baseline_token_available) {
 
             bool unchanged = false;
@@ -2161,10 +2163,9 @@ void file_context::execute_acquire(
             }
         }
 
-        const auto acquired =
-            acquire_file_content(
-                file_path,
-                output.snapshot);
+        const auto acquired = job.publish_fast
+            ? acquire_file_content_fast(file_path, output.snapshot.bytes)
+            : acquire_file_content(file_path, output.snapshot);
 
         switch (acquired) {
         case file_content_result::acquired:
@@ -2205,6 +2206,49 @@ void file_context::execute_acquire(
         output.kind =
             file_acquire_result_kind::failed;
     }
+}
+
+server_status file_context::apply_acquire(
+    file_acquire_result& result,
+    bool& content_changed) noexcept {
+
+    if (!publish_fast_acquisition || !result.publish_fast) {
+        return apply_acquire(
+            static_cast<const file_acquire_result&>(result), content_changed);
+    }
+    content_changed = false;
+    if (!contains(result.file) || baseline != nullptr) {
+        return server_status::project_configuration_invalid;
+    }
+    if (result.kind != file_acquire_result_kind::present) {
+        return server_status::io_error;
+    }
+    std::size_t index = 0;
+    if (!local_index(result.file, index)) {
+        return server_status::project_configuration_invalid;
+    }
+    // No duplicate reads and no dynamic arena relocation. A separately owned
+    // string preserves every parser string_view until construction completes.
+    if (content_files[index].materialized() ||
+        (index < publish_content_bytes.size() && publish_content_bytes[index])) {
+        return server_status::project_artifact_invalid;
+    }
+    try {
+        if (index >= publish_content_bytes.size()) {
+            publish_content_bytes.resize(index + 1);
+        }
+    }
+    catch (...) {
+        return server_status::io_error;
+    }
+    auto value = std::unique_ptr<std::string>(
+        new (std::nothrow) std::string(std::move(result.snapshot.bytes)));
+    if (!value) return server_status::io_error;
+    physical_files[index] = {};
+    physical_files[index].flags = file_physical_present;
+    publish_content_bytes[index] = std::move(value);
+    content_changed = true;
+    return server_status::success;
 }
 
 server_status file_context::apply_acquire(
@@ -3174,7 +3218,9 @@ bool file_context::content_available(
             file,
             index) &&
         physical_files[index].present() &&
-        content_files[index].materialized();
+        (content_files[index].materialized() ||
+         (index < publish_content_bytes.size() &&
+          static_cast<bool>(publish_content_bytes[index])));
 }
 
 std::string_view file_context::content(
@@ -3237,6 +3283,11 @@ std::string_view file_context::content(
             index)) {
 
         return {};
+    }
+
+    if (index < publish_content_bytes.size() &&
+        publish_content_bytes[index]) {
+        return *publish_content_bytes[index];
     }
 
     const auto& record =

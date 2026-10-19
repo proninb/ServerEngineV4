@@ -956,6 +956,13 @@ server_status construct_full_project(
         return composed;
     }
 
+    // PUBLISH-FAST-ACQUIRE-01. All subsequent Source/Header/include reads use
+    // a single byte snapshot without hashes, USN, metadata rechecks or copies.
+    // REBUILD and incremental BUILD retain their original verified I/O path.
+    if (mode == full_construction_mode::publish) {
+        context.files.enable_publish_fast_acquisition();
+    }
+
     const auto frontend_root_count =
         context.files.size();
 

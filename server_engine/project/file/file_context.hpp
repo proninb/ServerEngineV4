@@ -19,7 +19,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -116,6 +118,7 @@ struct file_acquire_job final {
     file_change_token baseline_token{};
     bool baseline_present = false;
     bool baseline_token_available = false;
+    bool publish_fast = false;
 };
 
 struct file_acquire_result final {
@@ -123,6 +126,7 @@ struct file_acquire_result final {
     file_acquire_result_kind kind =
         file_acquire_result_kind::failed;
     file_content_snapshot snapshot;
+    bool publish_fast = false;
 };
 
 // SHA-256 over the ordered raw 32-byte per-file content hashes. This is only
@@ -293,6 +297,12 @@ public:
     file_context(const file_context&) = delete;
     file_context& operator=(const file_context&) = delete;
 
+    // Only PUBLISH enables this immediately after composing configuration.
+    // BUILD and REBUILD keep immutable physical snapshots and change proofs.
+    void enable_publish_fast_acquisition() noexcept {
+        publish_fast_acquisition = true;
+    }
+
     // Binds immutable BUILD lineage without reconstructing committed file/path/
     // physical/topology arrays. The source_save_view must outlive this context.
     [[nodiscard]] server_status bind_baseline(
@@ -330,6 +340,12 @@ public:
 
     [[nodiscard]] server_status apply_acquire(
         const file_acquire_result& result,
+        bool& content_changed) noexcept;
+
+    // Mutable result overload takes ownership of PUBLISH bytes without an
+    // arena copy; non-PUBLISH delegates to the existing const overload.
+    [[nodiscard]] server_status apply_acquire(
+        file_acquire_result& result,
         bool& content_changed) noexcept;
 
     [[nodiscard]] server_status calculate_content_hash(
@@ -529,6 +545,10 @@ private:
     std::vector<file_physical_record> physical_files;
     std::vector<file_content_record> content_files;
     std::vector<char> content_bytes;
+    // Per-file heap-owned strings: stable data pointers across file_context
+    // growth and nested Header includes, including small-string files.
+    std::vector<std::unique_ptr<std::string>> publish_content_bytes;
+    bool publish_fast_acquisition = false;
 
     std::vector<file_dependency_record> dependency_files;
     std::vector<file_id> forward_edges;

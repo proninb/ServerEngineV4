@@ -117,6 +117,12 @@ enum class file_token_result : std::uint8_t {
     const std::filesystem::path& path,
     file_content_snapshot& output) noexcept;
 
+// PUBLISH-only: read one byte image; no physical change proof, hash, USN,
+// timestamp observation or second metadata query. Caller owns exact bytes.
+[[nodiscard]] file_content_result acquire_file_content_fast(
+    const std::filesystem::path& path,
+    std::string& output) noexcept;
+
 [[nodiscard]] file_content_result acquire_file_content_proof(
     const std::filesystem::path& path,
     file_content_proof& output) noexcept;
