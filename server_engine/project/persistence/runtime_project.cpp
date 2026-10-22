@@ -1,5 +1,6 @@
 #include "runtime_project.hpp"
 
+#include "../construction/execution_lanes.hpp"
 #include "../shm/shm_layout.hpp"
 #include "../shm/shm_runtime_v2.hpp"
 #include "../shm/shm_type_batch.hpp"
@@ -19,6 +20,43 @@ constexpr std::array<std::byte, 8> image_magic{
 };
 
 constexpr std::size_t directory_offset = runtime_project_header_size;
+
+struct runtime_image_clear_job final {
+    std::span<std::byte> output;
+    std::size_t lanes;
+
+    static void run(void* raw, std::size_t lane) noexcept {
+        auto& job = *static_cast<runtime_image_clear_job*>(raw);
+        // Disjoint, 64 KiB-aligned ranges, including an arbitrary final tail.
+        constexpr std::size_t block_size = 64 * 1024;
+        const auto blocks = job.output.size() / block_size;
+        const auto first = (blocks / job.lanes * lane +
+            (std::min)(lane, blocks % job.lanes)) * block_size;
+        const auto next = lane + 1;
+        const auto last = next == job.lanes ? job.output.size() :
+            (blocks / job.lanes * next +
+                (std::min)(next, blocks % job.lanes)) * block_size;
+        std::fill(job.output.begin() + first, job.output.begin() + last, std::byte{0});
+    }
+};
+
+void clear_runtime_image(std::span<std::byte> output) noexcept {
+    constexpr std::size_t bytes_per_lane = 4 * 1024 * 1024;
+    const auto lanes = (std::min)({output.size() / bytes_per_lane,
+        execution_lane_capacity(), std::size_t{16}});
+    if (lanes > 1) {
+        bool cleared = false;
+        {
+            runtime_image_clear_job job{output, lanes};
+            execution_lanes workers;
+            cleared = succeeded(workers.start(lanes)) &&
+                succeeded(workers.run(lanes, runtime_image_clear_job::run, &job));
+        }
+        // Destroy/join the workers before any serial fallback or encoding.
+        if (cleared) return;
+    }
+    std::fill(output.begin(), output.end(), std::byte{0});
+}
 
 [[nodiscard]] constexpr std::size_t section_index(
     compiled_project_section kind) noexcept {
@@ -351,7 +389,8 @@ runtime_project_image_result
 prepare_runtime_project_layout(
     const compiled_project_view& project,
     const compiled_project_runtime_type_counts& type_counts,
-    runtime_project_layout& output) noexcept {
+    runtime_project_layout& output,
+    const shm_runtime_v2* physical_plan) noexcept {
 
     output = {};
 
@@ -360,8 +399,18 @@ prepare_runtime_project_layout(
 
     execution_counts execution;
 
-    if (!prepare_execution_counts(project, execution))
+    if (physical_plan != nullptr) {
+        shm_runtime_v2_physical_counts counts;
+        if (!physical_plan->physical_counts(counts) ||
+            counts.link_slots != project.link_count() ||
+            counts.initializations != project.initialization_count())
+            return runtime_project_image_result::invalid_state;
+        execution.endpoint_programs = counts.endpoint_programs;
+        execution.dereferences = counts.dereferences;
+    }
+    else if (!prepare_execution_counts(project, execution)) {
         return runtime_project_image_result::invalid_state;
+    }
 
     const auto intrinsic_count =
         static_cast<std::uint64_t>(shm_layout_intrinsic_slot_count);
@@ -443,7 +492,7 @@ encode_runtime_project_image(
         output.size() != layout.size())
         return runtime_project_image_result::invalid_state;
 
-    std::fill(output.begin(), output.end(), std::byte{0});
+    clear_runtime_image(output);
 
     std::memcpy(
         output.data(),

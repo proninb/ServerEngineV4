@@ -115,7 +115,9 @@ enum class file_token_result : std::uint8_t {
 
 [[nodiscard]] file_content_result acquire_file_content(
     const std::filesystem::path& path,
-    file_content_snapshot& output) noexcept;
+    file_content_snapshot& output,
+    // PUBLISH needs stable bytes and their hash, but no BUILD change token.
+    bool capture_change_token = true) noexcept;
 
 [[nodiscard]] file_content_result acquire_file_content_proof(
     const std::filesystem::path& path,

@@ -4,14 +4,40 @@ project(ServerEngineV4
     VERSION 4.0.0
     LANGUAGES CXX
 )
+option(SERVER_ENGINE_CANONICALIZER_TRACE "Capture symbol events in the PUBLISH benchmark only" OFF)
 
 # PUBLISH uses Header Parser V2 + Source Parser V2 unconditionally.
 # REBUILD and incremental BUILD retain their existing semantic backends.
+option(SERVER_ENGINE_HEADER_SOURCE_OVERLAP_V2
+    "Prepare isolated Source tokens concurrently with Header semantics" OFF)
+if(SERVER_ENGINE_HEADER_SOURCE_OVERLAP_V2)
+    add_compile_definitions(CW_HEADER_SOURCE_OVERLAP_V2=1)
+endif()
+
+option(SERVER_ENGINE_HEADER_LEXER_TOKENS_V2
+    "Retain ready physical Header tokens for contextual preprocessing replay" OFF)
+if(SERVER_ENGINE_HEADER_LEXER_TOKENS_V2)
+    add_compile_definitions(CW_HEADER_LEXER_TOKENS_V2=1)
+endif()
+
+option(SERVER_ENGINE_HEADER_TOKEN_ONLY_V2
+    "Emit only ready physical Header tokens, without compact words" OFF)
+if(SERVER_ENGINE_HEADER_TOKEN_ONLY_V2)
+    if(NOT SERVER_ENGINE_HEADER_LEXER_TOKENS_V2)
+        message(FATAL_ERROR "HEADER_TOKEN_ONLY_V2 requires HEADER_LEXER_TOKENS_V2=ON")
+    endif()
+    add_compile_definitions(CW_HEADER_TOKEN_ONLY_V2=1)
+endif()
 
 option(SERVER_ENGINE_SOURCE_IDENT_CACHE_V2
     "Experimental per-Source-root identifier string_id cache (PUBLISH benchmark only)" OFF)
 # The optional identifier-cache experiment targets the PUBLISH benchmark only.
 
+option(SERVER_ENGINE_SOURCE_CONSTRUCTION_WINDOW_V2
+    "Buffer up to 64 resolved Source constructions before ordered commit (experimental)" OFF)
+if(SERVER_ENGINE_SOURCE_CONSTRUCTION_WINDOW_V2)
+    add_compile_definitions(CW_SOURCE_CONSTRUCTION_WINDOW_V2=1)
+endif()
 # SOURCE-V2-STRING-PATH-REUSE-01: type/path cache in canonical Source V2.
 # Default ON across server, benchmarks and tests; OFF is the exact baseline.
 option(SERVER_ENGINE_SOURCE_STRING_PATH_REUSE_V2
@@ -24,6 +50,35 @@ option(SERVER_ENGINE_SOURCE_PREDECODE_PARALLEL_V2
     "Parallel per-file lexical token decoding before deterministic Source V2 binding (experimental)" OFF)
 if(SERVER_ENGINE_SOURCE_PREDECODE_PARALLEL_V2)
     add_compile_definitions(CW_SOURCE_PREDECODE_PARALLEL_V2=1)
+endif()
+
+# Workers hash immutable physical names; canonical Source replay still assigns
+# every string_id and performs full spelling equality through string_table.
+option(SERVER_ENGINE_SOURCE_PREHASH_PARALLEL_V2
+    "Compute Source identifier hashes in parallel before canonical binding" ON)
+if(SERVER_ENGINE_SOURCE_PREHASH_PARALLEL_V2)
+    add_compile_definitions(CW_SOURCE_PREHASH_PARALLEL_V2=1)
+endif()
+option(SERVER_ENGINE_SOURCE_LEXER_TOKENS_V2
+    "Retain ready Source tokens and lexer hashes for direct PUBLISH consumption" ON)
+if(SERVER_ENGINE_SOURCE_LEXER_TOKENS_V2)
+    if(NOT SERVER_ENGINE_SOURCE_PREHASH_PARALLEL_V2)
+        message(FATAL_ERROR "SOURCE_LEXER_TOKENS_V2 requires SOURCE_PREHASH_PARALLEL_V2=ON")
+    endif()
+    add_compile_definitions(CW_SOURCE_LEXER_TOKENS_V2=1)
+endif()
+
+option(SERVER_ENGINE_SOURCE_STRING_BATCH_V2 "Batch Source string Graph writes" ON)
+if(SERVER_ENGINE_SOURCE_STRING_BATCH_V2)
+    add_compile_definitions(CW_SOURCE_STRING_BATCH_V2=1)
+endif()
+option(SERVER_ENGINE_SOURCE_TOKEN_ONLY_V2
+    "Emit only ready Source tokens for PUBLISH, without compact words" OFF)
+if(SERVER_ENGINE_SOURCE_TOKEN_ONLY_V2)
+    if(NOT SERVER_ENGINE_SOURCE_LEXER_TOKENS_V2)
+        message(FATAL_ERROR "SOURCE_TOKEN_ONLY_V2 requires SOURCE_LEXER_TOKENS_V2=ON")
+    endif()
+    add_compile_definitions(CW_SOURCE_TOKEN_ONLY_V2=1)
 endif()
 
 option(SERVER_ENGINE_SOURCE_PREBIND_PARALLEL_V2
@@ -399,6 +454,41 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
     )
+
+    # A PGO database belongs to one executable, not to all linked targets.
+    if(SERVER_ENGINE_CANONICALIZER_TRACE)
+        target_compile_definitions(ServerEngineV4PublishBenchmark PRIVATE CW_CANONICALIZER_TRACE=1)
+    endif()
+    set(SERVER_ENGINE_PUBLISH_PGO "OFF" CACHE STRING
+        "MSVC PUBLISH benchmark PGO mode: OFF, GENERATE, USE (Release only)")
+    set_property(CACHE SERVER_ENGINE_PUBLISH_PGO PROPERTY STRINGS OFF GENERATE USE)
+    set(SERVER_ENGINE_PUBLISH_PGO_DATABASE
+        "${CMAKE_CURRENT_BINARY_DIR}/publish-benchmark.pgd" CACHE FILEPATH
+        "PGO database for ServerEngineV4PublishBenchmark only")
+    if(NOT SERVER_ENGINE_PUBLISH_PGO STREQUAL "OFF")
+        if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC" OR
+           NOT SERVER_ENGINE_ENABLE_IPO OR NOT SERVER_ENGINE_IPO_SUPPORTED)
+            message(FATAL_ERROR "PUBLISH PGO requires MSVC and supported IPO")
+        endif()
+        if(NOT IS_ABSOLUTE "${SERVER_ENGINE_PUBLISH_PGO_DATABASE}")
+            message(FATAL_ERROR "PUBLISH PGO database must be an absolute path")
+        endif()
+        if(SERVER_ENGINE_PUBLISH_PGO STREQUAL "GENERATE")
+            set(publish_pgo_option
+                "/FASTGENPROFILE:NOEXACT,PGD=${SERVER_ENGINE_PUBLISH_PGO_DATABASE}")
+        elseif(SERVER_ENGINE_PUBLISH_PGO STREQUAL "USE")
+            if(NOT EXISTS "${SERVER_ENGINE_PUBLISH_PGO_DATABASE}")
+                message(FATAL_ERROR "Train and merge the PUBLISH PGO database before USE")
+            endif()
+            set(publish_pgo_option
+                "/USEPROFILE:PGD=${SERVER_ENGINE_PUBLISH_PGO_DATABASE}")
+        else()
+            message(FATAL_ERROR "PUBLISH PGO mode must be OFF, GENERATE or USE")
+        endif()
+        target_link_options(ServerEngineV4PublishBenchmark PRIVATE
+            "$<$<CONFIG:Release>:/LTCG>"
+            "$<$<CONFIG:Release>:${publish_pgo_option}>")
+    endif()
 
     if(WIN32)
         target_link_libraries(

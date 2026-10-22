@@ -647,6 +647,9 @@
     <ClInclude Include="server_engine\project\parser\parser.hpp">
       <Filter>server_engine\project\parser</Filter>
     </ClInclude>
+    <ClInclude Include="server_engine\project\parser\source_endpoint_resolver.hpp">
+      <Filter>server_engine\project\parser</Filter>
+    </ClInclude>
     <ClInclude Include="server_engine\project\parser\header_parser_v2.hpp">
       <Filter>server_engine\project\parser</Filter>
     </ClInclude>
@@ -690,6 +693,9 @@
       <Filter>server_engine\project\preprocessor</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\frontend\frontend_input.hpp">
+      <Filter>server_engine\project\frontend</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\frontend\source_token.hpp">
       <Filter>server_engine\project\frontend</Filter>
     </ClInclude>
     <ClInclude Include="server_engine\project\frontend\semantic_input.hpp">

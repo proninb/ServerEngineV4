@@ -58,7 +58,7 @@ enum class benchmark_mode {
         output = benchmark_mode::publish;
         return true;
     }
-    if (value == "publish-profile" || value == "publish-stage") {
+    if (value == "publish-profile" || value == "publish-stage" || value == "publish-timeline") {
         output = benchmark_mode::publish_profile;
         return true;
     }
@@ -502,6 +502,7 @@ void print_usage() {
         << "Usage:\n"
         << "  ServerEngineV4PublishBenchmark publish <project.json> <expected-types>\n"
         << "  ServerEngineV4PublishBenchmark publish-profile <project.json> <expected-types>\n"
+        << "  ServerEngineV4PublishBenchmark publish-timeline <project.json> <expected-types>\n"
         << "  ServerEngineV4PublishBenchmark publish-stage <project.json> <expected-types>\n"
         << "  ServerEngineV4PublishBenchmark load    <project.json> <expected-types>\n"
         << "  ServerEngineV4PublishBenchmark load-profile <project.json> <expected-types>\n"
@@ -622,7 +623,8 @@ int main(
         runtime_telemetry;
     cw::server::full_construction_telemetry
         publish_telemetry;
-    publish_telemetry.detailed_source = std::string_view{argv[1]} != "publish-stage";
+    publish_telemetry.phase_only = std::string_view{argv[1]} == "publish-timeline";
+    publish_telemetry.detailed_source = std::string_view{argv[1]} == "publish-profile";
 
     if (mode == benchmark_mode::publish ||
         mode == benchmark_mode::publish_profile) {
@@ -775,7 +777,22 @@ int main(
         << compiled.identity_count();
 
     if (mode == benchmark_mode::publish_profile) {
+        const auto& t = publish_telemetry;
+        const auto accounted = t.cleanup_ns + t.context_setup_ns + t.configuration_ns +
+            t.lexical_ns + t.assign_ns + t.semantic_ns + t.post_semantic_ns +
+            t.persistence_ns + t.post_persistence_ns + t.resident_ns + t.transient_release_ns;
         std::cout
+            << ",phase_only=" << t.phase_only
+            << ",operation_ms=" << ns_to_ms(t.operation_ns)
+            << ",accounted_ms=" << ns_to_ms(accounted)
+            << ",unaccounted_ms=" << ns_to_ms(t.operation_ns) - ns_to_ms(accounted)
+            << ",external_ms=" << elapsed - ns_to_ms(t.operation_ns)
+            << ",context_setup_ms=" << ns_to_ms(t.context_setup_ns)
+            << ",post_semantic_ms=" << ns_to_ms(t.post_semantic_ns)
+            << ",post_persistence_ms=" << ns_to_ms(t.post_persistence_ns)
+            << ",transient_release_ms=" << ns_to_ms(t.transient_release_ns)
+            << ",semantic_other_ms=" << ns_to_ms(t.semantic_ns) - ns_to_ms(
+                t.header_v2_physical_ns + t.header_ns + t.source_ns + t.source_finalize_ns)
             << ",cleanup_ms=" << ns_to_ms(publish_telemetry.cleanup_ns)
             << ",configuration_ms=" << ns_to_ms(publish_telemetry.configuration_ns)
             << ",lexical_ms=" << ns_to_ms(publish_telemetry.lexical_ns)
@@ -804,6 +821,8 @@ int main(
             << ",header_v2_roots=" << publish_telemetry.header_v2_roots
             << ",header_v2_physical_ms=" << ns_to_ms(publish_telemetry.header_v2_physical_ns)
             << ",header_v2_prepared_files=" << publish_telemetry.header_v2_prepared_files
+            << ",header_v2_compact_word_count=" << publish_telemetry.header_v2_compact_word_count
+            << ",header_v2_lexer_token_count=" << publish_telemetry.header_v2_lexer_token_count
             << ",header_v2_lexed_files=" << publish_telemetry.header_v2_lexed_files
             << ",header_v2_include_records=" << publish_telemetry.header_v2_include_records
             << ",header_v2_active_includes=" << publish_telemetry.header_v2_active_includes
@@ -828,6 +847,9 @@ int main(
             << ",source_provenance_ms=" << ns_to_ms(publish_telemetry.source_provenance_ns)
             << ",source_decode_ms=" << ns_to_ms(publish_telemetry.source_decode_ns)
             << ",source_intern_ms=" << ns_to_ms(publish_telemetry.source_intern_ns)
+            << ",source_ready_cursor_token_count=" << publish_telemetry.source_ready_cursor_token_count
+            << ",source_compact_cursor_token_count=" << publish_telemetry.source_compact_cursor_token_count
+            << ",source_compact_word_count=" << publish_telemetry.source_compact_word_count
             << ",source_token_count=" << publish_telemetry.source_token_count
             << ",source_identifier_count=" << publish_telemetry.source_identifier_count
             << ",header_scope_ms=" << ns_to_ms(publish_telemetry.header_scope_ns)
@@ -858,7 +880,13 @@ int main(
             << ",header_declare_record_calls=" << publish_telemetry.header_declare_record_calls
             << ",header_define_record_calls=" << publish_telemetry.header_define_record_calls
             << ",source_root_count=" << publish_telemetry.source_root_count
+            << ",source_lexer_token_count=" << publish_telemetry.source_lexer_token_count
             << ",source_root_setup_ms=" << ns_to_ms(publish_telemetry.source_root_setup_ns)
+            << ",source_overlap_prepared=" << publish_telemetry.source_overlap_prepared
+            << ",source_overlap_snapshot_ms=" << ns_to_ms(publish_telemetry.source_overlap_snapshot_ns)
+            << ",source_overlap_prepare_ms=" << ns_to_ms(publish_telemetry.source_overlap_prepare_ns)
+            << ",source_overlap_wait_ms=" << ns_to_ms(publish_telemetry.source_overlap_wait_ns)
+
             << ",source_replay_ms=" << ns_to_ms(publish_telemetry.source_replay_ns)
             << ",source_root_finish_ms=" << ns_to_ms(publish_telemetry.source_root_finish_ns)
             << ",source_object_statements=" << publish_telemetry.source_object_statements
@@ -867,6 +895,7 @@ int main(
             << ",source_model_direct_assignments=" << publish_telemetry.source_model_direct_assignments
             << ",source_string_assignment_statements=" << publish_telemetry.source_string_assignment_statements
             << ",source_string_assignment_elements=" << publish_telemetry.source_string_assignment_elements
+            << ",source_string_assignment_ms=" << ns_to_ms(publish_telemetry.source_string_assignment_ns)
             << ",source_endpoint_count=" << publish_telemetry.source_endpoint_count
             << ",source_endpoint_steps=" << publish_telemetry.source_endpoint_steps
             << ",source_endpoint_direct_members=" << publish_telemetry.source_endpoint_direct_members
@@ -902,6 +931,9 @@ int main(
             << ",compiled_type_encode_ms=" << ns_to_ms(publish_telemetry.compiled_type_encode_ns)
             << ",compiled_runtime_encode_ms=" << ns_to_ms(publish_telemetry.compiled_runtime_encode_ns)
             << ",compiled_flush_ms=" << ns_to_ms(publish_telemetry.compiled_flush_ns)
+            << ",compiled_flush_overlap_ms=" << ns_to_ms(publish_telemetry.compiled_flush_overlap_ns)
+            << ",acquisition_change_tokens=" << publish_telemetry.acquisition_change_tokens
+            << ",persistence_flush_enabled=" << publish_telemetry.persistence_flush_enabled
             << ",resident_ms=" << ns_to_ms(publish_telemetry.resident_ns);
     }
 

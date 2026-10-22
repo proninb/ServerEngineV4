@@ -3381,6 +3381,43 @@ server_status graph::add_resolved_initialization(
     if (!scalar_initialization_target(target_type))
         return server_status::project_configuration_invalid;
 
+    return upsert_initialization(target, value, replaced, false);
+}
+
+server_status graph::add_resolved_initializations(
+    type_ref target_type, std::span<const object_initialization_record> records,
+    bool& any_replaced) noexcept {
+    any_replaced = false;
+    if (!scalar_initialization_target(target_type))
+        return server_status::project_configuration_invalid;
+    for (const auto& record : records)
+        if (link_target_key(record.target) == 0)
+            return server_status::project_configuration_invalid;
+    const auto maximum = (std::numeric_limits<std::uint32_t>::max)();
+    if (records.size() > maximum - object_initializations.size())
+        return server_status::io_error;
+    auto status = ensure_initialization_target_index_capacity(records.size());
+    if (!succeeded(status)) return status;
+    try {
+        const auto needed = object_initializations.size() + records.size();
+        if (needed > object_initializations.capacity())
+            object_initializations.reserve((std::min)(static_cast<std::size_t>(maximum),
+                (std::max)(needed, object_initializations.capacity() * 2)));
+    } catch (...) { return server_status::io_error; }
+    for (const auto& record : records) {
+        bool replaced = false;
+        status = upsert_initialization(record.target, record.value, replaced, true);
+        if (!succeeded(status)) return status;
+        any_replaced |= replaced;
+    }
+    return server_status::success;
+}
+
+server_status graph::upsert_initialization(
+    object_endpoint target, construction_value value,
+    bool& replaced, bool capacity_prepared) noexcept {
+    replaced = false;
+
     const auto key =
         link_target_key(
             target);
@@ -3424,8 +3461,8 @@ server_status graph::add_resolved_initialization(
     }
 
     const auto prepared =
-        ensure_initialization_target_index_capacity(
-            1);
+        capacity_prepared ? server_status::success :
+            ensure_initialization_target_index_capacity(1);
 
     if (!succeeded(prepared)) {
         return prepared;

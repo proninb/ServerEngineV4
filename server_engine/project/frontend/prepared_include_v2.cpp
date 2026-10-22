@@ -33,6 +33,8 @@ enum class prepared_file_state_v2 : std::uint8_t {
 struct prepared_file_storage_v2 final {
     file_id file{};
     lexical_stream lexical;
+    std::vector<header_lexical_token> ready_tokens;
+    bool ready_only = false;
     lexical_symbol_stream_v2 symbols;
     prepared_literal_stream_v2 literals;
     std::vector<prepared_include_record_v2> includes;
@@ -242,7 +244,8 @@ struct physical_token_v2 final {
     file_id file,
     std::string_view source,
     std::span<const std::uint32_t> words,
-    prepared_literal_stream_v2& output) noexcept {
+    prepared_literal_stream_v2& output,
+    std::span<const header_lexical_token> ready_tokens = {}) noexcept {
 
     auto status =
         output.reset(
@@ -256,21 +259,16 @@ struct physical_token_v2 final {
     std::uint32_t source_offset = 0;
     std::size_t token_index = 0;
 
-    while (word_offset <
-           words.size()) {
-
+    while (ready_tokens.empty() ? word_offset < words.size() : token_index < ready_tokens.size()) {
         physical_token_v2 token;
-
-        status =
-            decode_physical_token_v2(
-                words,
-                word_offset,
-                source_offset,
-                token_index++,
-                token);
-
-        if (!succeeded(status)) {
-            return status;
+        if (!ready_tokens.empty()) {
+            const auto& ready = ready_tokens[token_index++];
+            token.kind = ready.kind;
+            token.source_offset = ready.source_offset;
+            token.source_length = ready.source_length;
+        } else {
+            status = decode_physical_token_v2(words, word_offset, source_offset, token_index++, token);
+            if (!succeeded(status)) return status;
         }
 
         if (token.kind !=
@@ -1093,7 +1091,7 @@ private:
             bool changed = false;
 
             const auto applied =
-                files.apply_acquire(
+                files.adopt_acquire(
                     task.result,
                     changed);
 
@@ -1153,6 +1151,12 @@ private:
             const auto lexer_started = owner.profile != nullptr
                 ? prepare_clock_v2::now() : prepare_clock_v2::time_point{};
 
+#ifdef CW_HEADER_LEXER_TOKENS_V2
+#ifdef CW_HEADER_TOKEN_ONLY_V2
+            storage->ready_only = true;
+#endif
+            storage->lexical.capture_header_tokens(&storage->ready_tokens, storage->ready_only);
+#endif
             storage->lexical_status =
                 lexer::tokenize(
                     file,
@@ -1161,6 +1165,7 @@ private:
                     storage->lexical,
                     &error,
                     &storage->symbols);
+            storage->lexical.capture_header_tokens(nullptr);
             if (owner.profile != nullptr) {
                 owner.lane_profiles[lane].lexer_ms +=
                     prepared_elapsed_ms_v2(lexer_started);
@@ -1178,7 +1183,7 @@ private:
                         owner.files.content(
                             file),
                         storage->lexical.words(),
-                        storage->literals);
+                        storage->literals, storage->ready_tokens);
                 if (owner.profile != nullptr) {
                     owner.lane_profiles[lane].literal_ms +=
                         prepared_elapsed_ms_v2(literal_started);
@@ -1516,6 +1521,17 @@ private:
         const auto words =
             storage.lexical.words();
 
+        const auto stream_size = storage.ready_only ? storage.ready_tokens.size() : words.size();
+        const auto read_token = [&](std::size_t& offset, std::uint32_t& source,
+            std::size_t index, physical_token_v2& token) noexcept {
+            if (!storage.ready_only)
+                return decode_physical_token_v2(words, offset, source, index, token);
+            if (offset >= storage.ready_tokens.size()) return server_status::project_artifact_invalid;
+            const auto& ready = storage.ready_tokens[offset++];
+            token = {ready.kind, ready.source_offset, ready.source_length};
+            return server_status::success;
+        };
+
         // FRONTEND-PHYSICAL-11: collect wall time for stream walking separately
         // from candidate resolution; timers are disabled in ordinary V2.
         const auto scan_started = profile != nullptr
@@ -1529,12 +1545,12 @@ private:
         std::size_t token_index = 0;
 
         while (word_offset <
-               words.size()) {
+               stream_size) {
 #else
         // lexical_stream::append() recorded source_base BEFORE each directive
         // and word_offset at its header. No replay of ordinary C++ tokens.
         for (const auto& anchor : storage.lexical.directives()) {
-            if (anchor.word_offset >= words.size()) {
+            if (anchor.word_offset >= stream_size) {
                 return server_status::project_artifact_invalid;
             }
             std::size_t word_offset = anchor.word_offset;
@@ -1546,8 +1562,7 @@ private:
             physical_token_v2 token;
 
             const auto decoded =
-                decode_physical_token_v2(
-                    words,
+                read_token(
                     word_offset,
                     source_offset,
                     token_index++,
@@ -1572,7 +1587,7 @@ private:
 
             for (;;) {
                 if (word_offset >=
-                    words.size()) {
+                    stream_size) {
 
                     return server_status::
                         project_artifact_invalid;
@@ -1581,8 +1596,7 @@ private:
                 physical_token_v2 current;
 
                 const auto next =
-                    decode_physical_token_v2(
-                        words,
+                    read_token(
                         word_offset,
                         source_offset,
                         token_index++,
@@ -1741,8 +1755,13 @@ private:
                 std::span<
                     const prepared_include_record_v2>{
                         source.includes},
+                source.ready_tokens,
             };
 
+            if (profile) {
+                profile->ready_tokens += source.ready_tokens.size();
+                profile->compact_words += source.lexical.word_count();
+            }
             ++output.ready_file_count;
         }
 

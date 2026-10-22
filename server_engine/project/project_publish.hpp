@@ -1,9 +1,10 @@
 /*
  * Project PUBLISH pipeline.
  *
- * PUBLISH compiles project.json and its source inputs from scratch, persists only
- * the final LOAD artifact compiled.bin, and publishes the resulting Project.
- * It deliberately creates no BUILD acceleration state.
+ * PUBLISH compiles project.json and its source inputs from scratch, writes the
+ * final LOAD artifacts compiled.bin/runtime.bin, and publishes the Project.
+ * It creates no BUILD acceleration state or USN tokens and issues no explicit
+ * durable flush. BUILD/REBUILD own durability.
  */
 #pragma once
 

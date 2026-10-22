@@ -12,6 +12,7 @@
 #include "project/parser/header_semantic_space.hpp"
 #include "project/parser/parser.hpp"
 #include "project/parser/header_parser_v2.hpp"
+#include "project/parser/source_endpoint_resolver.hpp"
 #include "project/preprocessor/preprocessor.hpp"
 #include "project/preprocessor_configuration.hpp"
 #include "project/semantic/identity.hpp"
@@ -310,6 +311,45 @@ private:
 
 
 // PARSER-V2-CURSOR-DECODE-09: ordinary, extended and malformed word streams.
+#ifdef CW_HEADER_TOKEN_ONLY_V2
+void test_header_token_only_32(test_state& tests) {
+    const file_id file{1};
+    const auto text = std::string{"#define PICK 1\n#if PICK\n#include \"a.h\"\n#endif\n"} +
+        "struct Long { int values[42]; }; /*" + std::string(70000, 'x') +
+        "*/ struct More { char name[4]; };\n";
+    lexical_stream compact, only;
+    std::vector<header_lexical_token> ready;
+    only.capture_header_tokens(&ready, true);
+    if (!tests.expect(succeeded(lexer::tokenize(file, text, compact)) &&
+            succeeded(lexer::tokenize(file, text, only)), "lex Header into each representation")) return;
+    tests.expect(only.words().empty() && only.word_count() == 0 &&
+            only.token_count() == ready.size() && only.directive_count() == 4,
+        "token-only Header never emits compact words and retains sparse directive anchors");
+    lexical_generation compact_generation;
+    tests.expect(succeeded(compact_generation.reset(1, 1)) &&
+            !succeeded(compact_generation.publish(file, 0, only)) && !compact_generation.contains(file),
+        "token-only Header cannot be mistaken for persisted compact lexical state");
+    std::uint32_t word = 0, source = 0;
+    for (const auto& token : ready) {
+        frontend_token reference;
+        if (!tests.expect(succeeded(decode_frontend_token(compact.words(), file, word, source, reference)),
+                "decode Header compact reference")) return;
+        tests.expect(token.kind == reference.kind && token.source_offset == reference.source_offset &&
+                token.source_length == reference.source_length,
+            "token-only Header is identical to compact reference including extended offsets");
+    }
+    tests.expect(word == compact.word_count(), "token-only Header covers complete lexical stream");
+    for (const auto& anchor : only.directives()) {
+        tests.expect(anchor.word_offset < ready.size() &&
+            (ready[anchor.word_offset].kind == token_kind::pp_define ||
+             ready[anchor.word_offset].kind == token_kind::pp_if ||
+             ready[anchor.word_offset].kind == token_kind::pp_include ||
+             ready[anchor.word_offset].kind == token_kind::pp_endif),
+            "token-only directive anchor addresses a directive token");
+    }
+}
+#endif
+
 void test_semantic_cursor_v2_decode_09(test_state& tests) {
     const file_id file{1};
     std::string text(70500, ' ');
@@ -398,6 +438,39 @@ void test_semantic_cursor_v2_decode_09(test_state& tests) {
         cursor.current() == nullptr && !cursor.at(token_kind::semicolon) &&
         !succeeded(cursor.advance()),
         "CURSOR-DECODE-09 EOF and rejection after EOF");
+
+#ifdef CW_HEADER_LEXER_TOKENS_V2
+    const std::array<header_lexical_token, 5> ready{{
+        {0, 5, token_kind::identifier}, {5, 1, token_kind::semicolon},
+        {70000, 4, token_kind::identifier}, {70000, 400, token_kind::pp_number},
+        {70000, 1, token_kind::semicolon}}};
+    semantic_cursor_v2 direct, reference;
+    const prepared_lexical_input_v2 direct_input{
+        file, {}, &symbols, &resolution, &numbers, ready};
+    if (!tests.expect(succeeded(direct.start(direct_input)) && succeeded(reference.start(input)),
+            "Header ready cursor starts without compact words")) return;
+    for (std::size_t i = 0; i < ready.size(); ++i) {
+        const auto* a = direct.current();
+        const auto* b = reference.current();
+        if (!tests.expect(a && b, "ready and compact cursors expose the same token count")) return;
+        tests.expect(a->file == b->file && a->kind == b->kind &&
+            a->source_offset == b->source_offset && a->source_length == b->source_length &&
+            a->identifier == b->identifier && a->number.kind == b->number.kind &&
+            a->number.bits == b->number.bits && direct.offset() == reference.offset(),
+            "Header ready replay preserves canonical identifiers, numbers and source ranges");
+        if (!tests.expect(succeeded(direct.advance()) && succeeded(reference.advance()),
+                "ready and compact cursors advance identically")) return;
+    }
+    tests.expect(direct.finished() && !direct.current() && !succeeded(direct.advance()),
+        "Header ready replay preserves EOF semantics");
+    auto malformed_ready = ready;
+    malformed_ready[0].source_length = static_cast<std::uint32_t>(text.size() + 1);
+    const prepared_lexical_input_v2 invalid_ready{
+        file, {}, &symbols, &resolution, &numbers, malformed_ready};
+    tests.expect(!succeeded(direct.start(invalid_ready)) && !direct.current(),
+        "Header ready replay rejects invalid byte ranges");
+
+#endif
 
     // Separate stream: both escape words, including on the very first token.
     lexical_symbol_stream_v2 empty_symbols;
@@ -814,7 +887,7 @@ void test_prepared_include_v2(
             prepared_include_state_v2::ready &&
         included_file != nullptr &&
         included_file->symbols != nullptr &&
-        !included_file->words.empty(),
+        (!included_file->words.empty() || !included_file->ready_tokens.empty()),
         "prepared include closure owns lexical/local-symbol state for target");
 
     tests.expect(
@@ -916,6 +989,147 @@ void test_prepared_include_v2(
 }
 
 
+void test_owned_verified_content(test_state& tests) {
+    for (const auto& expected : {std::string{}, std::string{"short\0text", 10},
+             std::string(131089, 'x')}) {
+        temporary_source source{"owned_verified_content", expected};
+        file_context files;
+        file_id root;
+        if (!tests.expect(succeeded(files.enable_owned_content()) &&
+                succeeded(files.resolve(source.path(), file_kind::source, root)),
+                "enable owned snapshot storage")) return;
+        file_acquire_job job;
+        file_acquire_result result;
+        if (!tests.expect(succeeded(files.prepare_acquire(root, job)),
+                "prepare verified owned acquisition")) return;
+        file_context::execute_acquire(job, result);
+        const auto original_data = result.snapshot.bytes.data();
+        const auto digest = result.snapshot.content_hash;
+        const auto token = result.snapshot.change_token;
+        const auto token_available = result.snapshot.change_token_available;
+        bool changed = false;
+        if (!tests.expect(result.kind == file_acquire_result_kind::present &&
+                digest == hash_file_content(expected) &&
+                succeeded(files.adopt_acquire(result, changed)) && changed &&
+                files.content_available(root) && files.content(root) == expected,
+                "adopt verified empty, short and large snapshots")) return;
+        const auto retained = files.content(root);
+        const auto* physical = files.physical(root);
+        tests.expect(physical != nullptr && physical->content_hash == digest &&
+            physical->has_change_token() == token_available &&
+            (!token_available || (physical->change_token.volume_serial == token.volume_serial &&
+                physical->change_token.file_reference == token.file_reference &&
+                physical->change_token.file_usn == token.file_usn)),
+            "owned publication preserves hash and change proof");
+        if (expected.size() > 1024)
+            tests.expect(retained.data() == original_data, "large snapshot buffer is transferred without copying");
+
+        // Force both file-table and owned-buffer-table growth. This also tests
+        // stable short-string storage while includes append new file identities.
+        for (std::size_t i = 0; i < 257; ++i) {
+            auto path = source.path();
+            path += ".included-" + std::to_string(i);
+            file_acquire_result additional;
+            additional.kind = file_acquire_result_kind::present;
+            additional.snapshot.bytes = "small";
+            additional.snapshot.content_hash = hash_file_content("small");
+            if (!tests.expect(succeeded(files.resolve(path, file_kind::header, additional.file)) &&
+                    succeeded(files.adopt_acquire(additional, changed)),
+                    "append owned include snapshot")) return;
+        }
+        tests.expect(files.content(root).data() == retained.data() && retained == expected,
+            "owned snapshot views survive file table growth");
+
+        file_acquire_result repeated;
+        repeated.file = root;
+        repeated.kind = file_acquire_result_kind::present;
+        repeated.snapshot.bytes = expected;
+        repeated.snapshot.content_hash = digest;
+        changed = true;
+        tests.expect(succeeded(files.adopt_acquire(repeated, changed)) && !changed &&
+            repeated.snapshot.bytes == expected, "identical repeated acquisition is non-consuming");
+        repeated.snapshot.bytes = expected + "changed";
+        repeated.snapshot.content_hash = hash_file_content(repeated.snapshot.bytes);
+        tests.expect(files.adopt_acquire(repeated, changed) == server_status::unsupported &&
+            files.content(root) == expected, "owned snapshots reject changed content after publication");
+        repeated.kind = file_acquire_result_kind::missing;
+        tests.expect(files.adopt_acquire(repeated, changed) == server_status::unsupported &&
+            files.content(root) == expected, "owned snapshots reject removal after publication");
+        repeated.kind = file_acquire_result_kind::changed_during_read;
+        tests.expect(files.adopt_acquire(repeated, changed) == server_status::io_error &&
+            files.content(root) == expected, "owned snapshots preserve acquisition error handling");
+    }
+
+    // Non-consuming publication remains available for configuration readers,
+    // which inspect result.snapshot.bytes after publishing the physical state.
+    temporary_source source{"owned_configuration", "{}"};
+    file_context files;
+    file_acquire_job job;
+    file_acquire_result result;
+    bool changed = false;
+    if (!tests.expect(succeeded(files.enable_owned_content()) &&
+            succeeded(files.resolve(source.path(), file_kind::project, result.file)) &&
+            succeeded(files.prepare_acquire(result.file, job)), "prepare owned configuration")) return;
+    file_context::execute_acquire(job, result);
+    tests.expect(succeeded(files.apply_acquire(result, changed)) &&
+        result.snapshot.bytes == "{}" && files.content(result.file) == "{}",
+        "configuration snapshot remains readable after ordinary publication");
+}
+
+void test_stable_snapshot_proofs(test_state& tests) {
+    const std::string bytes = "stable snapshot\n" + std::string(65537, 'z');
+    temporary_source source{"stable_snapshot_proofs", bytes};
+    file_content_snapshot snapshot;
+    file_content_proof proof;
+    if (!tests.expect(acquire_file_content(source.path(), snapshot) == file_content_result::acquired &&
+            acquire_file_content_proof(source.path(), proof) == file_content_result::acquired,
+            "acquire stable snapshot and streaming proof")) return;
+    tests.expect(snapshot.bytes == bytes && snapshot.content_hash == hash_file_content(bytes) &&
+        snapshot.content_hash == proof.content_hash && snapshot.observation == proof.observation &&
+        snapshot.observation.size == bytes.size() && snapshot.observation.write_time_ticks ==
+            std::filesystem::last_write_time(source.path()).time_since_epoch().count(),
+        "snapshot and streaming proof preserve exact content and observation");
+    file_content_snapshot content_only;
+    tests.expect(acquire_file_content(source.path(), content_only, false) == file_content_result::acquired &&
+        content_only.bytes == snapshot.bytes && content_only.content_hash == snapshot.content_hash &&
+        content_only.observation == snapshot.observation && !content_only.change_token_available &&
+        !content_only.change_token, "content-only acquisition preserves verified snapshot without a token");
+    file_context publish_files;
+    file_id root;
+    file_acquire_job publish_job;
+    file_acquire_result publish_result;
+    if (!tests.expect(succeeded(publish_files.configure_publish_acquisition()) &&
+            succeeded(publish_files.resolve(source.path(), file_kind::source, root)) &&
+            succeeded(publish_files.prepare_acquire(root, publish_job)) &&
+            !publish_job.capture_change_token, "PUBLISH propagates content-only policy to acquisition jobs")) return;
+    file_context::execute_acquire(publish_job, publish_result);
+    bool changed = false;
+    tests.expect(publish_result.kind == file_acquire_result_kind::present &&
+        !publish_result.snapshot.change_token_available &&
+        publish_result.snapshot.content_hash == snapshot.content_hash &&
+        succeeded(publish_files.adopt_acquire(publish_result, changed)) &&
+        publish_files.content(root) == bytes && !publish_files.physical(root)->has_change_token(),
+        "PUBLISH retains stable hashed bytes without BUILD change tokens");
+    file_change_token token;
+    const auto captured = capture_file_change_token(source.path(), token);
+    if (captured == file_token_result::available) {
+        tests.expect(snapshot.change_token_available && proof.change_token_available &&
+            snapshot.change_token.volume_serial == token.volume_serial &&
+            snapshot.change_token.file_reference == token.file_reference &&
+            snapshot.change_token.file_usn == token.file_usn &&
+            proof.change_token.file_usn == token.file_usn,
+            "same-handle and path-based change tokens agree");
+        bool unchanged = false;
+        tests.expect(prove_file_unchanged(source.path(), snapshot.change_token, unchanged) ==
+            file_token_result::available && unchanged, "snapshot token proves unchanged content");
+    }
+    auto missing = source.path();
+    missing += ".missing";
+    tests.expect(acquire_file_content(missing, snapshot) == file_content_result::missing &&
+        acquire_file_content_proof(missing, proof) == file_content_result::missing,
+        "snapshot and streaming proof preserve missing-file classification");
+}
+
 void test_publish_physical_01(test_state& tests) {
     const temporary_source header{
         "publish_physical_01_header",
@@ -924,11 +1138,14 @@ void test_publish_physical_01(test_state& tests) {
         "publish_physical_01_source",
         "PublishPhysical01 Instance;\n"};
 
+    for (const bool owned : {false, true})
     for (const auto scope : {
         initial_lexical_scope::all_roots,
         initial_lexical_scope::source_only}) {
 
         file_context files;
+        if (owned && !tests.expect(succeeded(files.enable_owned_content()),
+                "PHYSICAL01 enable owned source snapshots")) return;
         file_id header_id;
         file_id source_id;
         if (!tests.expect(
@@ -5478,12 +5695,13 @@ void test_header_static_constructor_binding(
 
 
 void test_source_string_assignment(test_state& tests) {
+    for (const bool frontend_v2 : {false, true}) {
     for (const auto literal : {"\"0.0.3\"", "\"\"", "\"A\\n\\x42\\103\"", "\"ab\" \"cd\"",
         "\"12345678\"", "\"\\x100\"", "L\"wide\""}) {
         const bool valid = std::string_view{literal} != "\"12345678\"" &&
             std::string_view{literal} != "\"\\x100\"" && std::string_view{literal} != "L\"wide\"";
         const temporary_source header{"string_header", "typedef unsigned char byte; typedef byte octet; struct Base { char VAL[8]; }; struct Text : Base {}; struct T { Text text; int& ref; byte code; };"};
-        const temporary_source source{"string_source", std::string{"octet flag; int value; T a; a.ref = value; a.text.VAL = "} + literal + ";"};
+        const temporary_source source{"string_source", std::string{"octet flag; int value; T a; a.ref = value; a.text.VAL = \"longer\"; a.text.VAL = "} + literal + ";"};
         file_context files;
         lexical_generation lexical;
         file_id h, s;
@@ -5497,10 +5715,14 @@ void test_source_string_assignment(test_state& tests) {
         source_map sources;
         preprocessor_configuration configuration;
         parser_failure failure;
+        std::vector<parser_warning> warnings;
         const auto status = parse_semantic_project(files, lexical, roots.size(), configuration,
-            strings, identities, G, sources, &failure);
+            strings, identities, G, sources, &failure, &warnings, nullptr, frontend_v2);
         tests.expect(succeeded(status) == valid, "Source string bounds, escapes and literal encoding");
         if (valid && succeeded(status)) {
+            tests.expect(warnings.size() == 1 &&
+                warnings.front().kind == parser_warning_kind::duplicate_initialization,
+                "repeated string emits one warning for the whole statement");
             const auto entries = G.initialization_entries();
             const std::string expected = std::string_view{literal} == "\"0.0.3\"" ? "0.0.3" :
                 std::string_view{literal} == "\"\"" ? "" : std::string_view{literal} == "\"ab\" \"cd\"" ? "abcd" : "A\nBC";
@@ -5512,6 +5734,7 @@ void test_source_string_assignment(test_state& tests) {
                     "Source string bytes and terminator are preserved");
             }
         }
+    }
     }
 }
 
@@ -7203,6 +7426,413 @@ void test_semantic_type_diagnostics(
 }
 
 
+void test_source_v2_assignment_dispatch(test_state& tests) {
+    const temporary_source header{"source_dispatch_header",
+        "struct Signal { int value; }; struct Array {}; namespace Space {}"};
+    const temporary_source source{"source_dispatch_source",
+        "Signal Signal; Signal other; Signal.value = 7; other.value = 8;\n"
+        "int Space; Space = 9; int Array[2]; Array[1] = 10;\n"};
+    file_context files;
+    lexical_generation lexical;
+    file_id header_id, source_id;
+    if (!tests.expect(
+            succeeded(files.resolve(header.path(), file_kind::header, header_id)) &&
+            succeeded(files.resolve(source.path(), file_kind::source, source_id)),
+            "resolve Source dispatch roots")) return;
+    const std::array roots{header_id, source_id};
+    if (!prepare_all_roots(tests, files, lexical, roots)) return;
+    preprocessor_configuration configuration;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    parser_failure failure;
+    const auto status = parse_semantic_project(files, lexical, roots.size(),
+        configuration, strings, identities, G, sources, &failure,
+        nullptr, nullptr, true);
+    tests.expect(succeeded(status) && G.object_count() == 4 &&
+            G.initialization_count() == 4,
+        "Source dispatch preserves declarations and member/array/scalar assignments "
+        "when object names also name Header types or namespaces");
+}
+
+void test_source_v2_cross_root_endpoints(test_state& tests) {
+    const temporary_source header{"source_endpoint_header",
+        "struct Leaf { int value; int values[3]; char name[5];\n"
+        "int prefix00_left_payload_suffix00; int prefix00_rite_payload_suffix00; };\n"
+        "struct Base { Leaf leaf; }; struct Root : Base { Leaf& ref; };\n"};
+    const temporary_source first{"source_endpoint_first",
+        "Root a; Leaf leaf; int numbers[3];\n"
+        "a.leaf.value = 1; a.leaf /* ; first */ .values[1] = 2; a.ref = leaf;\n"
+        "a.ref.value = 3; a.leaf.name = \"a\"; numbers[1] = 5;\n"
+        "a.leaf.prefix00_left_payload_suffix00 = 11;\n"
+        "a.leaf.prefix00_rite_payload_suffix00 = 12;\n"};
+    const std::string second_text =
+        "extern Root a; extern Leaf leaf; Root b; int other_numbers[3];\n"
+        "b.leaf /* ; second */ .value = 4; b.leaf.values[1] = 5; b.ref = leaf;\n"
+        "b.ref.value = 6; b.leaf.name = \"b\"; other_numbers [1] = 6;\n"
+        "b.leaf.prefix00_left_payload_suffix00 = 13;\n"
+        "b.leaf.prefix00_rite_payload_suffix00 = 14;\n"
+        "a.leaf.value = 7;\n";
+    const temporary_source second{"source_endpoint_second", second_text};
+    file_context files;
+    lexical_generation lexical;
+    std::array<file_id, 3> roots;
+    if (!tests.expect(
+            succeeded(files.resolve(header.path(), file_kind::header, roots[0])) &&
+            succeeded(files.resolve(first.path(), file_kind::source, roots[1])) &&
+            succeeded(files.resolve(second.path(), file_kind::source, roots[2])),
+            "resolve cross-root Source endpoints")) return;
+    if (!prepare_all_roots(tests, files, lexical, roots)) return;
+    preprocessor_configuration configuration;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    parser_failure failure;
+    std::vector<parser_warning> warnings;
+    semantic_parse_telemetry telemetry;
+    const auto status = parse_semantic_project(files, lexical, roots.size(),
+        configuration, strings, identities, G, sources, &failure,
+        &warnings, &telemetry, true);
+    if (!tests.expect(succeeded(status), "parse inherited/array/reference Source endpoints")) {
+        std::cerr << failure.detail << '\n';
+        return;
+    }
+    tests.expect(G.object_count() == 5 && G.link_count() == 2 &&
+            G.initialization_count() == 22,
+        "cross-root endpoints preserve separate object targets and string-array writes");
+    const auto identity = [&](const char* name, identity_kind kind) {
+        return identities.find(identities.root(), strings.find(name), kind);
+    };
+    const auto base_id = identity("Base", identity_kind::type);
+    const auto base = G.find_type(base_id);
+    const auto leaf = G.find_type(identity("Leaf", identity_kind::type));
+    const auto root = G.find_type(identity("Root", identity_kind::type));
+    const std::array<endpoint_path_step, 3> steps{{
+        {0, endpoint_path_step_kind::base, {}},
+        {G.find_member(base, strings.find("leaf")).value(), endpoint_path_step_kind::member, {}},
+        {G.find_member(leaf, strings.find("value")).value(), endpoint_path_step_kind::member, {}}}};
+    endpoint_path_handle path;
+    object_initialization_record a, b;
+    tests.expect(succeeded(G.intern_endpoint_path(G.named(root), steps, path)) &&
+            G.initialization({identity("a", identity_kind::object), endpoint_ref::from_path(path)}, a) &&
+            G.initialization({identity("b", identity_kind::object), endpoint_ref::from_path(path)}, b) &&
+            a.value.bits() == 7 && b.value.bits() == 4,
+        "same typed path uses each current WHO and last initialization wins");
+    const auto dependencies = sources.root_dependencies(roots[2]);
+    tests.expect(std::find(dependencies.begin(), dependencies.end(),
+            source_dependency_ref::type(base_id)) != dependencies.end(),
+        "second Source root retains inherited owner dependency");
+    tests.expect(warnings.size() == 1 && warnings[0].file == roots[2] &&
+            warnings[0].source.offset == second_text.rfind("value") &&
+            warnings[0].source.length == 5,
+        "cross-root replacement warning uses current member location");
+
+    const auto path_count = G.endpoint_path_count();
+    const auto initialization_count = G.initialization_count();
+    std::uint64_t lookups = 0;
+    source_endpoint_resolver resolver{static_cast<const graph&>(G), &lookups};
+    type_ref object_type;
+    derived_type_record array_type;
+    type_handle record_type;
+    bool dereference = false;
+    const auto* array_member = G.member(leaf, G.find_member(leaf, strings.find("values")));
+    const auto* reference_member = G.member(root, G.find_member(root, strings.find("ref")));
+    tests.expect(resolver.object_type(identity("a", identity_kind::object), object_type) &&
+            object_type == G.named(root) && array_member &&
+            resolver.array_type(array_member->type, array_type) && array_type.payload == 3 &&
+            reference_member && resolver.record_type(reference_member->type, record_type, dereference) &&
+            dereference && record_type == leaf,
+        "read-only resolver selects object types, arrays and reference referents");
+    source_endpoint_resolver::failure error;
+    member_index resolved_member;
+    type_handle owner;
+    type_ref resolved_type;
+    std::vector<endpoint_path_step> ancestry;
+    tests.expect(succeeded(resolver.resolve_member(root, strings.find("leaf"),
+            resolved_member, owner, resolved_type, ancestry, error)) &&
+            error == source_endpoint_resolver::failure::none && owner == base &&
+            resolved_member == G.find_member(base, strings.find("leaf")) &&
+            resolved_type == G.named(leaf) && ancestry.size() == 1 &&
+            ancestry[0].kind == endpoint_path_step_kind::base && ancestry[0].value == 0,
+        "read-only resolver returns WHO type and inherited local ancestry");
+    const auto uncached_lookups = lookups;
+    ancestry.assign(1, endpoint_path_step{2, endpoint_path_step_kind::array_index, {}});
+    tests.expect(succeeded(resolver.resolve_member(root, strings.find("leaf"),
+            resolved_member, owner, resolved_type, ancestry, error)) &&
+            lookups == uncached_lookups && ancestry.size() == 2 &&
+            ancestry[0].kind == endpoint_path_step_kind::array_index &&
+            ancestry[0].value == 2 && ancestry[1].kind == endpoint_path_step_kind::base,
+        "resolver cache appends ancestry to each caller's local prefix");
+    ancestry.clear();
+    tests.expect(!succeeded(resolver.resolve_member(root, strings.find("numbers"),
+            resolved_member, owner, resolved_type, ancestry, error)) &&
+            error == source_endpoint_resolver::failure::member_missing &&
+            !resolved_member && !owner && !resolved_type && ancestry.empty(),
+        "read-only resolver reports missing member without stale outputs");
+    const std::array<source_bound_selector, 3> array_selectors{{
+        {source_selector_kind::member, strings.find("leaf"), 0},
+        {source_selector_kind::member, strings.find("values"), 0},
+        {source_selector_kind::index, {}, 1}}};
+    const std::array<source_bound_selector, 2> reference_selectors{{
+        {source_selector_kind::member, strings.find("ref"), 0},
+        {source_selector_kind::member, strings.find("value"), 0}}};
+    const std::array<source_bound_selector, 2> invalid_selectors{{
+        {source_selector_kind::member, strings.find("leaf"), 0},
+        {source_selector_kind::member, strings.find("numbers"), 0}}};
+    const std::array<source_endpoint_request, 3> requests{{
+        {identity("a", identity_kind::object), array_selectors},
+        {identity("b", identity_kind::object), reference_selectors},
+        {identity("a", identity_kind::object), invalid_selectors}}};
+    struct resolution_results {
+        std::array<source_endpoint_result, 3> values;
+        std::array<server_status, 3> statuses;
+        std::array<source_endpoint_resolver::failure, 3> errors;
+        std::array<std::size_t, 3> positions;
+    } serial, parallel;
+    for (std::size_t i = 0; i < requests.size(); ++i)
+        serial.statuses[i] = resolver.resolve(requests[i], serial.values[i], serial.errors[i], serial.positions[i]);
+    struct resolution_job {
+        const graph* catalog;
+        const std::array<source_endpoint_request, 3>* requests;
+        resolution_results* results;
+    } job{&G, &requests, &parallel};
+    execution_lanes workers;
+    const auto started = workers.start(2);
+    const auto executed = succeeded(started) ? workers.run(2,
+        [](void* context, std::size_t lane) noexcept {
+            auto& job = *static_cast<resolution_job*>(context);
+            source_endpoint_resolver resolver{*job.catalog};
+            for (auto i = lane; i < job.requests->size(); i += 2)
+                job.results->statuses[i] = resolver.resolve((*job.requests)[i], job.results->values[i],
+                    job.results->errors[i], job.results->positions[i]);
+        }, &job) : started;
+    bool identical = succeeded(executed);
+    if (identical) for (std::size_t i = 0; i < requests.size(); ++i) {
+        identical = identical && parallel.statuses[i] == serial.statuses[i] &&
+            parallel.errors[i] == serial.errors[i] && parallel.positions[i] == serial.positions[i] &&
+            parallel.values[i].object == serial.values[i].object &&
+            parallel.values[i].endpoint.type == serial.values[i].endpoint.type &&
+            parallel.values[i].endpoint.object_type == serial.values[i].endpoint.object_type &&
+            parallel.values[i].endpoint.path == serial.values[i].endpoint.path &&
+            parallel.values[i].dependencies == serial.values[i].dependencies;
+    }
+    tests.expect(identical && succeeded(serial.statuses[0]) && succeeded(serial.statuses[1]) &&
+            serial.values[0].endpoint.path.size() == 4 && serial.values[1].endpoint.path.size() == 3 &&
+            serial.errors[2] == source_endpoint_resolver::failure::member_missing && serial.positions[2] == 1,
+        "bound WHO/selector requests resolve identically on isolated native worker contexts");
+    auto out_of_range = array_selectors;
+    out_of_range[2].index = 3;
+    source_endpoint_result rejected;
+    std::size_t rejected_position = 0;
+    tests.expect(!succeeded(resolver.resolve({requests[0].object, out_of_range}, rejected,
+            error, rejected_position)) && error == source_endpoint_resolver::failure::index_out_of_range &&
+            rejected_position == 2,
+        "bound request reports the failing array selector");
+    tests.expect(!succeeded(resolver.resolve({{}, {}}, rejected, error, rejected_position)) &&
+            error == source_endpoint_resolver::failure::object_missing && rejected.endpoint.path.empty() &&
+            rejected.dependencies.empty(),
+        "bound request reset removes prior paths and dependencies on invalid WHO");
+    tests.expect(G.endpoint_path_count() == path_count &&
+            G.initialization_count() == initialization_count && G.link_count() == 2,
+        "read-only resolution does not intern paths or commit Graph writes");
+}
+
+void test_source_v2_owned_endpoint_paths(test_state& tests) {
+    const temporary_source header{"owned_endpoint_header",
+        "struct Cell { int values[3]; int& ref; };\n"
+        "struct Root { Cell cells[2]; };\n"};
+    const temporary_source source{"owned_endpoint_source",
+        "Root a; Root b;\n"
+        "a.cells[1].ref = b.cells[0].values[2];\n"
+        "b.cells[0].ref = a.cells[1].values[1];\n"
+        "a.cells[1].values[0] = 7;\n"
+        "a.cells[1].ref = b.cells[1].values[0];\n"};
+    file_context files;
+    lexical_generation lexical;
+    std::array<file_id, 2> roots;
+    if (!tests.expect(succeeded(files.resolve(header.path(), file_kind::header, roots[0])) &&
+            succeeded(files.resolve(source.path(), file_kind::source, roots[1])),
+            "resolve owned endpoint roots")) return;
+    if (!prepare_all_roots(tests, files, lexical, roots)) return;
+    preprocessor_configuration configuration;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    parser_failure failure;
+    std::vector<parser_warning> warnings;
+    if (!tests.expect(succeeded(parse_semantic_project(files, lexical, roots.size(),
+            configuration, strings, identities, G, sources, &failure, &warnings,
+            nullptr, true)), "parse independently owned endpoint operands")) return;
+    const auto object = [&](const char* name) {
+        return identities.find(identities.root(), strings.find(name), identity_kind::object);
+    };
+    const auto links = G.link_entries();
+    if (!tests.expect(links.size() == 2, "owned endpoint link count")) return;
+    const auto& first = links[0];
+    const auto& second = links[1];
+    tests.expect(first.target.object == object("a") && first.target.member.path().value() == 1 &&
+            first.source.object == object("b") && first.source.member.path().value() == 5 &&
+            second.target.object == object("b") && second.target.member.path().value() == 3 &&
+            second.source.object == object("a") && second.source.member.path().value() == 4,
+        "owned operands preserve target-before-source path order and reference rebinding");
+    const auto target_path = G.endpoint_path_steps(first.target.member.path());
+    const auto source_path = G.endpoint_path_steps(first.source.member.path());
+    tests.expect(G.endpoint_path_count() == 5 && target_path.size() == 3 &&
+            source_path.size() == 4 &&
+            target_path[1].kind == endpoint_path_step_kind::array_index && target_path[1].value == 1 &&
+            source_path[1].kind == endpoint_path_step_kind::array_index && source_path[1].value == 1 &&
+            source_path[3].kind == endpoint_path_step_kind::array_index && source_path[3].value == 0,
+        "reading the RHS retains the target path and reuses no operand buffer");
+    const auto values = G.initialization_entries();
+    tests.expect(values.size() == 1 && values[0].target.object == object("a") &&
+            values[0].target.member.path().value() == 5 && values[0].value.bits() == 7 && warnings.size() == 1,
+        "owned endpoint buffer reuse preserves scalar values and replacement warnings");
+}
+
+void test_source_v2_construction_window(test_state& tests) {
+    const temporary_source header{"construction_window_header",
+        "struct T { int value; int& ref; char name[4]; };\n"};
+    std::string text = "T a; T b;\n";
+#ifdef CW_SOURCE_LEXER_TOKENS_V2
+    text += "/*" + std::string(70000, 'x') + "*/\n";
+#endif
+    for (unsigned i = 0; i < 130; ++i)
+        text += "a.value = " + std::to_string(i) + "; a.ref = b.value;\n";
+    text += "a.name = \"ok\"; T c; c.value = 9;\n"
+        "namespace N { T d; d.value = 11; } a.value = 130;\n";
+    const temporary_source source{"construction_window_source", text};
+    file_context files;
+    lexical_generation lexical;
+#ifdef CW_SOURCE_TOKEN_ONLY_V2
+    const temporary_source empty_source{"source_token_only_empty", "/* empty */"};
+    std::array<file_id, 3> roots;
+#else
+    std::array<file_id, 2> roots;
+#endif
+    if (!tests.expect(succeeded(files.resolve(header.path(), file_kind::header, roots[0])) &&
+            succeeded(files.resolve(source.path(), file_kind::source, roots[1])),
+            "resolve construction-window roots")) return;
+#ifdef CW_SOURCE_TOKEN_ONLY_V2
+    if (!tests.expect(succeeded(files.resolve(empty_source.path(), file_kind::source, roots[2])),
+            "resolve empty token-only Source")) return;
+#endif
+#ifdef CW_SOURCE_LEXER_TOKENS_V2
+    if (!tests.expect(succeeded(prepare_source_lexical_state(files, lexical, nullptr,
+            initial_lexical_scope::source_only)), "lexer emits ready PUBLISH Source tokens")) return;
+    const auto ready_tokens = lexical.source_tokens(roots[1]);
+    const auto expected_tokens = ready_tokens.size();
+#ifdef CW_SOURCE_TOKEN_ONLY_V2
+    lexical_stream reference_words;
+    if (!tests.expect(succeeded(lexer::tokenize(roots[1], files.content(roots[1]), reference_words)),
+            "lex compact reference outside token-only preparation")) return;
+    const auto compact = reference_words.words();
+    tests.expect(lexical.contains(roots[1]) && lexical.source_tokens_only(roots[1]) &&
+            lexical.words(roots[1]).empty() && lexical.token_count(roots[1]) == expected_tokens,
+        "Source token-only availability is independent of compact records");
+    // No batch/predecoded setter: start() itself must install mandatory input.
+    {
+        preprocessor_configuration plain;
+        string_table isolated_strings;
+        semantic_input_telemetry direct_profile;
+        semantic_input mandatory{files, lexical, plain, isolated_strings, &direct_profile};
+        if (!tests.expect(succeeded(mandatory.start(roots[1], semantic_input_mode::source)),
+                "start mandatory Source token input without preparation batch")) return;
+        std::size_t count = 0;
+        while (!mandatory.finished()) {
+            semantic_token token;
+            if (!tests.expect(succeeded(mandatory.next(token)), "consume mandatory Source input")) return;
+            if (token.kind != token_kind::invalid) ++count;
+        }
+        tests.expect(count == expected_tokens && direct_profile.source_ready_cursor_token_count == expected_tokens,
+            "missing optional batch never turns token-only Source into empty input");
+        semantic_token empty_token;
+        tests.expect(lexical.contains(roots[2]) && lexical.source_tokens_only(roots[2]) &&
+                succeeded(mandatory.start(roots[2], semantic_input_mode::source)) &&
+                succeeded(mandatory.next(empty_token)) && mandatory.finished() &&
+                empty_token.kind == token_kind::invalid,
+            "empty token-only Source remains available and reaches EOF without words");
+    }
+#else
+    const auto compact = lexical.words(roots[1]);
+#endif
+    std::uint32_t word_offset = 0, source_offset = 0;
+    for (const auto& ready : ready_tokens) {
+        frontend_token decoded;
+        if (!tests.expect(succeeded(decode_frontend_token(compact, roots[1], word_offset,
+                source_offset, decoded)), "decode reference compact token")) return;
+        tests.expect(ready.kind == decoded.kind && ready.source_offset == decoded.source_offset &&
+            ready.source_length == decoded.source_length, "lexer ready token equals compact representation");
+        if (ready.kind == token_kind::identifier) {
+            const auto spelling = files.content(roots[1]).substr(ready.source_offset, ready.source_length);
+            std::uint32_t hash = 2166136261u;
+            for (const auto c : spelling) { hash ^= static_cast<unsigned char>(c); hash *= 16777619u; }
+            tests.expect(ready.lexical_hash == (hash == 0 ? 1u : hash), "ready token reuses exact lexer hash");
+        }
+    }
+    tests.expect(expected_tokens != 0 && word_offset == compact.size(),
+        "ready stream covers every compact token exactly once");
+#else
+    if (!prepare_all_roots(tests, files, lexical, roots)) return;
+#endif
+    preprocessor_configuration configuration;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    parser_failure failure;
+    std::vector<parser_warning> warnings;
+    semantic_parse_telemetry telemetry;
+    if (!tests.expect(succeeded(parse_semantic_project(files, lexical, roots.size(),
+            configuration, strings, identities, G, sources, &failure, &warnings,
+            &telemetry, true)), "parse multiple bounded construction windows")) return;
+#if defined(CW_HEADER_SOURCE_OVERLAP_V2) && (defined(CW_SOURCE_PREHASH_PARALLEL_V2) || defined(CW_SOURCE_PREDECODE_PARALLEL_V2) || defined(CW_SOURCE_MODEL_V2))
+    tests.expect(telemetry.source_overlap_prepared == 1,
+        "Source preparation actually joins the worker started before Header semantics");
+#ifdef CW_SOURCE_MODEL_DIRECT_V2
+    tests.expect(telemetry.source_model_direct_assignments >= 260,
+        "overlapped syntax operations feed direct Source validation without token replay");
+#endif
+#endif
+#ifdef CW_SOURCE_LEXER_TOKENS_V2
+    tests.expect(telemetry.source_lexer_token_count == expected_tokens &&
+            lexical.source_tokens(roots[1]).empty(),
+        "Source consumes ready lexer tokens and releases them after semantic construction");
+#endif
+#ifdef CW_HEADER_LEXER_TOKENS_V2
+    tests.expect(telemetry.header_v2_lexer_token_count != 0,
+        "Header physical lexer publishes ready tokens into contextual replay");
+#endif
+#ifdef CW_HEADER_TOKEN_ONLY_V2
+    tests.expect(telemetry.header_v2_lexer_token_count != 0 &&
+            telemetry.header_v2_compact_word_count == 0,
+        "PUBLISH Header pipeline consumes ready tokens with zero compact word storage");
+#endif
+#ifdef CW_SOURCE_TOKEN_ONLY_V2
+    tests.expect(telemetry.source_compact_word_count == 0 &&
+        telemetry.source_ready_cursor_token_count == telemetry.source_token_count,
+        "token-only Source never stores or reads compact words");
+#endif
+#if !defined(CW_SOURCE_PREHASH_PARALLEL_V2) && !defined(CW_SOURCE_PREDECODE_PARALLEL_V2) && !defined(CW_SOURCE_MODEL_V2)
+    tests.expect(telemetry.source_ready_cursor_token_count == 0 &&
+            telemetry.source_compact_cursor_token_count == telemetry.source_token_count &&
+            telemetry.source_compact_word_count != 0,
+        "compact configuration actually reads words directly without ready arrays");
+#endif
+    const auto type = G.find_type(identities.find(identities.root(), strings.find("T"), identity_kind::type));
+    const auto object_a = identities.find(identities.root(), strings.find("a"), identity_kind::object);
+    const auto member = G.find_member(type, strings.find("value"));
+    object_initialization_record value;
+    tests.expect(G.object_count() == 4 && G.link_count() == 1 && G.initialization_count() == 7 &&
+            G.initialization({object_a, endpoint_ref{member}}, value) && value.value.bits() == 130,
+        "window boundaries preserve last-write-wins, strings, declarations and namespace commits");
+    tests.expect(warnings.size() == 259 &&
+            warnings.back().file == roots[1] && warnings.back().source.offset == text.rfind("value"),
+        "window commits retain every warning in original source order");
+}
+
 // HEADER-SEMANTIC-SPACE-01 test
 void test_header_semantic_space(test_state& tests) {
     tests.expect(
@@ -7283,6 +7913,10 @@ void test_header_v2_context_reuse(test_state& tests) {
             "reuse retains every root's ordered provenance");
         const auto shared_name = strings.find("ReuseShared");
         if (shared_name && roots.size() == 3) {
+#ifdef CW_HEADER_MODEL_EFFECTIVE_V2
+            (void)tests.expect(telemetry.header_v2_effective_records == 3,
+                "physical Header model scans shared closure once across roots");
+#endif
             const auto shared = identities.find(identities.root(), shared_name,
                 identity_kind::type);
             for (std::size_t i = 0; i < roots.size(); ++i) {
@@ -7320,6 +7954,25 @@ void test_header_v2_context_reuse(test_state& tests) {
         const temporary_source a{"reuse_macro_a", "#pragma once\n" + include(shared)};
         const temporary_source b{"reuse_macro_b", "#define SWITCH\n" + include(shared)};
         execute({a.path(), b.path()}, 2, 2, 2);
+    }
+    {
+        // Replayed sibling subtrees share a once-only leaf. Each root must
+        // retain the leaf contribution once, including after another root
+        // has already populated all three cache entries.
+        const temporary_source leaf{"reuse_diamond_leaf",
+            "#pragma once\nstruct ReuseDiamondLeaf {};\n"};
+        const temporary_source left{"reuse_diamond_left",
+            "#pragma once\n" + include(leaf) +
+            "struct ReuseDiamondLeft {};\n"};
+        const temporary_source right{"reuse_diamond_right",
+            "#pragma once\n" + include(leaf) +
+            "struct ReuseDiamondRight {};\n"};
+        const auto children = include(left) + include(right) + include(left);
+        const temporary_source a{"reuse_diamond_a",
+            "#pragma once\n" + children + "struct ReuseDiamondA {};\n"};
+        const temporary_source b{"reuse_diamond_b",
+            "#pragma once\n" + children + "struct ReuseDiamondB {};\n"};
+        execute({a.path(), b.path(), leaf.path()}, 5, 5, 9);
     }
     {
         const temporary_source shared{"reuse_scoped", "#pragma once\nstruct ReuseScoped {};\n"};
@@ -7596,6 +8249,9 @@ int main() {
     try {
         test_state tests;
 
+#ifdef CW_HEADER_TOKEN_ONLY_V2
+        test_header_token_only_32(tests);
+#endif
         test_semantic_cursor_v2_decode_09(tests);
 
         test_lexical_symbols_v2(
@@ -7603,6 +8259,8 @@ int main() {
 
         test_lexical_symbols_v2_growth_04(tests);
         test_publish_physical_01(tests);
+        test_owned_verified_content(tests);
+        test_stable_snapshot_proofs(tests);
         test_opt08_validate_canonical(tests); // HEADER-V2-OPT-08-VALIDATE
 
         test_prepared_include_v2(
@@ -7645,6 +8303,10 @@ int main() {
             tests);
 
         test_header_semantic_space(tests);
+        test_source_v2_assignment_dispatch(tests);
+        test_source_v2_cross_root_endpoints(tests);
+        test_source_v2_owned_endpoint_paths(tests);
+        test_source_v2_construction_window(tests);
 
         test_sparse_semantic_replay_order(
             tests);

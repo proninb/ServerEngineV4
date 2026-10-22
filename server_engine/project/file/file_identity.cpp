@@ -386,6 +386,37 @@ struct observed_file_change_state final {
 };
 
 [[nodiscard]] file_token_result query_file_change_state(
+    HANDLE file,
+    const BY_HANDLE_FILE_INFORMATION& information,
+    observed_file_change_state& output) noexcept {
+    output = {};
+    READ_FILE_USN_DATA request{};
+    request.MinMajorVersion = 2;
+    request.MaxMajorVersion = 2;
+    std::array<std::byte, 4096> buffer{};
+    DWORD returned = 0;
+    if (DeviceIoControl(file, FSCTL_READ_FILE_USN_DATA, &request, sizeof(request),
+            buffer.data(), static_cast<DWORD>(buffer.size()), &returned, nullptr) == 0) {
+        const auto error = GetLastError();
+        return error == ERROR_INVALID_FUNCTION || error == ERROR_NOT_SUPPORTED ||
+                error == ERROR_INVALID_PARAMETER
+            ? file_token_result::unavailable : file_token_result::failed;
+    }
+    if (returned < sizeof(USN_RECORD_V2)) return file_token_result::failed;
+    USN_RECORD_V2 record{};
+    std::memcpy(&record, buffer.data(), sizeof(record));
+    const auto file_reference = (static_cast<std::uint64_t>(information.nFileIndexHigh) << 32) |
+        information.nFileIndexLow;
+    if (record.MajorVersion != 2 || record.RecordLength < sizeof(USN_RECORD_V2) ||
+        record.RecordLength > returned || record.Usn < 0 || file_reference == 0 ||
+        record.FileReferenceNumber != file_reference) return file_token_result::failed;
+    output.volume_serial = information.dwVolumeSerialNumber;
+    output.file_reference = file_reference;
+    output.file_usn = static_cast<std::int64_t>(record.Usn);
+    return output ? file_token_result::available : file_token_result::unavailable;
+}
+
+[[nodiscard]] file_token_result query_file_change_state(
     const std::filesystem::path& path,
     observed_file_change_state& output) noexcept {
 
@@ -429,78 +460,7 @@ struct observed_file_change_state final {
             return file_token_result::failed;
         }
 
-        READ_FILE_USN_DATA request{};
-        request.MinMajorVersion = 2;
-        request.MaxMajorVersion = 2;
-
-        std::array<std::byte, 4096> buffer{};
-        DWORD returned = 0;
-
-        if (DeviceIoControl(
-                file.get(),
-                FSCTL_READ_FILE_USN_DATA,
-                &request,
-                sizeof(request),
-                buffer.data(),
-                static_cast<DWORD>(
-                    buffer.size()),
-                &returned,
-                nullptr) == 0) {
-
-            const auto error =
-                GetLastError();
-
-            if (error == ERROR_INVALID_FUNCTION ||
-                error == ERROR_NOT_SUPPORTED ||
-                error == ERROR_INVALID_PARAMETER) {
-
-                return file_token_result::unavailable;
-            }
-
-            return file_token_result::failed;
-        }
-
-        if (returned < sizeof(USN_RECORD_V2)) {
-            return file_token_result::failed;
-        }
-
-        USN_RECORD_V2 record{};
-
-        std::memcpy(
-            &record,
-            buffer.data(),
-            sizeof(record));
-
-        const auto file_reference =
-            (static_cast<std::uint64_t>(
-                information.nFileIndexHigh) << 32) |
-            information.nFileIndexLow;
-
-        if (record.MajorVersion != 2 ||
-            record.RecordLength <
-                sizeof(USN_RECORD_V2) ||
-            record.RecordLength > returned ||
-            record.Usn < 0 ||
-            file_reference == 0 ||
-            record.FileReferenceNumber !=
-                file_reference) {
-
-            return file_token_result::failed;
-        }
-
-        output.volume_serial =
-            information.dwVolumeSerialNumber;
-
-        output.file_reference =
-            file_reference;
-
-        output.file_usn =
-            static_cast<std::int64_t>(
-                record.Usn);
-
-        return output
-            ? file_token_result::available
-            : file_token_result::unavailable;
+        return query_file_change_state(file.get(), information, output);
     }
     catch (...) {
         return file_token_result::failed;
@@ -510,7 +470,8 @@ struct observed_file_change_state final {
 [[nodiscard]] file_content_result
 acquire_windows_snapshot(
     const std::filesystem::path& path,
-    file_content_snapshot& output) noexcept {
+    file_content_snapshot& output,
+    bool capture_change_token) noexcept {
 
     output = {};
 
@@ -660,8 +621,9 @@ acquire_windows_snapshot(
 
         observed_file_change_state state;
 
-        if (query_file_change_state(
-                path,
+        if (capture_change_token && query_file_change_state(
+                file.get(),
+                after,
                 state) ==
             file_token_result::available) {
 
@@ -831,7 +793,8 @@ acquire_windows_proof(
     observed_file_change_state state;
 
     if (query_file_change_state(
-            path,
+            file.get(),
+            after,
             state) ==
         file_token_result::available) {
 
@@ -1109,13 +1072,16 @@ file_token_result capture_file_change_checkpoint(
 
 file_content_result acquire_file_content(
     const std::filesystem::path& path,
-    file_content_snapshot& output) noexcept {
+    file_content_snapshot& output,
+    bool capture_change_token) noexcept {
 
 #if defined(_WIN32)
     return acquire_windows_snapshot(
         path,
-        output);
+        output,
+        capture_change_token);
 #else
+    (void)capture_change_token;
     output = {};
 
     file_snapshot_observation before;

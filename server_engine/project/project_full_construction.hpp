@@ -2,8 +2,8 @@
  * Shared full Project source-construction pipeline.
  *
  * PUBLISH and REBUILD compile the same project.json/source inputs into the same
- * final G. Their only difference is persistence policy after construction:
- * PUBLISH persists compiled.bin only; REBUILD also persists BUILD acceleration.
+ * final G. PUBLISH writes compiled.bin/runtime.bin without durable flush or
+ * BUILD change tokens. REBUILD also persists BUILD acceleration and flushes it.
  */
 #pragma once
 
@@ -26,6 +26,15 @@ enum class full_construction_mode : std::uint8_t {
 
 struct full_construction_telemetry final {
     bool detailed_source = true;
+    // Phase clocks without per-token/member counters: comparable to PUBLISH.
+    bool phase_only = false;
+    std::uint64_t operation_ns = 0;
+    std::uint64_t context_setup_ns = 0;
+    std::uint64_t post_semantic_ns = 0;
+    std::uint64_t post_persistence_ns = 0;
+    std::uint64_t transient_release_ns = 0;
+    std::uint64_t acquisition_change_tokens = 1;
+    std::uint64_t persistence_flush_enabled = 1;
     std::uint64_t cleanup_ns = 0;
     std::uint64_t configuration_ns = 0;
     std::uint64_t lexical_ns = 0;
@@ -59,6 +68,8 @@ struct full_construction_telemetry final {
     std::uint64_t header_v2_physical_ns = 0;
     std::uint64_t header_v2_prepared_files = 0;
     std::uint64_t header_v2_lexed_files = 0;
+    std::uint64_t header_v2_lexer_token_count = 0;
+    std::uint64_t header_v2_compact_word_count = 0;
     std::uint64_t header_v2_include_records = 0;
     std::uint64_t header_v2_active_includes = 0;
     std::uint64_t header_v2_definitions = 0;
@@ -85,6 +96,10 @@ struct full_construction_telemetry final {
     std::uint64_t source_decode_ns = 0;
     std::uint64_t source_intern_ns = 0;
     std::uint64_t source_token_count = 0;
+    std::uint64_t source_ready_cursor_token_count = 0;
+    std::uint64_t source_compact_cursor_token_count = 0;
+    std::uint64_t source_compact_word_count = 0;
+
     std::uint64_t source_identifier_count = 0;
 
     // PARSER-PERF-01.
@@ -126,6 +141,12 @@ struct full_construction_telemetry final {
     // PUBLISH-SOURCE-COARSE-PROFILE-01.
     std::uint64_t source_root_count = 0;
     std::uint64_t source_root_setup_ns = 0;
+    std::uint64_t source_lexer_token_count = 0;
+    std::uint64_t source_overlap_prepared = 0;
+    std::uint64_t source_overlap_snapshot_ns = 0;
+    std::uint64_t source_overlap_prepare_ns = 0;
+    std::uint64_t source_overlap_wait_ns = 0;
+
     std::uint64_t source_replay_ns = 0;
     std::uint64_t source_root_finish_ns = 0;
     std::uint64_t source_object_statements = 0;
@@ -134,6 +155,7 @@ struct full_construction_telemetry final {
     std::uint64_t source_model_direct_assignments = 0;
     std::uint64_t source_string_assignment_statements = 0;
     std::uint64_t source_string_assignment_elements = 0;
+    std::uint64_t source_string_assignment_ns = 0;
     std::uint64_t source_endpoint_count = 0;
     std::uint64_t source_endpoint_steps = 0;
 
@@ -176,7 +198,10 @@ struct full_construction_telemetry final {
     std::uint64_t compiled_abi_encode_ns = 0;
     std::uint64_t compiled_type_encode_ns = 0;
     std::uint64_t compiled_runtime_encode_ns = 0;
+    // Final serial flush wall time; excludes compiled.bin when it was flushed
+    // during compiled_plan_ns. The overlap duration is nested in that stage.
     std::uint64_t compiled_flush_ns = 0;
+    std::uint64_t compiled_flush_overlap_ns = 0;
     std::uint64_t resident_ns = 0;
 };
 

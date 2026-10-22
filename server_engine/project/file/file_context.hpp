@@ -19,7 +19,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -116,6 +118,7 @@ struct file_acquire_job final {
     file_change_token baseline_token{};
     bool baseline_present = false;
     bool baseline_token_available = false;
+    bool capture_change_token = true;
 };
 
 struct file_acquire_result final {
@@ -293,6 +296,14 @@ public:
     file_context(const file_context&) = delete;
     file_context& operator=(const file_context&) = delete;
 
+    // Fresh PUBLISH construction can retain the verified snapshot allocation
+    // instead of copying its bytes into a growing shared arena. Enable before
+    // materializing any input; BUILD/REBUILD retain the arena representation.
+    [[nodiscard]] server_status enable_owned_content() noexcept;
+
+    // PUBLISH owns stable snapshots, but creates no reusable BUILD lineage.
+    [[nodiscard]] server_status configure_publish_acquisition() noexcept;
+
     // Binds immutable BUILD lineage without reconstructing committed file/path/
     // physical/topology arrays. The source_save_view must outlive this context.
     [[nodiscard]] server_status bind_baseline(
@@ -330,6 +341,12 @@ public:
 
     [[nodiscard]] server_status apply_acquire(
         const file_acquire_result& result,
+        bool& content_changed) noexcept;
+
+    // Explicitly consumes snapshot.bytes in owned-content mode; otherwise
+    // delegates to the non-consuming arena publication above.
+    [[nodiscard]] server_status adopt_acquire(
+        file_acquire_result& result,
         bool& content_changed) noexcept;
 
     [[nodiscard]] server_status calculate_content_hash(
@@ -529,6 +546,10 @@ private:
     std::vector<file_physical_record> physical_files;
     std::vector<file_content_record> content_files;
     std::vector<char> content_bytes;
+    std::vector<std::unique_ptr<std::string>> owned_content;
+    std::size_t owned_content_bytes = 0;
+    bool owned_content_enabled = false;
+    bool capture_change_tokens = true;
 
     std::vector<file_dependency_record> dependency_files;
     std::vector<file_id> forward_edges;

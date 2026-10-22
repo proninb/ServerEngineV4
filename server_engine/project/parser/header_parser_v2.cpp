@@ -1646,6 +1646,10 @@ server_status header_parser_v2::try_effective_field(
         if (!identity) return server_status::success;
         const auto status = resolve_named_type(identity, type);
         if (!succeeded(status)) return status;
+        if (provenance != nullptr) {
+            const auto dependency = record_dependency(identity);
+            if (!succeeded(dependency)) return dependency;
+        }
     } else {
         intrinsic_type intrinsic = intrinsic_type::none;
         switch (field->builtin) {

@@ -189,16 +189,17 @@ namespace {
     return token_kind::pp_unknown;
 }
 
+template<class Output>
 [[nodiscard]] server_status emit(
-    lexical_stream& output,
+    Output& output,
     token_kind kind,
     std::size_t offset,
-    std::size_t length) noexcept {
+    std::size_t length, std::uint32_t hash = 0) noexcept {
 
     return output.append(
         kind,
         static_cast<std::uint32_t>(offset),
-        static_cast<std::uint32_t>(length));
+        static_cast<std::uint32_t>(length), hash);
 }
 
 [[nodiscard]] bool match(
@@ -527,10 +528,11 @@ struct literal_start final {
 
 }
 
-server_status lexer::tokenize(
+template<class Output>
+static server_status tokenize_impl(
     file_id file,
     std::string_view source,
-    lexical_stream& output,
+    Output& output,
     lexical_error* error,
     lexical_symbol_stream_v2* symbols) noexcept {
 
@@ -892,7 +894,7 @@ server_status lexer::tokenize(
             }
 
             const auto status =
-                emit(output, kind, start, position - start);
+                emit(output, kind, start, position - start, hash);
             if (!succeeded(status)) {
                 return status;
             }
@@ -954,6 +956,37 @@ server_status lexer::tokenize(
     }
 
     return server_status::success;
+}
+
+namespace {
+struct source_token_writer final {
+    lexical_stream& stream;
+    server_status reset(file_id file, std::size_t size) noexcept { return stream.reset(file, size); }
+    server_status append(token_kind kind, std::uint32_t offset, std::uint32_t length,
+        std::uint32_t hash) noexcept { return stream.append_source_token(kind, offset, length, hash); }
+};
+struct header_token_writer final {
+    lexical_stream& stream;
+    server_status reset(file_id file, std::size_t size) noexcept { return stream.reset(file, size); }
+    server_status append(token_kind kind, std::uint32_t offset, std::uint32_t length,
+        std::uint32_t) noexcept { return stream.append_header_token(kind, offset, length); }
+};
+}
+server_status lexer::tokenize(file_id file, std::string_view source, lexical_stream& output,
+    lexical_error* error, lexical_symbol_stream_v2* symbols) noexcept {
+#ifdef CW_SOURCE_TOKEN_ONLY_V2
+    if (output.source_tokens_only()) {
+        source_token_writer writer{output};
+        return tokenize_impl(file, source, writer, error, symbols);
+    }
+#endif
+#ifdef CW_HEADER_TOKEN_ONLY_V2
+    if (output.header_tokens_only()) {
+        header_token_writer writer{output};
+        return tokenize_impl(file, source, writer, error, symbols);
+    }
+#endif
+    return tokenize_impl(file, source, output, error, symbols);
 }
 
 }

@@ -5,6 +5,10 @@
  * Writes to the SAME G / source map: no intermediate facts / AST / projection.
  */
 #include "source_parser_v2.hpp"
+#ifdef CW_CANONICALIZER_TRACE
+#include "../../../experiments/canonicalizer-01/capture.hpp"
+#endif
+#include "source_endpoint_resolver.hpp"
 #include "../frontend/semantic_input.hpp"
 #include "../frontend/frontend_input.hpp"
 #include "source_model_v2.hpp"
@@ -20,6 +24,8 @@
 #include <cstring>
 #include <cstdint>
 #include <limits>
+#include <thread>
+#include <memory>
 #include <span>
 #include <string_view>
 #include <unordered_map>
@@ -94,12 +100,65 @@ static void source_v2_type_description(
 // Each lane owns its destination file_id slot. No shared append/locks/atomics.
 class source_predecode_batch final {
 public:
+    struct physical_source final {
+        bool source = false;
+        // Captured before Header semantics; no worker reads mutable arena metadata.
+        lexical_word_view encoded;
+        std::span<const std::uint32_t> words;
+        std::string_view content;
+        std::span<const source_predecoded_token> ready;
+    };
+    using physical_snapshot = std::vector<physical_source>;
+    [[nodiscard]] static bool snapshot(const file_context& files,
+        const lexical_generation& lexical, std::size_t count,
+        physical_snapshot& output) noexcept {
+        try {
+            bool any_source = false;
+            output.resize(count);
+            for (std::size_t i = 0; i < count; ++i) {
+                const file_id file{static_cast<std::uint32_t>(i + 1)};
+                if (files.kind(file) != file_kind::source) continue;
+                if (!lexical.contains(file) || !files.content_available(file)) return false;
+                auto& entry = output[i];
+                entry.source = true;
+                any_source = true;
+                const auto words = lexical.words(file);
+                entry.words = words.native_words();
+                if (entry.words.empty()) entry.encoded = words;
+                entry.content = files.content(file);
+                entry.ready = lexical.source_tokens(file);
+            }
+            return any_source;
+        } catch (...) { return false; }
+    }
     [[nodiscard]] bool prepare(const file_context& files,
         const lexical_generation& lexical, const string_table& strings,
         std::size_t file_count) noexcept {
+        return prepare_impl(&files, &lexical, &strings, nullptr, file_count);
+    }
+    [[nodiscard]] bool prepare_snapshot(const physical_snapshot& snapshot) noexcept {
+        return prepare_impl(nullptr, nullptr, nullptr, &snapshot, snapshot.size());
+    }
+private:
+    [[nodiscard]] bool prepare_impl(const file_context* files,
+        const lexical_generation* lexical, const string_table* strings,
+        const physical_snapshot* snapshot, std::size_t file_count) noexcept {
         ready_value = false;
         if (file_count == 0) return false;
-        try { roots.resize(file_count); }
+        try {
+            roots.resize(file_count);
+            ready_roots.resize(file_count);
+            bool all_ready = true;
+            for (std::size_t i = 0; i < file_count; ++i) {
+                const file_id file{static_cast<std::uint32_t>(i + 1)};
+                if (snapshot ? !(*snapshot)[i].source : files->kind(file) != file_kind::source) continue;
+                ready_roots[i] = snapshot ? (*snapshot)[i].ready : lexical->source_tokens(file);
+                if (ready_roots[i].empty()) all_ready = false;
+            }
+#ifndef CW_SOURCE_MODEL_V2
+            if (all_ready) { ready_value = true; return true; }
+#endif
+        }
         catch (...) { return false; }
         auto capacity = execution_lane_capacity();
         if (capacity == 0) capacity = 1;
@@ -108,7 +167,7 @@ public:
         std::vector<std::uint8_t> failures;
         try { failures.resize(active); }
         catch (...) { roots.clear(); return false; }
-        job work{&files, &lexical, &strings, &roots, &failures, file_count, active};
+        job work{files, lexical, strings, snapshot, &ready_roots, &roots, &failures, file_count, active};
         execution_lanes workers;
         if (!succeeded(workers.start(active)) ||
             !succeeded(workers.run(active, decode_lane, &work))) {
@@ -122,13 +181,21 @@ public:
         return true;
     }
 
+public:
     [[nodiscard]] bool ready() const noexcept { return ready_value; }
+    [[nodiscard]] std::uint64_t lexer_token_count() const noexcept {
+        if (!ready_value) return 0;
+        std::uint64_t result = 0;
+        for (const auto tokens : ready_roots) result += tokens.size();
+        return result;
+    }
 
     [[nodiscard]] std::span<const source_predecoded_token> tokens(
         file_id file) const noexcept {
         const auto index = static_cast<std::size_t>(file.value() - 1);
         if (!ready_value || !file || index >= roots.size()) return {};
-        return roots[index].tokens;
+        return ready_roots[index].empty()
+            ? std::span<const source_predecoded_token>{roots[index].tokens} : ready_roots[index];
     }
 
     // Syntactic operations are file-ordered and contain no semantic handles.
@@ -143,7 +210,9 @@ private:
     struct job final {
         const file_context* files;
         const lexical_generation* lexical;
-        const string_table* strings;  // read only until all lanes join
+        const string_table* strings;  // only used by the non-overlapped prebind experiment
+        const physical_snapshot* snapshot;
+        const std::vector<std::span<const source_predecoded_token>>* ready_roots;
         std::vector<source_model_file>* roots;
         std::vector<std::uint8_t>* failures;
         std::size_t file_count;
@@ -155,29 +224,44 @@ private:
         try {
             for (auto i = lane; i < task.file_count; i += task.lane_count) {
                 const file_id file{static_cast<std::uint32_t>(i + 1)};
-                if (task.files->kind(file) != file_kind::source) continue;
-                if (!task.lexical->contains(file)) {
+                const auto* captured = task.snapshot ? &(*task.snapshot)[i] : nullptr;
+                if (captured ? !captured->source : task.files->kind(file) != file_kind::source) continue;
+                const auto ready = (*task.ready_roots)[i];
+                if (!ready.empty()) {
+#ifdef CW_SOURCE_MODEL_V2
+                    source_model_builder builder{(*task.roots)[i], ready};
+                    for (const auto& token : ready) if (!builder.accept(token)) {
+                        (*task.failures)[lane] = 1; return;
+                    }
+                    if (!builder.finish()) { (*task.failures)[lane] = 1; return; }
+#endif
+                    continue;
+                }
+                if (!captured && !task.lexical->contains(file)) {
                     (*task.failures)[lane] = 1;
                     return;
                 }
-                const auto words = task.lexical->words(file);
-                const auto native = words.native_words();
-#ifdef CW_SOURCE_PREBIND_PARALLEL_V2
-                if (!task.files->content_available(file)) {
+                const auto words = captured ? captured->encoded : task.lexical->words(file);
+                const auto native = captured ? std::span<const std::uint32_t>{captured->words}
+                    : words.native_words();
+                const auto word_count = native.empty() ? words.size() : native.size();
+#if defined(CW_SOURCE_PREBIND_PARALLEL_V2) || defined(CW_SOURCE_PREHASH_PARALLEL_V2)
+                if (!captured && !task.files->content_available(file)) {
                     (*task.failures)[lane] = 1;
                     return;
                 }
-                const auto content = task.files->content(file);
+                const std::string_view content = captured ? std::string_view{captured->content}
+                    : task.files->content(file);
 #endif
                 auto& model = (*task.roots)[i];
                 auto& output = model.tokens;
-                output.reserve(words.size());
+                output.reserve(word_count);
 #ifdef CW_SOURCE_MODEL_V2
                 source_model_builder model_builder{model};
 #endif
                 std::uint32_t word_offset = 0;
                 std::uint32_t source_offset = 0;
-                while (word_offset != words.size()) {
+                while (word_offset != word_count) {
                     frontend_token token{};
                     const auto result = !native.empty()
                         ? decode_frontend_token(native, file, word_offset,
@@ -199,13 +283,29 @@ private:
                             (*task.failures)[lane] = 1;
                             return;
                         }
-                        known = task.strings->find(content.substr(offset, length));
+                        if (task.strings) known = task.strings->find(content.substr(offset, length));
                     }
                     output.push_back({token.source_offset,
                         token.source_length, token.kind, known});
 #else
                     output.push_back({token.source_offset,
                         token.source_length, token.kind});
+#endif
+#ifdef CW_SOURCE_PREHASH_PARALLEL_V2
+                    if (token.kind == token_kind::identifier) {
+                        const auto offset = static_cast<std::size_t>(token.source_offset);
+                        const auto length = static_cast<std::size_t>(token.source_length);
+                        if (offset > content.size() || length > content.size() - offset) {
+                            (*task.failures)[lane] = 1;
+                            return;
+                        }
+                        std::uint32_t hash = 2166136261u;
+                        for (const auto c : content.substr(offset, length)) {
+                            hash ^= static_cast<unsigned char>(c);
+                            hash *= 16777619u;
+                        }
+                        output.back().lexical_hash = hash == 0 ? 1u : hash;
+                    }
 #endif
 #ifdef CW_SOURCE_MODEL_V2
                     if (!model_builder.accept(output.back())) {
@@ -225,6 +325,7 @@ private:
     }
 
     bool ready_value = false;
+    std::vector<std::span<const source_predecoded_token>> ready_roots;
     std::vector<source_model_file> roots;
 };
 
@@ -238,7 +339,8 @@ public:
         const source_predecode_batch* decoded = nullptr) noexcept
         : files(f), input(f, l, c, s, t ? &input_profile : nullptr),
           strings(s), identities(ids), G(g), sources(sm), failure(err),
-          warnings(warns), telemetry(t), prepared(decoded) {
+          warnings(warns), telemetry(t), prepared(decoded),
+          endpoint_resolver(g, t ? &t->source_member_lookups : nullptr) {
         // SOURCE-V2-PERF-01-INPUT-TELEMETRY: detailed token clocks only
         // in explicit publish-profile, never in normal PUBLISH/publish-stage.
         input_profile.detailed_source = t != nullptr && t->detailed_source;
@@ -311,6 +413,9 @@ public:
         result.source_decode_ns += input_profile.source_decode_ns;
         result.source_intern_ns += input_profile.source_intern_ns;
         result.source_token_count += input_profile.source_token_count;
+        result.source_ready_cursor_token_count += input_profile.source_ready_cursor_token_count;
+        result.source_compact_cursor_token_count += input_profile.source_compact_cursor_token_count;
+
         result.source_identifier_count += input_profile.source_identifier_count;
     }
 
@@ -318,6 +423,9 @@ public:
     // counters; benchmark counters continue to describe one canonical replay.
     // One Source replay only. No deferred binding and no second Graph.
     [[nodiscard]] server_status parse(file_id root) noexcept {
+#ifdef CW_CANONICALIZER_TRACE
+        canonicalizer01::capture_unit capture_unit{root.value() | 0x80000000u};
+#endif
         if (failure) *failure = {};
         current = {};
         buffered = {};
@@ -354,6 +462,8 @@ public:
         status = advance();
         if (!succeeded(status)) return status;
         status = scope(identities.root(), false, 0);
+        const auto committed = flush_constructions();
+        if (!succeeded(committed)) return committed;
         if (!succeeded(status)) return status;
         return sources.end_root();
     }
@@ -385,12 +495,19 @@ private:
         source_range location{};
         bool defined = false;
     };
-    struct endpoint final {
+    struct endpoint final : source_typed_endpoint {
         object_endpoint ref{};
-        type_ref type{};
-        type_ref object_type{};
         source_unit unit{};
         source_range location{};
+        // Local typed path survives reading the other operand. No global
+        // endpoint_path_handle is needed until ordered canonicalization.
+
+        void reset() noexcept {
+            ref = {};
+            unit = {};
+            location = {};
+            source_typed_endpoint::reset();
+        }
     };
 
     // SOURCE-V2-G-CONSTRUCTION-01: compact, already-typed Source operation.
@@ -408,6 +525,76 @@ private:
         construction_value value{};      // used for initialization
         construction_opcode opcode = construction_opcode::initialization;
     };
+
+    struct queued_construction final {
+        endpoint target;
+        endpoint source;
+        construction_value value{};
+        construction_opcode opcode = construction_opcode::initialization;
+        semantic_token commit_token{};
+    };
+#ifdef CW_SOURCE_CONSTRUCTION_WINDOW_V2
+    static constexpr std::size_t construction_window_capacity = 64;
+#else
+    static constexpr std::size_t construction_window_capacity = 1;
+#endif
+
+    [[nodiscard]] server_status commit_queued(queued_construction& op) noexcept {
+        auto status = canonicalize_endpoint(op.target);
+        if (!succeeded(status)) return status;
+        const bool binding = op.opcode == construction_opcode::reference_binding;
+        if (binding) {
+            status = canonicalize_endpoint(op.source);
+            if (!succeeded(status)) return status;
+        }
+        const source_construction construction{op.target.unit, op.target.ref,
+            binding ? op.source.ref : object_endpoint{}, op.target.type, op.value, op.opcode};
+        link_handle link;
+        bool replaced = false;
+        status = commit_construction(construction, replaced, link);
+        if (!succeeded(status)) return binding
+            ? fail(parser_failure_kind::semantic, "Source reference binding cannot be represented in G")
+            : status;
+        if (binding) {
+            status = sources.add(op.target.unit.file, source_data_ref::link(link));
+            if (!succeeded(status)) return status;
+            if (telemetry) ++telemetry->source_link_statements;
+            return replaced ? warn_rebound(op.target) : server_status::success;
+        }
+        status = sources.add_initialization(op.target.ref);
+        if (!succeeded(status)) return status;
+        status = sources.add(op.target.unit.file, source_data_ref::object(op.target.unit.who));
+        if (!succeeded(status)) return status;
+        if (telemetry) ++telemetry->source_value_assignment_statements;
+        return replaced ? warn_replaced(op.target) : server_status::success;
+    }
+
+    [[nodiscard]] server_status flush_constructions() noexcept {
+        const auto count = construction_count;
+        // A failed prefix must never be replayed by an outer error barrier.
+        construction_count = 0;
+        const auto saved_token = current;
+        for (std::size_t i = 0; i < count; ++i) {
+            current = constructions[i].commit_token;
+            const auto status = commit_queued(constructions[i]);
+            current = saved_token;
+            if (!succeeded(status)) return status;
+        }
+        return server_status::success;
+    }
+
+    [[nodiscard]] server_status queue_construction(construction_opcode opcode,
+        construction_value value = {}) noexcept {
+        auto& op = constructions[construction_count++];
+        std::swap(op.target, assignment_target);
+        if (opcode == construction_opcode::reference_binding)
+            std::swap(op.source, assignment_source);
+        op.opcode = opcode;
+        op.value = value;
+        op.commit_token = current;
+        return construction_count == construction_window_capacity
+            ? flush_constructions() : server_status::success;
+    }
 
     // Graph mutation occurs only at canonical Source statement order.
     // Each caller still publishes Source Map and warnings in its ORIGINAL
@@ -595,6 +782,8 @@ private:
 
     [[nodiscard]] server_status parse_namespace(identity_ref scope_id,
         std::size_t depth) noexcept {
+        const auto committed = flush_constructions();
+        if (!succeeded(committed)) return committed;
         auto status = advance();
         if (!succeeded(status)) return status;
         if (!at(token_kind::identifier))
@@ -898,6 +1087,8 @@ private:
 
     [[nodiscard]] server_status object(identity_ref scope_id,
         bool is_extern = false) noexcept {
+        const auto committed = flush_constructions();
+        if (!succeeded(committed)) return committed;
         const auto declaration_file = current.file;
         const source_range declaration_location{
             current.source_offset, current.source_length};
@@ -1042,8 +1233,7 @@ private:
                 if (declared == extern_objects.end() || declared->second.defined)
                     return fail(parser_failure_kind::semantic,
                         "Duplicate Source object definition");
-                status = G.complete_resolved_extern_object(
-                    id, type, result, flags, init);
+                status = G.complete_resolved_extern_object(id, type, result, flags, init);
                 if (!succeeded(status)) return fail(parser_failure_kind::semantic,
                     "Source definition conflicts with extern WHO");
                 declared->second.defined = true;
@@ -1078,118 +1268,39 @@ private:
         return true;
     }
 
-    // SOURCE-V2-FAST-BIND-02: the Header type/member catalog is immutable
-    // for the whole Source pass. Cache resolved typed transitions, NOT text.
-    // Every hit contains the exact member, defining owner and base ancestry;
-    // member, dependency, endpoint-path and Graph mutation semantics stay intact.
-    struct member_transition final {
-        std::uint64_t key = 0;
-        member_index member{};
-        type_handle owner{};
-        type_ref value_type{};
-        std::uint32_t base_begin = 0;
-        std::uint32_t base_count = 0;
-    };
-
-    static constexpr std::size_t member_transition_slots = 1u << 16;
-
-    [[nodiscard]] static std::uint64_t transition_key(
-        type_handle record, string_id name) noexcept {
-        return (static_cast<std::uint64_t>(record.value()) << 32) |
-            static_cast<std::uint64_t>(name.value());
-    }
-
-    [[nodiscard]] static std::size_t transition_slot(std::uint64_t key) noexcept {
-        // Strong 64-bit mixing: low slot bits must depend on both the type and
-        // member ID. A direct-mapped table has no per-lookup allocations.
-        key ^= key >> 33;
-        key *= 0xff51afd7ed558ccdULL;
-        key ^= key >> 33;
-        key *= 0xc4ceb9fe1a85ec53ULL;
-        key ^= key >> 33;
-        return static_cast<std::size_t>(key) & (member_transition_slots - 1);
-    }
-
-    [[nodiscard]] bool cached_transition(type_handle record, string_id name,
-        member_index& member, type_handle& owner, type_ref& value_type,
+    [[nodiscard]] server_status resolve_member(type_handle record, string_id name,
+        member_index& member, type_handle& owner, type_ref& type,
         std::vector<endpoint_path_step>& ancestry) noexcept {
-        if (member_transitions.empty()) return false;
-        const auto key = transition_key(record, name);
-        const auto& entry = member_transitions[transition_slot(key)];
-        if (!key || entry.key != key || !entry.member) return false;
-        if (entry.base_count != 0) {
-            const auto begin = static_cast<std::size_t>(entry.base_begin);
-            const auto count = static_cast<std::size_t>(entry.base_count);
-            if (begin > transition_bases.size() ||
-                count > transition_bases.size() - begin) return false;
-            try {
-                ancestry.insert(ancestry.end(),
-                    transition_bases.begin() + begin,
-                    transition_bases.begin() + begin + count);
-            } catch (...) { return false; }
-        }
-        member = entry.member;
-        owner = entry.owner;
-        value_type = entry.value_type;
-        return true;
+        source_endpoint_resolver::failure error;
+        const auto status = endpoint_resolver.resolve_member(
+            record, name, member, owner, type, ancestry, error);
+        return endpoint_status(status, error);
     }
 
-    void remember_transition(type_handle record, string_id name,
-        member_index member, type_handle owner, type_ref value_type,
-        std::span<const endpoint_path_step> base_steps) noexcept {
-        if (!record || !name || !member || !owner || !value_type) return;
-        // One allocation for the whole table. If it fails, parsing proceeds
-        // through the original uncached Graph lookup path.
-        if (member_transitions.empty()) {
-            if (transition_allocation_attempted) return;
-            transition_allocation_attempted = true;
-            try { member_transitions.resize(member_transition_slots); }
-            catch (...) { return; }
+    [[nodiscard]] server_status endpoint_status(server_status status,
+        source_endpoint_resolver::failure error) noexcept {
+        if (succeeded(status)) return status;
+        switch (error) {
+        case source_endpoint_resolver::failure::inherited_depth:
+            return fail(parser_failure_kind::unsupported,
+                "Inherited member path exceeds maximum depth");
+        case source_endpoint_resolver::failure::member_missing:
+            return fail(parser_failure_kind::semantic, "Member not found in Header G");
+        case source_endpoint_resolver::failure::definition_missing:
+            return fail(parser_failure_kind::semantic, "Missing member definition");
+        case source_endpoint_resolver::failure::object_missing:
+            return fail(parser_failure_kind::semantic, "Source object is not defined in G");
+        case source_endpoint_resolver::failure::array_required:
+            return fail(parser_failure_kind::semantic, "Index requires bounded array");
+        case source_endpoint_resolver::failure::index_out_of_range:
+            return fail(parser_failure_kind::semantic, "Array index out of range");
+        case source_endpoint_resolver::failure::record_required:
+            return fail(parser_failure_kind::semantic, "Member access requires record type");
+        case source_endpoint_resolver::failure::endpoint_depth:
+            return fail(parser_failure_kind::unsupported, "Source endpoint too deep");
+        default: return status;
         }
-        std::uint32_t begin = 0;
-        if (!base_steps.empty()) {
-            constexpr auto max_u32 =
-                static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)());
-            if (transition_bases.size() > max_u32 - base_steps.size()) return;
-            begin = static_cast<std::uint32_t>(transition_bases.size());
-            try {
-                transition_bases.insert(transition_bases.end(),
-                    base_steps.begin(), base_steps.end());
-            } catch (...) { return; }
-        }
-        const auto key = transition_key(record, name);
-        member_transitions[transition_slot(key)] = {
-            key, member, owner, value_type, begin,
-            static_cast<std::uint32_t>(base_steps.size())};
     }
-
-    [[nodiscard]] server_status find_inherited(type_handle record, string_id name,
-        member_index& index, type_handle& owner,
-        std::vector<endpoint_path_step>& ancestry, unsigned depth = 0) noexcept {
-        if (depth >= 64) return fail(parser_failure_kind::unsupported,
-            "Inherited member path exceeds maximum depth");
-        if (telemetry) ++telemetry->source_member_lookups;
-        index = G.find_member(record, name);
-        if (index) { owner = record; return server_status::success; }
-        const auto bases = G.bases(record);
-        for (std::size_t i = 0; i < bases.size(); ++i) {
-            const auto base = G.find_type(bases[i].type);
-            if (!base) continue;
-            std::vector<endpoint_path_step> local;
-            try {
-                local = ancestry;
-                local.push_back({i, endpoint_path_step_kind::base, {}});
-            } catch (...) { return server_status::io_error; }
-            member_index found;
-            type_handle found_owner;
-            auto status = find_inherited(base, name, found, found_owner, local, depth + 1);
-            if (!succeeded(status)) return status;
-            if (found) { ancestry = std::move(local); index = found;
-                owner = found_owner; return server_status::success; }
-        }
-        return server_status::success;
-    }
-
 #ifdef CW_SOURCE_MODEL_DIRECT_V2
     // The Source Model already gives the exact statement and '=' boundary.
     // Shape checking is read-only, before any Graph writes or interning.
@@ -1319,21 +1430,8 @@ private:
             member_index member;
             type_handle owner;
             type_ref member_type;
-            const auto ancestry_begin = path.size();
-            if (!cached_transition(record, member_name, member,
-                    owner, member_type, path)) {
-                status = find_inherited(record, member_name, member, owner, path);
-                if (!succeeded(status)) return status;
-                if (!member) return fail(parser_failure_kind::semantic,
-                    "Member not found in Header G");
-                const auto* value = G.member(owner, member);
-                if (!value) return fail(parser_failure_kind::semantic,
-                    "Missing member definition");
-                member_type = value->type;
-                remember_transition(record, member_name, member, owner,
-                    member_type,
-                    std::span<const endpoint_path_step>{path}.subspan(ancestry_begin));
-            }
+            status = resolve_member(record, member_name, member, owner, member_type, path);
+            if (!succeeded(status)) return status;
             if (owner != record) {
                 status = dependency(G.identity(owner));
                 if (!succeeded(status)) return status;
@@ -1500,26 +1598,24 @@ private:
         return model_finish_operation(op);
     }
 #endif
+
     // SOURCE-V2-FAST-BIND-01: scope() already resolved the target WHO.
     // Source operands still resolve from scope_id; no semantic lookup is skipped.
-    [[nodiscard]] server_status resolve_endpoint(identity_ref scope_id,
+    [[nodiscard]] server_status read_endpoint(identity_ref scope_id,
         endpoint& output, identity_ref prebound_object = {}) noexcept {
         if (!at(token_kind::identifier))
             return fail(parser_failure_kind::syntax, "Expected Source object identifier");
         const auto id = prebound_object ? prebound_object
             : find_visible(scope_id, current.identifier, identity_kind::object);
-        const auto h = G.find_object(id);
-        const auto* obj = G.find(h);
-        if (!id || !obj)
-            return fail(parser_failure_kind::semantic, "Source object is not defined in G");
-        output = {};
+        output.reset();
+        auto& steps = output.path;
+        source_endpoint_resolver::failure resolver_error;
+        auto status = endpoint_resolver.begin_endpoint(id, output, resolver_error);
+        if (!succeeded(status)) return endpoint_status(status, resolver_error);
         output.unit = source_unit{current.file, id};
-        output.type = obj->type;
-        output.object_type = obj->type;
         output.location = {current.source_offset, current.source_length};
-        auto status = dependency(id);
+        status = dependency(id);
         if (!succeeded(status)) return status;
-        steps.clear();
         status = advance();
         if (!succeeded(status)) return status;
         while (at(token_kind::dot) || at(token_kind::l_bracket)) {
@@ -1527,8 +1623,7 @@ private:
                 return fail(parser_failure_kind::unsupported, "Source endpoint too deep");
             if (at(token_kind::l_bracket)) {
                 derived_type_record d;
-                if (!G.derived(strip_cv(G, output.type), d) ||
-                    d.kind != derived_type_kind::bounded_array)
+                if (!endpoint_resolver.array_type(output.type, d))
                     return fail(parser_failure_kind::semantic, "Index requires bounded array");
                 status = advance(); if (!succeeded(status)) return status;
                 if (!at(token_kind::pp_number))
@@ -1536,60 +1631,29 @@ private:
                 const auto text = spelling();
                 std::uint64_t value = 0;
                 const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
-                if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() ||
-                    value >= d.payload)
+                if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
                     return fail(parser_failure_kind::semantic, "Array index out of range");
-                try { steps.push_back({value, endpoint_path_step_kind::array_index, {}}); }
-                catch (...) { return server_status::io_error; }
-                output.type = d.child;
+                status = endpoint_resolver.append_index(output, d, value, resolver_error);
+                if (!succeeded(status)) return endpoint_status(status, resolver_error);
                 status = advance(); if (!succeeded(status)) return status;
                 status = expect(token_kind::r_bracket, "Expected ']'");
                 if (!succeeded(status)) return status;
                 status = advance(); if (!succeeded(status)) return status;
                 continue;
             }
-            type_ref selected = strip_cv(G, output.type);
-            type_ref referent;
-            if (reference_referent(selected, referent)) {
-                try { steps.push_back({0, endpoint_path_step_kind::dereference, {}}); }
-                catch (...) { return server_status::io_error; }
-                selected = strip_cv(G, referent);
-            }
             type_handle record;
-            if (!G.named(selected, record))
-                return fail(parser_failure_kind::semantic, "Member access requires record type");
+            status = endpoint_resolver.prepare_member(output, record, resolver_error);
+            if (!succeeded(status)) return endpoint_status(status, resolver_error);
             status = dependency(G.identity(record));
             if (!succeeded(status)) return status;
             status = advance(); if (!succeeded(status)) return status;
             if (!at(token_kind::identifier))
                 return fail(parser_failure_kind::syntax, "Expected member identifier after '.'");
-            member_index member;
             type_handle owner;
-            type_ref member_type;
-            // The current member name was interned by the Source cursor. Reuse
-            // the semantic transition instead of repeating Graph member search
-            // and inherited traversal on every occurrence of the same chain.
-            const auto ancestry_begin = steps.size();
-            if (!cached_transition(record, current.identifier, member,
-                    owner, member_type, steps)) {
-                status = find_inherited(record, current.identifier,
-                    member, owner, steps);
-                if (!succeeded(status)) return status;
-                if (!member) return fail(parser_failure_kind::semantic,
-                    "Member not found in Header G");
-                const auto* value = G.member(owner, member);
-                if (!value) return fail(parser_failure_kind::semantic,
-                    "Missing member definition");
-                member_type = value->type;
-                remember_transition(record, current.identifier, member, owner,
-                    member_type, std::span<const endpoint_path_step>{steps}.subspan(
-                        ancestry_begin));
-            }
+            status = endpoint_resolver.append_member(output, record, current.identifier, owner, resolver_error);
+            if (!succeeded(status)) return endpoint_status(status, resolver_error);
             if (owner != record) { status = dependency(G.identity(owner));
                 if (!succeeded(status)) return status; }
-            try { steps.push_back({member.value(), endpoint_path_step_kind::member, {}}); }
-            catch (...) { return server_status::io_error; }
-            output.type = member_type;
             output.location = {current.source_offset, current.source_length};
             status = advance(); if (!succeeded(status)) return status;
         }
@@ -1615,19 +1679,28 @@ private:
                 }
             }
         }
-        if (steps.size() == 1 && steps.front().kind == endpoint_path_step_kind::member)
-            output.ref = {id, endpoint_ref::from_raw(
-                static_cast<std::uint32_t>(steps.front().value))};
-        else {
-            endpoint_path_handle path;
-            status = G.intern_resolved_endpoint_path(obj->type, steps, output.type, path);
-            if (!succeeded(status))
-                return fail(parser_failure_kind::semantic, "Invalid Source endpoint path");
-            output.ref = {id, endpoint_ref::from_path(path)};
-        }
+
         return server_status::success;
     }
 
+    // Only this boundary interns the resolved local path into mutable G.
+    // read_endpoint leaves semantic WHO/type and local steps; it does not
+    // create a global endpoint path or commit an initialization/link.
+    [[nodiscard]] server_status canonicalize_endpoint(endpoint& output) noexcept {
+        const auto& steps = output.path;
+        if (steps.size() == 1 && steps.front().kind == endpoint_path_step_kind::member) {
+            output.ref = {output.unit.who, endpoint_ref::from_raw(
+                static_cast<std::uint32_t>(steps.front().value))};
+        } else {
+            endpoint_path_handle path;
+            const auto interned = G.intern_resolved_endpoint_path(
+                output.object_type, steps, output.type, path);
+            if (!succeeded(interned))
+                return fail(parser_failure_kind::semantic, "Invalid Source endpoint path");
+            output.ref = {output.unit.who, endpoint_ref::from_path(path)};
+        }
+        return server_status::success;
+    }
     [[nodiscard]] server_status warn_replaced(const endpoint& target) noexcept {
         if (!warnings) return server_status::success;
         try { warnings->push_back({parser_warning_kind::duplicate_initialization,
@@ -1709,6 +1782,19 @@ private:
     }
 
     [[nodiscard]] server_status assign_string(const endpoint& target) noexcept {
+        struct string_probe final {
+            std::uint64_t* elapsed;
+            std::chrono::steady_clock::time_point started;
+            ~string_probe() noexcept {
+                if (elapsed) *elapsed += static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - started).count());
+            }
+        } probe{telemetry && telemetry->detailed_source
+                ? &telemetry->source_string_assignment_ns : nullptr,
+            telemetry && telemetry->detailed_source
+                ? std::chrono::steady_clock::now()
+                : std::chrono::steady_clock::time_point{}};
         derived_type_record array;
         intrinsic_type ch;
         if (!G.derived(strip_cv(G, target.type), array) ||
@@ -1723,7 +1809,7 @@ private:
         if (!succeeded(status)) return status;
         std::vector<endpoint_path_step> path_steps;
         try {
-            path_steps = steps;
+            path_steps = target.path;
             path_steps.push_back({0, endpoint_path_step_kind::array_index, {}});
         } catch (...) { return server_status::io_error; }
 #ifdef CW_SOURCE_V2_STRING_PATH_REUSE_01
@@ -1731,7 +1817,7 @@ private:
         if (array.payload <= string_path_max_bound) {
             try {
                 const string_path_view lookup{target.object_type, target.type,
-                    std::span<const endpoint_path_step>{steps}};
+                    std::span<const endpoint_path_step>{target.path}};
                 auto found = string_path_cache.find(lookup);
                 if (found != string_path_cache.end()) {
                     cached_elements = &found->second;
@@ -1739,7 +1825,7 @@ private:
                     string_path_key key;
                     key.root = target.object_type;
                     key.array = target.type;
-                    key.prefix.assign(steps.begin(), steps.end());
+                    key.prefix.assign(target.path.begin(), target.path.end());
                     std::vector<endpoint_path_handle> handles(
                         static_cast<std::size_t>(array.payload));
                     auto inserted = string_path_cache.try_emplace(
@@ -1753,6 +1839,11 @@ private:
         }
 #endif
         bool any_replaced = false;
+#ifdef CW_SOURCE_STRING_BATCH_V2
+        string_initializations.clear();
+        try { string_initializations.reserve(static_cast<std::size_t>(array.payload)); }
+        catch (...) { return server_status::io_error; }
+#endif
         for (std::uint64_t i = 0; i < array.payload; ++i) {
             path_steps.back().value = i;
             endpoint_path_handle path;
@@ -1774,6 +1865,9 @@ private:
             const object_endpoint element{target.unit.who, endpoint_ref::from_path(path)};
             const auto value = construction_value::constant(construction_kind::unsigned_integer,
                 i < bytes.size() ? bytes[static_cast<std::size_t>(i)] : 0);
+#ifdef CW_SOURCE_STRING_BATCH_V2
+            string_initializations.push_back({element, value});
+#else
             const source_construction construction{
                 target.unit, element, {}, array.child, value,
                 construction_opcode::initialization};
@@ -1784,26 +1878,39 @@ private:
             any_replaced |= replaced;
             status = sources.add_initialization(element);
             if (!succeeded(status)) return status;
+#endif
         }
+#ifdef CW_SOURCE_STRING_BATCH_V2
+        status = G.add_resolved_initializations(array.child, string_initializations, any_replaced);
+        if (!succeeded(status)) return status;
+        for (const auto& entry : string_initializations) {
+            status = sources.add_initialization(entry.target);
+            if (!succeeded(status)) return status;
+        }
+#endif
         status = sources.add(target.unit.file, source_data_ref::object(target.unit.who));
         if (!succeeded(status)) return status;
         if (any_replaced) { status = warn_replaced(target);
             if (!succeeded(status)) return status; }
+        if (telemetry) {
+            ++telemetry->source_string_assignment_statements;
+            telemetry->source_string_assignment_elements += array.payload;
+        }
         return advance();
     }
 
     [[nodiscard]] server_status assignment(identity_ref scope_id,
         source_unit unit) noexcept {
-        endpoint target;
-        auto status = resolve_endpoint(scope_id, target, unit.who);
+        auto& target = assignment_target;
+        auto status = read_endpoint(scope_id, target, unit.who);
         if (!succeeded(status)) return status;
         status = expect(token_kind::assign, "Expected '=' after Source target");
         if (!succeeded(status)) return status;
         status = advance(); if (!succeeded(status)) return status;
         type_ref referent;
         if (reference_referent(target.type, referent)) {
-            endpoint source;
-            status = resolve_endpoint(scope_id, source);
+            auto& source = assignment_source;
+            status = read_endpoint(scope_id, source);
             if (!succeeded(status)) return status;
             type_ref source_type = source.type;
             type_ref inner;
@@ -1837,25 +1944,17 @@ private:
             }
             status = expect(token_kind::semicolon, "Expected ';' after Source link");
             if (!succeeded(status)) return status;
-            // Resolve endpoints once, then commit typed construction by WHO.
-            const source_construction construction{
-                target.unit, target.ref, source.ref, target.type, {},
-                construction_opcode::reference_binding};
-            link_handle link;
-            bool replaced = false;
-            status = commit_construction(construction, replaced, link);
-            if (!succeeded(status)) return fail(parser_failure_kind::semantic,
-                "Source reference binding cannot be represented in G");
-            status = sources.add(target.unit.file, source_data_ref::link(link));
+            status = queue_construction(construction_opcode::reference_binding);
             if (!succeeded(status)) return status;
-            if (telemetry) ++telemetry->source_link_statements;
-            if (replaced) {
-                status = warn_rebound(target);
-                if (!succeeded(status)) return status;
-            }
             return advance();
         }
-        if (at(token_kind::string_literal)) return assign_string(target);
+        if (at(token_kind::string_literal)) {
+            status = flush_constructions();
+            if (!succeeded(status)) return status;
+            status = canonicalize_endpoint(target);
+            if (!succeeded(status)) return status;
+            return assign_string(target);
+        }
         if (at(token_kind::identifier))
             return fail(parser_failure_kind::unsupported,
                 "EnumType::Value requires an enum declaration in Header Graph");
@@ -1866,20 +1965,8 @@ private:
         if (!succeeded(status)) return status;
         if (!construction_compatible(G, target.type, value))
             return fail(parser_failure_kind::semantic, "Source initializer type mismatch");
-        const source_construction construction{
-            target.unit, target.ref, {}, target.type, value,
-            construction_opcode::initialization};
-        bool replaced = false;
-        link_handle ignored_link;
-        status = commit_construction(construction, replaced, ignored_link);
+        status = queue_construction(construction_opcode::initialization, value);
         if (!succeeded(status)) return status;
-        status = sources.add_initialization(target.ref);
-        if (!succeeded(status)) return status;
-        status = sources.add(target.unit.file, source_data_ref::object(target.unit.who));
-        if (!succeeded(status)) return status;
-        if (telemetry) ++telemetry->source_value_assignment_statements;
-        if (replaced) { status = warn_replaced(target);
-            if (!succeeded(status)) return status; }
         return advance();
     }
 
@@ -1895,7 +1982,7 @@ private:
 #ifdef CW_SOURCE_MODEL_V2
                 (void)next_model_opcode();
 #endif
-                return server_status::success;
+                return flush_constructions();
             }
 #ifdef CW_SOURCE_MODEL_V2
             const auto model_opcode = next_model_opcode();
@@ -1922,7 +2009,9 @@ private:
             if (model_stream && model_opcode == source_model_opcode::assignment &&
                 model_cursor != 0 && model_cursor <= model_operations.size()) {
                 bool consumed = false;
-                const auto status = model_validate_assignment(
+                auto status = flush_constructions();
+                if (!succeeded(status)) return status;
+                status = model_validate_assignment(
                     scope_id, model_operations[model_cursor - 1], consumed);
                 if (!succeeded(status)) return status;
                 if (consumed) continue;
@@ -1950,25 +2039,24 @@ private:
                 const auto target = find_visible(scope_id, current.identifier,
                     identity_kind::object);
                 if (target) {
-                    const bool also_type =
-                        bool(find_visible(scope_id, current.identifier,
-                            identity_kind::type)) ||
-                        bool(find_visible(scope_id, current.identifier,
-                            identity_kind::namespace_scope));
-                    if (also_type) {
-                        token_kind next = token_kind::invalid;
-                        auto status = peek_kind(next);
+                    token_kind next = token_kind::invalid;
+                    auto status = peek_kind(next);
+                    if (!succeeded(status)) return status;
+                    // Assignment punctuation cannot introduce a declaration,
+                    // even when WHO shares its spelling with a type/namespace.
+                    if (next != token_kind::dot &&
+                        next != token_kind::l_bracket &&
+                        next != token_kind::assign &&
+                        (find_visible(scope_id, current.identifier,
+                            identity_kind::type) ||
+                         find_visible(scope_id, current.identifier,
+                            identity_kind::namespace_scope))) {
+                        status = object(scope_id);
                         if (!succeeded(status)) return status;
-                        if (next != token_kind::dot &&
-                            next != token_kind::l_bracket &&
-                            next != token_kind::assign) {
-                            status = object(scope_id);
-                            if (!succeeded(status)) return status;
-                            continue;
-                        }
+                        continue;
                     }
                     const source_unit unit{current.file, target};
-                    const auto status = assignment(scope_id, unit);
+                    status = assignment(scope_id, unit);
                     if (!succeeded(status)) return status;
                     continue;
                 }
@@ -2035,18 +2123,61 @@ private:
     semantic_token buffered{};
     bool has_buffered = false;
     std::vector<endpoint_path_step> steps;
+    // Reuse two owned buffers across statements, avoiding per-endpoint heap
+    // allocation while keeping independently resolved operands alive.
+    endpoint assignment_target;
+#ifdef CW_SOURCE_STRING_BATCH_V2
+    std::vector<object_initialization_record> string_initializations;
+#endif
+    endpoint assignment_source;
+    std::array<queued_construction, construction_window_capacity> constructions;
+    std::size_t construction_count = 0;
     // Typed transitions are reused across Source roots; G's Header types are
     // immutable for this pass. Cache/pool are never persisted to compiled.bin.
 #ifdef CW_SOURCE_V2_STRING_PATH_REUSE_01
     // Source-pass-local cache: never serialized; no profiler counters.
     string_path_cache_type string_path_cache;
 #endif
-    std::vector<member_transition> member_transitions;
-    std::vector<endpoint_path_step> transition_bases;
-    bool transition_allocation_attempted = false;
+    source_endpoint_resolver endpoint_resolver;
 };
 
 } // namespace
+
+struct source_preparation_v2::state final {
+    source_predecode_batch::physical_snapshot snapshot;
+    source_predecode_batch decoded;
+    std::thread worker;
+    std::uint64_t snapshot_ns = 0, prepare_ns = 0;
+    ~state() noexcept { if (worker.joinable()) worker.join(); }
+    void finish() noexcept { if (worker.joinable()) worker.join(); }
+};
+source_preparation_v2::source_preparation_v2() noexcept = default;
+source_preparation_v2::~source_preparation_v2() noexcept = default;
+bool source_preparation_v2::start(const file_context& files,
+    const lexical_generation& lexical, std::size_t count) noexcept {
+#if defined(CW_SOURCE_PREDECODE_PARALLEL_V2) || defined(CW_SOURCE_MODEL_V2) || defined(CW_SOURCE_PREHASH_PARALLEL_V2)
+    if (value) return false;
+    try {
+        const auto snapshot_started = std::chrono::steady_clock::now();
+        auto next = std::make_unique<state>();
+        if (!source_predecode_batch::snapshot(files, lexical, count, next->snapshot)) return false;
+        next->snapshot_ns = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - snapshot_started).count());
+        auto* work = next.get();
+        next->worker = std::thread([work]() noexcept {
+            const auto started = std::chrono::steady_clock::now();
+            (void)work->decoded.prepare_snapshot(work->snapshot);
+            work->prepare_ns = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - started).count());
+        });
+        value = std::move(next);
+        return true;
+    } catch (...) { return false; }
+#else
+    (void)files; (void)lexical; (void)count;
+    return false;
+#endif
+}
 
 server_status parse_source_roots_v2(
     file_context& files, lexical_generation& lexical,
@@ -2055,23 +2186,65 @@ server_status parse_source_roots_v2(
     string_table& strings, identity_space& identities,
     graph& G, source_map& sources, parser_failure* failure,
     std::vector<parser_warning>* warnings,
-    semantic_parse_telemetry* telemetry) noexcept {
+    semantic_parse_telemetry* telemetry, source_preparation_v2* preparation) noexcept {
     using clock = std::chrono::steady_clock;
     const auto started = telemetry ? clock::now() : clock::time_point{};
-    source_predecode_batch decoded;
-#if defined(CW_SOURCE_PREDECODE_PARALLEL_V2) || defined(CW_SOURCE_MODEL_V2)
+    // Declared before parser/model storage so their destruction is included.
+    // In particular, parallel predecode owns large temporary token buffers.
+    struct source_elapsed final {
+        semantic_parse_telemetry* telemetry;
+        clock::time_point started;
+        ~source_elapsed() noexcept {
+            if (telemetry)
+                telemetry->source_ns = static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        clock::now() - started).count());
+        }
+    } elapsed{telemetry, started};
+    if (telemetry) for (std::size_t i = 0; i < frontend_root_count; ++i) {
+        const file_id file{static_cast<std::uint32_t>(i + 1)};
+        if (files.kind(file) == file_kind::source)
+            telemetry->source_compact_word_count += lexical.words(file).size();
+    }
+    // Move ownership into this scope so token and snapshot destruction remains
+    // inside source_ns, including all error returns.
+    struct release_lexer_tokens final {
+        lexical_generation& lexical;
+        ~release_lexer_tokens() noexcept { lexical.release_source_tokens(); }
+    } release_tokens{lexical};
+    auto overlapped = preparation ? std::move(preparation->value) : nullptr;
+    source_predecode_batch local_decoded;
+    source_predecode_batch* selected = &local_decoded;
+    if (overlapped) {
+        const auto wait_started = telemetry ? clock::now() : clock::time_point{};
+        overlapped->finish();
+        if (telemetry) {
+            telemetry->source_overlap_prepared = overlapped->decoded.ready() ? 1 : 0;
+            telemetry->source_overlap_snapshot_ns = overlapped->snapshot_ns;
+            telemetry->source_overlap_prepare_ns = overlapped->prepare_ns;
+            telemetry->source_overlap_wait_ns = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(clock::now() - wait_started).count());
+        }
+        selected = &overlapped->decoded;
+        overlapped->snapshot.clear();
+    }
+    auto& decoded = *selected;
+#if defined(CW_SOURCE_PREDECODE_PARALLEL_V2) || defined(CW_SOURCE_MODEL_V2) || defined(CW_SOURCE_PREHASH_PARALLEL_V2)
     // If a lane, input or allocation fails, the original direct cursor
     // transparently runs instead, preserving diagnostics and semantics.
     // All Header writes have completed; no Source worker mutates strings.
-    (void)decoded.prepare(files, lexical, strings, frontend_root_count);
+    if (selected == &local_decoded)
+        (void)decoded.prepare(files, lexical, strings, frontend_root_count);
 #endif
+    if (telemetry) telemetry->source_lexer_token_count = decoded.lexer_token_count();
     const auto replay_started = telemetry ? clock::now() : clock::time_point{};
     if (telemetry && decoded.ready())
         telemetry->source_root_setup_ns = static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 replay_started - started).count());
     source_parser_v2 parser{files, lexical, configuration, strings,
-        identities, G, sources, failure, warnings, telemetry,
+        identities, G, sources, failure, warnings,
+        telemetry && !telemetry->phase_only ? telemetry : nullptr,
         decoded.ready() ? &decoded : nullptr};
     // Canonical one-pass Source binding: one G, direct commitments.
     // Undeclared forward references fail when encountered.
@@ -2090,9 +2263,6 @@ server_status parse_source_roots_v2(
             telemetry->source_replay_ns = static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     clock::now() - replay_started).count());
-        telemetry->source_ns =
-            static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                clock::now() - started).count());
     }
     return server_status::success;
 }

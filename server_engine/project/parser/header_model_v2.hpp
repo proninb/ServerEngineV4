@@ -223,11 +223,17 @@ private:
         // predefines. No potentially different effective tokens are published.
         try {
             std::vector<frontend_token> tokens;
-            tokens.reserve(physical->words.size() / 2);
+            const auto ready = physical->ready_tokens;
+            tokens.reserve(ready.empty() ? physical->words.size() / 2 : ready.size());
+            std::size_t ready_index = 0;
             std::uint32_t word = 0, source = 0;
-            while (word < physical->words.size()) {
+            while (ready.empty() ? word < physical->words.size() : ready_index < ready.size()) {
                 frontend_token token;
-                const auto step = decode_frontend_token(
+                auto step = server_status::success;
+                if (!ready.empty()) {
+                    const auto& item = ready[ready_index++];
+                    token = {output.root, item.kind, item.source_offset, item.source_length};
+                } else step = decode_frontend_token(
                     physical->words, output.root, word, source, token);
                 if (!succeeded(step)) {
                     output.exclusion = header_model_exclusion_v2::lexical_decode_failed;

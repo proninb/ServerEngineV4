@@ -9,6 +9,7 @@
 
 #include "directive_executor.hpp"
 #include "frontend_input.hpp"
+#include "source_token.hpp"
 #include "lexer.hpp"
 #include "../preprocessor/preprocessor.hpp"
 #include "../preprocessor_configuration.hpp"
@@ -31,22 +32,6 @@ enum class semantic_input_mode : std::uint8_t {
     header,
     source,
 };
-
-// No AST/WHO. Parallel workers may resolve ONLY names already present
-// after Header completion; new Source names are interned in canonical order.
-struct source_predecoded_token final {
-    std::uint32_t source_offset = 0;
-    std::uint32_t source_length = 0;
-    token_kind kind = token_kind::invalid;
-#ifdef CW_SOURCE_PREBIND_PARALLEL_V2
-    string_id known_identifier{};
-#endif
-};
-#ifdef CW_SOURCE_PREBIND_PARALLEL_V2
-static_assert(sizeof(source_predecoded_token) == 16);
-#else
-static_assert(sizeof(source_predecoded_token) == 12);
-#endif
 
 struct semantic_token final {
     file_id file{};
@@ -83,6 +68,8 @@ struct semantic_input_telemetry final {
     std::uint64_t source_decode_ns = 0;
     std::uint64_t source_intern_ns = 0;
     std::uint64_t source_token_count = 0;
+    std::uint64_t source_ready_cursor_token_count = 0;
+    std::uint64_t source_compact_cursor_token_count = 0;
     std::uint64_t source_identifier_count = 0;
 };
 
@@ -123,6 +110,7 @@ public:
     [[nodiscard]] bool finished() const noexcept {
         return finished_value;
     }
+
 
     [[nodiscard]] const semantic_input_failure&
     failure() const noexcept {
@@ -175,7 +163,7 @@ private:
 
     [[nodiscard]] server_status physical_identifier(
         const frontend_token& token,
-        string_id& output) noexcept;
+        string_id& output, std::uint32_t lexical_hash = 0) noexcept;
 
     [[nodiscard]] server_status effective_identifier(
         const frontend_token& token,

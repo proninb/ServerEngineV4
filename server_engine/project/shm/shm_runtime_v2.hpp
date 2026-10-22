@@ -109,6 +109,13 @@ struct shm_runtime_v2_physical_initialization final {
 static_assert(
     sizeof(shm_runtime_v2_physical_initialization) == 32);
 
+struct shm_runtime_v2_physical_counts final {
+    std::size_t link_slots = 0;
+    std::size_t initializations = 0;
+    std::uint64_t endpoint_programs = 0;
+    std::uint64_t dereferences = 0;
+};
+
 class shm_runtime_v2 final {
 public:
     shm_runtime_v2() = default;
@@ -165,6 +172,10 @@ public:
     [[nodiscard]] bool persisted_physical() const noexcept {
         return persisted_physical_value;
     }
+
+    // Counts the already validated construction plan without traversing G again.
+    // Only an owned physical plan can be used to size a new runtime image.
+    [[nodiscard]] bool physical_counts(shm_runtime_v2_physical_counts& output) const noexcept;
 
     [[nodiscard]] std::size_t construction_bytes() const noexcept {
         if (persisted_physical_value) {

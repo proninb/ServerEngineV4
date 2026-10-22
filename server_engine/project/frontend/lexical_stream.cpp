@@ -141,12 +141,30 @@ server_status lexical_stream::reset(
         return server_status::project_configuration_invalid;
     }
 
+    if (source_tokens) {
+        source_tokens->clear();
+        try { source_tokens->reserve(source_size_value / 8 + 16); }
+        catch (...) {
+            if (source_ready_only) return server_status::io_error;
+            source_tokens = nullptr;
+        }
+    }
+
+    if (header_tokens) {
+        header_tokens->clear();
+        try { header_tokens->reserve(source_size_value / 8 + 16); }
+        catch (...) {
+            if (tokens_only) return server_status::io_error;
+            header_tokens = nullptr;
+        }
+    }
+    if (tokens_only) { values.reset(); value_capacity = 0; }
+
     const auto estimated =
         source_size_value / 4 + 16;
 
-    const auto reserved =
-        reserve_words(
-            estimated);
+    const auto reserved = tokens_only ? server_status::success
+        : reserve_words(estimated);
 
     if (!succeeded(reserved)) {
         source_file = {};
@@ -173,7 +191,7 @@ server_status lexical_stream::reset(
 server_status lexical_stream::append(
     token_kind kind,
     std::uint32_t source_offset_value,
-    std::uint32_t source_length_value) noexcept {
+    std::uint32_t source_length_value, std::uint32_t lexical_hash) noexcept {
 
     if (!source_file ||
         kind == token_kind::invalid ||
@@ -293,11 +311,76 @@ server_status lexical_stream::append(
             source_length_value;
     }
 
+    if (source_tokens) {
+        try {
+            source_predecoded_token token{source_offset_value, source_length_value, kind};
+#ifdef CW_SOURCE_PREHASH_PARALLEL_V2
+            token.lexical_hash = kind == token_kind::identifier
+                ? (lexical_hash == 0 ? 1u : lexical_hash) : 0;
+#else
+            (void)lexical_hash;
+#endif
+            source_tokens->push_back(token);
+        } catch (...) {
+            // Optional acceleration must never leave a partial token stream.
+            // Keep compact words valid and let Source use its original cursor.
+            source_tokens->clear();
+            source_tokens = nullptr;
+        }
+    }
+#ifdef CW_HEADER_LEXER_TOKENS_V2
+    else if (header_tokens) {
+        try { header_tokens->push_back({source_offset_value, source_length_value, kind}); }
+        catch (...) { header_tokens->clear(); header_tokens = nullptr; }
+    }
+#endif
     last_source_offset =
         source_offset_value;
 
     ++tokens;
 
+    return server_status::success;
+}
+
+server_status lexical_stream::append_header_token(token_kind kind,
+    std::uint32_t offset, std::uint32_t length) noexcept {
+    if (!source_file || !header_tokens || !tokens_only || kind == token_kind::invalid ||
+        offset > source_size || length > source_size - offset ||
+        (tokens != 0 && offset < last_source_offset))
+        return server_status::project_configuration_invalid;
+    if (tokens == UINT32_MAX) return server_status::io_error;
+    const bool directive = directive_start(kind);
+    if (directive) {
+        const auto status = reserve_directives(directive_count_value + 1);
+        if (!succeeded(status)) return status;
+    }
+    try { header_tokens->push_back({offset, length, kind}); }
+    catch (...) { return server_status::io_error; }
+    if (directive) directive_values[directive_count_value++] = {tokens, 0};
+    last_source_offset = offset;
+    ++tokens;
+    return server_status::success;
+}
+
+server_status lexical_stream::append_source_token(token_kind kind, std::uint32_t offset,
+    std::uint32_t length, std::uint32_t hash) noexcept {
+    if (!source_file || !source_tokens || !source_ready_only || kind == token_kind::invalid ||
+        offset > source_size || length > source_size - offset ||
+        (tokens != 0 && offset < last_source_offset))
+        return server_status::project_configuration_invalid;
+    if (tokens == UINT32_MAX) return server_status::io_error;
+    try {
+        source_predecoded_token token{offset, length, kind};
+#ifdef CW_SOURCE_PREHASH_PARALLEL_V2
+        token.lexical_hash = kind == token_kind::identifier ? (hash == 0 ? 1u : hash) : 0;
+#else
+        (void)hash;
+#endif
+        source_tokens->push_back(token);
+    } catch (...) { return server_status::io_error; }
+    // Source rejects directives during semantic replay, so it needs no anchors.
+    last_source_offset = offset;
+    ++tokens;
     return server_status::success;
 }
 

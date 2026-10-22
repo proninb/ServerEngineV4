@@ -1913,6 +1913,22 @@ bool shm_runtime_v2::endpoint_dereference_at(
     return true;
 }
 
+bool shm_runtime_v2::physical_counts(shm_runtime_v2_physical_counts& output) const noexcept {
+    output = {};
+    if (persisted_physical_value) return false;
+    output.link_slots = links.size();
+    output.initializations = initializations.size();
+    output.dereferences = endpoint_dereferences.size();
+    for (const auto& link : links) {
+        if (!link.live) continue;
+        output.endpoint_programs += link.source.dereference_count != 0;
+        output.endpoint_programs += link.target.dereference_count != 0;
+    }
+    for (const auto& value : initializations)
+        output.endpoint_programs += value.target.dereference_count != 0;
+    return true;
+}
+
 shm_runtime_v2_result prepare_shm_runtime_v2_physical_plan(
     const compiled_project_view& project,
     const server_abi_configuration& abi,

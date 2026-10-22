@@ -61,6 +61,7 @@ struct parser_warning final {
 
 struct semantic_parse_telemetry final {
     bool detailed_source = true;
+    bool phase_only = false;
     std::uint64_t header_ns = 0;
     // PUBLISH Header V2 path. Physical preparation is separate from header_ns.
     // Legacy include_ns/include_count describe the OLD semantic input only.
@@ -89,6 +90,8 @@ struct semantic_parse_telemetry final {
     std::uint64_t header_v2_physical_ns = 0;
     std::uint64_t header_v2_prepared_files = 0;
     std::uint64_t header_v2_lexed_files = 0;
+    std::uint64_t header_v2_lexer_token_count = 0;
+    std::uint64_t header_v2_compact_word_count = 0;
     std::uint64_t header_v2_include_records = 0;
     std::uint64_t header_v2_active_includes = 0;
     std::uint64_t header_v2_definitions = 0;
@@ -116,6 +119,10 @@ struct semantic_parse_telemetry final {
     std::uint64_t source_decode_ns = 0;
     std::uint64_t source_intern_ns = 0;
     std::uint64_t source_token_count = 0;
+    std::uint64_t source_ready_cursor_token_count = 0;
+    std::uint64_t source_compact_cursor_token_count = 0;
+    std::uint64_t source_compact_word_count = 0;
+
     std::uint64_t source_identifier_count = 0;
 
     // PARSER-PERF-01.
@@ -158,6 +165,12 @@ struct semantic_parse_telemetry final {
     // Root-level clocks only; no clocks are read inside Source statement loops.
     std::uint64_t source_root_count = 0;
     std::uint64_t source_root_setup_ns = 0;
+    std::uint64_t source_lexer_token_count = 0;
+    std::uint64_t source_overlap_prepared = 0;
+    std::uint64_t source_overlap_snapshot_ns = 0;
+    std::uint64_t source_overlap_prepare_ns = 0;
+    std::uint64_t source_overlap_wait_ns = 0;
+
     std::uint64_t source_replay_ns = 0;
     std::uint64_t source_root_finish_ns = 0;
 
@@ -168,6 +181,7 @@ struct semantic_parse_telemetry final {
     std::uint64_t source_model_direct_assignments = 0;
     std::uint64_t source_string_assignment_statements = 0;
     std::uint64_t source_string_assignment_elements = 0;
+    std::uint64_t source_string_assignment_ns = 0;
     std::uint64_t source_endpoint_count = 0;
     std::uint64_t source_endpoint_steps = 0;
 

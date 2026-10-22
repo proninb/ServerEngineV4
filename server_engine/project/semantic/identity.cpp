@@ -1,4 +1,7 @@
 #include "identity.hpp"
+#ifdef CW_CANONICALIZER_TRACE
+#include "../../../experiments/canonicalizer-01/capture.hpp"
+#endif
 
 #include "../persistence/compiled_project.hpp"
 
@@ -328,6 +331,9 @@ identity_ref identity_space::find(
     identity_ref parent,
     string_id name,
     identity_kind kind) const noexcept {
+#ifdef CW_CANONICALIZER_TRACE
+    const auto lookup = [&]() noexcept -> identity_ref {
+#endif
 
     if (!contains(parent) ||
         !strings.contains(name) ||
@@ -363,6 +369,13 @@ identity_ref identity_space::find(
             name,
             kind)
         : identity_ref{};
+#ifdef CW_CANONICALIZER_TRACE
+    };
+    const auto result = lookup();
+    canonicalizer01::identity_event(this, true, parent.value(), name.value(),
+        static_cast<std::uint8_t>(kind), result.value());
+    return result;
+#endif
 }
 
 void identity_space::insert_index(
@@ -467,6 +480,12 @@ server_status identity_space::resolve(
     string_id name,
     identity_kind kind,
     identity_ref& output) noexcept {
+#ifdef CW_CANONICALIZER_TRACE
+    canonicalizer01::exit_capture trace{[&]() noexcept {
+        canonicalizer01::identity_event(this, false, parent.value(), name.value(),
+            static_cast<std::uint8_t>(kind), output.value());
+    }};
+#endif
 
     output = {};
 

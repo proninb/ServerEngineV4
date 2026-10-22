@@ -8,6 +8,8 @@
 #pragma once
 
 #include "lexical_token.hpp"
+#include "source_token.hpp"
+#include <vector>
 #include "../file/file_context.hpp"
 #include "../../server_status.hpp"
 
@@ -43,8 +45,27 @@ public:
     [[nodiscard]] server_status append(
         token_kind kind,
         std::uint32_t source_offset,
-        std::uint32_t source_length) noexcept;
+        std::uint32_t source_length, std::uint32_t lexical_hash = 0) noexcept;
 
+    // Optional transient PUBLISH output; owner allocates one vector per file.
+    void capture_source_tokens(std::vector<source_predecoded_token>* value, bool only = false) noexcept {
+        source_tokens = value;
+        header_tokens = nullptr;
+        tokens_only = only;
+        source_ready_only = only;
+    }
+    void capture_header_tokens(std::vector<header_lexical_token>* value, bool only = false) noexcept {
+        header_tokens = value;
+        source_tokens = nullptr;
+        tokens_only = only;
+        source_ready_only = false;
+    }
+    [[nodiscard]] bool source_tokens_only() const noexcept { return source_ready_only; }
+    [[nodiscard]] bool header_tokens_only() const noexcept { return tokens_only && header_tokens != nullptr; }
+    [[nodiscard]] server_status append_header_token(token_kind kind,
+        std::uint32_t offset, std::uint32_t length) noexcept;
+    [[nodiscard]] server_status append_source_token(token_kind kind, std::uint32_t offset,
+        std::uint32_t length, std::uint32_t hash) noexcept;
     [[nodiscard]] file_id file() const noexcept {
         return source_file;
     }
@@ -92,6 +113,10 @@ private:
     [[nodiscard]] server_status reserve_directives(
         std::size_t required) noexcept;
 
+    bool tokens_only = false;
+    bool source_ready_only = false;
+    std::vector<header_lexical_token>* header_tokens = nullptr;
+    std::vector<source_predecoded_token>* source_tokens = nullptr;
     file_id source_file{};
 
     std::unique_ptr<std::uint32_t[]> values;

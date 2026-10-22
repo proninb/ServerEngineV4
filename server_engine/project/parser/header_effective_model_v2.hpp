@@ -159,6 +159,7 @@ private:
         const auto source = inputs->content(file);
         if (source.size() != physical->symbols->source_size()) return;
         const auto words = physical->words;
+        const auto ready = physical->ready_tokens;
         std::size_t position = 0;
         std::uint32_t previous_offset = 0;
         bool first = true;
@@ -167,11 +168,18 @@ private:
         std::vector<std::uint32_t> record_depths;
         std::array<scanned_token, 3> prior{};
         try {
-            while (position < words.size()) {
+            while (ready.empty() ? position < words.size() : position < ready.size()) {
+                std::uint32_t offset = 0, length = 0;
+                token_kind kind = token_kind::invalid;
+                if (!ready.empty()) {
+                    const auto& item = ready[position++];
+                    offset = item.source_offset; length = item.source_length; kind = item.kind;
+                    if (offset > source.size() || length > source.size() - offset) return;
+                } else {
                 const auto raw = lexical_token::from_value(words[position++]);
                 if (!raw) { output.fields.clear(); output.records = 0; return; }
                 auto delta = raw.delta();
-                auto length = raw.length();
+                length = raw.length();
                 if (delta == lexical_token::extended_delta) {
                     if (position == words.size()) return;
                     delta = words[position++];
@@ -181,11 +189,12 @@ private:
                     length = words[position++];
                 }
                 if (!first && delta > UINT32_MAX - previous_offset) return;
-                const auto offset = first ? delta : previous_offset + delta;
+                offset = first ? delta : previous_offset + delta;
                 first = false;
                 previous_offset = offset;
                 if (offset > source.size() || length > source.size() - offset) return;
-                const auto kind = raw.kind();
+                kind = raw.kind();
+                }
                 const scanned_token current{offset, length, kind,
                                              braces, parens, brackets};
 

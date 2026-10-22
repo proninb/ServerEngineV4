@@ -240,6 +240,37 @@ public:
         std::uint32_t arena,
         const lexical_stream& stream) noexcept;
 
+    // Owner initializes file slots before lexical lanes; each file has one writer.
+    [[nodiscard]] server_status enable_source_tokens(std::size_t count) noexcept {
+        try { direct_source_tokens.resize(count); direct_source_only.resize(count); return server_status::success; }
+        catch (...) { return server_status::io_error; }
+    }
+    [[nodiscard]] std::vector<source_predecoded_token>* source_token_output(file_id file) noexcept {
+        return file && file.value() <= direct_source_tokens.size()
+            ? &direct_source_tokens[file.value() - 1] : nullptr;
+    }
+    [[nodiscard]] std::span<const source_predecoded_token> source_tokens(file_id file) const noexcept {
+        return file && file.value() <= direct_source_tokens.size()
+            ? std::span<const source_predecoded_token>{direct_source_tokens[file.value() - 1]}
+            : std::span<const source_predecoded_token>{};
+    }
+    [[nodiscard]] bool source_tokens_only(file_id file) const noexcept {
+        return file && file.value() <= direct_source_only.size() && direct_source_only[file.value() - 1] != 0;
+    }
+    // PUBLISH-only transient availability, never a compact lexical record.
+    [[nodiscard]] server_status publish_source_tokens(file_id file, std::uint32_t count) noexcept {
+        std::size_t index = 0;
+        if (baseline.valid() || !local_index(file, index) || index >= direct_source_only.size() ||
+            records[index].available() || direct_source_only[index] || direct_source_tokens[index].size() != count)
+            return server_status::project_configuration_invalid;
+        direct_source_only[index] = 1;
+        return server_status::success;
+    }
+    void release_source_tokens() noexcept {
+        std::vector<std::vector<source_predecoded_token>>{}.swap(direct_source_tokens);
+        std::vector<std::uint8_t>{}.swap(direct_source_only);
+    }
+
     [[nodiscard]] bool contains(
         file_id file) const noexcept;
 
@@ -305,6 +336,8 @@ private:
         file_id file,
         std::uint32_t record) const noexcept;
 
+    std::vector<std::vector<source_predecoded_token>> direct_source_tokens;
+    std::vector<std::uint8_t> direct_source_only;
     lexical_baseline_view baseline;
     std::size_t baseline_file_count = 0;
 

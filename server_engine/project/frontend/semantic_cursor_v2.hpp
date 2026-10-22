@@ -1,7 +1,7 @@
 /*
  * Parser V2 semantic cursor over prepared lexical input.
  *
- * Replay performs only compact token decoding plus direct
+ * Replay consumes compact words or optional ready physical tokens, plus direct
  * local_symbol_id -> string_id resolution. It owns no source text, filesystem,
  * lexer, string table, spelling hash, or preprocessing state.
  */
@@ -90,7 +90,11 @@ public:
         input = value;
         started = true;
 
-        if (input.words.empty()) {
+        if (input.words.empty()
+#ifdef CW_HEADER_LEXER_TOKENS_V2
+            && input.ready_tokens.empty()
+#endif
+            ) {
             return input.symbols->identifier_count() == 0 &&
                 input.literals->number_count() == 0
                 ? server_status::success
@@ -104,7 +108,7 @@ public:
     [[nodiscard]] bool finished() const noexcept {
         return started &&
             !current_valid &&
-            word_offset == input.words.size();
+            at_end();
     }
 
     [[nodiscard]] const prepared_token* current() const noexcept {
@@ -137,8 +141,7 @@ public:
         current_valid = false;
         ++token_offset;
 
-        if (word_offset ==
-            input.words.size()) {
+        if (at_end()) {
 
             return identifier_occurrence ==
                     input.symbols->identifier_count() &&
@@ -157,9 +160,30 @@ public:
     }
 
 private:
+    [[nodiscard]] bool at_end() const noexcept {
+#ifdef CW_HEADER_LEXER_TOKENS_V2
+        return input.ready_tokens.empty() ? word_offset == input.words.size()
+            : token_offset == input.ready_tokens.size();
+#else
+        return word_offset == input.words.size();
+#endif
+    }
     [[nodiscard]] server_status decode_current() noexcept {
 #ifdef CW_HEADER_V2_SEMANTIC_PROFILE
         cursor_v2_perf07_probe perf07_probe(decode_profile);
+#endif
+#ifdef CW_HEADER_LEXER_TOKENS_V2
+        if (!input.ready_tokens.empty()) {
+            if (token_offset >= input.ready_tokens.size())
+                return server_status::project_configuration_invalid;
+            const auto& token = input.ready_tokens[token_offset];
+            const auto size = input.symbols->source_size();
+            if (token.kind == token_kind::invalid || token.source_offset > size ||
+                token.source_length > size - token.source_offset ||
+                (token_offset != 0 && token.source_offset < source_offset))
+                return server_status::project_configuration_invalid;
+            return bind_current(token.kind, token.source_offset, token.source_length, 0);
+        }
 #endif
 #if defined(CW_PARSER_V2_DECODE09_REFERENCE)
         // PARSER-V2-CURSOR-AB-DIRECTIVE-10: exact pre-DECODE-09 baseline.
@@ -243,7 +267,6 @@ private:
                 project_configuration_invalid;
         }
 
-        string_id identifier;
 #else
         auto position =
             word_offset;
@@ -330,11 +353,17 @@ private:
             }
         }
 
-        string_id identifier;
 #endif
+        return bind_current(header.kind(), source, length, position);
+    }
+
+    // Context-dependent ID and literal resolution stays in the replay cursor.
+    [[nodiscard]] server_status bind_current(token_kind kind, std::uint32_t source,
+        std::uint32_t length, std::size_t position) noexcept {
+        string_id identifier;
         prepared_number_v2 number;
 
-        if (header.kind() ==
+        if (kind ==
             token_kind::identifier) {
 
             if (identifier_occurrence >=
@@ -357,7 +386,7 @@ private:
 
             ++identifier_occurrence;
         }
-        else if (header.kind() ==
+        else if (kind ==
             token_kind::pp_number) {
 
             if (number_occurrence >=
@@ -388,7 +417,7 @@ private:
 
         current_value = {
             input.file,
-            header.kind(),
+            kind,
             source,
             length,
             identifier,

@@ -1,4 +1,7 @@
 #include "parser.hpp"
+#ifdef CW_CANONICALIZER_TRACE
+#include "../../../experiments/canonicalizer-01/capture.hpp"
+#endif
 #include "header_parser_v2.hpp"
 #ifdef CW_HEADER_MODEL_V2
 #include "header_model_v2.hpp"
@@ -47,7 +50,8 @@ struct header_v2_semantic_reuse_cache final {
     semantic_preprocessor_v2& input;
     std::vector<entry> entries;
     std::vector<capture> stack;
-    std::vector<std::uint8_t> simulated_once;
+    std::vector<std::uint32_t> simulated_once;
+    std::uint32_t simulation_generation = 0;
 
     server_status reset(std::size_t count) noexcept {
         try { entries.resize(count + 1); simulated_once.resize(count + 1); }
@@ -60,11 +64,13 @@ struct header_v2_semantic_reuse_cache final {
         const auto& cached = entries[file.value()];
         if (!cached.ready) return false;
         for (const auto& e : cached.events) {
-            if (e.kind == event_kind::once) simulated_once[e.file.value()] = 1;
+            if (e.kind == event_kind::once)
+                simulated_once[e.file.value()] = simulation_generation;
             if (e.kind == event_kind::include) {
                 const file_id child{e.value};
                 if (!child || child.value() >= entries.size()) return false;
-                if (!simulated_once[child.value()] && !preflight(child, depth + 1)) return false;
+                if (simulated_once[child.value()] != simulation_generation &&
+                    !input.reuse_once(child) && !preflight(child, depth + 1)) return false;
             }
         }
         return true;
@@ -100,8 +106,12 @@ struct header_v2_semantic_reuse_cache final {
         bool eligible, bool& reused) {
         if (kind == event_kind::begin) {
             if (eligible && entries[file.value()].ready) {
-                for (std::size_t i = 1; i < entries.size(); ++i)
-                    simulated_once[i] = input.reuse_once(file_id{static_cast<std::uint32_t>(i)});
+                // Overlay only the once events encountered by this preflight.
+                // The real preprocessor state remains unchanged until replay.
+                if (++simulation_generation == 0) {
+                    std::fill(simulated_once.begin(), simulated_once.end(), 0);
+                    simulation_generation = 1;
+                }
                 if (preflight(file, input.reuse_depth())) {
                     const auto status = replay(file);
                     reused = succeeded(status);
@@ -5718,10 +5728,12 @@ server_status parse_semantic_project(
     if (telemetry != nullptr) {
         const auto detailed =
             telemetry->detailed_source;
+        const auto phase_only = telemetry->phase_only;
 
         *telemetry = {};
         telemetry->detailed_source =
             detailed;
+        telemetry->phase_only = phase_only;
     }
 
     using clock_type =
@@ -5787,12 +5799,24 @@ server_status parse_semantic_project(
                         clock_type::now() - physical_started).count());
                 telemetry->header_v2_prepared_files = v2_physical_profile.ready_files;
                 telemetry->header_v2_lexed_files = v2_physical_profile.lexed_files;
+                telemetry->header_v2_lexer_token_count = v2_physical_profile.ready_tokens;
+                telemetry->header_v2_compact_word_count = v2_physical_profile.compact_words;
                 telemetry->header_v2_include_records = v2_physical_profile.include_records;
             }
         }
     }
 
-#ifdef CW_HEADER_MODEL_V2
+    // Header V2 replays its own prepared closure. From here until Source joins,
+    // original lexical storage and physical source bytes stay frozen; only
+    // semantic state and file dependency topology change. Capture spans on owner
+    // so workers never access the changing File Context metadata.
+    source_preparation_v2 source_preparation;
+#ifdef CW_HEADER_SOURCE_OVERLAP_V2
+    if (publish_frontend_v2)
+        (void)source_preparation.start(files, lexical, frontend_root_count);
+#endif
+
+#if defined(CW_HEADER_MODEL_V2) && !defined(CW_HEADER_MODEL_EFFECTIVE_V2)
     header_model_batch header_models;
     if (publish_frontend_v2 && !v2_header_roots.empty()) {
         const auto model_started = telemetry != nullptr
@@ -5846,9 +5870,29 @@ server_status parse_semantic_project(
         const auto started = telemetry != nullptr
             ? clock_type::now() : clock_type::time_point{};
 
+#ifdef CW_HEADER_MODEL_EFFECTIVE_V2
+        // Physical syntax depends only on the prepared immutable closure,
+        // not on a root's macro state. Build once for the entire Header pass.
+        header_effective_model_v2 effective_model;
+        const auto model_started = telemetry != nullptr
+            ? clock_type::now() : clock_type::time_point{};
+        const auto model_status = effective_model.build(input.model_files(), input.model_prepared());
+        if (!succeeded(model_status)) return model_status;
+        if (telemetry != nullptr) {
+            telemetry->header_v2_effective_model_ns = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    clock_type::now() - model_started).count());
+            telemetry->header_v2_effective_records = effective_model.record_count();
+            telemetry->header_v2_effective_fields = effective_model.field_count();
+            telemetry->header_v2_effective_constructors = effective_model.constructor_count();
+        }
+#endif
         for (std::size_t root_ordinal = 0;
              root_ordinal < v2_header_roots.size(); ++root_ordinal) {
             const auto root = v2_header_roots[root_ordinal];
+#ifdef CW_CANONICALIZER_TRACE
+            canonicalizer01::capture_unit capture_unit{root.value()};
+#endif
             auto status = sources.begin_root(root);
             if (!succeeded(status)) return status;
 
@@ -5857,30 +5901,14 @@ server_status parse_semantic_project(
             if (succeeded(status)) {
                 header_parser_v2 parser{input, identities, G, &header_failure};
                 parser.set_provenance(&sources);
-#ifdef CW_HEADER_MODEL_V2
+#if defined(CW_HEADER_MODEL_V2) && !defined(CW_HEADER_MODEL_EFFECTIVE_V2)
                 parser.set_header_model(header_models.root(root_ordinal));
 #endif
 #ifdef CW_HEADER_MODEL_EFFECTIVE_V2
-                header_effective_model_v2 effective_model;
-                // 02B2: scan immutable physical lexical words in parallel.
-                // Do NOT advance the active semantic preprocessor ahead of G.
-                const auto model_started = telemetry != nullptr
-                    ? clock_type::now() : clock_type::time_point{};
-                status = effective_model.build(input.model_files(), input.model_prepared());
-                if (!succeeded(status)) return status;
-                if (telemetry != nullptr) {
-                    telemetry->header_v2_effective_model_ns += static_cast<std::uint64_t>(
-                        std::chrono::duration_cast<std::chrono::nanoseconds>(
-                            clock_type::now() - model_started).count());
-                    telemetry->header_v2_effective_records += effective_model.record_count();
-                    telemetry->header_v2_effective_fields += effective_model.field_count();
-                    telemetry->header_v2_effective_constructors += effective_model.constructor_count();
-                }
-                parser.set_header_model(nullptr); // supersede physical model
                 parser.set_effective_model(&effective_model);
 #endif
                 parser.set_publication_stats(
-                    telemetry != nullptr ? &v2_publication_stats : nullptr);
+                    telemetry != nullptr && !telemetry->phase_only ? &v2_publication_stats : nullptr);
                 status = parser.parse();
 #ifdef CW_HEADER_MODEL_V2
                 if (telemetry != nullptr)
@@ -6000,7 +6028,7 @@ server_status parse_semantic_project(
     if (publish_frontend_v2) {
         const auto result = parse_source_roots_v2(
             files, lexical, frontend_root_count, configuration,
-            strings, identities, G, sources, failure, warnings, telemetry);
+            strings, identities, G, sources, failure, warnings, telemetry, &source_preparation);
         if (!succeeded(result)) return result;
 
         // SOURCE-V2-PERF-02-PRESERVE-INPUT-COUNTERS:
@@ -6012,6 +6040,9 @@ server_status parse_semantic_project(
             input_telemetry.source_decode_ns = telemetry->source_decode_ns;
             input_telemetry.source_intern_ns = telemetry->source_intern_ns;
             input_telemetry.source_token_count = telemetry->source_token_count;
+            input_telemetry.source_ready_cursor_token_count = telemetry->source_ready_cursor_token_count;
+            input_telemetry.source_compact_cursor_token_count = telemetry->source_compact_cursor_token_count;
+
             input_telemetry.source_identifier_count = telemetry->source_identifier_count;
         }
     }
@@ -6108,6 +6139,9 @@ server_status parse_semantic_project(
 
         telemetry->source_token_count =
             input_telemetry.source_token_count;
+        telemetry->source_ready_cursor_token_count = input_telemetry.source_ready_cursor_token_count;
+        telemetry->source_compact_cursor_token_count = input_telemetry.source_compact_cursor_token_count;
+
 
         telemetry->source_identifier_count =
             input_telemetry.source_identifier_count;

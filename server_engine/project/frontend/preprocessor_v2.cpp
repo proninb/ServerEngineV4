@@ -751,6 +751,7 @@ server_status semantic_preprocessor_v2::enter_file(
             physical->symbols,
             resolution,
             physical->literals,
+            physical->ready_tokens,
         };
 
     const auto started_input =

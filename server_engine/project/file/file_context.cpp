@@ -303,12 +303,28 @@ file_id file_dependency_view::operator[](
     return {};
 }
 
+server_status file_context::enable_owned_content() noexcept {
+    if (baseline != nullptr || !content_bytes.empty() ||
+        std::any_of(content_files.begin(), content_files.end(),
+            [](const auto& record) { return record.materialized(); }))
+        return server_status::project_artifact_invalid;
+    owned_content_enabled = true;
+    return server_status::success;
+}
+
+server_status file_context::configure_publish_acquisition() noexcept {
+    const auto configured = enable_owned_content();
+    if (succeeded(configured)) capture_change_tokens = false;
+    return configured;
+}
+
 server_status file_context::bind_baseline(
     const source_save_view& source) noexcept {
 
     if (!source.valid() ||
         source.file_count() == 0 ||
         baseline != nullptr ||
+        owned_content_enabled ||
         !files.empty() ||
         !path_chars.empty() ||
         !path_index.empty() ||
@@ -2096,6 +2112,7 @@ server_status file_context::prepare_acquire(
 
     output.file = file;
     output.path = path(file);
+    output.capture_change_token = capture_change_tokens;
     output.baseline_present =
         state->present();
     output.baseline_token_available =
@@ -2124,7 +2141,7 @@ void file_context::execute_acquire(
         const auto file_path =
             make_path(job.path);
 
-        if (job.baseline_present &&
+        if (job.capture_change_token && job.baseline_present &&
             job.baseline_token_available) {
 
             bool unchanged = false;
@@ -2164,7 +2181,8 @@ void file_context::execute_acquire(
         const auto acquired =
             acquire_file_content(
                 file_path,
-                output.snapshot);
+                output.snapshot,
+                job.capture_change_token);
 
         switch (acquired) {
         case file_content_result::acquired:
@@ -2204,6 +2222,45 @@ void file_context::execute_acquire(
     catch (...) {
         output.kind =
             file_acquire_result_kind::failed;
+    }
+}
+
+server_status file_context::adopt_acquire(
+    file_acquire_result& result,
+    bool& content_changed) noexcept {
+    content_changed = false;
+    if (!owned_content_enabled || result.kind != file_acquire_result_kind::present ||
+        content_available(result.file)) {
+        return apply_acquire(static_cast<const file_acquire_result&>(result), content_changed);
+    }
+    std::size_t index = 0;
+    if (baseline != nullptr || !local_index(result.file, index))
+        return server_status::project_configuration_invalid;
+    const auto max_size = static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)());
+    if (content_bytes.size() > max_size ||
+        owned_content_bytes > max_size - content_bytes.size() ||
+        result.snapshot.bytes.size() > max_size - content_bytes.size() - owned_content_bytes)
+        return server_status::io_error;
+    try {
+        if (index >= owned_content.size()) owned_content.resize(index + 1);
+        // The separate string object also keeps short-string data stable when
+        // the file table grows while discovering nested includes.
+        auto bytes = std::make_unique<std::string>(std::move(result.snapshot.bytes));
+        auto& state = physical_files[index];
+        content_changed = !state.present() || state.content_hash != result.snapshot.content_hash;
+        state = {};
+        state.content_hash = result.snapshot.content_hash;
+        state.flags = file_physical_present;
+        if (result.snapshot.change_token_available && result.snapshot.change_token) {
+            state.change_token = result.snapshot.change_token;
+            state.flags |= file_physical_change_token;
+        }
+        owned_content_bytes += bytes->size();
+        owned_content[index] = std::move(bytes);
+        return server_status::success;
+    }
+    catch (...) {
+        return server_status::io_error;
     }
 }
 
@@ -2273,7 +2330,8 @@ server_status file_context::apply_acquire(
                 project_artifact_invalid;
 
     case file_acquire_result_kind::missing:
-        if (content_state->materialized()) {
+        if (content_state->materialized() ||
+            (owned_content_enabled && content_available(result.file))) {
             return server_status::unsupported;
         }
 
@@ -2290,7 +2348,8 @@ server_status file_context::apply_acquire(
             !(state->content_hash ==
               result.snapshot.content_hash);
 
-        if (content_state->materialized()) {
+        if (content_state->materialized() ||
+            (owned_content_enabled && content_available(result.file))) {
             if (changed) {
                 return server_status::unsupported;
             }
@@ -2306,9 +2365,10 @@ server_status file_context::apply_acquire(
 
         if (content_bytes.size() >
                 max_u32 ||
+            owned_content_bytes > max_u32 - content_bytes.size() ||
             result.snapshot.bytes.size() >
                 max_u32 -
-                    content_bytes.size()) {
+                    content_bytes.size() - owned_content_bytes) {
 
             return server_status::io_error;
         }
@@ -3174,7 +3234,8 @@ bool file_context::content_available(
             file,
             index) &&
         physical_files[index].present() &&
-        content_files[index].materialized();
+        (content_files[index].materialized() ||
+            (index < owned_content.size() && owned_content[index]));
 }
 
 std::string_view file_context::content(
@@ -3238,6 +3299,9 @@ std::string_view file_context::content(
 
         return {};
     }
+
+    if (index < owned_content.size() && owned_content[index])
+        return *owned_content[index];
 
     const auto& record =
         content_files[index];

@@ -1,5 +1,6 @@
 #include "project/persistence/compiled_project.hpp"
 #include "project/persistence/compiled_project_build.hpp"
+#include "project/persistence/runtime_project.hpp"
 #include "project/persistence/crc64_ecma.hpp"
 #include "project/runtime/fixed_direct_materializer.hpp"
 #include "project/runtime/runtime_layout.hpp"
@@ -17,6 +18,7 @@
 #include "read_only_file_mapping.hpp"
 #include "writable_file_mapping.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -3286,6 +3288,173 @@ compiled_project_image_result build_test_compiled_image(
 
     return compiled_project_image_result::
         success;
+}
+
+void test_runtime_image_initialization(
+    test_state& tests,
+    const compiled_fixture& fixture) {
+    compiled_test_image image;
+    compiled_project_view view;
+    if (!tests.expect(
+            build_test_compiled_image(fixture, image) == compiled_project_image_result::success &&
+            view.bind(image.bytes) == compiled_project_image_result::success,
+            "prepare runtime initialization fixture")) return;
+
+    // Small serial images, the parallel threshold, and uneven worker tails.
+    // Poisoned storage and guard bytes catch missed ranges and overruns.
+    for (const auto constants : {std::size_t{0}, std::size_t{262144},
+             std::size_t{524289}, std::size_t{1048583}}) {
+        compiled_project_runtime_type_counts counts{};
+        counts.constants = constants;
+        runtime_project_layout layout;
+        if (!tests.expect(prepare_runtime_project_layout(view, counts, layout) ==
+                runtime_project_image_result::success,
+                "prepare runtime initialization layout")) return;
+        std::vector<std::byte> storage(layout.size() + 2, std::byte{0xa5});
+        auto output = std::span<std::byte>{storage}.subspan(1, layout.size());
+        if (!tests.expect(encode_runtime_project_image(layout, output) ==
+                runtime_project_image_result::success,
+                "initialize poisoned runtime image")) return;
+        tests.expect(storage.front() == std::byte{0xa5} &&
+            storage.back() == std::byte{0xa5}, "runtime initialization preserves guards");
+        tests.expect(std::all_of(output.begin() + runtime_project_prefix_size,
+            output.end(), [](std::byte value) { return value == std::byte{0}; }),
+            "runtime initialization clears all payload and alignment bytes");
+        runtime_project_view runtime;
+        tests.expect(runtime.bind(output) == runtime_project_image_result::success,
+            "initialized runtime image binds");
+        std::vector<std::byte> clean(layout.size());
+        tests.expect(encode_runtime_project_image(layout, clean) ==
+                runtime_project_image_result::success &&
+            std::equal(clean.begin(), clean.end(), output.begin()),
+            "runtime image bytes independent of previous storage contents");
+    }
+}
+
+void test_graph_link_upsert_growth(test_state& tests) {
+    compiled_fixture f;
+    if (!build_fixture(tests, f)) return;
+    const object_endpoint first{f.left_identity, f.value_member};
+    const object_endpoint second{f.right_identity, f.value_member};
+    std::vector<std::pair<object_endpoint, link_handle>> inserted;
+    const auto initial_count = f.G.link_count();
+    const auto initialization_count = f.G.initialization_count();
+    for (unsigned i = 0; i != 1024; ++i) {
+        string_id name;
+        identity_ref id;
+        object_handle object;
+        if (!tests.expect(
+                succeeded(f.strings.intern("upsert_" + std::to_string(i), name)) &&
+                succeeded(f.identities.resolve(f.identities.root(), name,
+                    identity_kind::object, id)) &&
+                succeeded(f.G.add_object(id, f.named_type, object)),
+                "prepare link index growth object")) return;
+        const object_endpoint target{id, f.peer_member};
+        link_handle link;
+        bool replaced = true;
+        if (!tests.expect(succeeded(f.G.rebind_resolved_link(first, target,
+                link, replaced)) && link && !replaced,
+                "upsert appends fresh target through index growth")) return;
+        if (!tests.expect(succeeded(f.G.add_resolved_initialization(
+                {id, f.value_member}, f.integer_type,
+                construction_value::constant(construction_kind::unsigned_integer, i),
+                replaced)) && !replaced,
+                "append fresh initialization through index growth")) return;
+        inserted.push_back({target, link});
+    }
+    for (const auto& [target, original] : inserted) {
+        link_handle link;
+        bool replaced = false;
+        tests.expect(succeeded(f.G.add_resolved_link(first, target, link)) &&
+                link == original,
+            "duplicate add retains stable link slot after growth");
+        tests.expect(!succeeded(f.G.add_resolved_link(second, target, link)) && !link,
+            "add rejects different source for occupied target");
+        tests.expect(succeeded(f.G.rebind_resolved_link(second, target, link,
+                replaced)) && replaced && link == original &&
+                f.G.find(link) && f.G.find(link)->source == second,
+            "rebind updates source in stable slot after growth");
+        const object_endpoint scalar{target.object, f.value_member};
+        object_initialization_record initialization;
+        const auto value = construction_value::constant(
+            construction_kind::unsigned_integer, 12345);
+        tests.expect(succeeded(f.G.add_resolved_initialization(scalar,
+                f.integer_type, value, replaced)) && replaced &&
+                f.G.initialization(scalar, initialization) &&
+                initialization.value.bits() == value.bits(),
+            "initialization replacement retains target through index growth");
+    }
+    tests.expect(f.G.link_count() == initial_count + inserted.size(),
+        "duplicate add and replacement do not append links");
+    tests.expect(f.G.initialization_count() == initialization_count + inserted.size(),
+        "replacement does not append initializations");
+    const object_endpoint batch_target{inserted.front().first.object, f.value_member};
+    const object_initialization_record batch[] = {
+        {batch_target, construction_value::constant(construction_kind::unsigned_integer, 41)},
+        {batch_target, construction_value::constant(construction_kind::unsigned_integer, 42)}};
+    bool batch_replaced = false;
+    object_initialization_record batch_result;
+    tests.expect(succeeded(f.G.add_resolved_initializations(f.integer_type, batch,
+            batch_replaced)) && batch_replaced &&
+            f.G.initialization(batch_target, batch_result) && batch_result.value.bits() == 42 &&
+            f.G.initialization_count() == initialization_count + inserted.size(),
+        "batch retains slots and applies repeated targets in order");
+    const object_initialization_record invalid_batch[] = {
+        {batch_target, construction_value::constant(construction_kind::unsigned_integer, 99)},
+        {{}, construction_value::constant(construction_kind::unsigned_integer, 1)}};
+    tests.expect(!succeeded(f.G.add_resolved_initializations(f.integer_type,
+            invalid_batch, batch_replaced)) &&
+            f.G.initialization(batch_target, batch_result) && batch_result.value.bits() == 42,
+        "batch validates endpoints before mutation");
+}
+
+void test_runtime_layout_from_physical_plan(test_state& tests) {
+    compiled_fixture fixture;
+    if (!build_fixture(tests, fixture)) return;
+    const std::array<endpoint_path_step, 2> steps{{
+        {fixture.peer_member.value(), endpoint_path_step_kind::member, {}},
+        {0, endpoint_path_step_kind::dereference, {}}}};
+    endpoint_path_handle path;
+    bool replaced = false;
+    link_handle link;
+    if (!tests.expect(succeeded(fixture.G.intern_endpoint_path(fixture.named_type, steps, path)) &&
+            succeeded(fixture.G.add_initialization(
+                {fixture.right_identity, endpoint_ref::from_path(path)},
+                construction_value::constant(construction_kind::unsigned_integer, 19), replaced)) &&
+            succeeded(fixture.G.add_link(
+                {fixture.right_identity, endpoint_ref::from_path(path)},
+                {fixture.left_identity, fixture.peer_member}, link)),
+            "prepare direct and dereferenced runtime endpoints")) return;
+    compiled_test_image image;
+    compiled_project_view view;
+    if (!tests.expect(build_test_compiled_image(fixture, image) == compiled_project_image_result::success &&
+            view.bind(image.bytes) == compiled_project_image_result::success,
+            "encode runtime endpoint fixture")) return;
+#if defined(_WIN32)
+    const server_abi_configuration abi{abi_target::windows_x64, 8};
+#else
+    const server_abi_configuration abi{abi_target::posix_x64, 8};
+#endif
+    shm_layout layout;
+    shm_runtime_v2 plan;
+    if (!tests.expect(prepare_shm_layout(view, abi, layout) == shm_layout_result::success &&
+            prepare_shm_runtime_v2_physical_plan(view, abi, layout, plan) == shm_runtime_v2_result::success,
+            "prepare runtime physical endpoint plan")) return;
+    shm_runtime_v2_physical_counts counts;
+    tests.expect(plan.physical_counts(counts) && counts.endpoint_programs == 2 &&
+        counts.dereferences == 2, "physical counts include link and initialization dereferences");
+    compiled_project_runtime_type_counts types{};
+    runtime_project_layout scanned, reused;
+    if (!tests.expect(prepare_runtime_project_layout(view, types, scanned) == runtime_project_image_result::success &&
+            prepare_runtime_project_layout(view, types, reused, &plan) == runtime_project_image_result::success &&
+            scanned.size() == reused.size(), "physical and Graph runtime layout sizes match")) return;
+    std::vector<std::byte> first(scanned.size()), second(reused.size());
+    tests.expect(encode_runtime_project_image(scanned, first) == runtime_project_image_result::success &&
+        encode_runtime_project_image(reused, second) == runtime_project_image_result::success &&
+        first == second, "physical and Graph runtime directories match byte for byte");
+    shm_runtime_v2 empty;
+    tests.expect(prepare_runtime_project_layout(view, types, reused, &empty) ==
+        runtime_project_image_result::invalid_state, "reject mismatched runtime plan slot counts");
 }
 
 void test_direct_mmap_encoding(
@@ -13310,6 +13479,10 @@ int main() {
             first);
 
         test_string_intern_growth_and_aliasing(tests);
+
+        test_runtime_image_initialization(tests, fixture);
+        test_runtime_layout_from_physical_plan(tests);
+        test_graph_link_upsert_growth(tests);
 
         test_direct_mmap_encoding(
             tests,

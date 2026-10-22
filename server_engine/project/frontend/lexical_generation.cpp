@@ -506,6 +506,7 @@ server_status lexical_generation::reset(
         return server_status::io_error;
     }
 
+    release_source_tokens();
     baseline = {};
     baseline_file_count = 0;
     records = std::move(new_records);
@@ -548,6 +549,7 @@ server_status lexical_generation::bind_baseline(
         return server_status::io_error;
     }
 
+    release_source_tokens();
     baseline = value;
     baseline_file_count = value.size();
     arena_values = std::move(new_arenas);
@@ -614,6 +616,7 @@ server_status lexical_generation::publish(
 
     if (!file ||
         stream.file() != file ||
+        stream.word_count() < stream.token_count() ||
         static_cast<std::size_t>(arena_index) >= arena_count_value ||
         stream.word_count() > static_cast<std::size_t>(
             (std::numeric_limits<std::uint32_t>::max)()) ||
@@ -707,6 +710,7 @@ server_status lexical_generation::publish(
 }
 
 bool lexical_generation::contains(file_id file) const noexcept {
+    if (source_tokens_only(file)) return true;
     if (!file) {
         return false;
     }
@@ -847,6 +851,7 @@ lexical_directive_view lexical_generation::directives(file_id file) const noexce
 }
 
 std::uint32_t lexical_generation::token_count(file_id file) const noexcept {
+    if (source_tokens_only(file)) return static_cast<std::uint32_t>(source_tokens(file).size());
     if (!file) {
         return 0;
     }

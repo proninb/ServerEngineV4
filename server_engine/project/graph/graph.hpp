@@ -448,6 +448,11 @@ public:
         object_endpoint target,
         object_initialization_record& output) const noexcept;
 
+    // Ordered, already resolved scalar records; replacements keep their slots.
+    [[nodiscard]] server_status add_resolved_initializations(
+        type_ref target_type, std::span<const object_initialization_record> records,
+        bool& any_replaced) noexcept;
+
     [[nodiscard]] type_ref intrinsic(
         intrinsic_type type) const noexcept;
 
@@ -828,6 +833,10 @@ private:
 
     [[nodiscard]] bool scalar_initialization_target(
         type_ref type) const noexcept;
+
+    [[nodiscard]] server_status upsert_initialization(
+        object_endpoint target, construction_value value,
+        bool& replaced, bool capacity_prepared) noexcept;
 
     [[nodiscard]] bool endpoint_type(
         object_endpoint endpoint,

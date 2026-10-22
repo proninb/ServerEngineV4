@@ -1,4 +1,7 @@
 #include "string_table.hpp"
+#ifdef CW_CANONICALIZER_TRACE
+#include "../../../experiments/canonicalizer-01/capture.hpp"
+#endif
 
 #include "../persistence/compiled_project.hpp"
 
@@ -335,6 +338,11 @@ server_status string_table::intern_prehashed(
     std::string_view value,
     std::uint32_t lexical_hash,
     string_id& output) noexcept {
+#ifdef CW_CANONICALIZER_TRACE
+    canonicalizer01::exit_capture trace{[&]() noexcept {
+        if (output) canonicalizer01::string_event(this, get(output), output.value());
+    }};
+#endif
 
     output = {};
 

@@ -46,9 +46,12 @@ class source_model_builder final {
 public:
     explicit source_model_builder(source_model_file& destination) noexcept
         : out(destination) {}
+    source_model_builder(source_model_file& destination,
+        std::span<const source_predecoded_token> input) noexcept
+        : out(destination), borrowed(input) {}
 
     [[nodiscard]] bool accept(const source_predecoded_token& tok) noexcept {
-        const auto index = out.tokens.size() - 1;
+        const auto index = seen++;
         const auto kind = tok.kind;
         if (kind == token_kind::l_brace) {
             // Only namespace braces delimit scopes. Object initializers retain
@@ -86,7 +89,7 @@ public:
         else if (kind == token_kind::semicolon && initializer_depth == 0) {
             const auto opcode = (index == begin)
                 ? source_model_opcode::empty_statement
-                : (out.tokens[begin].kind == token_kind::kw_extern
+                : (tokens()[begin].kind == token_kind::kw_extern
                     ? source_model_opcode::extern_statement
                     : source_model_opcode::statement);
             if (!emit(index + 1, opcode)) return false;
@@ -99,22 +102,25 @@ public:
     // Incomplete or invalid syntax is retained for the canonical validator to
     // produce its existing, precisely located diagnostics.
     [[nodiscard]] bool finish() noexcept {
-        if (begin == out.tokens.size()) return true;
-        return emit(out.tokens.size(), source_model_opcode::statement);
+        if (begin == seen) return true;
+        return emit(seen, source_model_opcode::statement);
     }
 
 private:
+    [[nodiscard]] std::span<const source_predecoded_token> tokens() const noexcept {
+        return borrowed.empty() ? std::span<const source_predecoded_token>{out.tokens} : borrowed;
+    }
     [[nodiscard]] bool first_is_namespace() const noexcept {
-        return begin < out.tokens.size() &&
-            out.tokens[begin].kind == token_kind::kw_namespace;
+        return begin < seen &&
+            tokens()[begin].kind == token_kind::kw_namespace;
     }
     [[nodiscard]] bool emit(std::size_t end,
                             source_model_opcode code) noexcept {
         if (end <= begin) return true;
         if (end > 0xffffffffu || begin > 0xffffffffu) return false;
         if (code == source_model_opcode::statement && begin + 1 < end) {
-            const auto first = out.tokens[begin].kind;
-            const auto second = out.tokens[begin + 1].kind;
+            const auto first = tokens()[begin].kind;
+            const auto second = tokens()[begin + 1].kind;
             code = first == token_kind::identifier &&
                 (second == token_kind::dot || second == token_kind::l_bracket ||
                  second == token_kind::assign)
@@ -132,6 +138,8 @@ private:
     }
 
     source_model_file& out;
+    std::span<const source_predecoded_token> borrowed;
+    std::size_t seen = 0;
     std::size_t begin = 0;
     std::size_t initializer_depth = 0;
     std::uint32_t equal = 0xffffffffu;

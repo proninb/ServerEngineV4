@@ -19,6 +19,8 @@
 
 namespace cw::server {
 
+class shm_runtime_v2;
+
 inline constexpr std::uint32_t runtime_project_format_version = 1;
 inline constexpr std::size_t runtime_project_header_size = 64;
 inline constexpr std::size_t runtime_project_directory_count = 32;
@@ -60,7 +62,8 @@ private:
     prepare_runtime_project_layout(
         const compiled_project_view&,
         const compiled_project_runtime_type_counts&,
-        runtime_project_layout&) noexcept;
+        runtime_project_layout&,
+        const shm_runtime_v2*) noexcept;
 
     friend runtime_project_image_result
     encode_runtime_project_image(
@@ -100,7 +103,10 @@ private:
 prepare_runtime_project_layout(
     const compiled_project_view& project,
     const compiled_project_runtime_type_counts& type_counts,
-    runtime_project_layout& output) noexcept;
+    runtime_project_layout& output,
+    // Must be the successful, unchanged physical plan for this exact project.
+    // Null retains the independent Graph-based sizing path.
+    const shm_runtime_v2* physical_plan = nullptr) noexcept;
 
 [[nodiscard]] runtime_project_image_result
 encode_runtime_project_image(

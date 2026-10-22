@@ -256,6 +256,7 @@
     <ClInclude Include="server_engine\project\graph\construction_value.hpp" />
     <ClInclude Include="server_engine\project\graph\construction_semantics.hpp" />
     <ClInclude Include="server_engine\project\parser\parser.hpp" />
+    <ClInclude Include="server_engine\project\parser\source_endpoint_resolver.hpp" />
     <ClInclude Include="server_engine\project\parser\header_parser_v2.hpp" />
     <ClInclude Include="server_engine\project\file\file_id.hpp" />
     <ClInclude Include="server_engine\project\frontend\source_range.hpp" />
@@ -271,6 +272,7 @@
     <ClInclude Include="server_engine\project\graph\type_ref.hpp" />
     <ClInclude Include="server_engine\project\preprocessor\preprocessor.hpp" />
     <ClInclude Include="server_engine\project\frontend\frontend_input.hpp" />
+    <ClInclude Include="server_engine\project\frontend\source_token.hpp" />
     <ClInclude Include="server_engine\project\frontend\semantic_input.hpp" />
     <ClInclude Include="server_engine\project\frontend\directive_decoder.hpp" />
     <ClInclude Include="server_engine\project\frontend\directive_executor.hpp" />

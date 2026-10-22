@@ -3,12 +3,14 @@
  *
  * Physical text has already been lexed and identifier spellings have already
  * been merged to canonical string_id values. This view borrows only compact
- * lexical words plus the file-local symbol stream and its resolved IDs.
+ * lexical words or ready physical tokens, plus the file-local symbol stream
+ * and its resolved IDs.
  */
 #pragma once
 
 #include "lexical_symbols_v2.hpp"
 #include "prepared_token.hpp"
+#include "source_token.hpp"
 
 #include <cstdint>
 #include <span>
@@ -81,6 +83,7 @@ struct prepared_lexical_input_v2 final {
     const lexical_symbol_stream_v2* symbols = nullptr;
     const lexical_symbol_resolution_v2* resolution = nullptr;
     const prepared_literal_stream_v2* literals = nullptr;
+    std::span<const header_lexical_token> ready_tokens;
 
     [[nodiscard]] bool valid() const noexcept {
         return file &&

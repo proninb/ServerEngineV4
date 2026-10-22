@@ -436,9 +436,15 @@ A failed BUILD discards temporary operation state and does not publish a residen
 LOAD, PUBLISH, BUILD, and REBUILD never substitute for each other.
 
 `PUBLISH` is the reference full compiler path. `REBUILD` reuses that exact
-compiler path and differs only by additionally persisting BUILD acceleration.
+compiler path, additionally persists BUILD acceleration, and owns durable flush.
 For identical source/configuration input, PUBLISH and REBUILD must produce the
 same final semantic G.
+
+PUBLISH reads stable snapshots and retains SHA-256 content identity, but does
+not capture USN/change tokens or issue explicit durable flush for compiled.bin
+and runtime.bin. Successful PUBLISH means the complete artifacts are available
+to LOAD and the resident Project is published; it is not a crash-durability
+boundary. BUILD and REBUILD retain change tracking and durable flush.
 
 ## Semantic Source Provenance
 

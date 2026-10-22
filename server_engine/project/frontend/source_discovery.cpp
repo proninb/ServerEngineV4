@@ -60,8 +60,16 @@ namespace {
         return server_status::project_configuration_invalid;
     }
 
+    auto* ready = files.kind(file) == file_kind::source ? lexical.source_token_output(file) : nullptr;
+#ifdef CW_SOURCE_TOKEN_ONLY_V2
+    const bool only = ready != nullptr;
+#else
+    const bool only = false;
+#endif
+    stream.capture_source_tokens(ready, only);
     lexical_error error;
     const auto tokenized = lexer::tokenize(file, files.content(file), stream, &error);
+    stream.capture_source_tokens(nullptr);
 
     if (!succeeded(tokenized)) {
         if (failure != nullptr) {
@@ -72,7 +80,8 @@ namespace {
         return tokenized;
     }
 
-    return lexical.publish(file, arena, stream);
+    return only ? lexical.publish_source_tokens(file, stream.token_count())
+        : lexical.publish(file, arena, stream);
 }
 
 struct file_pool final {
@@ -184,6 +193,12 @@ public:
             return reset;
         }
 
+#ifdef CW_SOURCE_LEXER_TOKENS_V2
+        if (scope == initial_lexical_scope::source_only) {
+            const auto enabled = lexical.enable_source_tokens(root_count);
+            if (!succeeded(enabled)) return enabled;
+        }
+#endif
         return lex_range(
             0,
             root_count,
@@ -233,7 +248,7 @@ private:
                 status = acquisition_status(slot.result.kind);
                 if (!succeeded(status)) return status;
                 bool changed = false;
-                status = files.apply_acquire(slot.result, changed);
+                status = files.adopt_acquire(slot.result, changed);
                 if (!succeeded(status)) return status;
                 slot.result = {}; // Release private bytes after ordered publication.
             }
@@ -292,7 +307,7 @@ private:
         bool content_changed = false;
 
         const auto applied =
-            files.apply_acquire(
+            files.adopt_acquire(
                 result,
                 content_changed);
 

@@ -43,6 +43,7 @@ struct prepared_physical_file_v2 final {
     const lexical_symbol_stream_v2* symbols = nullptr;
     const prepared_literal_stream_v2* literals = nullptr;
     std::span<const prepared_include_record_v2> includes;
+    std::span<const header_lexical_token> ready_tokens;
 
     [[nodiscard]] bool valid() const noexcept {
         return file &&
@@ -191,6 +192,8 @@ struct prepared_include_profile_v2 final {
     std::size_t read_tasks = 0;
     std::size_t lexed_files = 0;
     std::size_t ready_files = 0;
+    std::size_t ready_tokens = 0;
+    std::size_t compact_words = 0;
     std::size_t include_records = 0;
 
     // FRONTEND-PHYSICAL-11: profile-only, single-owner include discovery.

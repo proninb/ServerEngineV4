@@ -203,6 +203,10 @@ server_status semantic_input::start(
         }
 #endif
         source_root = root;
+        if (lexical.source_tokens_only(root)) {
+            // Mandatory ready input is available even if the optional batch fails.
+            set_predecoded_source(lexical.source_tokens(root));
+        }
         source_words = lexical.words(root);
         source_native_words = source_words.native_words();
         source_word_offset = 0;
@@ -870,7 +874,7 @@ server_status semantic_input::consume_directive(
 
 server_status semantic_input::physical_identifier(
     const frontend_token& token,
-    string_id& output) noexcept {
+    string_id& output, std::uint32_t lexical_hash) noexcept {
 
     output = {};
 
@@ -1012,7 +1016,9 @@ server_status semantic_input::physical_identifier(
         return cached_status;
     }
 #endif
-    const auto status = strings.intern(spelling, output);
+    const auto status = lexical_hash != 0
+        ? strings.intern_prehashed(spelling, lexical_hash, output)
+        : strings.intern(spelling, output);
     if (measure) telemetry->source_intern_ns += static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(clock_type::now() - started_at).count());
     return status;
@@ -1093,7 +1099,11 @@ server_status semantic_input::next_source(semantic_token& output) noexcept {
         if (measure && !source_predecoded_active)
             telemetry->source_decode_ns += static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(clock_type::now() - started_at).count());
-        if (succeeded(advanced)) ++telemetry->source_token_count;
+        if (succeeded(advanced)) {
+            ++telemetry->source_token_count;
+            if (source_predecoded_active) ++telemetry->source_ready_cursor_token_count;
+            else ++telemetry->source_compact_cursor_token_count;
+        }
     }
     if (!succeeded(advanced)) return fail(source_root, {},
         "Semantic lexical input could not decode next token", advanced);
@@ -1110,7 +1120,12 @@ server_status semantic_input::next_source(semantic_token& output) noexcept {
             return server_status::success;
 #endif
         return physical_identifier({output.file, output.kind, output.source_offset, output.source_length},
-            output.identifier);
+            output.identifier
+#ifdef CW_SOURCE_PREHASH_PARALLEL_V2
+            , source_predecoded_active
+                ? source_predecoded[source_predecoded_offset - 1].lexical_hash : 0
+#endif
+            );
     }
     return server_status::success;
 }
