@@ -1,3 +1,6 @@
+#ifdef CW_STRING_INTERN_SLOT_AB
+#include "intern_slot_policy.hpp"
+#endif
 #include "string_table.hpp"
 #ifdef CW_CANONICALIZER_TRACE
 #include "../../../experiments/canonicalizer-01/capture.hpp"
@@ -353,8 +356,28 @@ server_status string_table::intern_prehashed(
 
     const auto hash = lexical_hash == 0 ? 1u : lexical_hash;
 
+#ifdef CW_STRING_INTERN_SLOT_AB
+    const auto previous_capacity = index.size();
+    auto vacant_position = (std::numeric_limits<std::size_t>::max)();
+    const auto existing = [&]() noexcept -> string_id {
+        if (detail::string_intern_slot_reference) return find_hashed(value, hash);
+        if (!index.empty()) {
+            const auto mask = index.size() - 1;
+            auto position = static_cast<std::size_t>(hash) & mask;
+            for (std::size_t probe = 0; probe < index.size(); ++probe) {
+                const auto& slot = index[position];
+                if (!slot.id) { vacant_position = position; break; }
+                if (slot.hash == hash && get(slot.id) == value) return slot.id;
+                position = (position + 1) & mask;
+            }
+        }
+        return baseline != nullptr ? baseline->find_string(value) : string_id{};
+    }();
+    if (existing) {
+#else
     if (const auto existing = find_hashed(value, hash);
         existing) {
+#endif
 
         output = existing;
         return server_status::success;
@@ -452,10 +475,18 @@ server_status string_table::intern_prehashed(
                 baseline_string_count +
                 records.size())};
 
+#ifdef CW_STRING_INTERN_SLOT_AB
+        if (!detail::string_intern_slot_reference && index.size() == previous_capacity &&
+            vacant_position < index.size()) {
+            index[vacant_position] = {hash, output};
+        } else
+#endif
+        {
         insert_index(
             index,
             output,
             records.back().hash);
+        }
 
         return server_status::success;
     }

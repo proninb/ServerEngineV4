@@ -1,3 +1,6 @@
+#ifdef CW_RUNTIME_API_RANGES_AB
+#include "runtime_range_policy.hpp"
+#endif
 #include "shm_type_batch.hpp"
 
 #include "../abi/abi_layout.hpp"
@@ -1248,8 +1251,14 @@ private:
                     member.type;
             }
 
-            if (target_type.kind() !=
-                    type_ref_kind::intrinsic ||
+            auto storage_type = target_type.kind() == type_ref_kind::intrinsic
+                ? static_cast<intrinsic_type>(target_type.payload()) : intrinsic_type::none;
+            if (target_type.kind() == type_ref_kind::named) {
+                type_entry scalar;
+                if (project.type(project.type_location(target_type), scalar) &&
+                    scalar.kind == graph_type_kind::enumeration) storage_type = scalar.storage_intrinsic();
+            }
+            if (storage_type == intrinsic_type::none ||
                 destination >=
                     static_cast<shm_offset>(
                         (std::numeric_limits<
@@ -1262,8 +1271,7 @@ private:
                 append_constructor_intrinsic(
                     static_cast<shm_record_offset>(
                         destination),
-                    static_cast<intrinsic_type>(
-                        target_type.payload()),
+                    storage_type,
                     entry.value);
 
             if (appended !=
@@ -1980,8 +1988,7 @@ private:
                 return shm_type_batch_result::invalid_input;
             }
 
-            if (entry.kind ==
-                graph_type_kind::intrinsic_alias) {
+            if (entry.scalar_named()) {
                 return shm_type_batch_result::success;
             }
 
@@ -2168,11 +2175,10 @@ private:
                 return shm_type_batch_result::invalid_input;
             }
 
-            if (entry.kind ==
-                graph_type_kind::intrinsic_alias) {
+            if (entry.scalar_named()) {
                 return append_intrinsic(
                     target,
-                    entry.alias_intrinsic(),
+                    entry.storage_intrinsic(),
                     construction);
             }
 
@@ -2528,8 +2534,7 @@ private:
             return shm_type_batch_result::invalid_input;
         }
 
-        if (type.kind ==
-            graph_type_kind::intrinsic_alias) {
+        if (type.scalar_named()) {
             slot.state = cache_state::ready;
 
             if (telemetry != nullptr) {
@@ -4387,6 +4392,15 @@ private:
         const auto api =
             type_apis[type_api - 1];
 
+#ifdef CW_RUNTIME_API_RANGES_AB
+        if (!detail::runtime_range_reference && !range_cache_attempted) {
+            range_cache_attempted = true;
+            try { range_cache.resize(type_apis.size()); } catch (...) { /* Original checks remain available. */ }
+        }
+        const bool known_valid = !detail::runtime_range_reference &&
+            type_api <= range_cache.size() && range_cache[type_api - 1] != 0;
+        if (!known_valid) {
+#endif
         if (!valid_range(
                 api.relative_references,
                 relative_references.size()) ||
@@ -4410,6 +4424,12 @@ private:
                 post_stores.size())) {
             return shm_type_batch_result::invalid_input;
         }
+
+#ifdef CW_RUNTIME_API_RANGES_AB
+            if (!detail::runtime_range_reference && type_api <= range_cache.size())
+                range_cache[type_api - 1] = 1;
+        }
+#endif
 
         if (telemetry != nullptr) {
             ++telemetry->api_applications;
@@ -4685,6 +4705,11 @@ private:
         return shm_type_batch_result::success;
     }
 
+#ifdef CW_RUNTIME_API_RANGES_AB
+    // Executor-local memo over immutable program columns. No shared mutable cache.
+    bool range_cache_attempted = false;
+    std::vector<std::uint8_t> range_cache;
+#endif
     const shm_type_batch& area;
     const server_abi_configuration& abi;
     const shm_layout& layout;

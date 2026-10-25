@@ -7,6 +7,7 @@
 #pragma once
 
 #include "../frontend/preprocessor_v2.hpp"
+#include "header_record_index.hpp"
 #ifdef CW_HEADER_MODEL_V2
 #include "header_model_v2.hpp"
 #ifdef CW_HEADER_MODEL_EFFECTIVE_V2
@@ -206,12 +207,12 @@ private:
     struct record_reference_state final {
         // Only forward references allocate these sparse indices. No second
         // whole-record traversal is performed at the closing brace.
-        std::unordered_multimap<std::uint32_t, waiting_reference> waiting;
-        std::unordered_map<std::size_t, std::uint64_t> generations;
+        detail::header_record_index<std::unordered_multimap<std::uint32_t, waiting_reference>> waiting;
+        detail::header_record_index<std::unordered_map<std::size_t, std::uint64_t>> generations;
     };
 
     using pending_constructor_operations =
-        std::unordered_map<std::uint32_t, constructor_operation>;
+        detail::header_record_index<std::unordered_map<std::uint32_t, constructor_operation>>;
 
     // HEADER-V2-NESTED-CONSTRUCTOR-10: sparse, record-local paths only.
     // The common case (no nested constructor body assignments) allocates none.
@@ -228,10 +229,10 @@ private:
     };
     struct record_nested_state final {
         identity_ref owner{};
-        std::unordered_map<std::uint32_t, std::vector<nested_operation>> waiting;
+        detail::header_record_index<std::unordered_map<std::uint32_t, std::vector<nested_operation>>> waiting;
         std::vector<constructor_default> completed;
         // Allocate the extra index only for unusually large nested bodies.
-        std::unordered_map<std::uint32_t, std::size_t> completed_lookup;
+        detail::header_record_index<std::unordered_map<std::uint32_t, std::size_t>> completed_lookup;
     };
 
 
@@ -302,6 +303,12 @@ private:
 
     [[nodiscard]] server_status parse_array_suffix(
         resolved_type& output) noexcept;
+
+    [[nodiscard]] server_status parse_enum(identity_ref scope) noexcept;
+    [[nodiscard]] server_status parse_enum_constant(construction_value& output) noexcept;
+    identity_ref constant_scope{};
+    const std::vector<member_record>* enum_lookup_members = nullptr;
+    const record_member_name_set* enum_lookup_names = nullptr;
 
     [[nodiscard]] server_status parse_scalar_constant(
         construction_value& output) noexcept;

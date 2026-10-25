@@ -1,3 +1,4 @@
+#include "../graph/enum_semantics.hpp"
 #include "compiled_project.hpp"
 #include "../graph/construction_semantics.hpp"
 #include "../../filesystem_path.hpp"
@@ -872,9 +873,8 @@ compiled_project_view::bind(
             invalid_image;
     }
 
-    if (read_u32(
-            image.data() + 8) !=
-            compiled_project_format_version ||
+    if ((read_u32(image.data() + 8) != 25 &&
+         read_u32(image.data() + 8) != compiled_project_format_version) ||
         read_u32(
             image.data() + 12) !=
             endian_marker ||
@@ -1582,6 +1582,10 @@ compiled_project_view::string_byte_size() const noexcept {
         section(
             compiled_project_section::
                 string_bytes).count);
+}
+
+std::uint32_t compiled_project_view::format_version() const noexcept {
+    return bytes.size() >= 12 ? read_u32(bytes.data() + 8) : 0;
 }
 
 std::string_view compiled_project_view::string(
@@ -3458,7 +3462,11 @@ bool compiled_project_view::constructor_default_at(
             target = member.type;
         }
     }
-    return target.kind() == type_ref_kind::intrinsic && construction_compatible(*this, target, output.value);
+    type_entry scalar;
+    const bool enum_target = target.kind() == type_ref_kind::named &&
+        type(type_location(target), scalar) && scalar.kind == graph_type_kind::enumeration;
+    return (target.kind() == type_ref_kind::intrinsic || enum_target) &&
+        construction_compatible(*this, target, output.value);
 }
 
 bool compiled_project_view::initialization_at(
@@ -4370,6 +4378,7 @@ compiled_project_view::verify_contents() const noexcept {
                 handle,
                 type_value) ||
             !type_value.valid_kind() ||
+            (type_value.kind == graph_type_kind::enumeration && read_u32(bytes.data() + 8) < 26) ||
             !valid_record_kind(
                 type_value.record_kind) ||
             (type_value.flags &
@@ -4587,6 +4596,14 @@ compiled_project_view::verify_contents() const noexcept {
                 return compiled_project_image_result::
                     invalid_image;
             }
+
+            if (type_value.kind == graph_type_kind::enumeration &&
+                (member_record_value.type.kind() != type_ref_kind::intrinsic ||
+                 member_record_value.type.payload() != static_cast<std::uint32_t>(type_value.enum_underlying()) ||
+                 (construction_value_value.kind != construction_kind::signed_integer &&
+                  construction_value_value.kind != construction_kind::unsigned_integer) ||
+                 !enum_value_fits(type_value.enum_underlying(), construction_value_value)))
+                return compiled_project_image_result::invalid_image;
 
             if (construction_value_value.kind ==
                 construction_kind::member_binding) {
@@ -5184,8 +5201,8 @@ compiled_project_view::verify_contents() const noexcept {
                     !type(
                         record_handle,
                         record) ||
-                    step.value >=
-                        record.members.count ||
+                    record.kind != graph_type_kind::record ||
+                    step.value >= record.members.count ||
                     !member(
                         record_handle,
                         static_cast<std::uint32_t>(
@@ -5402,12 +5419,13 @@ compiled_project_view::verify_contents() const noexcept {
                 }
 
                 type_handle record;
-
+                type_entry record_entry;
                 member_record member_value;
 
                 if (!named(
                         object_type,
-                        record) ||
+                        record) || !type(record, record_entry) ||
+                    record_entry.kind != graph_type_kind::record ||
                     !member(
                         record,
                         endpoint.member.direct_member(),
@@ -5469,6 +5487,11 @@ compiled_project_view::verify_contents() const noexcept {
                             intrinsic_type::void_type;
                 }
 
+                if (type.kind() == type_ref_kind::named) {
+                    type_entry entry;
+                    return this->type(find_type(identity_ref::make(type.payload(), identity_kind::type)), entry) &&
+                        entry.kind == graph_type_kind::enumeration;
+                }
                 return type.kind() ==
                         type_ref_kind::derived &&
                     derived(
@@ -5668,12 +5691,13 @@ compiled_project_view::verify_contents() const noexcept {
                 }
 
                 type_handle record;
-
+                type_entry record_entry;
                 member_record member_value;
 
                 if (!named(
                         object_type,
-                        record) ||
+                        record) || !type(record, record_entry) ||
+                    record_entry.kind != graph_type_kind::record ||
                     !member(
                         record,
                         endpoint.member.direct_member(),
@@ -6177,12 +6201,10 @@ prepare_compiled_project_layout(
                     std::uint32_t>::max)() -
                     length) {
 
-            return compiled_project_image_result::
-                invalid_state;
+            return compiled_project_image_result::invalid_state;
         }
 
-        source_path_bytes +=
-            length;
+        source_path_bytes += length;
     }
 
     const compiled_project_layout::
@@ -6226,10 +6248,7 @@ prepare_compiled_project_layout(
             G.constructor_defaults.entries().size(),
         };
 
-    return compiled_project_layout::
-        prepare_counts(
-            counts,
-            output);
+    return compiled_project_layout::prepare_counts(counts, output);
 }
 
 compiled_project_image_result
@@ -7924,7 +7943,7 @@ encode_compiled_project_image(const string_table &strings,
 
     write_u32(
         base + 8,
-        compiled_project_format_version);
+        G.enum_types().empty() ? 25u : compiled_project_format_version);
 
     write_u32(
         base + 12,

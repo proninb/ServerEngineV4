@@ -1,5 +1,23 @@
+#ifdef CW_RESOLVED_G_01
+#include "../../../experiments/resolved-g-01/capture.hpp"
+#endif
+#include "enum_semantics.hpp"
 #include "graph.hpp"
 #include "construction_semantics.hpp"
+#ifdef CW_GRAPH_LINK_INDEX_AB
+#include "link_index_policy.hpp"
+#include <new>
+#endif
+#ifdef CW_GRAPH_LINK_INDEX_AUDIT
+#include "../../../experiments/source-link-index-01/audit.hpp"
+#endif
+#include "member_index_policy.hpp"
+#ifdef CW_GRAPH_MEMBER_INDEX_TEST_FAILURE
+#include <new>
+#endif
+#ifdef CW_GRAPH_MEMBER_INDEX_AUDIT
+#include "../../../experiments/header-graph-index-01/audit.hpp"
+#endif
 
 #include <algorithm>
 #include <limits>
@@ -307,6 +325,60 @@ identity_ref graph::identity(
     return contains(object)
         ? object_identities[object.value() - 1]
         : identity_ref{};
+}
+
+server_status graph::define_enum(identity_ref identity, intrinsic_type underlying,
+    bool scoped, bool fixed, bool body, std::span<const member_record> names,
+    std::span<const construction_value> values, type_handle& output) noexcept {
+    if (underlying < intrinsic_type::bool_type ||
+        underlying > intrinsic_type::unsigned_long_long || names.size() != values.size() ||
+        (!body && (!fixed || !names.empty()))) return server_status::project_configuration_invalid;
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        if (!names[i].name || names[i].type != intrinsic(underlying) ||
+            !valid_construction(values[i]) ||
+            (values[i].kind != construction_kind::signed_integer && values[i].kind != construction_kind::unsigned_integer) ||
+            !enum_value_fits(underlying, values[i])) return server_status::project_configuration_invalid;
+        for (std::size_t j = 0; j < i; ++j)
+            if (names[i].name == names[j].name) return server_status::project_configuration_invalid;
+    }
+    output = find_type(identity);
+    if (output) {
+        auto& entry = types[output.value() - 1];
+        if (entry.kind != graph_type_kind::enumeration ||
+            bool(entry.flags & graph_enum_scoped) != scoped ||
+            bool(entry.flags & graph_enum_fixed) != fixed ||
+            (fixed && entry.enum_underlying() != underlying))
+            return server_status::project_configuration_invalid;
+        if (!body) return server_status::success;
+        if (entry.flags & graph_enum_body) {
+            if (entry.enum_underlying() != underlying || entry.members.count != names.size())
+                return server_status::project_configuration_invalid;
+            for (std::size_t i = 0; i < names.size(); ++i) {
+                const auto global = entry.members.begin + i;
+                if (member_records[global].name != names[i].name || member_construction[global] != values[i])
+                    return server_status::project_configuration_invalid;
+            }
+            return server_status::success;
+        }
+        // Reuse the normal transactional dense-column writer for the body.
+        entry.kind = graph_type_kind::record;
+        entry.flags = 0;
+    } else {
+        try { enum_handles.reserve(enum_handles.size() + 1); }
+        catch (...) { return server_status::io_error; }
+        const auto status = declare_record(identity, graph_record_kind::struct_type, output);
+        if (!succeeded(status)) return status;
+    }
+    const auto status = define_record(output, graph_record_kind::struct_type, names, values);
+    if (!succeeded(status)) return status;
+    auto& entry = types[output.value() - 1];
+    if (std::find(enum_handles.begin(), enum_handles.end(), output) == enum_handles.end())
+        enum_handles.push_back(output);
+    entry.kind = graph_type_kind::enumeration;
+    entry.flags = graph_type_defined | (scoped ? graph_enum_scoped : 0) |
+        (fixed ? graph_enum_fixed : 0) | (body ? graph_enum_body : 0) |
+        (static_cast<std::uint16_t>(underlying) << 8);
+    return server_status::success;
 }
 
 server_status graph::define_intrinsic_alias(identity_ref identity, intrinsic_type intrinsic_value, type_handle& output) noexcept {
@@ -1247,6 +1319,11 @@ server_status graph::add_object(
 server_status graph::complete_resolved_extern_object(
     identity_ref identity, type_ref type, object_handle& output,
     std::uint32_t flags, construction_value initial) noexcept {
+#ifdef CW_RESOLVED_G_01
+    auto replay_observation=resolved_g01::observe([&] { return resolved_g01::object(identity,type,flags,initial,true); },
+        [&](resolved_g01::operation& o) { o.expected=output.value(); });
+#endif
+
     output = {};
     if (!identity || identity.kind() != identity_kind::object ||
         !contains(type) ||
@@ -1282,6 +1359,11 @@ server_status graph::add_resolved_object(
     object_handle& output,
     std::uint32_t flags,
     construction_value initial) noexcept {
+#ifdef CW_RESOLVED_G_01
+    auto replay_observation=resolved_g01::observe([&] { return resolved_g01::object(identity,type,flags,initial,false); },
+        [&](resolved_g01::operation& o) { o.expected=output.value(); });
+#endif
+
 
     output = {};
 
@@ -1843,6 +1925,11 @@ server_status graph::derive_resolved(
     derived_type_kind kind,
     std::uint64_t payload,
     type_ref& output) noexcept {
+#ifdef CW_RESOLVED_G_01
+    auto replay_observation=resolved_g01::observe([&] { return resolved_g01::derived(child,kind,payload); },
+        [&](resolved_g01::operation& o) { o.expected=output.value(); });
+#endif
+
 
     output = {};
 
@@ -2038,6 +2125,9 @@ std::uint64_t graph::hash_member_name(
 
 server_status graph::ensure_member_name_index_capacity(
     std::size_t additional) noexcept {
+#ifdef CW_GRAPH_MEMBER_INDEX_AUDIT
+    ++member_index_audit::ensure_calls;
+#endif
 
     if (additional >
         (std::numeric_limits<std::size_t>::max)() -
@@ -2061,17 +2151,49 @@ server_status graph::ensure_member_name_index_capacity(
         return server_status::success;
     }
 
-    const auto capacity =
+    const auto reference_capacity =
         next_index_capacity(
             required);
 
-    if (capacity == 0) {
+    if (reference_capacity == 0) {
         return server_status::io_error;
     }
 
+    auto capacity = reference_capacity;
+    bool wider_growth = true;
+#ifdef CW_GRAPH_MEMBER_INDEX_AB
+    wider_growth = !detail::member_index_growth_reference;
+#endif
+    if (wider_growth && !member_name_index.empty() &&
+        member_name_index.size() <=
+            (std::numeric_limits<std::size_t>::max)() / 4) {
+        capacity = (std::max)(capacity, member_name_index.size() * 4);
+    }
+
     try {
-        std::vector<member_name_index_slot>
-            candidate(capacity);
+        std::vector<member_name_index_slot> candidate;
+        try {
+#ifdef CW_GRAPH_MEMBER_INDEX_TEST_FAILURE
+            if (capacity > reference_capacity && detail::fail_next_wide_allocation) {
+                detail::fail_next_wide_allocation = false;
+                throw std::bad_alloc{};
+            }
+#endif
+            candidate.resize(capacity);
+        }
+        catch (...) {
+            if (capacity == reference_capacity) return server_status::io_error;
+            // Preserve the old lower-memory growth path if speculation fails.
+            capacity = reference_capacity;
+            candidate.resize(capacity);
+        }
+#ifdef CW_GRAPH_MEMBER_INDEX_AUDIT
+        ++member_index_audit::growths;
+        member_index_audit::allocated_slots+=capacity;
+        member_index_audit::final_capacity=capacity;
+        member_index_audit::scanned_slots+=member_name_index.size();
+        member_index_audit::rebuild_scope audit_rebuild;
+#endif
 
         for (const auto& slot :
              member_name_index) {
@@ -2113,7 +2235,14 @@ void graph::insert_member_name_index(
                 name)) &
         mask;
 
+#ifdef CW_GRAPH_MEMBER_INDEX_AUDIT
+    std::uint64_t probes=1;
+#endif
+
     while (target[position].type) {
+#ifdef CW_GRAPH_MEMBER_INDEX_AUDIT
+        ++probes;
+#endif
         position =
             (position + 1) &
             mask;
@@ -2124,6 +2253,9 @@ void graph::insert_member_name_index(
         name,
         member,
     };
+#ifdef CW_GRAPH_MEMBER_INDEX_AUDIT
+    member_index_audit::insert(probes);
+#endif
 }
 
 member_index graph::find_indexed_member(
@@ -2545,7 +2677,7 @@ bool graph::resolve_endpoint_path(
             const auto* entry =
                 find(record);
 
-            if (entry == nullptr ||
+            if (entry == nullptr || entry->kind != graph_type_kind::record ||
                 !entry->defined() ||
                 step.value >=
                     entry->members.count) {
@@ -2753,9 +2885,12 @@ server_status graph::ensure_endpoint_path_index_capacity(
                     record.steps.count};
 
             const auto hash =
-                hash_endpoint_path(
-                    record.root_type,
-                    steps);
+#ifdef CW_PATH_INTERN_02
+                path_intern02::enabled(path_intern02::cached_hashes) &&
+                index < endpoint_path_hashes.size() && endpoint_path_hashes[index]!=0
+                    ? endpoint_path_hashes[index] :
+#endif
+                hash_endpoint_path(record.root_type, steps);
 
             insert_endpoint_path_index(
                 candidate,
@@ -2807,19 +2942,34 @@ server_status graph::intern_endpoint_path(
 server_status graph::intern_resolved_endpoint_path(
     type_ref root_type, std::span<const endpoint_path_step> steps,
     type_ref resolved, endpoint_path_handle& output) noexcept {
+#ifdef CW_RESOLVED_G_01
+    auto replay_observation=resolved_g01::observe([&] { return resolved_g01::path(root_type,steps,resolved); },
+        [&](resolved_g01::operation& o) { o.expected=output.value(); });
+#endif
+
     output = {};
     if (!contains(root_type) || !contains(resolved)) {
         return server_status::project_configuration_invalid;
     }
 
     const auto hash =
-        hash_endpoint_path(
-            root_type,
-            steps);
+#ifdef CW_PATH_INTERN_02
+        path_intern02::enabled(path_intern02::prehashed) && path_intern02::supplied_hash!=0
+            ? path_intern02::supplied_hash :
+#endif
+        hash_endpoint_path(root_type, steps);
 
     const auto fingerprint_value =
         fingerprint(hash);
 
+#ifdef CW_PATH_INTERN_02
+    std::size_t empty_slot=(std::numeric_limits<std::size_t>::max)();
+    const auto old_index_size=endpoint_path_index.size();
+    const auto existing=path_intern02::enabled(path_intern02::single_probe)
+        ? resolved_g01::access::find_slot(*this,root_type,steps,hash,fingerprint_value,empty_slot)
+        : find_endpoint_path(root_type,steps,hash,fingerprint_value);
+    if (existing) {
+#else
     if (const auto existing =
             find_endpoint_path(
                 root_type,
@@ -2827,6 +2977,7 @@ server_status graph::intern_resolved_endpoint_path(
                 hash,
                 fingerprint_value);
         existing) {
+#endif
 
         output = existing;
 
@@ -2856,6 +3007,9 @@ server_status graph::intern_resolved_endpoint_path(
 
     const auto old_step_count =
         endpoint_path_step_values.size();
+#ifdef CW_PATH_INTERN_02
+    const auto old_hash_count=endpoint_path_hashes.size();
+#endif
 
     try {
         endpoint_path_step_values.insert(
@@ -2879,6 +3033,16 @@ server_status graph::intern_resolved_endpoint_path(
                 static_cast<std::uint32_t>(
                     endpoint_paths.size())};
 
+#ifdef CW_PATH_INTERN_02
+        if (path_intern02::enabled(path_intern02::cached_hashes)) {
+            if (endpoint_path_hashes.size()<old_path_count) endpoint_path_hashes.resize(old_path_count,0);
+            endpoint_path_hashes.push_back(hash);
+        }
+        if (path_intern02::enabled(path_intern02::single_probe) &&
+            old_index_size==endpoint_path_index.size() && empty_slot<endpoint_path_index.size()) {
+            endpoint_path_index[empty_slot]={fingerprint_value,output};
+        } else
+#endif
         insert_endpoint_path_index(
             endpoint_path_index,
             output,
@@ -2894,6 +3058,9 @@ server_status graph::intern_resolved_endpoint_path(
         endpoint_path_step_values.resize(
             old_step_count);
 
+#ifdef CW_PATH_INTERN_02
+        endpoint_path_hashes.resize(old_hash_count);
+#endif
         output = {};
 
         return server_status::io_error;
@@ -2953,6 +3120,79 @@ std::uint64_t graph::link_target_key(
         (static_cast<std::uint64_t>(target.member.value()) + 1);
 }
 
+#ifdef CW_GRAPH_LINK_INDEX_AB
+server_status graph::ensure_link_target_index_capacity(
+    std::size_t additional) noexcept {
+#ifdef CW_GRAPH_LINK_INDEX_AUDIT
+    ++link_index_audit::ensure_calls;
+#endif
+    if (additional > (std::numeric_limits<std::size_t>::max)() - link_target_index_count)
+        return server_status::io_error;
+    const auto required = link_target_index_count + additional;
+    if (!link_target_index.empty() && required <= link_target_index.size() / 2)
+        return server_status::success;
+    const auto reference_capacity = next_index_capacity(required);
+    if (reference_capacity == 0) return server_status::io_error;
+    auto capacity = reference_capacity;
+#ifdef CW_GRAPH_LINK_INDEX_AB
+    if (!detail::link_index_growth_reference && !link_target_index.empty() &&
+        link_target_index.size() <= (std::numeric_limits<std::size_t>::max)() / 4)
+        capacity = (std::max)(capacity, link_target_index.size() * 4);
+#endif
+    try {
+        std::vector<link_target_index_slot> candidate;
+        try {
+#ifdef CW_GRAPH_LINK_INDEX_TEST_FAILURE
+            if (capacity > reference_capacity && detail::fail_next_link_wide_allocation) {
+                detail::fail_next_link_wide_allocation = false;
+                throw std::bad_alloc{};
+            }
+#endif
+            candidate.resize(capacity);
+        } catch (...) {
+            if (capacity == reference_capacity) throw;
+            capacity = reference_capacity;
+            candidate.resize(capacity);
+        }
+#ifdef CW_GRAPH_LINK_INDEX_AUDIT
+        ++link_index_audit::growths;
+        link_index_audit::allocated_slots += capacity;
+        link_index_audit::final_capacity = capacity;
+        link_index_audit::scanned_slots += link_target_index.size();
+        link_index_audit::rebuild_scope audit_rebuild;
+#endif
+        for (const auto& value : link_target_index) {
+            if (value.key != 0)
+                insert_link_target_index(candidate, value.key, value.link);
+        }
+        link_target_index = std::move(candidate);
+        return server_status::success;
+    }
+    catch (...) { return server_status::io_error; }
+}
+
+void graph::insert_link_target_index(
+    std::vector<link_target_index_slot>& target,
+    std::uint64_t key,
+    link_handle link_value) const noexcept {
+    const auto mask = target.size() - 1;
+    auto position = static_cast<std::size_t>(mix64(key)) & mask;
+#ifdef CW_GRAPH_LINK_INDEX_AUDIT
+    std::uint64_t probes = 1;
+#endif
+    while (target[position].key != 0) {
+        position = (position + 1) & mask;
+#ifdef CW_GRAPH_LINK_INDEX_AUDIT
+        ++probes;
+#endif
+    }
+#ifdef CW_GRAPH_LINK_INDEX_AUDIT
+    link_index_audit::insert(probes);
+#endif
+    target[position] = {key, link_value};
+}
+
+#else
 server_status graph::ensure_link_target_index_capacity(
     std::size_t additional) noexcept {
 
@@ -2988,6 +3228,8 @@ void graph::insert_link_target_index(
     while (target[position].key != 0) position = (position + 1) & mask;
     target[position] = {key, link_value};
 }
+
+#endif
 
 link_handle graph::find_link_target(
     object_endpoint target) const noexcept {
@@ -3242,6 +3484,10 @@ bool graph::scalar_initialization_target(
                 intrinsic_type::void_type;
     }
 
+    if (type.kind() == type_ref_kind::named) {
+        const auto* entry = find(find_type(identity_ref::make(type.payload(), identity_kind::type)));
+        return entry && entry->kind == graph_type_kind::enumeration;
+    }
     return type.kind() ==
             type_ref_kind::derived &&
         derived(
@@ -3327,6 +3573,7 @@ bool graph::endpoint_type(
         return false;
     }
 
+    if (!find(type) || find(type)->kind != graph_type_kind::record) return false;
     const auto* value =
         member(
             type,
@@ -3377,6 +3624,11 @@ server_status graph::add_initialization(
 server_status graph::add_resolved_initialization(
     object_endpoint target, type_ref target_type,
     construction_value value, bool& replaced) noexcept {
+#ifdef CW_RESOLVED_G_01
+    auto replay_observation=resolved_g01::observe([&] { return resolved_g01::initialization(target,target_type,value); },
+        [&](resolved_g01::operation& o) { o.replaced=replaced; });
+#endif
+
     replaced = false;
     if (!scalar_initialization_target(target_type))
         return server_status::project_configuration_invalid;
@@ -3387,6 +3639,11 @@ server_status graph::add_resolved_initialization(
 server_status graph::add_resolved_initializations(
     type_ref target_type, std::span<const object_initialization_record> records,
     bool& any_replaced) noexcept {
+#ifdef CW_RESOLVED_G_01
+    auto replay_observation=resolved_g01::observe([&] { return resolved_g01::batch(target_type,records); },
+        [&](resolved_g01::operation& o) { o.replaced=any_replaced; });
+#endif
+
     any_replaced = false;
     if (!scalar_initialization_target(target_type))
         return server_status::project_configuration_invalid;
@@ -3554,6 +3811,11 @@ server_status graph::add_resolved_link(
 server_status graph::rebind_resolved_link(
     object_endpoint source, object_endpoint target,
     link_handle& output, bool& replaced) noexcept {
+#ifdef CW_RESOLVED_G_01
+    auto replay_observation=resolved_g01::observe([&] { return resolved_g01::link(source,target); },
+        [&](resolved_g01::operation& o) { o.expected=output.value(); o.replaced=replaced; });
+#endif
+
     output = {};
     replaced = false;
     if (!source.object || !source.member || !target.object || !target.member)

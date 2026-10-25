@@ -1,3 +1,6 @@
+#ifdef CW_FILE_HASH_AUDIT
+#include "publish_hash_policy.hpp"
+#endif
 #include "file_identity.hpp"
 
 #include <algorithm>
@@ -471,7 +474,8 @@ struct observed_file_change_state final {
 acquire_windows_snapshot(
     const std::filesystem::path& path,
     file_content_snapshot& output,
-    bool capture_change_token) noexcept {
+    bool capture_change_token,
+    bool calculate_content_hash) noexcept {
 
     output = {};
 
@@ -613,8 +617,9 @@ acquire_windows_snapshot(
             static_cast<std::int64_t>(
                 write_time.time_since_epoch().count());
 
-        output.content_hash =
-            hash_file_content(bytes);
+        if (calculate_content_hash) {
+            output.content_hash = hash_file_content(bytes);
+        }
 
         output.bytes =
             std::move(bytes);
@@ -977,6 +982,10 @@ acquire_windows_proof(
 
 file_content_hash hash_file_content(
     std::string_view bytes) noexcept {
+#ifdef CW_FILE_HASH_AUDIT
+    ++detail::file_hash_calls;
+    detail::file_hash_bytes += bytes.size();
+#endif
 
     sha256_state hash;
     hash.update(bytes);
@@ -1073,13 +1082,15 @@ file_token_result capture_file_change_checkpoint(
 file_content_result acquire_file_content(
     const std::filesystem::path& path,
     file_content_snapshot& output,
-    bool capture_change_token) noexcept {
+    bool capture_change_token,
+    bool calculate_content_hash) noexcept {
 
 #if defined(_WIN32)
     return acquire_windows_snapshot(
         path,
         output,
-        capture_change_token);
+        capture_change_token,
+        calculate_content_hash);
 #else
     (void)capture_change_token;
     output = {};
@@ -1152,8 +1163,9 @@ file_content_result acquire_file_content(
         }
 
         output.observation = after;
-        output.content_hash =
-            hash_file_content(bytes);
+        if (calculate_content_hash) {
+            output.content_hash = hash_file_content(bytes);
+        }
         output.bytes =
             std::move(bytes);
 

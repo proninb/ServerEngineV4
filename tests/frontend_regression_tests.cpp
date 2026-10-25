@@ -1,3 +1,6 @@
+#ifdef CW_PUBLISH_NO_SHA256_AB
+#include "project/file/publish_hash_policy.hpp"
+#endif
 #include "project/frontend/directive_executor.hpp"
 #include "project/frontend/lexer.hpp"
 #include "project/frontend/lexical_symbols_v2.hpp"
@@ -12,6 +15,9 @@
 #include "project/parser/header_semantic_space.hpp"
 #include "project/parser/parser.hpp"
 #include "project/parser/header_parser_v2.hpp"
+#ifdef CW_HEADER_STATE_LAZY_AB
+#include <cstdlib>
+#endif
 #include "project/parser/source_endpoint_resolver.hpp"
 #include "project/preprocessor/preprocessor.hpp"
 #include "project/preprocessor_configuration.hpp"
@@ -538,6 +544,40 @@ void test_semantic_cursor_v2_decode_09(test_state& tests) {
         !succeeded(invalid_inline.advance()) &&
         invalid_inline.current() == nullptr,
         "CURSOR-DECODE-09 out-of-bounds inline delta rejected");
+}
+
+void test_semantic_cursor_v2_identifier_contract(test_state& tests) {
+    const file_id file{1};string_table strings;string_id a,b;
+    lexical_symbol_stream_v2 symbols;lexical_symbol_resolution_v2 resolution;
+    prepared_literal_stream_v2 numbers;
+    if(!tests.expect(succeeded(strings.intern("A",a))&&succeeded(strings.intern("B",b))&&
+        succeeded(symbols.reset(file,3))&&succeeded(symbols.record_identifier("A B",1,0,1))&&
+        succeeded(symbols.record_identifier("A B",2,2,1))&&succeeded(numbers.reset(file)),"cursor mapping fixture setup"))return;
+    const std::array<std::uint32_t,2> words={
+        lexical_token::make(token_kind::identifier,0,1).value(),
+        lexical_token::make(token_kind::identifier,2,1).value()};
+    semantic_cursor_v2 cursor;
+    // Complete but undersized mapping: preserve failure at the second identifier.
+    tests.expect(succeeded(resolution.reset(file,1))&&succeeded(resolution.set(local_symbol_id_v2{1},a)),"cursor mapping short mapping setup");
+    prepared_lexical_input_v2 input{file,words,&symbols,&resolution,&numbers};
+    tests.expect(succeeded(cursor.start(input))&&cursor.current()&&cursor.current()->identifier==a,"cursor mapping accepts valid first local ID");
+    tests.expect(!succeeded(cursor.advance())&&cursor.current()==nullptr,"cursor mapping checks local ID against mapping size");
+    // Reuse the cursor only after rebuilding an immutable mapping; start refreshes views.
+    tests.expect(succeeded(resolution.reset(file,2))&&succeeded(resolution.set(local_symbol_id_v2{1},b))&&
+        succeeded(resolution.set(local_symbol_id_v2{2},a)),"cursor mapping restart mapping setup");
+    tests.expect(succeeded(cursor.start(input))&&cursor.current()&&cursor.current()->identifier==b&&
+        succeeded(cursor.advance())&&cursor.current()&&cursor.current()->identifier==a&&succeeded(cursor.advance())&&cursor.finished(),
+        "cursor mapping refreshes mapping and keeps occurrence order");
+    // start must still validate file lineage and completeness, hiding old payloads.
+    tests.expect(succeeded(resolution.reset(file_id{2},0)),"cursor mapping mismatched file setup");
+    tests.expect(!succeeded(cursor.start(input))&&cursor.current()==nullptr,"cursor mapping rejects mismatched mapping file");
+    tests.expect(succeeded(resolution.reset(file,2))&&succeeded(resolution.set(local_symbol_id_v2{1},a)),"cursor mapping incomplete mapping setup");
+    tests.expect(!succeeded(cursor.start(input))&&cursor.current()==nullptr,"cursor mapping rejects incomplete resolutions");
+    tests.expect(succeeded(resolution.set(local_symbol_id_v2{2},b)),"cursor mapping complete mapping setup");
+    const std::array<std::uint32_t,3> extra={words[0],words[1],lexical_token::make(token_kind::identifier,0,1).value()};
+    input.words=extra;
+    tests.expect(succeeded(cursor.start(input))&&succeeded(cursor.advance())&&!succeeded(cursor.advance())&&cursor.current()==nullptr,
+        "cursor mapping rejects missing identifier occurrence without stale payload");
 }
 
 void test_lexical_symbols_v2(
@@ -1106,10 +1146,31 @@ void test_stable_snapshot_proofs(test_state& tests) {
     bool changed = false;
     tests.expect(publish_result.kind == file_acquire_result_kind::present &&
         !publish_result.snapshot.change_token_available &&
-        publish_result.snapshot.content_hash == snapshot.content_hash &&
+        publish_result.snapshot.content_hash == (publish_job.calculate_content_hash
+            ? snapshot.content_hash : file_content_hash{}) &&
         succeeded(publish_files.adopt_acquire(publish_result, changed)) &&
         publish_files.content(root) == bytes && !publish_files.physical(root)->has_change_token(),
-        "PUBLISH retains stable hashed bytes without BUILD change tokens");
+        "PUBLISH retains stable bytes under its digest policy without BUILD change tokens");
+    file_content_snapshot unhashed;
+    tests.expect(acquire_file_content(source.path(), unhashed, false, false) == file_content_result::acquired &&
+        unhashed.bytes == bytes && unhashed.content_hash == file_content_hash{} &&
+        !unhashed.change_token_available, "explicit fresh snapshot skips digest without changing bytes");
+    // A no-digest context must compare actual bytes when asked to adopt again.
+    if (!publish_job.calculate_content_hash) {
+        file_acquire_result repeat;
+        repeat.file = root;
+        repeat.kind = file_acquire_result_kind::present;
+        repeat.snapshot.bytes = bytes;
+        tests.expect(succeeded(publish_files.adopt_acquire(repeat, changed)) && !changed,
+            "unhashed repeated snapshot recognizes equal bytes");
+        repeat.snapshot.bytes[0] ^= 1;
+        tests.expect(publish_files.adopt_acquire(repeat, changed) == server_status::unsupported &&
+            publish_files.content(root) == bytes,
+            "unhashed repeated snapshot rejects changed bytes and preserves immutable content");
+        construction_content_hash aggregate;
+        tests.expect(publish_files.calculate_content_hash(std::span{&root, 1}, aggregate) == server_status::unsupported,
+            "unhashed PUBLISH never exposes a zero digest as reusable aggregate proof");
+    }
     file_change_token token;
     const auto captured = capture_file_change_token(source.path(), token);
     if (captured == file_token_result::available) {
@@ -4082,6 +4143,116 @@ void test_subscript_operators(test_state& tests) {
     }
 }
 
+void test_enum_v4(test_state& tests) {
+    const temporary_source header{"enum_v4",
+        "enum Plain { First=-2, Second, Third, Last=20 };\n"
+        "enum class Mode : unsigned char;\n"
+        "enum class Mode : unsigned char { Off, On=7, Next };\n"
+        "enum struct Other : unsigned short { On=9 };\n"
+        "enum Wide { Big=4294967296, NextBig };\n"
+        "namespace N { enum class State { Idle, Busy=11 }; enum Code { Good=3 }; }\n"
+        "struct Outer { enum class Inner : unsigned short { Value=42 }; Inner v=Inner::Value; };\n"
+        "struct Holder { Outer inner; Holder() { inner.v = Outer::Inner::Value; } };\n"
+        "struct Data { Plain p; Mode m; Mode& ref; int code; N::State state;\n"
+        "Data():p(Last),m(Mode::On),ref(m),code(First),state(N::State::Busy) {} };\n"};
+    const temporary_source source{"enum_v4_source",
+        "Data a; Data b; Mode top = Mode::Next; top=Mode::Off;\n"
+        "Mode values[2]; values[1]=Mode::Next;\n"
+        "a.p = Third; a.m = Mode::Off; a.ref = b.m;\n"
+        "a.code = N::Code::Good; a.state = N::State::Idle;\n"
+        "Outer nested; Outer::Inner standalone=Outer::Inner::Value;\n"};
+    file_context files;
+    lexical_generation lexical;
+    file_id h, s;
+    if (!tests.expect(succeeded(files.resolve(header.path(), file_kind::header, h)) &&
+        succeeded(files.resolve(source.path(), file_kind::source, s)), "resolve enum roots")) return;
+    const std::array<file_id, 2> roots{h, s};
+    if (!prepare_all_roots(tests, files, lexical, roots)) return;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    preprocessor_configuration configuration;
+    parser_failure failure;
+    const auto status = parse_semantic_project(files, lexical, roots.size(), configuration,
+        strings, identities, G, sources, &failure, nullptr, nullptr, true);
+    if (!tests.expect(succeeded(status), "PUBLISH parses enum/enum class/enum struct and Source values")) {
+        std::cerr << "enum failure at " << failure.source.offset << ": " << failure.detail << '\n';
+        return;
+    }
+    const auto plain = G.find_type(identities.find(identities.root(), strings.find("Plain"), identity_kind::type));
+    const auto mode = G.find_type(identities.find(identities.root(), strings.find("Mode"), identity_kind::type));
+    const auto wide = G.find_type(identities.find(identities.root(), strings.find("Wide"), identity_kind::type));
+    (void)tests.expect(plain && mode && wide && G.find(mode)->kind == graph_type_kind::enumeration &&
+        (G.find(mode)->flags & graph_enum_scoped) && G.find(mode)->enum_underlying() == intrinsic_type::unsigned_char,
+        "enum remains a distinct scoped named type in G");
+    const auto* second = G.construction(plain, G.find_member(plain, strings.find("Second")));
+    const auto* next = G.construction(mode, G.find_member(mode, strings.find("Next")));
+    const auto* next_big = G.construction(wide, G.find_member(wide, strings.find("NextBig")));
+    (void)tests.expect(second && second->bits() == std::uint64_t(-1) && next && next->bits() == 8 &&
+        next_big && next_big->bits() == 4294967297ULL, "enum literal and implicit increments preserve 64-bit values");
+    (void)tests.expect(G.link_count() == 1 && G.initialization_count() == 6,
+        "enum Source assignments and exact-type reference binding reach G");
+    for (const auto text : {
+        "Mode a; Other& b; b=a;",
+        "Mode a; int& b; b=a;",
+        "Mode a; a=1;",
+        "Mode a; a=Other::On;",
+        "int a; a=Mode::On;",
+        "Mode a; a=On;",
+        "Mode a; a.On=1;"}) {
+        const temporary_source invalid_source{"invalid_enum_source", text};
+        file_context bad_files;
+        lexical_generation bad_lexical;
+        file_id bh, bs;
+        if (!tests.expect(succeeded(bad_files.resolve(header.path(), file_kind::header, bh)) &&
+            succeeded(bad_files.resolve(invalid_source.path(), file_kind::source, bs)), "resolve invalid enum Source roots")) continue;
+        const std::array<file_id, 2> bad_roots{bh, bs};
+        if (!prepare_all_roots(tests, bad_files, bad_lexical, bad_roots)) continue;
+        string_table bad_strings;
+        identity_space bad_identities{bad_strings};
+        graph bad_G;
+        source_map bad_sources;
+        const auto rejected = parse_semantic_project(bad_files, bad_lexical, 2, configuration,
+            bad_strings, bad_identities, bad_G, bad_sources, &failure, nullptr, nullptr, true);
+        if (!tests.expect(!succeeded(rejected), "reject incompatible enum Source values and references"))
+            std::cerr << "accepted Source: " << text << '\n';
+    }
+    for (const auto text : {
+        "enum class E : unsigned char { A=256 };",
+        "enum E : unsigned int { A=-1 };",
+        "enum E { A, A };",
+        "enum E;",
+        "enum E { A }; enum F { A };",
+        "enum class E { A }; enum E { B };",
+        "enum class E : int; enum class E : unsigned int { A };",
+        "enum E { A }; enum E { B };",
+        "struct E {}; enum E { A };",
+        "enum E : double { A };",
+        "enum E { A=18446744073709551615, B };",
+        "enum E { A=-9223372036854775809 };",
+        "enum E { A=1+2 };",
+        "enum class E { A }; struct T { int x=E::A; };",
+        "enum class E { A }; struct T { E e=1; };",
+        "enum class E { A }; enum class F { A }; struct T { F x=E::A; };",
+        "enum class E { A }; struct T { E x=A; };",
+        "enum class E { A }; struct T { E e; int& r; T():r(e){} };"}) {
+        const temporary_source invalid{"invalid_enum", text};
+        file_context bad_files;
+        lexical_generation bad_lexical;
+        file_id root;
+        if (!prepare_root(tests, invalid.path(), bad_files, bad_lexical, root)) continue;
+        string_table bad_strings;
+        identity_space bad_identities{bad_strings};
+        graph bad_G;
+        source_map bad_sources;
+        const auto rejected = parse_semantic_project(bad_files, bad_lexical, 1, configuration,
+            bad_strings, bad_identities, bad_G, bad_sources, &failure, nullptr, nullptr, true);
+        if (!tests.expect(!succeeded(rejected), "reject invalid enum declaration or typed constant"))
+            std::cerr << "accepted: " << text << '\n';
+    }
+}
+
 void test_microsoft_int64(test_state& tests) {
     const temporary_source header{"microsoft_int64",
         "struct Wide { __int64 a; signed __int64 b; unsigned __int64 c;\n"
@@ -5735,6 +5906,42 @@ void test_source_string_assignment(test_state& tests) {
             }
         }
     }
+    }
+}
+
+void test_source_string_scratch_lifetime(test_state& tests) {
+    for (const bool frontend_v2 : {false, true}) {
+        const temporary_source header{"scratch_header",
+            "struct Inner { char large[128]; }; struct T { char small[8]; Inner nested; };"};
+        const temporary_source source{"scratch_source",
+            "T a; a.nested.large = \"abcdefghijklmnopqrstuvwxyz0123456789\"; "
+            "a.small = \"B\"; a.nested.large = \"\"; a.small = \"C\" \"D\";"};
+        file_context files;
+        lexical_generation lexical;
+        file_id h, s;
+        (void)files.resolve(header.path(), file_kind::header, h);
+        (void)files.resolve(source.path(), file_kind::source, s);
+        const std::array<file_id, 2> roots{h, s};
+        if (!prepare_all_roots(tests, files, lexical, roots)) return;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        preprocessor_configuration configuration;
+        parser_failure failure;
+        std::vector<parser_warning> warnings;
+        const auto status = parse_semantic_project(files, lexical, roots.size(), configuration,
+            strings, identities, G, sources, &failure, &warnings, nullptr, frontend_v2);
+        if (!tests.expect(succeeded(status), "alternating Source string lengths and path depths")) return;
+        tests.expect(warnings.size() == 2, "scratch reuse preserves overwrite warning count");
+        tests.expect(G.initialization_entries().size() == 136, "scratch outputs own all final string values");
+        for (const auto& entry : G.initialization_entries()) {
+            const auto path = G.endpoint_path_steps(entry.target.member.path());
+            const auto index = path.back().value;
+            const auto expected = path.size() == 2 && index < 2 ? (index == 0 ? 'C' : 'D') : 0;
+            tests.expect(entry.value.bits() == static_cast<std::uint64_t>(expected),
+                "cleared scratch leaves no prior bytes or nested path components in G");
+        }
     }
 }
 
@@ -8241,9 +8448,18 @@ static void test_opt08_validate_canonical(test_state& tests) {
     }
 }
 }
+#include "header_v2_semantic_contract_cases.hpp"
 }
 
 int main() {
+#ifdef CW_PUBLISH_NO_SHA256_AB
+    const auto* hash_reference=std::getenv("CW_PUBLISH_SHA256_REFERENCE");
+    cw::server::detail::publish_hash_reference=hash_reference&&std::string_view{hash_reference}=="1";
+#endif
+#ifdef CW_HEADER_STATE_LAZY_AB
+    const auto* eager = std::getenv("CW_HEADER_STATE_EAGER");
+    cw::server::detail::header_record_state_eager = eager && std::string_view{eager} == "1";
+#endif
     using namespace cw::server;
 
     try {
@@ -8253,6 +8469,7 @@ int main() {
         test_header_token_only_32(tests);
 #endif
         test_semantic_cursor_v2_decode_09(tests);
+        test_semantic_cursor_v2_identifier_contract(tests);
 
         test_lexical_symbols_v2(
             tests);
@@ -8295,6 +8512,7 @@ int main() {
         test_header_v2_differential_01(tests);
 
         test_header_v2_differential_02(tests);
+        test_header_v2_semantic_contract(tests);
 
         test_header_parser_v2_minimal(
             tests);
@@ -8329,6 +8547,7 @@ int main() {
             tests);
 
         test_source_string_assignment(tests);
+        test_source_string_scratch_lifetime(tests);
         test_source_value_initialization(
             tests);
 
@@ -8371,6 +8590,7 @@ int main() {
         test_global_include_directories(tests);
         test_subscript_operators(tests);
         test_microsoft_int64(tests);
+        test_enum_v4(tests);
 
         test_conditional_entry_floor(
             tests);

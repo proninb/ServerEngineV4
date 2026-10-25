@@ -1373,8 +1373,8 @@ private:
             return runtime_layout_result::invalid_input;
         }
 
-        if (type.kind == graph_type_kind::intrinsic_alias) {
-            const auto result = intrinsic_layout(type.alias_intrinsic(), abi.target, value);
+        if (type.scalar_named()) {
+            const auto result = intrinsic_layout(type.storage_intrinsic(), abi.target, value);
             if (result == runtime_layout_result::success) {
                 slot.size = value.size;
                 slot.alignment = static_cast<std::uint16_t>(value.alignment);

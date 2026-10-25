@@ -641,8 +641,7 @@ private:
                 return shm_sparse_result::invalid_input;
             }
 
-            if (entry.kind ==
-                graph_type_kind::intrinsic_alias) {
+            if (entry.scalar_named()) {
                 return shm_sparse_result::success;
             }
 
@@ -736,11 +735,10 @@ private:
                 return shm_sparse_result::invalid_input;
             }
 
-            if (entry.kind ==
-                graph_type_kind::intrinsic_alias) {
+            if (entry.scalar_named()) {
                 return append_intrinsic(
                     target,
-                    entry.alias_intrinsic(),
+                    entry.storage_intrinsic(),
                     construction);
             }
 
@@ -1082,8 +1080,7 @@ private:
             return shm_sparse_result::invalid_input;
         }
 
-        if (type.kind ==
-            graph_type_kind::intrinsic_alias) {
+        if (type.scalar_named()) {
             slot.state = cache_state::ready;
             mark_program({}, true);
             return shm_sparse_result::success;

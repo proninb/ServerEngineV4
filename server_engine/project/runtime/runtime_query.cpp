@@ -2083,6 +2083,9 @@ runtime_query_result get_runtime_value(
                 return runtime_query_result::invalid_runtime;
             }
 
+            type_entry owner_type;
+            if (!project.type(owner, owner_type)) return runtime_query_result::invalid_runtime;
+            if (owner_type.kind != graph_type_kind::record) return runtime_query_result::unsupported_type;
             const auto string =
                 project.find_string(
                     name.substr(
@@ -2154,13 +2157,14 @@ runtime_query_result get_runtime_value(
         return normalized;
     }
 
-    if (type.kind() != type_ref_kind::intrinsic) {
-        return runtime_query_result::unsupported_type;
+    auto intrinsic = type.kind() == type_ref_kind::intrinsic
+        ? static_cast<intrinsic_type>(type.payload()) : intrinsic_type::none;
+    if (type.kind() == type_ref_kind::named) {
+        type_entry entry;
+        if (project.type(project.type_location(type), entry) &&
+            entry.kind == graph_type_kind::enumeration) intrinsic = entry.enum_underlying();
     }
-
-    const auto intrinsic =
-        static_cast<intrinsic_type>(
-            type.payload());
+    if (intrinsic == intrinsic_type::none) return runtime_query_result::unsupported_type;
 
     std::uint8_t size = 0;
 

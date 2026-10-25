@@ -4,7 +4,12 @@ project(ServerEngineV4
     VERSION 4.0.0
     LANGUAGES CXX
 )
+option(SERVER_ENGINE_PUBLISH_NO_SHA256_AB "Benchmark reference/candidate PUBLISH content digests" OFF)
+if(SERVER_ENGINE_PUBLISH_NO_SHA256_AB)
+    add_compile_definitions(CW_PUBLISH_NO_SHA256_AB=1)
+endif()
 option(SERVER_ENGINE_CANONICALIZER_TRACE "Capture symbol events in the PUBLISH benchmark only" OFF)
+option(SERVER_ENGINE_HEADER_STATE_LAZY_AB "Enable eager/lazy Header state control in benchmark/tests only" OFF)
 
 # PUBLISH uses Header Parser V2 + Source Parser V2 unconditionally.
 # REBUILD and incremental BUILD retain their existing semantic backends.
@@ -322,6 +327,9 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
         benchmarks/publish_benchmark.cpp
         ${SERVER_ENGINE_V4_BENCHMARK_SOURCES}
     )
+    if(SERVER_ENGINE_HEADER_STATE_LAZY_AB)
+        target_compile_definitions(ServerEngineV4PublishBenchmark PRIVATE CW_HEADER_STATE_LAZY_AB=1)
+    endif()
     # SOURCE-V2-IDENT-CACHE-01: benchmark-only opt-in, production unchanged.
     if(SERVER_ENGINE_SOURCE_IDENT_CACHE_V2)
         target_compile_definitions(
@@ -714,6 +722,13 @@ if(MSVC)
 endif()
 
 include(CTest)
+if(BUILD_TESTING)
+    add_executable(ServerEngineV4HeaderRecordIndexTests tests/header_record_index_tests.cpp)
+    target_include_directories(ServerEngineV4HeaderRecordIndexTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+    target_compile_features(ServerEngineV4HeaderRecordIndexTests PRIVATE cxx_std_20)
+    target_compile_definitions(ServerEngineV4HeaderRecordIndexTests PRIVATE CW_HEADER_STATE_LAZY_AB=1)
+    add_test(NAME header_record_index COMMAND ServerEngineV4HeaderRecordIndexTests)
+endif()
 
 if(BUILD_TESTING)
     add_executable(ServerEngineV4Crc64Tests tests/crc64_tests.cpp)
@@ -1368,6 +1383,11 @@ if(BUILD_TESTING)
     target_include_directories(ServerEngineV4FrontendTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
     )
+    if(SERVER_ENGINE_HEADER_STATE_LAZY_AB)
+        target_compile_definitions(ServerEngineV4FrontendTests PRIVATE CW_HEADER_STATE_LAZY_AB=1)
+        add_test(NAME frontend_regressions_eager COMMAND ServerEngineV4FrontendTests)
+        set_tests_properties(frontend_regressions_eager PROPERTIES ENVIRONMENT "CW_HEADER_STATE_EAGER=1")
+    endif()
 
     if(WIN32)
         target_sources(ServerEngineV4FrontendTests PRIVATE
@@ -1388,5 +1408,9 @@ if(BUILD_TESTING)
         NAME frontend_regressions
         COMMAND ServerEngineV4FrontendTests
     )
+    if(SERVER_ENGINE_HEADER_STATE_LAZY_AB)
+        set_tests_properties(frontend_regressions PROPERTIES ENVIRONMENT "CW_HEADER_STATE_EAGER=0")
+        set_tests_properties(frontend_regressions frontend_regressions_eager PROPERTIES RUN_SERIAL TRUE)
+    endif()
 endif()
 

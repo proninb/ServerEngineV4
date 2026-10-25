@@ -1083,6 +1083,7 @@ encode_build_compiled_project_image(
             compiled_project_section::
                 member_name_index);
 
+    bool has_enums = false;
     std::uint32_t dense_type_cursor = 0;
     std::uint32_t dense_base_cursor = 0;
     std::uint32_t dense_member_cursor = 0;
@@ -1141,6 +1142,7 @@ encode_build_compiled_project_image(
                 invalid_state;
         }
 
+        has_enums |= value.kind == graph_type_kind::enumeration;
         auto* type_record =
             type_values +
             static_cast<std::size_t>(
@@ -2862,7 +2864,7 @@ encode_build_compiled_project_image(
 
     build_write_u32(
         base + 8,
-        compiled_project_format_version);
+        has_enums ? compiled_project_format_version : 25u);
 
     build_write_u32(
         base + 12,

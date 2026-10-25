@@ -1,3 +1,37 @@
+#if defined(CW_SOURCE_TARGET_CONTEXT_AB) || defined(CW_SOURCE_TARGET_CONTEXT_AUDIT)
+#include "project/parser/source_target_context_policy.hpp"
+#endif
+#ifdef CW_SOURCE_LOCALITY_AUDIT
+#include "../experiments/source-locality-01/capture.hpp"
+#endif
+#ifdef CW_SOURCE_TYPE_PREPARE_AB
+#include "project/parser/source_type_prepare_policy.hpp"
+#endif
+#ifdef CW_SOURCE_STRING_SCRATCH_AB
+#include "project/parser/source_string_scratch_policy.hpp"
+#endif
+#ifdef CW_RUNTIME_OBJECT_LANES_AB
+#include "project/runtime/object_lane_policy.hpp"
+#include <charconv>
+#endif
+#ifdef CW_RUNTIME_API_RANGES_AB
+#include "project/shm/runtime_range_policy.hpp"
+#endif
+#ifdef CW_CONSTRUCTION_EARLY_RELEASE_AB
+#include "project/construction/early_release_policy.hpp"
+#endif
+#ifdef CW_PUBLISH_NO_SHA256_AB
+#include "project/file/publish_hash_policy.hpp"
+#endif
+#ifdef CW_STRING_INTERN_SLOT_AB
+#include "project/string/intern_slot_policy.hpp"
+#endif
+#ifdef CW_GRAPH_LINK_INDEX_AB
+#include "project/graph/link_index_policy.hpp"
+#endif
+#ifdef CW_GRAPH_LINK_INDEX_AUDIT
+#include "../experiments/source-link-index-01/audit.hpp"
+#endif
 /*
  * End-to-end Project PUBLISH/REBUILD/LOAD benchmark and explicit artifact audit.
  *
@@ -16,6 +50,15 @@
 #include "project/graph/graph.hpp"
 #include "project/semantic/identity.hpp"
 #include "project/string/string_table.hpp"
+#ifdef CW_GRAPH_MEMBER_INDEX_AUDIT
+#include "../experiments/header-graph-index-01/audit.hpp"
+#endif
+#ifdef CW_GRAPH_MEMBER_INDEX_AB
+#include "project/graph/member_index_policy.hpp"
+#endif
+#ifdef CW_HEADER_STATE_LAZY_AB
+#include "project/parser/header_record_index.hpp"
+#endif
 
 #include <chrono>
 #include <cstdint>
@@ -35,6 +78,10 @@
 #include <Psapi.h>
 #else
 #include <sys/resource.h>
+#endif
+
+#ifdef CW_RUNTIME_OBJECT_LANES_AB
+#include "../experiments/runtime-object-lanes-01/shm_audit.hpp"
 #endif
 
 namespace {
@@ -518,6 +565,70 @@ int main(
     int argc,
     char* argv[]) {
 
+#ifdef CW_GRAPH_MEMBER_INDEX_AB
+    const auto* reference=std::getenv("CW_GRAPH_MEMBER_INDEX_REFERENCE");
+    cw::server::detail::member_index_growth_reference=reference&&std::string_view{reference}=="1";
+#endif
+
+#ifdef CW_HEADER_STATE_LAZY_AB
+    const auto* eager = std::getenv("CW_HEADER_STATE_EAGER");
+    cw::server::detail::header_record_state_eager = eager && std::string_view{eager} == "1";
+#endif
+
+#ifdef CW_GRAPH_LINK_INDEX_AB
+    const auto* link_reference=std::getenv("CW_GRAPH_LINK_INDEX_REFERENCE");
+    cw::server::detail::link_index_growth_reference=link_reference&&std::string_view{link_reference}=="1";
+#endif
+#ifdef CW_STRING_INTERN_SLOT_AB
+    const auto* slot_reference=std::getenv("CW_STRING_INTERN_SLOT_REFERENCE");
+    cw::server::detail::string_intern_slot_reference=slot_reference&&std::string_view{slot_reference}=="1";
+#endif
+#ifdef CW_PUBLISH_NO_SHA256_AB
+    const auto* hash_reference=std::getenv("CW_PUBLISH_SHA256_REFERENCE");
+    cw::server::detail::publish_hash_reference=hash_reference&&std::string_view{hash_reference}=="1";
+#endif
+#ifdef CW_RUNTIME_API_RANGES_AB
+    const auto* range_reference=std::getenv("CW_RUNTIME_RANGES_REFERENCE");
+    cw::server::detail::runtime_range_reference=range_reference&&std::string_view{range_reference}=="1";
+#endif
+#ifdef CW_CONSTRUCTION_EARLY_RELEASE_AB
+    const auto* lifetime_reference=std::getenv("CW_EARLY_RELEASE_REFERENCE");
+    cw::server::detail::early_release_reference=lifetime_reference&&std::string_view{lifetime_reference}=="1";
+#endif
+#ifdef CW_RUNTIME_OBJECT_LANES_AB
+    if (const auto* text = std::getenv("CW_RUNTIME_OBJECT_WORKERS")) {
+        const std::string_view value{text};
+        std::size_t limit = 0;
+        const auto parsed = std::from_chars(value.data(), value.data()+value.size(), limit);
+        if (parsed.ec != std::errc{} || parsed.ptr != value.data()+value.size() ||
+            (limit != 4 && limit != 8 && limit != 16 && limit != 24)) {
+            std::cerr << "Invalid Object worker limit\n"; return 2;
+        }
+        cw::server::detail::object_lane_cap = limit;
+    }
+    if (const auto* text = std::getenv("CW_RUNTIME_OBJECT_PRETOUCH")) {
+        if (std::string_view{text} != "0" && std::string_view{text} != "1") return 2;
+        cw::server::detail::object_pretouch = std::string_view{text} == "1";
+    }
+#endif
+#ifdef CW_SOURCE_STRING_SCRATCH_AB
+    if (const auto* text = std::getenv("CW_SOURCE_STRING_SCRATCH")) {
+        if (std::string_view{text} != "0" && std::string_view{text} != "1") return 2;
+        cw::server::detail::source_string_scratch_reuse = std::string_view{text} == "1";
+    }
+#endif
+#ifdef CW_SOURCE_TYPE_PREPARE_AB
+    if (const auto* text = std::getenv("CW_SOURCE_TYPE_PREPARE")) {
+        if (std::string_view{text} != "0" && std::string_view{text} != "1") return 2;
+        cw::server::detail::source_type_prepare_cache = std::string_view{text} == "1";
+    }
+#endif
+#ifdef CW_SOURCE_TARGET_CONTEXT_AB
+    if (const auto* text = std::getenv("CW_SOURCE_TARGET_CONTEXT")) {
+        if (std::string_view{text} != "0" && std::string_view{text} != "1") return 2;
+        cw::server::detail::source_target_context = std::string_view{text} == "1";
+    }
+#endif
     if (argc != 4) {
         print_usage();
         return 2;
@@ -676,6 +787,13 @@ int main(
     const auto finished =
         std::chrono::steady_clock::now();
 
+#ifdef CW_SOURCE_LOCALITY_AUDIT
+    // Also retain diagnostic prefixes when an input is unsupported. Consumers
+    // must check lifecycle status and root completion before claiming coverage.
+    if (const auto* directory = std::getenv("CW_SOURCE_LOCALITY_OUTPUT"))
+        source_locality01::capture.dump(std::filesystem::path{directory});
+#endif
+
     diagnostics.sort_deterministic();
 
     if (!cw::server::succeeded(status) ||
@@ -750,6 +868,14 @@ int main(
     const auto peak =
         peak_working_set_bytes();
 
+#ifdef CW_RUNTIME_OBJECT_LANES_AB
+    std::string shm_audit_sha;
+    if (const auto* enabled = std::getenv("CW_RUNTIME_SHM_AUDIT"); enabled && std::string_view{enabled} == "1") {
+        // After operation timer and peak WS capture; never used by the timing runner.
+        shm_audit_sha = runtime_object_lanes01::sha256(project->shm().bytes().first(
+            static_cast<std::size_t>(project->runtime_size())));
+    }
+#endif
     std::cout
         << "mode="
         << argv[1]
@@ -1304,6 +1430,73 @@ int main(
             << (build_telemetry.rebuild_fallback ? 1 : 0);
     }
 
+#ifdef CW_RUNTIME_OBJECT_LANES_AB
+    std::cout << ",object_lanes=" << cw::server::detail::last_object_lanes
+              << ",object_phase_ms=" << static_cast<double>(cw::server::detail::last_object_phase_ns)/1000000.0
+              << ",pretouch_ms=" << static_cast<double>(cw::server::detail::last_pretouch_ns)/1000000.0
+              << ",pretouch_bytes=" << cw::server::detail::last_pretouch_bytes;
+    if (!shm_audit_sha.empty())
+        std::cout << ",shm_audit_sha256=" << shm_audit_sha << ",shm_audit_bytes=" << project->runtime_size();
+#endif
+#ifdef CW_SOURCE_TARGET_CONTEXT_AB
+    std::cout << ",target_context=" << cw::server::detail::source_target_context;
+#ifdef CW_SOURCE_TARGET_CONTEXT_AUDIT
+    const auto& target_counts = cw::server::detail::target_context_counts;
+    std::cout << ",target_lookup_calls=" << target_counts.lookup_calls
+        << ",target_name_hits=" << target_counts.name_hits
+        << ",target_endpoints=" << target_counts.target_endpoints
+        << ",target_type_hits=" << target_counts.type_hits
+        << ",rhs_endpoints=" << target_counts.rhs_endpoints
+        << ",target_declaration_seeds=" << target_counts.declaration_seeds
+        << ",target_root_resets=" << target_counts.root_resets
+        << ",target_namespace_resets=" << target_counts.namespace_resets;
+#endif
+#endif
+#ifdef CW_SOURCE_TYPE_PREPARE_AB
+    std::cout << ",type_prepare_cache=" << cw::server::detail::source_type_prepare_cache;
+#ifdef CW_SOURCE_TYPE_PREPARE_AUDIT
+    const auto& resolver_counts = cw::server::detail::source_resolver_counts;
+    std::cout << ",resolver_record_calls=" << resolver_counts.record_calls
+        << ",resolver_record_named=" << resolver_counts.record_named
+        << ",resolver_record_derived=" << resolver_counts.record_derived
+        << ",resolver_record_found=" << resolver_counts.record_found
+        << ",resolver_record_dereference=" << resolver_counts.record_dereference
+        << ",resolver_unique_types=" << resolver_counts.input_types.size()
+        << ",resolver_preparation_hits=" << resolver_counts.preparation_hits
+        << ",resolver_preparation_misses=" << resolver_counts.preparation_misses
+        << ",resolver_member_calls=" << resolver_counts.member_calls
+        << ",resolver_member_hits=" << resolver_counts.member_hits
+        << ",resolver_member_empty=" << resolver_counts.member_empty
+        << ",resolver_member_conflicts=" << resolver_counts.member_conflicts
+        << ",resolver_unique_transitions=" << resolver_counts.transition_keys.size()
+        << ",resolver_inherited_lookups=" << resolver_counts.inherited_lookups
+        << ",resolver_copied_base_steps=" << resolver_counts.copied_base_steps
+        << ",resolver_member_steps=" << resolver_counts.member_steps
+        << ",resolver_dereference_steps=" << resolver_counts.dereference_steps
+        << ",resolver_index_steps=" << resolver_counts.index_steps
+        << ",resolver_audit_failed=" << resolver_counts.allocation_failed;
+#endif
+#endif
+#ifdef CW_SOURCE_STRING_SCRATCH_AB
+    std::cout << ",string_scratch_reuse=" << cw::server::detail::source_string_scratch_reuse;
+#ifdef CW_SOURCE_STRING_SCRATCH_AUDIT
+    std::cout << ",scratch_statements=" << cw::server::detail::string_scratch_statements
+        << ",scratch_bytes_growths=" << cw::server::detail::string_bytes_growths
+        << ",scratch_bytes_requested=" << cw::server::detail::string_bytes_requested
+        << ",scratch_paths_growths=" << cw::server::detail::string_paths_growths
+        << ",scratch_paths_requested=" << cw::server::detail::string_paths_requested;
+#endif
+#endif
+#ifdef CW_FILE_HASH_AUDIT
+    std::cout << ",sha256_calls=" << cw::server::detail::file_hash_calls.load()
+              << ",sha256_bytes=" << cw::server::detail::file_hash_bytes.load();
+#endif
+#ifdef CW_GRAPH_LINK_INDEX_AUDIT
+    cw::server::link_index_audit::print(std::cout);
+#endif
+#ifdef CW_GRAPH_MEMBER_INDEX_AUDIT
+    cw::server::member_index_audit::print(std::cout);
+#endif
     std::cout << '\n';
 
     return 0;

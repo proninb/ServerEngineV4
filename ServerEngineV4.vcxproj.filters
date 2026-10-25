@@ -644,6 +644,12 @@
     <ClInclude Include="server_engine\project\graph\construction_semantics.hpp">
       <Filter>server_engine\project\graph</Filter>
     </ClInclude>
+    <ClInclude Include="server_engine\project\parser\enum_constants.hpp">
+      <Filter>server_engine\project\parser</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\graph\enum_semantics.hpp">
+      <Filter>server_engine\project\graph</Filter>
+    </ClInclude>
     <ClInclude Include="server_engine\project\parser\parser.hpp">
       <Filter>server_engine\project\parser</Filter>
     </ClInclude>
@@ -737,6 +743,16 @@
     <ClInclude Include="server_engine\project\file\file_identity.hpp">
       <Filter>server_engine\project\file</Filter>
     </ClInclude>
+    <ClInclude Include="server_engine\project\file\publish_hash_policy.hpp">
+      <Filter>server_engine\project\file</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\shm\runtime_range_policy.hpp">
+      <Filter>server_engine\project\shm</Filter>
+    </ClInclude>
+    <ClInclude Include="server_engine\project\construction\early_release_policy.hpp">
+      <Filter>server_engine\project\construction</Filter>
+    </ClInclude>
+
     <ClInclude Include="server_engine\project\file\file_kind.hpp">
       <Filter>server_engine\project\file</Filter>
     </ClInclude>

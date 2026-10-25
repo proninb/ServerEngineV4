@@ -8,3 +8,5 @@ Release/
 *.user
 *.suo
 /benchmark/
+__pycache__/
+*.py[cod]

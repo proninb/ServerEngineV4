@@ -9,7 +9,7 @@ from prepare_unitproxl_headers import TOKEN
 INCLUDE = re.compile(rb'^\s*#include\s+"([^"\r\n]+)"\s*(?://[^\r\n]*)?$')
 
 
-def prepare(book, destination, header, expand_sdk_byte=False):
+def prepare(book, destination, header, expand_sdk_byte=False, expand_chapters=False):
     book, destination = book.resolve(), destination.resolve()
     source_root = book.parent
     if destination == source_root or source_root in destination.parents or destination in source_root.parents:
@@ -44,7 +44,7 @@ def prepare(book, destination, header, expand_sdk_byte=False):
             raise ValueError(f"Repeated input requires explicit review: {path}")
         seen.add(path)
         data = path.read_bytes()
-        if path.suffix.lower() != ".book":
+        if path.suffix.lower() != ".book" and not (expand_chapters and path.suffix.lower() == ".chap"):
             return source_node(relative, data, path)
         active.add(path)
         children, chunk = [], bytearray()
@@ -101,6 +101,8 @@ if __name__ == "__main__":
     parser.add_argument("destination", type=Path)
     parser.add_argument("--header", default="Types/unity_pro_xl.h")
     parser.add_argument("--expand-sdk-byte", action="store_true")
+    parser.add_argument("--expand-chapters", action="store_true",
+                        help="Expand Source .chap include containers in original order, like .book files")
     args = parser.parse_args()
-    inputs, sources = prepare(args.book, args.destination, args.header, args.expand_sdk_byte)
+    inputs, sources = prepare(args.book, args.destination, args.header, args.expand_sdk_byte, args.expand_chapters)
     print(f"Converted {inputs} inputs into {sources} source nodes: {args.destination / 'project.json'}")

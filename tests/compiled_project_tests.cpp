@@ -124,6 +124,106 @@ compiled_project_image_result build_test_compiled_image(
     const compiled_fixture& fixture,
     compiled_test_image& output);
 
+void write_u32(std::byte* target, std::uint32_t value) noexcept;
+void rewrite_header_crc(std::vector<std::byte>& image) noexcept;
+
+void test_enum_persistence_runtime(test_state& tests) {
+    compiled_fixture f;
+    const auto name = [&](const char* text) { string_id id; (void)f.strings.intern(text, id); return id; };
+    const auto identity = [&](const char* text, identity_kind kind) {
+        identity_ref id; (void)f.identities.resolve(f.identities.root(), name(text), kind, id); return id;
+    };
+    const auto enum_id = identity("Mode", identity_kind::type);
+    const auto owner_id = identity("Owner", identity_kind::type);
+    const auto instance_id = identity("instance", identity_kind::object);
+    const auto top_id = identity("top", identity_kind::object);
+    const auto value = construction_value::constant(construction_kind::unsigned_integer, 513);
+    const std::array<member_record, 2> enumerators{{
+        {name("Off"), f.G.intrinsic(intrinsic_type::unsigned_short)},
+        {name("On"), f.G.intrinsic(intrinsic_type::unsigned_short)}}};
+    const std::array<construction_value, 2> values{{
+        construction_value::constant(construction_kind::unsigned_integer, 0), value}};
+    type_handle enumeration, owner;
+    if (!tests.expect(succeeded(f.G.define_enum(enum_id, intrinsic_type::unsigned_short,
+        true, true, true, enumerators, values, enumeration)), "define enum in G")) return;
+    tests.expect(succeeded(f.G.define_enum(enum_id, intrinsic_type::unsigned_short,
+        true, true, true, enumerators, values, enumeration)), "identical Header enum replay merges deterministically");
+    type_ref reference;
+    (void)f.G.derive(f.G.named(enumeration), derived_type_kind::lvalue_reference, 0, reference);
+    (void)f.G.declare_record(owner_id, graph_record_kind::struct_type, owner);
+    type_ref array_type;
+    (void)f.G.derive(f.G.named(enumeration), derived_type_kind::bounded_array, 2, array_type);
+    const std::array<member_record, 3> members{{
+        {name("value"), f.G.named(enumeration)}, {name("ref"), reference}, {name("values"), array_type}}};
+    const std::array<construction_value, 3> defaults{{value, construction_value::member_binding(1), {}}};
+    if (!tests.expect(succeeded(f.G.define_record(owner, graph_record_kind::struct_type, members, defaults)),
+        "define enum field and enum reference")) return;
+    (void)f.G.constructor_defaults.add({owner_id, name("values[1]"), value});
+    object_handle instance, top;
+    (void)f.G.add_object(instance_id, f.G.named(owner), instance);
+    (void)f.G.add_object(top_id, f.G.named(enumeration), top, graph_object_non_default_initializer, value);
+    (void)f.sources.finalize(f.files.size(), f.identities, f.G);
+    compiled_test_image image;
+    if (!tests.expect(build_test_compiled_image(f, image) == compiled_project_image_result::success,
+        "encode enum metadata and construction")) return;
+    compiled_project_view view;
+    if (!tests.expect(view.bind(image.bytes) == compiled_project_image_result::success,
+        "LOAD validates enum image")) return;
+    auto disguised = image.bytes;
+    write_u32(disguised.data() + 8, 25u);
+    rewrite_header_crc(disguised);
+    compiled_project_view invalid;
+    const auto disguised_bind = invalid.bind(disguised);
+    tests.expect(disguised_bind == compiled_project_image_result::invalid_image ||
+        (disguised_bind == compiled_project_image_result::success &&
+         invalid.verify_contents() == compiled_project_image_result::invalid_image),
+        "reject enum metadata disguised as pre-enum compiled format");
+    if (!tests.expect(view.verify_contents() == compiled_project_image_result::success,
+        "deep audit enum metadata, type bindings and constructor defaults")) return;
+    type_entry type;
+    member_record persisted_name;
+    construction_value persisted_value;
+    tests.expect(view.type(enumeration, type) && type.kind == graph_type_kind::enumeration &&
+        type.enum_underlying() == intrinsic_type::unsigned_short && (type.flags & graph_enum_scoped) &&
+        view.member_at(type.members.begin + 1, persisted_name) && view.string(persisted_name.name) == "On" &&
+        view.construction_at(type.members.begin + 1, persisted_value) && persisted_value == value,
+        "compiled.bin preserves enum identity, underlying type and values");
+#if defined(_WIN32)
+    const server_abi_configuration abi{abi_target::windows_x64, 8};
+#else
+    const server_abi_configuration abi{abi_target::posix_x64, 8};
+#endif
+    shm_layout layout;
+    shm_runtime_v2 model;
+    if (!tests.expect(prepare_shm_layout(view, abi, layout) == shm_layout_result::success &&
+        prepare_shm_runtime_v2(view, abi, layout, model) == shm_runtime_v2_result::success,
+        "prepare enum Runtime V2 ABI and type programs")) return;
+    std::vector<std::byte> runtime(static_cast<std::size_t>(layout.size()), std::byte{});
+    if (!tests.expect(materialize_shm_runtime_v2_canonical(model, abi, layout, runtime) == shm_runtime_v2_result::success &&
+        mark_shm_runtime_v2_links(model, abi, layout, runtime) == shm_runtime_v2_result::success &&
+        materialize_shm_runtime_v2_objects(model, abi, layout, runtime) == shm_runtime_v2_result::success &&
+        materialize_shm_runtime_v2_links(model, abi, layout, runtime) == shm_runtime_v2_result::success &&
+        materialize_shm_runtime_v2_initializations(model, abi, layout, runtime) == shm_runtime_v2_result::success,
+        "materialize enum values and references")) return;
+    shm_offset instance_offset=0, top_offset=0;
+    shm_record_offset value_offset=0, ref_offset=0, array_offset=0;
+    type_entry owner_entry;
+    if (!tests.expect(layout.object_offset(instance, instance_offset) && layout.object_offset(top, top_offset) &&
+        view.type(owner, owner_entry) && layout.member_offset(owner_entry.members.begin, value_offset) &&
+        layout.member_offset(owner_entry.members.begin + 1, ref_offset) &&
+        layout.member_offset(owner_entry.members.begin + 2, array_offset), "resolve enum Runtime offsets")) return;
+    std::uint16_t actual=0, actual_top=0, array_value=0;
+    std::uintptr_t pointer=0;
+    std::memcpy(&actual, runtime.data()+instance_offset+value_offset, sizeof actual);
+    std::memcpy(&actual_top, runtime.data()+top_offset, sizeof actual_top);
+    std::memcpy(&pointer, runtime.data()+instance_offset+ref_offset, sizeof pointer);
+    std::memcpy(&array_value, runtime.data()+instance_offset+array_offset+sizeof(std::uint16_t), sizeof array_value);
+    tests.expect(array_value == 513, "nested enum array constructor default survives persistence and Runtime V2");
+    tests.expect(actual == 513 && actual_top == 513 && pointer ==
+        reinterpret_cast<std::uintptr_t>(runtime.data()+instance_offset+value_offset),
+        "Runtime stores underlying enum bytes and exact enum reference address");
+}
+
 void test_nested_defaults_persistence(test_state& tests) {
     compiled_fixture f;
     const auto name = [&](const char* text) { string_id id; (void)f.strings.intern(text, id); return id; };
@@ -13267,7 +13367,7 @@ void test_persisted_sources(test_state &tests, const compiled_test_image &image)
     auto old = image.bytes;
     write_u32(
         old.data() + 8,
-        compiled_project_format_version - 1);
+        24u);
     rewrite_header_crc(old);
     tests.expect(view.bind(old) == compiled_project_image_result::invalid_image,
                  "reject previous compiled format");
@@ -13321,6 +13421,7 @@ int main() {
         test_state tests;
 
         test_nested_defaults_persistence(tests);
+        test_enum_persistence_runtime(tests);
         test_class_abi_persistence(
             tests);
 

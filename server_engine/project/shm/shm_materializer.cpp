@@ -511,9 +511,7 @@ private:
 
             // SHM-NAMED-ALIAS-01:
             // named identity may denote an intrinsic alias.
-            if (named.kind ==
-                graph_type_kind::
-                    intrinsic_alias) {
+            if (named.scalar_named()) {
 
                 return shm_materialization_result::
                     success;
@@ -908,12 +906,10 @@ private:
 
             // SHM-NAMED-ALIAS-01:
             // named identity may denote either a record or intrinsic alias.
-            if (named.kind ==
-                graph_type_kind::
-                    intrinsic_alias) {
+            if (named.scalar_named()) {
 
                 return intrinsic(
-                    named.alias_intrinsic(),
+                    named.storage_intrinsic(),
                     construction,
                     target);
             }

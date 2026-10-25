@@ -211,6 +211,7 @@ static_assert(std::is_trivially_copyable_v<endpoint_path_record>);
 enum class graph_type_kind : std::uint8_t {
     record = 1,
     intrinsic_alias = 2,
+    enumeration = 3,
 };
 
 enum class graph_record_kind : std::uint8_t {
@@ -252,9 +253,13 @@ inline constexpr std::uint16_t graph_type_defined =
 inline constexpr std::uint16_t graph_type_polymorphic =
     0x0002u;
 
+inline constexpr std::uint16_t graph_enum_scoped = 0x0004u;
+inline constexpr std::uint16_t graph_enum_fixed = 0x0008u;
+inline constexpr std::uint16_t graph_enum_body = 0x0010u;
+
 inline constexpr std::uint16_t graph_type_flag_mask =
     graph_type_defined |
-    graph_type_polymorphic | 0xff00u;
+    graph_type_polymorphic | graph_enum_scoped | graph_enum_fixed | graph_enum_body | 0xff00u;
 
 struct type_entry final {
     graph_range members;
@@ -273,13 +278,32 @@ struct type_entry final {
         return (flags & graph_type_polymorphic) != 0;
     }
 
+    [[nodiscard]] constexpr intrinsic_type storage_intrinsic() const noexcept {
+        return scalar_named() ? static_cast<intrinsic_type>(flags >> 8) : intrinsic_type::none;
+    }
+
     [[nodiscard]] constexpr intrinsic_type alias_intrinsic() const noexcept {
-        return kind == graph_type_kind::intrinsic_alias ? static_cast<intrinsic_type>(flags >> 8) : intrinsic_type::none;
+        return kind == graph_type_kind::intrinsic_alias ? storage_intrinsic() : intrinsic_type::none;
+    }
+
+    [[nodiscard]] constexpr intrinsic_type enum_underlying() const noexcept {
+        return kind == graph_type_kind::enumeration ? storage_intrinsic() : intrinsic_type::none;
+    }
+
+    [[nodiscard]] constexpr bool scalar_named() const noexcept {
+        return kind == graph_type_kind::intrinsic_alias || kind == graph_type_kind::enumeration;
     }
 
     [[nodiscard]] constexpr bool valid_kind() const noexcept {
-        return kind == graph_type_kind::record ? (flags & 0xff00u) == 0 :
-            kind == graph_type_kind::intrinsic_alias && defined() && !polymorphic() &&
+        if (kind == graph_type_kind::enumeration)
+            return defined() && !polymorphic() && bases.count == 0 &&
+                record_kind == graph_record_kind::struct_type &&
+                ((flags & graph_enum_body) || ((flags & graph_enum_fixed) && members.count == 0)) &&
+                (!(flags & graph_enum_scoped) || (flags & graph_enum_fixed)) &&
+                enum_underlying() >= intrinsic_type::bool_type &&
+                enum_underlying() <= intrinsic_type::unsigned_long_long;
+        return kind == graph_type_kind::record ? (flags & ~(graph_type_defined | graph_type_polymorphic)) == 0 :
+            kind == graph_type_kind::intrinsic_alias && defined() && (flags & 0x00feu) == 0 &&
             members.count == 0 && bases.count == 0 &&
             alias_intrinsic() >= intrinsic_type::bool_type && alias_intrinsic() <= intrinsic_type::long_double_type;
     }
@@ -364,7 +388,13 @@ static_assert(std::is_trivially_copyable_v<object_initialization_record>);
 
 // Owns one complete semantic G. Member construction is dense per member; object
 // construction is sparse cold storage addressed from the compact object state.
+#ifdef CW_RESOLVED_G_01
+namespace resolved_g01 { struct access; }
+#endif
 class graph final {
+#ifdef CW_RESOLVED_G_01
+    friend struct resolved_g01::access;
+#endif
 public:
     constructor_default_table constructor_defaults;
     graph() = default;
@@ -374,6 +404,22 @@ public:
 
     graph(graph&&) noexcept = default;
     graph& operator=(graph&&) noexcept = default;
+
+    // Enum ranges address name/value metadata in the dense member columns,
+    // not fields in an instance. Scalar ABI consumers must skip these ranges.
+    [[nodiscard]] server_status define_enum(identity_ref identity,
+        intrinsic_type underlying, bool scoped, bool fixed, bool body,
+        std::span<const member_record> names,
+        std::span<const construction_value> values, type_handle& output) noexcept;
+
+    [[nodiscard]] std::span<const type_handle> enum_types() const noexcept { return enum_handles; }
+
+    [[nodiscard]] bool type(type_handle handle, type_entry& output) const noexcept {
+        const auto* entry = find(handle);
+        if (!entry) return false;
+        output = *entry;
+        return true;
+    }
 
     [[nodiscard]] server_status define_intrinsic_alias(identity_ref identity, intrinsic_type intrinsic, type_handle& output) noexcept;
 
@@ -846,6 +892,7 @@ private:
 
     std::vector<type_entry> types;
     std::vector<identity_ref> type_identities;
+    std::vector<type_handle> enum_handles;
     std::vector<base_record> base_records;
     std::vector<member_record> member_records;
     std::vector<construction_value> member_construction;
@@ -861,6 +908,10 @@ private:
     std::vector<endpoint_path_record> endpoint_paths;
     std::vector<endpoint_path_step> endpoint_path_step_values;
     std::vector<endpoint_path_index_slot> endpoint_path_index;
+#ifdef CW_PATH_INTERN_02
+    // Standalone experiment only; not persisted or present in production G.
+    std::vector<std::uint64_t> endpoint_path_hashes;
+#endif
 
     std::vector<link_record> links;
     std::vector<object_initialization_record>

@@ -119,6 +119,7 @@ struct file_acquire_job final {
     bool baseline_present = false;
     bool baseline_token_available = false;
     bool capture_change_token = true;
+    bool calculate_content_hash = true;
 };
 
 struct file_acquire_result final {
@@ -301,13 +302,15 @@ public:
     // materializing any input; BUILD/REBUILD retain the arena representation.
     [[nodiscard]] server_status enable_owned_content() noexcept;
 
-    // PUBLISH owns stable snapshots, but creates no reusable BUILD lineage.
+    // PUBLISH owns stable snapshots without content digests/change tokens; no BUILD lineage.
     [[nodiscard]] server_status configure_publish_acquisition() noexcept;
 
     // Binds immutable BUILD lineage without reconstructing committed file/path/
     // physical/topology arrays. The source_save_view must outlive this context.
     [[nodiscard]] server_status bind_baseline(
         const source_save_view& source) noexcept;
+
+    [[nodiscard]] bool captures_content_hashes() const noexcept { return capture_content_hashes; }
 
     [[nodiscard]] bool baseline_bound() const noexcept {
         return baseline != nullptr;
@@ -550,6 +553,7 @@ private:
     std::size_t owned_content_bytes = 0;
     bool owned_content_enabled = false;
     bool capture_change_tokens = true;
+    bool capture_content_hashes = true;
 
     std::vector<file_dependency_record> dependency_files;
     std::vector<file_id> forward_edges;

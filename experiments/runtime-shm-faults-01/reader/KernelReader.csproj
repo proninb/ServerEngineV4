@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+    <VsPrivateAssemblies Condition="'$(VsPrivateAssemblies)' == ''">C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\PrivateAssemblies</VsPrivateAssemblies>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Microsoft.Diagnostics.Tracing.TraceEvent"><HintPath>$(VsPrivateAssemblies)\Microsoft.Diagnostics.Tracing.TraceEvent.dll</HintPath></Reference>
+    <Reference Include="Microsoft.Diagnostics.FastSerialization"><HintPath>$(VsPrivateAssemblies)\Microsoft.Diagnostics.FastSerialization.dll</HintPath></Reference>
+    <Reference Include="Microsoft.Diagnostics.NETCore.Client"><HintPath>$(VsPrivateAssemblies)\..\CommonExtensions\Microsoft\TestWindow\VsTest\Extensions\Microsoft.Diagnostics.NETCore.Client.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>

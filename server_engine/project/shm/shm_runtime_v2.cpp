@@ -1314,12 +1314,15 @@ private:
             break;
         }
 
-        if (type.kind() ==
-            type_ref_kind::intrinsic) {
-
-            switch (
-                static_cast<intrinsic_type>(
-                    type.payload())) {
+        auto storage_type = type.kind() == type_ref_kind::intrinsic
+            ? static_cast<intrinsic_type>(type.payload()) : intrinsic_type::none;
+        if (type.kind() == type_ref_kind::named) {
+            type_entry entry;
+            if (project.type(project.type_location(type), entry) &&
+                entry.kind == graph_type_kind::enumeration) storage_type = entry.storage_intrinsic();
+        }
+        if (storage_type != intrinsic_type::none) {
+            switch (storage_type) {
 
             case intrinsic_type::bool_type: {
                 bool value = false;

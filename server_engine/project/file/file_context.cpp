@@ -1,3 +1,6 @@
+#ifdef CW_PUBLISH_NO_SHA256_AB
+#include "publish_hash_policy.hpp"
+#endif
 #include "file_context.hpp"
 
 #include "../persistence/source_save.hpp"
@@ -314,7 +317,13 @@ server_status file_context::enable_owned_content() noexcept {
 
 server_status file_context::configure_publish_acquisition() noexcept {
     const auto configured = enable_owned_content();
-    if (succeeded(configured)) capture_change_tokens = false;
+    if (succeeded(configured)) {
+        capture_change_tokens = false;
+        capture_content_hashes = false;
+#ifdef CW_PUBLISH_NO_SHA256_AB
+        capture_content_hashes = detail::publish_hash_reference;
+#endif
+    }
     return configured;
 }
 
@@ -2113,6 +2122,7 @@ server_status file_context::prepare_acquire(
     output.file = file;
     output.path = path(file);
     output.capture_change_token = capture_change_tokens;
+    output.calculate_content_hash = capture_content_hashes;
     output.baseline_present =
         state->present();
     output.baseline_token_available =
@@ -2182,7 +2192,8 @@ void file_context::execute_acquire(
             acquire_file_content(
                 file_path,
                 output.snapshot,
-                job.capture_change_token);
+                job.capture_change_token,
+                job.calculate_content_hash);
 
         switch (acquired) {
         case file_content_result::acquired:
@@ -2343,10 +2354,10 @@ server_status file_context::apply_acquire(
         return server_status::success;
 
     case file_acquire_result_kind::present: {
-        const auto changed =
-            !baseline_present ||
-            !(state->content_hash ==
-              result.snapshot.content_hash);
+        const auto changed = !baseline_present ||
+            (capture_content_hashes
+                ? state->content_hash != result.snapshot.content_hash
+                : content(result.file) != result.snapshot.bytes);
 
         if (content_state->materialized() ||
             (owned_content_enabled && content_available(result.file))) {
@@ -2429,6 +2440,7 @@ server_status file_context::calculate_content_hash(
     construction_content_hash& output) const noexcept {
 
     output = {};
+    if (!capture_content_hashes) return server_status::unsupported;
 
     try {
         if (ordered_files.size() >

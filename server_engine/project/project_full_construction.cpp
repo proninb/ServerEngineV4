@@ -1,3 +1,7 @@
+#ifdef CW_CONSTRUCTION_EARLY_RELEASE_AB
+#include "construction/early_release_policy.hpp"
+#include <optional>
+#endif
 #include "project_full_construction.hpp"
 #ifdef CW_CANONICALIZER_TRACE
 #include "../../experiments/canonicalizer-01/capture.hpp"
@@ -998,14 +1002,19 @@ server_status construct_full_project(
         clock_type::time_point& started;
         ~release_probe() noexcept {
             if (telemetry && started != clock_type::time_point{})
-                telemetry->transient_release_ns = static_cast<std::uint64_t>(
+                telemetry->transient_release_ns += static_cast<std::uint64_t>(
                     std::chrono::duration_cast<std::chrono::nanoseconds>(
                         clock_type::now() - started).count());
         }
     } release_timer{telemetry, release_started};
 
+#ifdef CW_CONSTRUCTION_EARLY_RELEASE_AB
+    std::optional<full_construction_context> context_storage{std::in_place, settings};
+    auto& context = *context_storage;
+#else
     full_construction_context context{
         settings};
+#endif
 #ifdef CW_CANONICALIZER_TRACE
     canonicalizer01::capture_session capture{&context.strings, &context.identities};
 #endif
@@ -1577,9 +1586,17 @@ server_status construct_full_project(
         diagnostics);
     }
 
+    if (telemetry) telemetry->post_persistence_ns = elapsed_ns(post_persistence_started);
+#if defined(CW_CONSTRUCTION_EARLY_RELEASE_AB) && !defined(CW_CANONICALIZER_TRACE)
+    if (mode == full_construction_mode::publish && !detail::early_release_reference) {
+        const auto begin = telemetry ? clock_type::now() : clock_type::time_point{};
+        // Persistence has joined; resident publication reads only the two images.
+        context_storage.reset();
+        if (telemetry) telemetry->transient_release_ns = elapsed_ns(begin);
+    }
+#endif
     const auto resident_started = telemetry != nullptr
         ? clock_type::now() : clock_type::time_point{};
-    if (telemetry) telemetry->post_persistence_ns = elapsed_ns(post_persistence_started);
     read_only_file_mapping resident_mapping;
 
     if (resident_mapping.open(
@@ -1664,6 +1681,7 @@ server_status construct_full_project(
         resident_runtime,
         output);
     if (telemetry != nullptr) { telemetry->resident_ns = elapsed_ns(resident_started); }
+    // Include remaining local destruction even when context was released early.
     if (telemetry) release_started = clock_type::now();
     return resident_result;
         }();

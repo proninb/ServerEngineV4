@@ -377,13 +377,11 @@ public:
         }
 
         try {
-            output.configuration_hash =
-                calculate_project_configuration_hash(
-                    output.files);
-
-            output.preprocessor_hash =
-                calculate_project_preprocessor_hash(
-                    preprocessor);
+            // These hashes prove reusable BUILD lineage. PUBLISH creates none.
+            if (files == nullptr || files->captures_content_hashes()) {
+                output.configuration_hash = calculate_project_configuration_hash(output.files);
+                output.preprocessor_hash = calculate_project_preprocessor_hash(preprocessor);
+            }
 
             if (semantic_roots != nullptr) {
                 std::sort(

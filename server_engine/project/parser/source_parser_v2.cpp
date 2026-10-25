@@ -1,3 +1,7 @@
+#ifdef CW_RESOLVED_G_01
+#include "../../../experiments/resolved-g-01/capture.hpp"
+#endif
+#include "enum_constants.hpp"
 /*
  * PARSER-V2-SOURCE-01
  * Restricted Source domain. Header Parser has already constructed Type Graph G.
@@ -5,6 +9,15 @@
  * Writes to the SAME G / source map: no intermediate facts / AST / projection.
  */
 #include "source_parser_v2.hpp"
+#if defined(CW_SOURCE_TARGET_CONTEXT_AB) || defined(CW_SOURCE_TARGET_CONTEXT_AUDIT)
+#include "source_target_context_policy.hpp"
+#endif
+#ifdef CW_SOURCE_LOCALITY_AUDIT
+#include "../../../experiments/source-locality-01/capture.hpp"
+#endif
+#ifdef CW_SOURCE_STRING_SCRATCH_AB
+#include "source_string_scratch_policy.hpp"
+#endif
 #ifdef CW_CANONICALIZER_TRACE
 #include "../../../experiments/canonicalizer-01/capture.hpp"
 #endif
@@ -423,6 +436,17 @@ public:
     // counters; benchmark counters continue to describe one canonical replay.
     // One Source replay only. No deferred binding and no second Graph.
     [[nodiscard]] server_status parse(file_id root) noexcept {
+#if defined(CW_SOURCE_TARGET_CONTEXT_AB) || defined(CW_SOURCE_TARGET_CONTEXT_V2)
+        target_context = {};
+#endif
+#ifdef CW_SOURCE_TARGET_CONTEXT_AUDIT
+        ++detail::target_context_counts.root_resets;
+#endif
+#ifdef CW_SOURCE_LOCALITY_AUDIT
+        source_locality01::capture.root = root.value();
+        source_locality01::capture.file(root.value(), files.path(root));
+        (void)source_locality01::capture.add({'B', 0, root.value()});
+#endif
 #ifdef CW_CANONICALIZER_TRACE
         canonicalizer01::capture_unit capture_unit{root.value() | 0x80000000u};
 #endif
@@ -465,7 +489,11 @@ public:
         const auto committed = flush_constructions();
         if (!succeeded(committed)) return committed;
         if (!succeeded(status)) return status;
-        return sources.end_root();
+        const auto ended = sources.end_root();
+#ifdef CW_SOURCE_LOCALITY_AUDIT
+        if (succeeded(ended)) (void)source_locality01::capture.add({'E', 0, root.value()});
+#endif
+        return ended;
     }
 
     [[nodiscard]] server_status validate_externs() noexcept {
@@ -486,6 +514,27 @@ public:
     }
 
 private:
+#if defined(CW_SOURCE_TARGET_CONTEXT_AB) || defined(CW_SOURCE_TARGET_CONTEXT_V2)
+    struct current_target_context final {
+        file_id file{};
+        identity_ref scope{};
+        string_id name{};
+        identity_ref who{};
+        type_ref type{};
+        [[nodiscard]] bool matches(file_id f, identity_ref s, string_id n) const noexcept {
+            return who && type && file == f && scope == s && name == n;
+        }
+    };
+    static_assert(sizeof(current_target_context) == 20);
+    current_target_context target_context;
+    [[nodiscard]] static bool target_context_enabled() noexcept {
+#ifdef CW_SOURCE_TARGET_CONTEXT_AB
+        return detail::source_target_context;
+#else
+        return true;
+#endif
+    }
+#endif
     // SOURCE-V2-UNIT-BIND-01: WHO is distinct from physical producer file.
     struct source_unit final { file_id file{}; identity_ref who{}; };
     // Only explicit extern WHO are tracked; ordinary Source objects require
@@ -555,6 +604,13 @@ private:
         if (!succeeded(status)) return binding
             ? fail(parser_failure_kind::semantic, "Source reference binding cannot be represented in G")
             : status;
+#ifdef CW_SOURCE_LOCALITY_AUDIT
+        (void)source_locality01::capture.add({'W', 0, op.target.unit.file.value(), 0, 0,
+            op.target.ref.object.value(), op.target.object_type.value(), op.target.type.value(),
+            binding ? op.source.ref.object.value() : 0, binding ? op.source.object_type.value() : 0,
+            op.target.ref.member.value(), binding ? 2u : 1u,
+            op.target.location.offset, op.target.location.length});
+#endif
         if (binding) {
             status = sources.add(op.target.unit.file, source_data_ref::link(link));
             if (!succeeded(status)) return status;
@@ -780,8 +836,32 @@ private:
         return sources.add_dependency(id);
     }
 
+    [[nodiscard]] identity_ref find_assignment_target(identity_ref scope) const noexcept {
+#ifdef CW_SOURCE_TARGET_CONTEXT_AUDIT
+        ++detail::target_context_counts.lookup_calls;
+#endif
+#if defined(CW_SOURCE_TARGET_CONTEXT_AB) || defined(CW_SOURCE_TARGET_CONTEXT_V2)
+        if (target_context_enabled() && target_context.matches(current.file, scope, current.identifier)) {
+#ifdef CW_SOURCE_TARGET_CONTEXT_AUDIT
+            ++detail::target_context_counts.name_hits;
+#endif
+            return target_context.who;
+        }
+#endif
+        return find_visible(scope, current.identifier, identity_kind::object);
+    }
+
     [[nodiscard]] server_status parse_namespace(identity_ref scope_id,
         std::size_t depth) noexcept {
+#if defined(CW_SOURCE_TARGET_CONTEXT_AB) || defined(CW_SOURCE_TARGET_CONTEXT_V2)
+        target_context = {};
+#endif
+#ifdef CW_SOURCE_TARGET_CONTEXT_AUDIT
+        ++detail::target_context_counts.namespace_resets;
+#endif
+#ifdef CW_SOURCE_LOCALITY_AUDIT
+        (void)source_locality01::capture.add({'N', 0, current.file.value(), scope_id.value()});
+#endif
         const auto committed = flush_constructions();
         if (!succeeded(committed)) return committed;
         auto status = advance();
@@ -810,6 +890,15 @@ private:
         if (!succeeded(status)) return status;
         status = expect(token_kind::r_brace, "Unclosed namespace");
         if (!succeeded(status)) return status;
+#if defined(CW_SOURCE_TARGET_CONTEXT_AB) || defined(CW_SOURCE_TARGET_CONTEXT_V2)
+        target_context = {};
+#endif
+#ifdef CW_SOURCE_TARGET_CONTEXT_AUDIT
+        ++detail::target_context_counts.namespace_resets;
+#endif
+#ifdef CW_SOURCE_LOCALITY_AUDIT
+        (void)source_locality01::capture.add({'N', 0, current.file.value(), scope_id.value()});
+#endif
         return advance();
     }
 
@@ -828,10 +917,11 @@ private:
             if (!at(token_kind::identifier))
                 return fail(parser_failure_kind::syntax, "Expected qualified type name");
             // Only qualified namespace traversal; no implicit C++ expression parsing.
-            if (!namespace_id)
+            const auto parent = namespace_id ? namespace_id : type_id;
+            if (!parent)
                 return fail(parser_failure_kind::semantic, "Qualified namespace is not defined");
-            type_id = identities.find(namespace_id, current.identifier, identity_kind::type);
-            namespace_id = identities.find(namespace_id, current.identifier, identity_kind::namespace_scope);
+            type_id = identities.find(parent, current.identifier, identity_kind::type);
+            namespace_id = identities.find(parent, current.identifier, identity_kind::namespace_scope);
             status = advance();
             if (!succeeded(status)) return status;
         }
@@ -1039,8 +1129,42 @@ private:
         return server_status::success;
     }
 
-    [[nodiscard]] server_status scalar(construction_value& output) noexcept {
+    [[nodiscard]] server_status scalar(construction_value& output, identity_ref scope_id) noexcept {
         output = {};
+        if (at(token_kind::identifier)) {
+            const auto name = current.identifier;
+            if (find_visible(scope_id, name, identity_kind::object))
+                return fail(parser_failure_kind::unsupported, "A scalar constant cannot read a Source object value");
+            auto owner = find_visible(scope_id, name, identity_kind::type);
+            auto ns = find_visible(scope_id, name, identity_kind::namespace_scope);
+            const bool unqualified = enum_constant(G, identities, scope_id, name, output);
+            auto status = advance();
+            if (!succeeded(status)) return status;
+            if (!at(token_kind::scope)) {
+                if (!unqualified) return fail(parser_failure_kind::semantic, "Unknown enum constant");
+                return dependency(identity_ref::from_raw(output.operand));
+            }
+            for (;;) {
+                status = advance();
+                if (!succeeded(status)) return status;
+                if (!at(token_kind::identifier))
+                    return fail(parser_failure_kind::syntax, "Expected qualified enum constant");
+                const auto component = current.identifier;
+                if (owner && enum_constant(G, identities, owner, component, output, true)) {
+                    status = dependency(owner);
+                    if (!succeeded(status)) return status;
+                    return advance();
+                }
+                const auto parent = ns ? ns : owner;
+                if (!parent) return fail(parser_failure_kind::semantic, "Unknown qualified enum constant");
+                owner = identities.find(parent, component, identity_kind::type);
+                ns = identities.find(parent, component, identity_kind::namespace_scope);
+                status = advance();
+                if (!succeeded(status)) return status;
+                if (!at(token_kind::scope))
+                    return fail(parser_failure_kind::semantic, "Expected enum value after qualified type");
+            }
+        }
         if (at(token_kind::kw_true) || at(token_kind::kw_false) ||
             at(token_kind::kw_nullptr)) {
             if (at(token_kind::kw_true))
@@ -1087,6 +1211,9 @@ private:
 
     [[nodiscard]] server_status object(identity_ref scope_id,
         bool is_extern = false) noexcept {
+#if defined(CW_SOURCE_TARGET_CONTEXT_AB) || defined(CW_SOURCE_TARGET_CONTEXT_V2)
+        target_context = {};
+#endif
         const auto committed = flush_constructions();
         if (!succeeded(committed)) return committed;
         const auto declaration_file = current.file;
@@ -1180,7 +1307,7 @@ private:
             if (at(token_kind::l_brace)) { close = token_kind::r_brace;
                 status = advance(); if (!succeeded(status)) return status; }
             if (!at(token_kind::r_brace)) {
-                status = scalar(init);
+                status = scalar(init, scope_id);
                 if (!succeeded(status)) return status;
                 flags = graph_object_non_default_initializer;
             }
@@ -1189,7 +1316,7 @@ private:
             close = token_kind::r_brace;
             status = advance(); if (!succeeded(status)) return status;
             if (!at(token_kind::r_brace)) {
-                status = scalar(init); if (!succeeded(status)) return status;
+                status = scalar(init, scope_id); if (!succeeded(status)) return status;
                 flags = graph_object_non_default_initializer;
             }
         }
@@ -1200,7 +1327,7 @@ private:
         }
         status = expect(token_kind::semicolon, "Expected ';' after object");
         if (!succeeded(status)) return status;
-        if (flags && !construction_compatible(G, type, init))
+        if (flags && (!normalize_enum_constant(G, type, init) || !construction_compatible(G, type, init)))
             return fail(parser_failure_kind::semantic, "Object initializer type mismatch");
         identity_ref id;
         status = identities.resolve(scope_id, name, identity_kind::object, id);
@@ -1247,6 +1374,20 @@ private:
             if (!succeeded(status)) return status;
             if (telemetry) ++telemetry->source_object_statements;
         }
+#if defined(CW_SOURCE_TARGET_CONTEXT_AB) || defined(CW_SOURCE_TARGET_CONTEXT_V2)
+        if (target_context_enabled()) {
+            target_context = {object_file, scope_id, name, id, type};
+#ifdef CW_SOURCE_TARGET_CONTEXT_AUDIT
+            ++detail::target_context_counts.declaration_seeds;
+#endif
+        }
+#endif
+#ifdef CW_SOURCE_LOCALITY_AUDIT
+        source_locality01::capture.file(object_file.value(), files.path(object_file));
+        (void)source_locality01::capture.add({'D', 0, object_file.value(), scope_id.value(),
+            name.value(), id.value(), type.value(), 0, 0, 0, 0, is_extern ? 1u : 0u,
+            declaration_location.offset, declaration_location.length});
+#endif
         return advance();
     }
 
@@ -1610,8 +1751,31 @@ private:
         output.reset();
         auto& steps = output.path;
         source_endpoint_resolver::failure resolver_error;
+#ifdef CW_SOURCE_TARGET_CONTEXT_AUDIT
+        if (prebound_object) ++detail::target_context_counts.target_endpoints;
+        else ++detail::target_context_counts.rhs_endpoints;
+#endif
+#if defined(CW_SOURCE_TARGET_CONTEXT_AB) || defined(CW_SOURCE_TARGET_CONTEXT_V2)
+        auto status = server_status::success;
+        if (prebound_object && target_context_enabled() && target_context.who == id &&
+            target_context.matches(current.file, scope_id, current.identifier)) {
+            output.type = output.object_type = target_context.type;
+            resolver_error = source_endpoint_resolver::failure::none;
+#ifdef CW_SOURCE_TARGET_CONTEXT_AUDIT
+            ++detail::target_context_counts.type_hits;
+#endif
+        } else {
+            status = endpoint_resolver.begin_endpoint(id, output, resolver_error);
+        }
+#else
         auto status = endpoint_resolver.begin_endpoint(id, output, resolver_error);
+#endif
         if (!succeeded(status)) return endpoint_status(status, resolver_error);
+#if defined(CW_SOURCE_TARGET_CONTEXT_AB) || defined(CW_SOURCE_TARGET_CONTEXT_V2)
+        // RHS operands never update this context. Origin/path still reset for every statement.
+        if (prebound_object && target_context_enabled())
+            target_context = {current.file, scope_id, current.identifier, id, output.object_type};
+#endif
         output.unit = source_unit{current.file, id};
         output.location = {current.source_offset, current.source_length};
         status = dependency(id);
@@ -1774,7 +1938,14 @@ private:
                 }
                 if (bytes.size() + 1 >= bound)
                     return fail(parser_failure_kind::semantic, "String exceeds char array bound");
+#ifdef CW_SOURCE_STRING_SCRATCH_AUDIT
+                const auto old_capacity = bytes.capacity();
+#endif
                 try { bytes.push_back(b); } catch (...) { return server_status::io_error; }
+#ifdef CW_SOURCE_STRING_SCRATCH_AUDIT
+                detail::audit_string_growth(old_capacity, bytes,
+                    detail::string_bytes_growths, detail::string_bytes_requested);
+#endif
             }
             auto status = advance(); if (!succeeded(status)) return status;
         }
@@ -1802,15 +1973,42 @@ private:
             !G.intrinsic(array.child, ch) || ch != intrinsic_type::char_type)
             return fail(parser_failure_kind::semantic,
                 "String initializer requires bounded char array");
-        std::vector<std::uint8_t> bytes;
+        std::vector<std::uint8_t> local_bytes;
+#ifdef CW_SOURCE_STRING_SCRATCH_AB
+        auto& bytes = detail::source_string_scratch_reuse ? string_bytes_scratch : local_bytes;
+        bytes.clear();
+#else
+        auto& bytes = local_bytes;
+#endif
+#ifdef CW_SOURCE_STRING_SCRATCH_AUDIT
+        ++detail::string_scratch_statements;
+#endif
         auto status = string_literal(bytes, array.payload);
         if (!succeeded(status)) return status;
         status = expect(token_kind::semicolon, "Expected ';' after string");
         if (!succeeded(status)) return status;
-        std::vector<endpoint_path_step> path_steps;
+        std::vector<endpoint_path_step> local_path_steps;
+#ifdef CW_SOURCE_STRING_SCRATCH_AB
+        auto& path_steps = detail::source_string_scratch_reuse ? string_paths_scratch : local_path_steps;
+        path_steps.clear();
+#else
+        auto& path_steps = local_path_steps;
+#endif
         try {
+#ifdef CW_SOURCE_STRING_SCRATCH_AUDIT
+            auto old_capacity = path_steps.capacity();
+#endif
             path_steps = target.path;
+#ifdef CW_SOURCE_STRING_SCRATCH_AUDIT
+            detail::audit_string_growth(old_capacity, path_steps,
+                detail::string_paths_growths, detail::string_paths_requested);
+            old_capacity = path_steps.capacity();
+#endif
             path_steps.push_back({0, endpoint_path_step_kind::array_index, {}});
+#ifdef CW_SOURCE_STRING_SCRATCH_AUDIT
+            detail::audit_string_growth(old_capacity, path_steps,
+                detail::string_paths_growths, detail::string_paths_requested);
+#endif
         } catch (...) { return server_status::io_error; }
 #ifdef CW_SOURCE_V2_STRING_PATH_REUSE_01
         std::vector<endpoint_path_handle>* cached_elements = nullptr;
@@ -1884,6 +2082,12 @@ private:
         status = G.add_resolved_initializations(array.child, string_initializations, any_replaced);
         if (!succeeded(status)) return status;
         for (const auto& entry : string_initializations) {
+#ifdef CW_SOURCE_LOCALITY_AUDIT
+            (void)source_locality01::capture.add({'W', 0, target.unit.file.value(), 0, 0,
+                entry.target.object.value(), target.object_type.value(), array.child.value(),
+                0, 0, entry.target.member.value(), 3,
+                target.location.offset, target.location.length});
+#endif
             status = sources.add_initialization(entry.target);
             if (!succeeded(status)) return status;
         }
@@ -1901,9 +2105,18 @@ private:
 
     [[nodiscard]] server_status assignment(identity_ref scope_id,
         source_unit unit) noexcept {
+#ifdef CW_SOURCE_LOCALITY_AUDIT
+        const auto target_name = current.identifier;
+#endif
         auto& target = assignment_target;
         auto status = read_endpoint(scope_id, target, unit.who);
         if (!succeeded(status)) return status;
+#ifdef CW_SOURCE_LOCALITY_AUDIT
+        source_locality01::capture.file(target.unit.file.value(), files.path(target.unit.file));
+        const auto locality_index = source_locality01::capture.add({'A', 0, target.unit.file.value(),
+            scope_id.value(), target_name.value(), unit.who.value(), target.object_type.value(),
+            target.type.value(), 0, 0, 0, 0, target.location.offset, target.location.length});
+#endif
         status = expect(token_kind::assign, "Expected '=' after Source target");
         if (!succeeded(status)) return status;
         status = advance(); if (!succeeded(status)) return status;
@@ -1944,27 +2157,33 @@ private:
             }
             status = expect(token_kind::semicolon, "Expected ';' after Source link");
             if (!succeeded(status)) return status;
+#ifdef CW_SOURCE_LOCALITY_AUDIT
+            source_locality01::capture.classify(locality_index, 2, source.unit.who.value(), source.object_type.value());
+#endif
             status = queue_construction(construction_opcode::reference_binding);
             if (!succeeded(status)) return status;
             return advance();
         }
         if (at(token_kind::string_literal)) {
+#ifdef CW_SOURCE_LOCALITY_AUDIT
+            source_locality01::capture.classify(locality_index, 3);
+#endif
             status = flush_constructions();
             if (!succeeded(status)) return status;
             status = canonicalize_endpoint(target);
             if (!succeeded(status)) return status;
             return assign_string(target);
         }
-        if (at(token_kind::identifier))
-            return fail(parser_failure_kind::unsupported,
-                "EnumType::Value requires an enum declaration in Header Graph");
         construction_value value;
-        status = scalar(value);
+        status = scalar(value, scope_id);
         if (!succeeded(status)) return status;
         status = expect(token_kind::semicolon, "Expected ';' after Source value");
         if (!succeeded(status)) return status;
-        if (!construction_compatible(G, target.type, value))
+        if (!normalize_enum_constant(G, target.type, value) || !construction_compatible(G, target.type, value))
             return fail(parser_failure_kind::semantic, "Source initializer type mismatch");
+#ifdef CW_SOURCE_LOCALITY_AUDIT
+        source_locality01::capture.classify(locality_index, 1);
+#endif
         status = queue_construction(construction_opcode::initialization, value);
         if (!succeeded(status)) return status;
         return advance();
@@ -2022,8 +2241,7 @@ private:
                 // 'object = literal' cannot be an ordinary Source declarator.
                 // Resolve WHO once; do not repeat type/namespace dispatch.
                 if (model_opcode == source_model_opcode::assignment) {
-                    const auto who = find_visible(scope_id, current.identifier,
-                        identity_kind::object);
+                    const auto who = find_assignment_target(scope_id);
                     if (who) {
                         const source_unit unit{current.file, who};
                         const auto status = assignment(scope_id, unit);
@@ -2036,8 +2254,7 @@ private:
                 // An existing WHO is an assignment target, except when the
                 // same spelling also names a Header type or namespace and the
                 // statement has declarator syntax (e.g. `Signal Signal;`).
-                const auto target = find_visible(scope_id, current.identifier,
-                    identity_kind::object);
+                const auto target = find_assignment_target(scope_id);
                 if (target) {
                     token_kind next = token_kind::invalid;
                     auto status = peek_kind(next);
@@ -2123,6 +2340,11 @@ private:
     semantic_token buffered{};
     bool has_buffered = false;
     std::vector<endpoint_path_step> steps;
+#ifdef CW_SOURCE_STRING_SCRATCH_AB
+    // No Graph/SourceMap entry borrows these buffers. Clear before each use.
+    std::vector<std::uint8_t> string_bytes_scratch;
+    std::vector<endpoint_path_step> string_paths_scratch;
+#endif
     // Reuse two owned buffers across statements, avoiding per-endpoint heap
     // allocation while keeping independently resolved operands alive.
     endpoint assignment_target;
@@ -2187,6 +2409,10 @@ server_status parse_source_roots_v2(
     graph& G, source_map& sources, parser_failure* failure,
     std::vector<parser_warning>* warnings,
     semantic_parse_telemetry* telemetry, source_preparation_v2* preparation) noexcept {
+#ifdef CW_RESOLVED_G_01
+    if (!resolved_g01::begin(G)) return server_status::project_artifact_invalid;
+#endif
+
     using clock = std::chrono::steady_clock;
     const auto started = telemetry ? clock::now() : clock::time_point{};
     // Declared before parser/model storage so their destruction is included.
@@ -2264,6 +2490,9 @@ server_status parse_source_roots_v2(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     clock::now() - replay_started).count());
     }
+#ifdef CW_RESOLVED_G_01
+    if (!resolved_g01::finish(G)) return server_status::project_artifact_invalid;
+#endif
     return server_status::success;
 }
 

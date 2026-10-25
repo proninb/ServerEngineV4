@@ -1,3 +1,4 @@
+#include "enum_constants.hpp"
 #include "header_parser_v2.hpp"
 
 #include "../graph/construction_semantics.hpp"
@@ -345,8 +346,8 @@ server_status header_parser_v2::resolve_named_type(
         }
 
         if (entry == nullptr ||
-            entry->kind !=
-                graph_type_kind::record) {
+            entry->kind != graph_type_kind::record &&
+            entry->kind != graph_type_kind::enumeration) {
 
             return fail(
                 parser_v2_failure_kind::semantic,
@@ -789,10 +790,32 @@ server_status header_parser_v2::parse_type(
             identity = find_type_identity(scope, token->identifier);
         }
 
+        identity_ref namespace_scope;
+        for (auto search = scope; search;) {
+            namespace_scope = identities.find(search, token->identifier, identity_kind::namespace_scope);
+            if (namespace_scope || search == identities.root()) break;
+            identity_record parent;
+            if (!identities.record(search, parent)) break;
+            search = parent.parent;
+        }
+        if (!identity && !namespace_scope)
+            return fail(parser_v2_failure_kind::semantic, "Header Parser V2 named type is unknown");
+        auto advanced = consume();
+        if (!succeeded(advanced)) return advanced;
+        while (at(token_kind::scope)) {
+            const auto parent = namespace_scope ? namespace_scope : identity;
+            if (!parent) return fail(parser_v2_failure_kind::semantic, "Unknown qualified type scope");
+            advanced = consume();
+            if (!succeeded(advanced)) return advanced;
+            if (!at(token_kind::identifier))
+                return fail(parser_v2_failure_kind::syntax, "Expected qualified type name");
+            identity = identities.find(parent, current()->identifier, identity_kind::type);
+            namespace_scope = identities.find(parent, current()->identifier, identity_kind::namespace_scope);
+            advanced = consume();
+            if (!succeeded(advanced)) return advanced;
+        }
         if (!identity) {
-            return fail(
-                parser_v2_failure_kind::semantic,
-                "Header Parser V2 named type is unknown");
+            return fail(parser_v2_failure_kind::semantic, "Header Parser V2 named type is unknown");
         }
 
         server_status resolved;
@@ -816,12 +839,6 @@ server_status header_parser_v2::parse_type(
             if (!succeeded(dependency)) return dependency;
         }
 
-        const auto status =
-            consume();
-
-        if (!succeeded(status)) {
-            return status;
-        }
     }
 
     server_status tail_status;
@@ -1085,6 +1102,7 @@ server_status header_parser_v2::parse_scalar_constant(
     construction_value& output) noexcept {
 
     output = {};
+    if (at(token_kind::identifier)) return parse_enum_constant(output);
 
     bool negative = false;
 
@@ -1187,6 +1205,26 @@ server_status header_parser_v2::parse_reference_name(
 server_status header_parser_v2::parse_construction_operand(
     constructor_operation& output, bool allow_reference_name) noexcept {
 
+    if (at(token_kind::identifier) && enum_lookup_members && enum_lookup_names &&
+        enum_lookup_names->find(*enum_lookup_members, current()->identifier) < enum_lookup_members->size())
+        return parse_reference_name(output);
+    construction_value constant;
+    identity_ref visible_namespace;
+    if (at(token_kind::identifier)) {
+        for (auto search = constant_scope; search;) {
+            visible_namespace = identities.find(search, current()->identifier, identity_kind::namespace_scope);
+            if (visible_namespace || search == identities.root()) break;
+            identity_record record;
+            if (!identities.record(search, record)) break;
+            search = record.parent;
+        }
+    }
+    if (at(token_kind::identifier) &&
+        (enum_constant(G, identities, constant_scope, current()->identifier, constant) ||
+         find_type_identity(constant_scope, current()->identifier) ||
+         visible_namespace)) {
+        return parse_enum_constant(output.value);
+    }
     if (allow_reference_name &&
         (at(token_kind::identifier) || at(token_kind::kw_this))) {
         return parse_reference_name(output);
@@ -1232,8 +1270,10 @@ server_status header_parser_v2::parse_member_initializer(
         if (!succeeded(status)) return status;
     }
 
+    auto normalized = output.value;
     if (!output.reference_name &&
-        !construction_compatible(G, target, output.value)) {
+        (!normalize_enum_constant(G, target, normalized) ||
+         !construction_compatible(G, target, normalized))) {
         return fail_at(parser_v2_failure_kind::semantic,
             "Header Parser V2 member initializer is incompatible with its type",
             output.file, output.source);
@@ -1254,16 +1294,18 @@ server_status header_parser_v2::apply_record_operand(
     }
 
     const auto& target_type = members[target].type;
+    auto normalized = input_value.value;
     auto revision = references.generations.find(target);
 
     if (!input_value.reference_name) {
-        if (!construction_compatible(G, target_type, input_value.value)) {
+        if ((!normalize_enum_constant(G, target_type, normalized) ||
+            !construction_compatible(G, target_type, normalized))) {
             return fail_at(parser_v2_failure_kind::semantic,
                 "Header Parser V2 construction value is incompatible with its field",
                 input_value.file, input_value.source);
         }
         if (revision != references.generations.end()) ++revision->second;
-        construction[target] = input_value.value;
+        construction[target] = normalized;
         return server_status::success;
     }
 
@@ -2043,7 +2085,8 @@ server_status header_parser_v2::apply_nested_operation(
                     operation.file, operation.source);
             }
             type_handle record;
-            if (!G.named(type, record)) {
+            if (!G.named(type, record) || !G.find(record) ||
+                G.find(record)->kind != graph_type_kind::record) {
                 return fail_at(parser_v2_failure_kind::semantic,
                     "Nested constructor target record is invalid",
                     operation.file, operation.source);
@@ -2085,8 +2128,13 @@ server_status header_parser_v2::apply_nested_operation(
         }
     }
 
-    if (type.kind() != type_ref_kind::intrinsic ||
-        !construction_compatible(G, type, operation.value)) {
+    auto normalized = operation.value;
+    type_handle enum_handle;
+    const auto* enum_entry = G.named(type, enum_handle) ? G.find(enum_handle) : nullptr;
+    if ((type.kind() != type_ref_kind::intrinsic &&
+         !(enum_entry && enum_entry->kind == graph_type_kind::enumeration)) ||
+        !normalize_enum_constant(G, type, normalized) ||
+        !construction_compatible(G, type, normalized)) {
         return fail_at(parser_v2_failure_kind::unsupported,
             "Nested constructor assignment requires a writable scalar field and scalar constant",
             operation.file, operation.source);
@@ -2102,7 +2150,7 @@ server_status header_parser_v2::apply_nested_operation(
     if (nested.completed.size() < 32) {
         for (auto& previous : nested.completed) {
             if (previous.path == path) {
-                previous.value = operation.value;
+                previous.value = normalized;
                 return server_status::success;
             }
         }
@@ -2118,7 +2166,7 @@ server_status header_parser_v2::apply_nested_operation(
             }
             const auto found = nested.completed_lookup.find(path.value());
             if (found != nested.completed_lookup.end()) {
-                nested.completed[found->second].value = operation.value;
+                nested.completed[found->second].value = normalized;
                 return server_status::success;
             }
         }
@@ -2130,7 +2178,7 @@ server_status header_parser_v2::apply_nested_operation(
             // fails: the construction run will be discarded on error.
             nested.completed_lookup.emplace(path.value(), nested.completed.size());
         }
-        nested.completed.push_back({nested.owner, path, operation.value});
+        nested.completed.push_back({nested.owner, path, normalized});
     }
     catch (...) { return server_status::io_error; }
     return server_status::success;
@@ -2558,6 +2606,10 @@ server_status header_parser_v2::parse_record(
             "Header Parser V2 record identity could not be resolved");
     }
 
+    const auto previous_scope = constant_scope;
+    struct restore { identity_ref& slot; identity_ref value; ~restore() { slot = value; } } restore_scope{constant_scope, previous_scope};
+    constant_scope = identity;
+
     status =
         remember_record_kind(
             identity,
@@ -2740,6 +2792,15 @@ server_status header_parser_v2::parse_record(
 
     record_member_name_set
         names;
+    struct restore_enum_lookup {
+        const std::vector<member_record>*& members_slot;
+        const record_member_name_set*& names_slot;
+        const std::vector<member_record>* previous_members;
+        const record_member_name_set* previous_names;
+        ~restore_enum_lookup() { members_slot = previous_members; names_slot = previous_names; }
+    } restore_lookup{enum_lookup_members, enum_lookup_names, enum_lookup_members, enum_lookup_names};
+    enum_lookup_members = &members;
+    enum_lookup_names = &names;
 
     auto access =
         default_access(
@@ -2803,6 +2864,11 @@ server_status header_parser_v2::parse_record(
             continue;
         }
 
+        if (at(token_kind::kw_enum)) {
+            status = parse_enum(identity);
+            if (!succeeded(status)) return status;
+            continue;
+        }
         bool virtual_prefix = false;
         if (at(token_kind::kw_virtual)) {
             virtual_prefix = true;
@@ -2965,7 +3031,7 @@ server_status header_parser_v2::parse_record(
 #endif
         status =
             parse_member(
-                scope,
+                identity,
                 record_name,
                 access,
                 members,
@@ -3220,10 +3286,192 @@ server_status header_parser_v2::parse_typedef(
     return consume();
 }
 
+server_status header_parser_v2::parse_enum_constant(construction_value& output) noexcept {
+    if (!at(token_kind::identifier))
+        return fail(parser_v2_failure_kind::syntax, "Expected enum constant");
+    const auto name = current()->identifier;
+    auto owner = find_type_identity(constant_scope, name);
+    auto namespace_scope = constant_scope;
+    identity_ref ns;
+    while (namespace_scope) {
+        ns = identities.find(namespace_scope, name, identity_kind::namespace_scope);
+        if (ns || namespace_scope == identities.root()) break;
+        identity_record record;
+        if (!identities.record(namespace_scope, record)) break;
+        namespace_scope = record.parent;
+    }
+    const bool unqualified = enum_constant(G, identities, constant_scope, name, output);
+    auto status = consume();
+    if (!succeeded(status)) return status;
+    if (!at(token_kind::scope)) {
+        if (!unqualified) return fail(parser_v2_failure_kind::semantic, "Unknown enum constant");
+        return record_dependency(identity_ref::from_raw(output.operand));
+    }
+    for (;;) {
+        status = consume();
+        if (!succeeded(status)) return status;
+        if (!at(token_kind::identifier))
+            return fail(parser_v2_failure_kind::syntax, "Expected qualified enum name");
+        const auto component = current()->identifier;
+        if (owner && enum_constant(G, identities, owner, component, output, true)) {
+            status = consume();
+            if (!succeeded(status)) return status;
+            return record_dependency(owner);
+        }
+        const auto parent = ns ? ns : owner;
+        if (!parent) return fail(parser_v2_failure_kind::semantic, "Unknown qualified enum constant");
+        owner = identities.find(parent, component, identity_kind::type);
+        ns = identities.find(parent, component, identity_kind::namespace_scope);
+        status = consume();
+        if (!succeeded(status)) return status;
+        if (!at(token_kind::scope))
+            return fail(parser_v2_failure_kind::semantic, "Expected enum value after qualified type");
+    }
+}
+
+server_status header_parser_v2::parse_enum(identity_ref scope) noexcept {
+    const auto file = current()->file;
+    auto status = consume();
+    if (!succeeded(status)) return status;
+    bool scoped = false;
+    if (at(token_kind::kw_class) || at(token_kind::kw_struct)) {
+        scoped = true;
+        status = consume();
+        if (!succeeded(status)) return status;
+    }
+    if (!at(token_kind::identifier))
+        return fail(parser_v2_failure_kind::unsupported, "Named enum required; anonymous enums are unsupported");
+    identity_ref identity;
+    status = identities.resolve(scope, current()->identifier, identity_kind::type, identity);
+    if (!succeeded(status)) return fail(parser_v2_failure_kind::semantic, "Enum identity conflicts with an existing declaration");
+    status = consume();
+    if (!succeeded(status)) return status;
+    intrinsic_type underlying = intrinsic_type::signed_int;
+    bool fixed = scoped;
+    if (at(token_kind::colon)) {
+        fixed = true;
+        status = consume();
+        if (!succeeded(status)) return status;
+        resolved_type parsed;
+        status = parse_type(scope, parsed);
+        if (!succeeded(status)) return status;
+        if (!G.intrinsic(parsed.type, underlying) ||
+            !construction_semantics_detail::integral_intrinsic(underlying))
+            return fail(parser_v2_failure_kind::semantic, "Enum underlying type must be integral");
+    }
+    const bool body = at(token_kind::l_brace);
+    if (!body && !fixed)
+        return fail(parser_v2_failure_kind::semantic, "Unscoped enum forward declaration requires an underlying type");
+    std::vector<member_record> names;
+    std::vector<construction_value> values;
+    construction_value next = construction_value::constant(construction_kind::unsigned_integer, 0);
+    bool next_overflow = false;
+    if (body) {
+        status = consume();
+        if (!succeeded(status)) return status;
+        while (!at(token_kind::r_brace) && !input.finished()) {
+            if (!at(token_kind::identifier))
+                return fail(parser_v2_failure_kind::syntax, "Expected enumerator name");
+            const auto name = current()->identifier;
+            for (const auto& entry : names)
+                if (entry.name == name)
+                    return fail(parser_v2_failure_kind::semantic, "Duplicate enumerator name");
+            if (!scoped) {
+                for (const auto handle : G.enum_types()) {
+                    identity_record record;
+                    const auto* type = G.find(handle);
+                    if (G.identity(handle) != identity && type && !(type->flags & graph_enum_scoped) &&
+                        identities.record(G.identity(handle), record) && record.parent == scope &&
+                        G.member(handle, G.find_member(handle, name)))
+                        return fail(parser_v2_failure_kind::semantic, "Unscoped enumerator conflicts with an existing name");
+                }
+                if (identities.find(scope, name, identity_kind::type) ||
+                    identities.find(scope, name, identity_kind::object) ||
+                    identities.find(scope, name, identity_kind::namespace_scope))
+                    return fail(parser_v2_failure_kind::semantic, "Unscoped enumerator conflicts with an existing name");
+            }
+            status = consume();
+            if (!succeeded(status)) return status;
+            auto value = next;
+            if (at(token_kind::assign)) {
+                status = consume();
+                if (!succeeded(status)) return status;
+                // Same literal subset as V3. General constexpr expressions are
+                // deliberately rejected rather than partially evaluated.
+                if (!at(token_kind::plus) && !at(token_kind::minus) && !at(token_kind::pp_number))
+                    return fail(parser_v2_failure_kind::unsupported, "Enumerator requires a decimal integer literal");
+                const bool negative = at(token_kind::minus);
+                if (at(token_kind::plus) || negative) {
+                    status = consume();
+                    if (!succeeded(status)) return status;
+                }
+                const auto* token = current();
+                if (!token || token->kind != token_kind::pp_number ||
+                    token->number.kind != prepared_number_kind_v2::unsigned_integer)
+                    return fail(parser_v2_failure_kind::unsupported, "Enumerator requires a decimal integer literal");
+                const auto magnitude = token->number.bits;
+                if (negative && magnitude > (std::uint64_t{1} << 63))
+                    return fail(parser_v2_failure_kind::semantic, "Enumerator overflows signed 64-bit range");
+                value = construction_value::constant(negative ? construction_kind::signed_integer :
+                    construction_kind::unsigned_integer, negative ? std::uint64_t{0} - magnitude : magnitude);
+                status = consume();
+                if (!succeeded(status)) return status;
+            } else if (next_overflow) {
+                return fail(parser_v2_failure_kind::semantic, "Implicit enumerator overflows 64-bit range");
+            }
+            if (fixed && !enum_value_fits(underlying, value))
+                return fail(parser_v2_failure_kind::semantic, "Enumerator is outside its underlying type range");
+            try {
+                names.push_back({name, G.intrinsic(underlying)});
+                values.push_back(value);
+            } catch (...) { return server_status::io_error; }
+            next_overflow = value.kind == construction_kind::unsigned_integer &&
+                value.bits() == (std::numeric_limits<std::uint64_t>::max)();
+            next = construction_value::constant(
+                value.kind == construction_kind::signed_integer && value.bits() != (std::numeric_limits<std::uint64_t>::max)()
+                    ? construction_kind::signed_integer : construction_kind::unsigned_integer,
+                value.bits() + 1);
+            if (at(token_kind::comma)) {
+                status = consume();
+                if (!succeeded(status)) return status;
+                continue;
+            }
+            if (!at(token_kind::r_brace))
+                return fail(parser_v2_failure_kind::syntax, "Expected ',' or '}' after enumerator");
+        }
+        status = expect(token_kind::r_brace, "Expected '}' after enum");
+        if (!succeeded(status)) return status;
+    }
+    if (!at(token_kind::semicolon))
+        return fail(parser_v2_failure_kind::syntax, "Expected ';' after enum declaration");
+    if (!fixed) {
+        for (const auto candidate : {intrinsic_type::signed_int, intrinsic_type::unsigned_int,
+            intrinsic_type::signed_long_long, intrinsic_type::unsigned_long_long}) {
+            bool fits = true;
+            for (auto value : values) fits &= enum_value_fits(candidate, value);
+            if (fits) { underlying = candidate; break; }
+            if (candidate == intrinsic_type::unsigned_long_long)
+                return fail(parser_v2_failure_kind::semantic, "No integral type can represent all enumerators");
+        }
+        for (auto& name : names) name.type = G.intrinsic(underlying);
+    }
+    type_handle handle;
+    status = G.define_enum(identity, underlying, scoped, fixed, body, names, values, handle);
+    if (!succeeded(status)) return fail(parser_v2_failure_kind::semantic, "Enum declaration conflicts with an existing type");
+    if (provenance) {
+        status = record_contribution(file, source_data_ref::type(identity, body));
+        if (!succeeded(status)) return status;
+    }
+    return consume();
+}
+
 server_status header_parser_v2::parse_scope(
     identity_ref scope,
     bool closing_brace,
     std::size_t depth) noexcept {
+    const auto previous_scope = constant_scope;
+    struct restore { identity_ref& slot; identity_ref value; ~restore() { slot = value; } } restore_scope{constant_scope, previous_scope};
+    constant_scope = scope;
 
     if (depth >
         parser_v2_scope_depth_limit) {
@@ -3265,6 +3513,11 @@ server_status header_parser_v2::parse_scope(
             model = nullptr;
         }
 #endif
+        if (at(token_kind::kw_enum)) {
+            const auto status = parse_enum(scope);
+            if (!succeeded(status)) return status;
+            continue;
+        }
         // HEADER-V2-TYPEDEF-07: Header-scope alias declaration.
         if (at(token_kind::kw_typedef)) {
             const auto status = parse_typedef(scope);

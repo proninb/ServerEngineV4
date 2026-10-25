@@ -2,6 +2,9 @@
 // it cannot mutate Graph, intern names/paths, or publish Source Map entries.
 #pragma once
 #include "../graph/graph.hpp"
+#if defined(CW_SOURCE_TYPE_PREPARE_AB) || defined(CW_SOURCE_TYPE_PREPARE_AUDIT)
+#include "source_type_prepare_policy.hpp"
+#endif
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -61,6 +64,9 @@ public:
         }
         try { output.path.push_back({index, endpoint_path_step_kind::array_index, {}}); }
         catch (...) { return server_status::io_error; }
+#ifdef CW_SOURCE_TYPE_PREPARE_AUDIT
+        ++detail::source_resolver_counts.index_steps;
+#endif
         output.type = array.child;
         return server_status::success;
     }
@@ -73,6 +79,9 @@ public:
         if (dereference) {
             try { output.path.push_back({0, endpoint_path_step_kind::dereference, {}}); }
             catch (...) { return server_status::io_error; }
+#ifdef CW_SOURCE_TYPE_PREPARE_AUDIT
+            ++detail::source_resolver_counts.dereference_steps;
+#endif
         }
         if (!found) {
             error = failure::record_required;
@@ -89,6 +98,9 @@ public:
         if (!succeeded(status)) return status;
         try { output.path.push_back({member.value(), endpoint_path_step_kind::member, {}}); }
         catch (...) { return server_status::io_error; }
+#ifdef CW_SOURCE_TYPE_PREPARE_AUDIT
+        ++detail::source_resolver_counts.member_steps;
+#endif
         output.type = type;
         return server_status::success;
     }
@@ -149,13 +161,52 @@ public:
 
     [[nodiscard]] bool record_type(type_ref type, type_handle& record,
         bool& dereference) const noexcept {
+#ifdef CW_SOURCE_TYPE_PREPARE_AUDIT
+        auto& counts = detail::source_resolver_counts;
+        ++counts.record_calls;
+        counts.record_named += type.kind() == type_ref_kind::named;
+        counts.record_derived += type.kind() == type_ref_kind::derived;
+        counts.observe(counts.input_types, type.value());
+#endif
+#if defined(CW_SOURCE_TYPE_PREPARE_AB) || defined(CW_SOURCE_TYPE_PREPARE_V2)
+        if (preparation_enabled()) {
+            if (type && !prepared_records.empty()) {
+                const auto& entry = prepared_records[preparation_slot(type)];
+                if (entry.input == type && entry.record) {
+                    record = entry.record;
+                    dereference = entry.dereference;
+#ifdef CW_SOURCE_TYPE_PREPARE_AUDIT
+                    ++counts.preparation_hits;
+                    ++counts.record_found;
+                    counts.record_dereference += dereference;
+#endif
+                    return true;
+                }
+            }
+#ifdef CW_SOURCE_TYPE_PREPARE_AUDIT
+            ++counts.preparation_misses;
+#endif
+        }
+#endif
         auto selected = without_cv(type);
         derived_type_record derived;
         dereference = G.derived(selected, derived) &&
             (derived.kind == derived_type_kind::lvalue_reference ||
              derived.kind == derived_type_kind::rvalue_reference);
         if (dereference) selected = without_cv(derived.child);
-        return G.named(selected, record);
+        const auto found = G.named(selected, record) && G.find(record) &&
+            G.find(record)->kind == graph_type_kind::record;
+#ifdef CW_SOURCE_TYPE_PREPARE_AUDIT
+        counts.record_found += found;
+        counts.record_dereference += dereference;
+#endif
+#if defined(CW_SOURCE_TYPE_PREPARE_AB) || defined(CW_SOURCE_TYPE_PREPARE_V2)
+        // Cache only successful catalog reads. A later Graph append can make a
+        // previously missing identity valid; negative results must not survive it.
+        if (found && preparation_enabled())
+            remember_preparation(type, record, dereference);
+#endif
+        return found;
     }
 
     [[nodiscard]] server_status resolve_member(type_handle record, string_id name,
@@ -185,6 +236,41 @@ public:
         return server_status::success;
     }
 private:
+#if defined(CW_SOURCE_TYPE_PREPARE_AB) || defined(CW_SOURCE_TYPE_PREPARE_V2)
+    [[nodiscard]] static bool preparation_enabled() noexcept {
+#ifdef CW_SOURCE_TYPE_PREPARE_AB
+        return detail::source_type_prepare_cache;
+#else
+        return true;
+#endif
+    }
+    struct prepared_record final {
+        type_ref input{};
+        type_handle record{};
+        bool dereference = false;
+    };
+    static_assert(sizeof(prepared_record) == 12);
+    static constexpr std::size_t preparation_slots = 4096;
+    [[nodiscard]] static std::size_t preparation_slot(type_ref type) noexcept {
+        const auto key = type.value() ^ (type.value() >> 16);
+        return static_cast<std::uint32_t>(key * 0x9e3779b9u) >> 20;
+    }
+    void remember_preparation(type_ref type, type_handle record, bool dereference) const noexcept {
+        if (prepared_records.empty()) {
+            if (preparation_allocation_attempted) return;
+            preparation_allocation_attempted = true;
+#ifdef CW_SOURCE_TYPE_PREPARE_TEST
+            if (detail::source_type_prepare_force_unavailable) return;
+#endif
+            try { prepared_records.resize(preparation_slots); }
+            catch (...) { return; } // Acceleration failure preserves the original path.
+        }
+        prepared_records[preparation_slot(type)] = {type, record, dereference};
+    }
+    // Resolver-local, positive-only. Source cannot redefine Header record types.
+    mutable std::vector<prepared_record> prepared_records;
+    mutable bool preparation_allocation_attempted = false;
+#endif
     [[nodiscard]] type_ref without_cv(type_ref type) const noexcept {
         derived_type_record derived;
         while (G.derived(type, derived) &&
@@ -227,10 +313,29 @@ private:
     [[nodiscard]] bool cached_transition(type_handle record, string_id name,
         member_index& member, type_handle& owner, type_ref& value_type,
         std::vector<endpoint_path_step>& ancestry) noexcept {
-        if (member_transitions.empty()) return false;
+#ifdef CW_SOURCE_TYPE_PREPARE_AUDIT
         const auto key = transition_key(record, name);
+        auto& counts = detail::source_resolver_counts;
+        ++counts.member_calls;
+        counts.observe(counts.transition_keys, key);
+#endif
+        if (member_transitions.empty()) {
+#ifdef CW_SOURCE_TYPE_PREPARE_AUDIT
+            ++counts.member_empty;
+#endif
+            return false;
+        }
+#ifndef CW_SOURCE_TYPE_PREPARE_AUDIT
+        const auto key = transition_key(record, name);
+#endif
         const auto& entry = member_transitions[transition_slot(key)];
-        if (!key || entry.key != key || !entry.member) return false;
+        if (!key || entry.key != key || !entry.member) {
+#ifdef CW_SOURCE_TYPE_PREPARE_AUDIT
+            if (entry.key) ++counts.member_conflicts;
+            else ++counts.member_empty;
+#endif
+            return false;
+        }
         if (entry.base_count != 0) {
             const auto begin = static_cast<std::size_t>(entry.base_begin);
             const auto count = static_cast<std::size_t>(entry.base_count);
@@ -243,6 +348,10 @@ private:
             } catch (...) { return false; }
         }
         member = entry.member;
+#ifdef CW_SOURCE_TYPE_PREPARE_AUDIT
+        ++counts.member_hits;
+        counts.copied_base_steps += entry.base_count;
+#endif
         owner = entry.owner;
         value_type = entry.value_type;
         return true;
@@ -280,6 +389,9 @@ private:
     [[nodiscard]] server_status find_inherited(type_handle record, string_id name,
         member_index& index, type_handle& owner,
         std::vector<endpoint_path_step>& ancestry, unsigned depth = 0) noexcept {
+#ifdef CW_SOURCE_TYPE_PREPARE_AUDIT
+        ++detail::source_resolver_counts.inherited_lookups;
+#endif
         if (depth >= 64) { depth_exceeded = true; return server_status::project_configuration_invalid; }
         if (lookup_count != nullptr) ++*lookup_count;
         index = G.find_member(record, name);

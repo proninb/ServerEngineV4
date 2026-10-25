@@ -3,7 +3,7 @@
  *
  * PUBLISH and REBUILD compile the same project.json/source inputs into the same
  * final G. PUBLISH writes compiled.bin/runtime.bin without durable flush or
- * BUILD change tokens. REBUILD also persists BUILD acceleration and flushes it.
+ * BUILD change tokens or content SHA-256. REBUILD persists BUILD acceleration and flushes it.
  */
 #pragma once
 

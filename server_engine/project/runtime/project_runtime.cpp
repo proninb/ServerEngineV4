@@ -1,3 +1,8 @@
+#ifdef CW_RUNTIME_OBJECT_LANES_AB
+#include "object_lane_policy.hpp"
+#define NOMINMAX
+#include <Windows.h>
+#endif
 #include "project_runtime.hpp"
 
 #include "runtime_binding.hpp"
@@ -503,6 +508,23 @@ struct runtime_object_job final {
     std::span<shm_runtime_v2_execute_telemetry> telemetry;
 };
 
+#ifdef CW_RUNTIME_OBJECT_LANES_AB
+struct pretouch_job {
+    volatile std::byte* bytes;
+    std::size_t begin, pages, page_size, lanes;
+};
+void pretouch_lane(void* context, std::size_t lane) noexcept {
+    auto& job = *static_cast<pretouch_job*>(context);
+    const auto first = job.pages / job.lanes * lane + (std::min)(lane, job.pages % job.lanes);
+    const auto count = job.pages / job.lanes + (lane < job.pages % job.lanes);
+    for (std::size_t i = first; i < first + count; ++i) {
+        const auto offset = job.begin + i * job.page_size;
+        const auto value = job.bytes[offset];
+        job.bytes[offset] = value;
+    }
+}
+#endif
+
 void runtime_object_lane(
     void* value,
     std::size_t lane) noexcept {
@@ -566,6 +588,18 @@ runtime_materialize_objects_parallel(
     shm_runtime_v2_execute_telemetry* telemetry,
     std::size_t& lanes_used) noexcept {
 
+#ifdef CW_RUNTIME_OBJECT_LANES_AB
+    struct object_phase_probe {
+        std::size_t& used;
+        std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
+        ~object_phase_probe() {
+            detail::last_object_lanes = used;
+            detail::last_object_phase_ns = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - started).count());
+        }
+    } probe{lanes_used};
+#endif
     lanes_used = 1;
 
     if (telemetry != nullptr) {
@@ -575,8 +609,11 @@ runtime_materialize_objects_parallel(
     const auto object_count =
         runtime.object_count();
 
-    const auto capacity =
-        execution_lane_capacity();
+    auto capacity = execution_lane_capacity();
+#ifdef CW_RUNTIME_OBJECT_LANES_AB
+    if (detail::object_lane_cap != 0)
+        capacity = (std::min)(capacity, detail::object_lane_cap);
+#endif
 
     const auto active_lanes =
         object_count <
@@ -1287,6 +1324,42 @@ server_status create_resident_project(
         clock_type::now();
 
     std::size_t object_lanes = 1;
+
+#ifdef CW_RUNTIME_OBJECT_LANES_AB
+    detail::last_pretouch_ns = 0;
+    detail::last_pretouch_bytes = 0;
+    if (detail::object_pretouch) {
+        const auto started = clock_type::now();
+        auto begin = v2_layout.size();
+        for (std::size_t i = 0; i < compiled.object_slot_count(); ++i) {
+            const auto object = compiled.object_at(i);
+            shm_offset offset = 0;
+            if (object && v2_layout.object_offset(object, offset)) begin = (std::min)(begin, offset);
+        }
+        const auto end = v2_layout.size();
+        if (begin < end && end <= shared_memory.bytes().size()) {
+            SYSTEM_INFO info{};
+            GetSystemInfo(&info);
+            const auto page = static_cast<std::size_t>(info.dwPageSize);
+            // The mapping base is page aligned. Touch only bytes in the Object tail.
+            const auto first = static_cast<std::size_t>(begin);
+            auto* bytes = static_cast<volatile std::byte*>(shared_memory.bytes().data());
+            const auto value = bytes[first];
+            bytes[first] = value;
+            const auto aligned = first + (page - first % page);
+            const auto pages = aligned < end ? (static_cast<std::size_t>(end) - aligned + page - 1) / page : 0;
+            execution_lanes lanes;
+            const auto count = execution_lane_capacity();
+            pretouch_job job{bytes, aligned, pages, page, count};
+            if (!succeeded(lanes.start(count)) || !succeeded(lanes.run(count, pretouch_lane, &job))) {
+                job.lanes = 1;
+                pretouch_lane(&job, 0);
+            }
+            detail::last_pretouch_bytes = static_cast<std::size_t>(end - begin);
+        }
+        detail::last_pretouch_ns = elapsed_ns(started, clock_type::now());
+    }
+#endif
 
     const auto objects =
         runtime_materialize_objects_parallel(

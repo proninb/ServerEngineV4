@@ -9,6 +9,7 @@
 
 #include "construction_value.hpp"
 #include "type_ref.hpp"
+#include "graph.hpp"
 
 namespace cw::server {
 
@@ -144,8 +145,14 @@ template <typename TypeView>
     if (target.kind() ==
         type_ref_kind::named) {
 
-        return value.kind ==
-            construction_kind::zero;
+        type_entry entry;
+        const auto identity = identity_ref::from_raw((static_cast<std::uint32_t>(identity_kind::type) << identity_ref::kind_shift) | target.payload());
+        if (types.type(types.find_type(identity), entry) &&
+            entry.kind == graph_type_kind::enumeration) {
+            return value.kind == construction_kind::zero ||
+                construction_semantics_detail::integer_constant(value);
+        }
+        return value.kind == construction_kind::zero;
     }
 
     if (target.kind() !=

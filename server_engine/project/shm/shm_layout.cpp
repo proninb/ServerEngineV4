@@ -124,6 +124,18 @@ public:
         : project(project), abi(abi), output(output) {}
 
     [[nodiscard]] shm_layout_result build() noexcept {
+        // Validate enum representations even when no object uses the type.
+        // In particular Windows 'long' is narrower than its ABI-independent
+        // compiled representation permits.
+        for (std::size_t i = 0; project.format_version() >= 26 && i < project.type_slot_count(); ++i) {
+            const auto handle = project.type_at(i);
+            type_entry entry;
+            if (handle && project.type(handle, entry) && entry.kind == graph_type_kind::enumeration) {
+                shm_value_layout value;
+                const auto result = resolve_record(handle, value);
+                if (result != shm_layout_result::success) return result;
+            }
+        }
         for (std::size_t index = 0;
              index < project.object_slot_count();
              ++index) {
@@ -562,9 +574,30 @@ private:
         if (slot.state == shm_layout::slot_state::visiting) return shm_layout_result::invalid_input;
         type_entry type;
         if (!project.type(handle, type) || !type.valid_kind()) return shm_layout_result::invalid_input;
-        if (type.kind == graph_type_kind::intrinsic_alias) {
-            const auto result = intrinsic_layout(type.alias_intrinsic(), abi.target, value);
+        if (type.scalar_named()) {
+            const auto result = intrinsic_layout(type.storage_intrinsic(), abi.target, value);
             if (result == shm_layout_result::success) {
+                if (type.kind == graph_type_kind::enumeration) {
+                    const auto underlying = type.storage_intrinsic();
+                    const bool signed_type = underlying == intrinsic_type::signed_char ||
+                        underlying == intrinsic_type::signed_short || underlying == intrinsic_type::signed_int ||
+                        underlying == intrinsic_type::signed_long || underlying == intrinsic_type::signed_long_long ||
+                        underlying == intrinsic_type::char_type ||
+                        (underlying == intrinsic_type::wchar_type &&
+                         abi.target != abi_target::windows_x86 && abi.target != abi_target::windows_x64);
+                    const auto bits = static_cast<unsigned>(value.size * 8);
+                    for (std::uint32_t i = 0; i < type.members.count; ++i) {
+                        construction_value constant;
+                        if (!project.construction_at(type.members.begin + i, constant))
+                            return shm_layout_result::invalid_input;
+                        const bool negative = constant.kind == construction_kind::signed_integer && (constant.bits() >> 63);
+                        if (negative ? (!signed_type || (bits < 64 && constant.bits() <
+                            (std::uint64_t{0} - (std::uint64_t{1} << (bits - 1))))) :
+                            (signed_type ? constant.bits() > ((std::uint64_t{1} << (bits - 1)) - 1) :
+                             (bits < 64 && constant.bits() > ((std::uint64_t{1} << bits) - 1))))
+                            return shm_layout_result::invalid_input;
+                    }
+                }
                 if (value.alignment >
                     (std::numeric_limits<std::uint16_t>::max)()) {
                     return shm_layout_result::overflow;
