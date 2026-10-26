@@ -3636,6 +3636,55 @@ server_status graph::add_resolved_initialization(
     return upsert_initialization(target, value, replaced, false);
 }
 
+server_status graph::apply_resolved_initialization(
+    object_endpoint target, type_ref target_type, construction_value value,
+    initialization_decision decision, void* context,
+    initialization_apply_result& output) noexcept {
+    output = {};
+    if (decision == nullptr || !scalar_initialization_target(target_type))
+        return server_status::project_configuration_invalid;
+    const auto key = link_target_key(target);
+    if (key == 0) return server_status::project_configuration_invalid;
+
+    const auto existing = find_initialization_position(target);
+    if (existing != 0) {
+        if (existing > object_initializations.size() ||
+            object_initializations[existing - 1].target != target)
+            return server_status::project_artifact_invalid;
+        bool accept = false;
+        const auto status = decision(context, existing - 1, true, accept);
+        if (!succeeded(status)) return status;
+        output.slot = existing - 1;
+        output.existed = true;
+        if (accept) object_initializations[existing - 1].value = value;
+        output.applied = accept;
+        return server_status::success;
+    }
+
+    const auto maximum = (std::numeric_limits<std::uint32_t>::max)();
+    if (object_initializations.size() >= maximum) return server_status::io_error;
+    auto status = ensure_initialization_target_index_capacity(1);
+    if (!succeeded(status)) return status;
+    try {
+        if (object_initializations.size() == object_initializations.capacity())
+            object_initializations.reserve((std::min)(static_cast<std::size_t>(maximum),
+                (std::max)(object_initializations.size() + 1, object_initializations.capacity() * 2)));
+    } catch (...) { return server_status::io_error; }
+
+    const auto slot = static_cast<std::uint32_t>(object_initializations.size());
+    bool accept = false;
+    status = decision(context, slot, false, accept);
+    if (!succeeded(status)) return status;
+    if (!accept) return server_status::success;
+    // Capacity is prepared and records are trivial: no allocation after policy.
+    object_initializations.push_back({target, value});
+    insert_initialization_target_index(initialization_target_index, key, slot + 1);
+    ++initialization_target_index_count;
+    output.slot = slot;
+    output.applied = true;
+    return server_status::success;
+}
+
 server_status graph::add_resolved_initializations(
     type_ref target_type, std::span<const object_initialization_record> records,
     bool& any_replaced) noexcept {

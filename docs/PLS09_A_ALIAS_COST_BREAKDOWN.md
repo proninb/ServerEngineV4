@@ -140,9 +140,11 @@ The first four binding/reference stages account for **94.91% of allocation
 calls**. Source inspection matches the counted work: `bindings = direct` copies
 the map, reference evaluation inserts then erases visiting nodes and retains
 cache nodes, and the diagnostics pass builds another binding-target heads map.
-The 734,368 reference-stage allocations equal two per 367,144 evaluated binding
-on this corpus; counted cache stores and visiting inserts corroborate that
-relationship, without claiming every machine instruction was sampled.
+The 367,144 cache stores plus 367,144 visiting inserts account for 734,288
+node entries. The complete reference stage has 734,368 allocation calls: another
+80 calls include bucket/array/output growth. The stage total is not exactly two
+allocations per binding; counters establish the dominant source without claiming
+every machine instruction was sampled.
 
 Peak tracked alias-owned live requested payload is 158.35 MiB; flat index capacity
 is 64 MiB. These are neither process RSS nor all bound/result storage. Buffers

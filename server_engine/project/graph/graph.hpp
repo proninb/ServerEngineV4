@@ -386,6 +386,18 @@ struct object_initialization_record final {
 static_assert(sizeof(object_initialization_record) == 24);
 static_assert(std::is_trivially_copyable_v<object_initialization_record>);
 
+// Transient producer result, never stored in G or persisted. Slots are zero-based
+// initialization_entries() indices, stable for append/replacement. Discard them
+// across reset, rebuild or any operation that removes/reorders initializations.
+struct initialization_apply_result final {
+    static constexpr std::uint32_t invalid_slot = 0xffffffffu;
+    std::uint32_t slot = invalid_slot;
+    bool existed = false;
+    bool applied = false;
+};
+using initialization_decision = server_status (*)(
+    void* context, std::uint32_t slot, bool exists, bool& accept) noexcept;
+
 // Owns one complete semantic G. Member construction is dense per member; object
 // construction is sparse cold storage addressed from the compact object state.
 #ifdef CW_RESOLVED_G_01
@@ -486,9 +498,22 @@ public:
     [[nodiscard]] server_status rebind_resolved_link(
         object_endpoint source, object_endpoint target,
         link_handle& output, bool& replaced) noexcept;
+    [[nodiscard]] link_handle link_at_target(object_endpoint target) const noexcept {
+        return find_link_target(target);
+    }
     [[nodiscard]] server_status add_resolved_initialization(
         object_endpoint target, type_ref target_type,
         construction_value value, bool& replaced) noexcept;
+
+    // One target-index lookup; decision runs BEFORE replacement. The producer
+    // owns policy/scratch and must not mutate/reenter G from the callback.
+    // New-slot capacity is prepared before decision; rejection appends no entry
+    // (reserved capacity may grow). Input uses the resolved/normalized contract
+    // as add_resolved_initialization(). No Source-specific state enters G.
+    [[nodiscard]] server_status apply_resolved_initialization(
+        object_endpoint target, type_ref target_type, construction_value value,
+        initialization_decision decision, void* context,
+        initialization_apply_result& output) noexcept;
 
     [[nodiscard]] bool initialization(
         object_endpoint target,
