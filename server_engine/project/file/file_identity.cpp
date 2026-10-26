@@ -1079,6 +1079,66 @@ file_token_result capture_file_change_checkpoint(
 #endif
 }
 
+file_content_result acquire_file_content_fast(
+    const std::filesystem::path& path,
+    std::string& output) noexcept {
+
+    output.clear();
+    try {
+#if defined(_WIN32)
+        // Keep the existing sharing contract: writers/deleters cannot change
+        // this file while its handle is held. No metadata rechecks are needed.
+        windows_handle file{CreateFileW(path.c_str(), GENERIC_READ,
+            FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr)};
+        if (!file) {
+            const auto error = GetLastError();
+            if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
+                return file_content_result::missing;
+            if (error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION)
+                return file_content_result::changed_during_read;
+            return file_content_result::failed;
+        }
+        LARGE_INTEGER size{};
+        if (GetFileSizeEx(file.get(), &size) == 0 || size.QuadPart < 0 ||
+            static_cast<std::uint64_t>(size.QuadPart) >
+                (std::numeric_limits<std::uint32_t>::max)()) {
+            return file_content_result::failed;
+        }
+        std::string bytes(static_cast<std::size_t>(size.QuadPart), '\0');
+        std::size_t offset = 0;
+        while (offset < bytes.size()) {
+            const auto chunk = static_cast<DWORD>((std::min<std::size_t>)(
+                bytes.size() - offset, std::size_t{1024u * 1024u * 1024u}));
+            DWORD count = 0;
+            if (ReadFile(file.get(), bytes.data() + offset, chunk,
+                    &count, nullptr) == 0 || count != chunk) {
+                return file_content_result::changed_during_read;
+            }
+            offset += count;
+        }
+#else
+        // The portable backend retains its stable snapshot checks: portable
+        // streams do not provide Windows' deny-write sharing contract.
+        file_content_snapshot snapshot;
+        const auto result = acquire_file_content(path, snapshot, false, false);
+        if (result != file_content_result::acquired) return result;
+        auto bytes = std::move(snapshot.bytes);
+#endif
+        output = std::move(bytes);
+        return file_content_result::acquired;
+    }
+    catch (const std::bad_alloc&) {
+        return file_content_result::allocation_failed;
+    }
+    catch (const std::length_error&) {
+        return file_content_result::allocation_failed;
+    }
+    catch (...) {
+        return file_content_result::failed;
+    }
+}
+
 file_content_result acquire_file_content(
     const std::filesystem::path& path,
     file_content_snapshot& output,

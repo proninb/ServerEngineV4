@@ -1,5 +1,11 @@
 # PLS10-C10 — typed-endpoint scratch lifetime
 
+**Unsandboxed recheck, 2026-10-26:** V2 1353.49 ms versus C10 1426.55 ms;
+C10 loses 15/15 native pairs. Median paired penalty 83.06 ms, 95% CI
+38.86–103.71 ms. Original series below did not record launch sandbox mode.
+See `docs/PLS10_C10_UNSANDBOXED_RECHECK_01.md` for explicit launch controls,
+frozen binaries and retained measurements. Production V2 remains preferred.
+
 2026-10-25. **Successful experimental candidate; production V2 unchanged.**
 One change only: retain vector capacity of the ordered committer's temporary
 `source_typed_endpoint` across endpoint requests. No new semantic cache, Graph

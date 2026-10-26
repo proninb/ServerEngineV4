@@ -120,6 +120,12 @@ enum class file_token_result : std::uint8_t {
     bool capture_change_token = true,
     bool calculate_content_hash = true) noexcept;
 
+// Fresh PUBLISH owns only bytes, without persisted metadata or change proofs.
+// On Windows the read handle excludes concurrent writers for the entire read.
+[[nodiscard]] file_content_result acquire_file_content_fast(
+    const std::filesystem::path& path,
+    std::string& output) noexcept;
+
 [[nodiscard]] file_content_result acquire_file_content_proof(
     const std::filesystem::path& path,
     file_content_proof& output) noexcept;

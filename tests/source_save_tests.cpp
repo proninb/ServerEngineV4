@@ -16,6 +16,13 @@
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
+
 namespace {
 
 using namespace cw::server;
@@ -116,6 +123,87 @@ bool acquire(
         files.apply_acquire(
             result,
             changed));
+}
+
+void test_publish_acquisition(
+    test_state& tests,
+    const std::filesystem::path& root) {
+
+    const auto path = root / "publish-bytes.bin";
+    std::string payload(128 * 1024 + 7, '\0');
+    for (std::size_t i = 0; i < payload.size(); ++i)
+        payload[i] = static_cast<char>(i % 251);
+    {
+        std::ofstream stream(path, std::ios::binary);
+        stream.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+        if (!tests.expect(stream.good(), "write binary acquisition fixture")) return;
+    }
+
+    for (const bool publish : {false, true}) {
+        file_context files;
+        if (publish && !tests.expect(succeeded(files.configure_publish_acquisition()),
+                "configure fresh PUBLISH acquisition")) return;
+        file_id file;
+        if (!tests.expect(succeeded(files.resolve(path, file_kind::source, file)),
+                "resolve acquisition fixture")) return;
+        file_acquire_job job;
+        if (!tests.expect(succeeded(files.prepare_acquire(file, job)),
+                "prepare acquisition fixture")) return;
+        bool expect_digest = !publish;
+#ifdef CW_PUBLISH_NO_SHA256_AB
+        expect_digest = true; // Optional A/B builds default to the digest reference.
+#endif
+        tests.expect(job.publish_fast == publish &&
+            job.capture_change_token == !publish && job.calculate_content_hash == expect_digest,
+            "only PUBLISH selects byte-only acquisition");
+        file_acquire_result result;
+        file_context::execute_acquire(job, result);
+        if (!tests.expect(result.kind == file_acquire_result_kind::present &&
+                result.snapshot.bytes == payload, "acquire all binary bytes")) return;
+        tests.expect((expect_digest
+                ? result.snapshot.content_hash == hash_file_content(payload)
+                : result.snapshot.content_hash == file_content_hash{}) &&
+                (!publish || !result.snapshot.change_token_available),
+            "normal acquisition retains digest; PUBLISH omits change proofs");
+        if (publish) {
+            auto digest_job = job;
+            digest_job.calculate_content_hash = true;
+            file_acquire_result digest_result;
+            file_context::execute_acquire(digest_job, digest_result);
+            tests.expect(digest_result.kind == file_acquire_result_kind::present &&
+                digest_result.snapshot.bytes == payload &&
+                digest_result.snapshot.content_hash == hash_file_content(payload),
+                "byte-only acquisition supports the optional digest control");
+        }
+        bool changed = false;
+        tests.expect(succeeded(files.adopt_acquire(result, changed)) && changed &&
+            files.content(file) == payload, "publish acquired bytes into File Context");
+    }
+
+    std::string bytes = "previous result";
+    tests.expect(acquire_file_content_fast(root / "missing.bin", bytes) ==
+        file_content_result::missing && bytes.empty(), "missing file clears fast output");
+    const auto empty = root / "empty.bin";
+    tests.expect(write_text(empty, "") &&
+        acquire_file_content_fast(empty, bytes) == file_content_result::acquired &&
+        bytes.empty(), "fast acquisition accepts empty files");
+    tests.expect(acquire_file_content_fast(root, bytes) != file_content_result::acquired &&
+        bytes.empty(), "fast acquisition rejects directories");
+
+#if defined(_WIN32)
+    // Even a writer that permits other readers must block this deny-write read.
+    const auto writer = CreateFileW(path.c_str(), GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (tests.expect(writer != INVALID_HANDLE_VALUE, "open concurrent writer")) {
+        tests.expect(acquire_file_content_fast(path, bytes) ==
+            file_content_result::changed_during_read && bytes.empty(),
+            "fast acquisition rejects an active writer");
+        CloseHandle(writer);
+    }
+    tests.expect(acquire_file_content_fast(path, bytes) == file_content_result::acquired &&
+        bytes == payload, "fast acquisition recovers after writer closes");
+#endif
 }
 
 void test_native_path_codec(
@@ -1725,6 +1813,8 @@ int main() {
         test_direct_source_save(
             tests,
             tree.root);
+
+        test_publish_acquisition(tests, tree.root);
 
         test_affected_semantic_roots(
             tests,

@@ -120,6 +120,7 @@ struct file_acquire_job final {
     bool baseline_token_available = false;
     bool capture_change_token = true;
     bool calculate_content_hash = true;
+    bool publish_fast = false;
 };
 
 struct file_acquire_result final {
@@ -554,6 +555,7 @@ private:
     bool owned_content_enabled = false;
     bool capture_change_tokens = true;
     bool capture_content_hashes = true;
+    bool publish_fast_acquisition = false;
 
     std::vector<file_dependency_record> dependency_files;
     std::vector<file_id> forward_edges;

@@ -1,5 +1,10 @@
 # PLS10-C10 — reusable typed-endpoint scratch
 
+Explicit unsandboxed recheck: V2 1353.49 ms, C10 1426.55 ms; V2 wins 15/15
+pairs. See `docs/PLS10_C10_UNSANDBOXED_RECHECK_01.md`. Run the frozen-binary
+`recheck_unsandboxed.py` outside sandbox with a new output directory; no rebuild
+is required. The original series below did not record its sandbox launch mode.
+
 C9 follow-up: refine allocation counts first, then test exactly one buffer
 lifetime change. No Graph API/ABI, Source semantics, symbol cache, string batch,
 queue, worker-count, or production dispatch changes.

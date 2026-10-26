@@ -318,6 +318,7 @@ server_status file_context::enable_owned_content() noexcept {
 server_status file_context::configure_publish_acquisition() noexcept {
     const auto configured = enable_owned_content();
     if (succeeded(configured)) {
+        publish_fast_acquisition = true;
         capture_change_tokens = false;
         capture_content_hashes = false;
 #ifdef CW_PUBLISH_NO_SHA256_AB
@@ -2123,6 +2124,7 @@ server_status file_context::prepare_acquire(
     output.path = path(file);
     output.capture_change_token = capture_change_tokens;
     output.calculate_content_hash = capture_content_hashes;
+    output.publish_fast = publish_fast_acquisition;
     output.baseline_present =
         state->present();
     output.baseline_token_available =
@@ -2188,12 +2190,19 @@ void file_context::execute_acquire(
             }
         }
 
-        const auto acquired =
-            acquire_file_content(
+        const auto acquired = job.publish_fast
+            ? acquire_file_content_fast(file_path, output.snapshot.bytes)
+            : acquire_file_content(
                 file_path,
                 output.snapshot,
                 job.capture_change_token,
                 job.calculate_content_hash);
+
+        // Preserve the optional digest A/B control without restoring metadata I/O.
+        if (job.publish_fast && job.calculate_content_hash &&
+            acquired == file_content_result::acquired) {
+            output.snapshot.content_hash = hash_file_content(output.snapshot.bytes);
+        }
 
         switch (acquired) {
         case file_content_result::acquired:
