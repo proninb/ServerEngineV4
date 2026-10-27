@@ -1,0 +1,252 @@
+{
+  "ordinary": {
+    "unit": {
+      "images": {
+        "compiled.bin": "16a81fc1b08522803a6b71db97187fbae5babf144703fe30b306a845b6d0921e",
+        "runtime.bin": "a0281b3bb48103a7cd339cccd072d24f3524db9932bc67b58a714906996b5ee6"
+      },
+      "native": {
+        "bytes": 2146276728,
+        "sha256": "3864b27bbaa8e54e30eb4a2e2c806ecf77b78434b10e49b70a26659fe74f0743",
+        "excluded_system_bytes": 72,
+        "fixed_base": "0x0000010000000000"
+      }
+    },
+    "simple": {
+      "images": {
+        "compiled.bin": "6f00928db18a49d467eb9a11c9f8b7ac015201dcaef636ebdaceb2475c7c6f9c",
+        "runtime.bin": "a0e7af3949422baae01860dce9f6e2e203dd60ff950a9aaa5755f0f8b2ab60cf"
+      },
+      "native": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "excluded_system_bytes": 72,
+        "fixed_base": "0x0000010000000000"
+      }
+    },
+    "mixed": {
+      "images": {
+        "compiled.bin": "eff100cade7eadc6471171ae2f441baa01b814e903cc3a7cc6c7e52f908a4fb4",
+        "runtime.bin": "9fbf7527827c13880ba5adee09d0a2c560d5c80d01b96b4f937bb706d61bcbac"
+      },
+      "native": {
+        "bytes": 72008,
+        "sha256": "9dd876e5f74d57329b8d5b2c1c5438e164edd476e55363cabe44ec74fd0e1cc8",
+        "excluded_system_bytes": 72,
+        "fixed_base": "0x0000010000000000"
+      }
+    },
+    "lifecycle": {
+      "images": {
+        "compiled.bin": "127183d486ea2ab6b908f3c3ea1fe35998278834027fa0ed70d070c42eb2b57c",
+        "runtime.bin": "8714dc1bc16728eb21e5c4358598b2fa1ee5f1ae6c31e974696d10258bdef37f"
+      },
+      "native": {
+        "bytes": 48,
+        "sha256": "e50867f6f03085a1ea60766ce55483085b04c86b6effb2b75ebff38f5a89f9ab",
+        "excluded_system_bytes": 72,
+        "fixed_base": "0x0000010000000000"
+      },
+      "values": {
+        "b.x": {
+          "type": 12,
+          "size": 4,
+          "bits": 7
+        },
+        "t.ref.x": {
+          "type": 12,
+          "size": 4,
+          "bits": 7
+        },
+        "t.mode": {
+          "type": 12,
+          "size": 4,
+          "bits": 2
+        }
+      },
+      "links": {
+        "objects": [
+          {
+            "object": "t",
+            "links": [
+              {
+                "source": "b",
+                "target": "t.ref",
+                "file": "C:/Boris/ServerEngineV4/build/production-pgo-current-02/fixtures/lifecycle/source.cpp"
+              }
+            ],
+            "assigns": []
+          }
+        ]
+      }
+    },
+    "rebuild": {
+      "images": {
+        "compiled.bin": "f364d0f0e150bb3991138593f4b82c96cb50d2484c987c086028697dc89df9eb",
+        "runtime.bin": "d4f72be60c73e614206633a0061ef413ec8d3f936551687149c60bedbe9a832c"
+      },
+      "native": {
+        "bytes": 8,
+        "sha256": "aae89fc0f03e2959ae4d701a80cc3915918c950b159f6abb6c92c1433b1a8534",
+        "excluded_system_bytes": 72,
+        "fixed_base": "0x0000010000000000"
+      }
+    },
+    "build-nochange": {
+      "images": {
+        "compiled.bin": "f364d0f0e150bb3991138593f4b82c96cb50d2484c987c086028697dc89df9eb",
+        "runtime.bin": "d4f72be60c73e614206633a0061ef413ec8d3f936551687149c60bedbe9a832c"
+      },
+      "native": {
+        "bytes": 8,
+        "sha256": "aae89fc0f03e2959ae4d701a80cc3915918c950b159f6abb6c92c1433b1a8534",
+        "excluded_system_bytes": 72,
+        "fixed_base": "0x0000010000000000"
+      }
+    },
+    "build-change": {
+      "expected_failure": [
+        {
+          "id": 2007,
+          "severity": "error",
+          "detail": "RUNTIME-BIN-02 supports PUBLISH/LOAD only; semantic-changing BUILD is deferred"
+        }
+      ],
+      "images": {
+        "compiled.bin": "f364d0f0e150bb3991138593f4b82c96cb50d2484c987c086028697dc89df9eb",
+        "runtime.bin": "d4f72be60c73e614206633a0061ef413ec8d3f936551687149c60bedbe9a832c"
+      },
+      "native": {
+        "bytes": 8,
+        "sha256": "aae89fc0f03e2959ae4d701a80cc3915918c950b159f6abb6c92c1433b1a8534",
+        "excluded_system_bytes": 72,
+        "fixed_base": "0x0000010000000000"
+      }
+    }
+  },
+  "pgo": {
+    "unit": {
+      "images": {
+        "compiled.bin": "16a81fc1b08522803a6b71db97187fbae5babf144703fe30b306a845b6d0921e",
+        "runtime.bin": "a0281b3bb48103a7cd339cccd072d24f3524db9932bc67b58a714906996b5ee6"
+      },
+      "native": {
+        "bytes": 2146276728,
+        "sha256": "3864b27bbaa8e54e30eb4a2e2c806ecf77b78434b10e49b70a26659fe74f0743",
+        "excluded_system_bytes": 72,
+        "fixed_base": "0x0000010000000000"
+      }
+    },
+    "simple": {
+      "images": {
+        "compiled.bin": "6f00928db18a49d467eb9a11c9f8b7ac015201dcaef636ebdaceb2475c7c6f9c",
+        "runtime.bin": "a0e7af3949422baae01860dce9f6e2e203dd60ff950a9aaa5755f0f8b2ab60cf"
+      },
+      "native": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "excluded_system_bytes": 72,
+        "fixed_base": "0x0000010000000000"
+      }
+    },
+    "mixed": {
+      "images": {
+        "compiled.bin": "eff100cade7eadc6471171ae2f441baa01b814e903cc3a7cc6c7e52f908a4fb4",
+        "runtime.bin": "9fbf7527827c13880ba5adee09d0a2c560d5c80d01b96b4f937bb706d61bcbac"
+      },
+      "native": {
+        "bytes": 72008,
+        "sha256": "9dd876e5f74d57329b8d5b2c1c5438e164edd476e55363cabe44ec74fd0e1cc8",
+        "excluded_system_bytes": 72,
+        "fixed_base": "0x0000010000000000"
+      }
+    },
+    "lifecycle": {
+      "images": {
+        "compiled.bin": "127183d486ea2ab6b908f3c3ea1fe35998278834027fa0ed70d070c42eb2b57c",
+        "runtime.bin": "8714dc1bc16728eb21e5c4358598b2fa1ee5f1ae6c31e974696d10258bdef37f"
+      },
+      "native": {
+        "bytes": 48,
+        "sha256": "e50867f6f03085a1ea60766ce55483085b04c86b6effb2b75ebff38f5a89f9ab",
+        "excluded_system_bytes": 72,
+        "fixed_base": "0x0000010000000000"
+      },
+      "values": {
+        "b.x": {
+          "type": 12,
+          "size": 4,
+          "bits": 7
+        },
+        "t.ref.x": {
+          "type": 12,
+          "size": 4,
+          "bits": 7
+        },
+        "t.mode": {
+          "type": 12,
+          "size": 4,
+          "bits": 2
+        }
+      },
+      "links": {
+        "objects": [
+          {
+            "object": "t",
+            "links": [
+              {
+                "source": "b",
+                "target": "t.ref",
+                "file": "C:/Boris/ServerEngineV4/build/production-pgo-current-02/fixtures/lifecycle/source.cpp"
+              }
+            ],
+            "assigns": []
+          }
+        ]
+      }
+    },
+    "rebuild": {
+      "images": {
+        "compiled.bin": "f364d0f0e150bb3991138593f4b82c96cb50d2484c987c086028697dc89df9eb",
+        "runtime.bin": "d4f72be60c73e614206633a0061ef413ec8d3f936551687149c60bedbe9a832c"
+      },
+      "native": {
+        "bytes": 8,
+        "sha256": "aae89fc0f03e2959ae4d701a80cc3915918c950b159f6abb6c92c1433b1a8534",
+        "excluded_system_bytes": 72,
+        "fixed_base": "0x0000010000000000"
+      }
+    },
+    "build-nochange": {
+      "images": {
+        "compiled.bin": "f364d0f0e150bb3991138593f4b82c96cb50d2484c987c086028697dc89df9eb",
+        "runtime.bin": "d4f72be60c73e614206633a0061ef413ec8d3f936551687149c60bedbe9a832c"
+      },
+      "native": {
+        "bytes": 8,
+        "sha256": "aae89fc0f03e2959ae4d701a80cc3915918c950b159f6abb6c92c1433b1a8534",
+        "excluded_system_bytes": 72,
+        "fixed_base": "0x0000010000000000"
+      }
+    },
+    "build-change": {
+      "expected_failure": [
+        {
+          "id": 2007,
+          "severity": "error",
+          "detail": "RUNTIME-BIN-02 supports PUBLISH/LOAD only; semantic-changing BUILD is deferred"
+        }
+      ],
+      "images": {
+        "compiled.bin": "f364d0f0e150bb3991138593f4b82c96cb50d2484c987c086028697dc89df9eb",
+        "runtime.bin": "d4f72be60c73e614206633a0061ef413ec8d3f936551687149c60bedbe9a832c"
+      },
+      "native": {
+        "bytes": 8,
+        "sha256": "aae89fc0f03e2959ae4d701a80cc3915918c950b159f6abb6c92c1433b1a8534",
+        "excluded_system_bytes": 72,
+        "fixed_base": "0x0000010000000000"
+      }
+    }
+  }
+}

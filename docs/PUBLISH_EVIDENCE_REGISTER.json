@@ -1,0 +1,2270 @@
+{
+  "as_of": "2026-10-26",
+  "production_commit": "87abe00f7b6abd611c045b20d999649b9152659a",
+  "scope": "Source report inventory; excerpts are historical, not production adoption claims",
+  "reports": [
+    {
+      "path": "docs/BULK_MATERIALIZATION_01.md",
+      "title": "# BULK-MATERIALIZATION-01 — 2026-10-24",
+      "lead": " ## Решение  **NO ADOPTION.** Проверенный bulk prototype сохраняет G/Runtime artifacts и diagnostics, но замедляет полный PUBLISH. Пользовательский порог ≥10% ускорения с доверительным интервалом, исключающим ноль, не выполнен. Production Graph API/ABI, Source Parser, persistence и Runtime в этом эксперименте не изменены. ",
+      "decision_lines": [
+        [
+          5,
+          "**NO ADOPTION.** Проверенный bulk prototype сохраняет G/Runtime artifacts и diagnostics, но замедляет полный PUBLISH. Пользовательский порог ≥10% ускорения с доверительным интервалом, исключающим ноль, не выполнен. Produ"
+        ],
+        [
+          9,
+          "Один UnitProXL fixture, Release + IPO, один standalone executable для control и candidate. 15 пар, порядок AB/BA чередуется. Все `SERVER_ENGINE_*:BOOL` CMake options совпали с production baseline. Timed runs без audit co"
+        ],
+        [
+          20,
+          "Принятый порог — медианное парное ускорение полного PUBLISH не менее 10% и нижняя граница CI выигрыша >0. Получено замедление; прототип не внедрён."
+        ],
+        [
+          80,
+          "7 calibration pairs: frozen production executable `build/enum-v4/Release/ServerEngineV4PublishBenchmark.exe` против mode 0 standalone. Неактивный standalone быстрее по полному PUBLISH на 6,53 мс, CI [1,67; 10,13]; Source"
+        ]
+      ],
+      "sha256": "9e3118be88a367cbdad01c6afa816cde79302fd51383cdb1496f400122c5bc6d"
+    },
+    {
+      "path": "docs/CANONICALIZER_01.md",
+      "title": "# CANONICALIZER-01: модель идентичности и стоимость согласования",
+      "lead": " Изолированный эксперимент реализован в experiments/canonicalizer-01/. Рабочий PUBLISH использует прежние Parser, identity_space, String Table и G. Новая архитектура и алгоритм для неё этим экспериментом не утверждаются. ",
+      "decision_lines": [
+        [
+          42,
+          "identity_space. Capture выключен по умолчанию и включается только для отдельного"
+        ],
+        [
+          44,
+          "этих hooks. Время capture PUBLISH не используется для оценки ускорения."
+        ]
+      ],
+      "sha256": "d50c828a019123d18c59349154a5c6009eda4a895402f8858064deadc03a8f6d"
+    },
+    {
+      "path": "docs/CONSTRUCTION_LIFETIME_01.md",
+      "title": "# CONSTRUCTION-LIFETIME-01 — memory benefit, not promoted for speed",
+      "lead": " The experiment stores full_construction_context in an in-place optional. Reference destroys it at the original end of scope. Candidate resets it after all persistence workers join and before resident mappings/SHM construction. Resident publication reads its own compiled/runtime images and caller-owned settings; no context data",
+      "decision_lines": [
+        [
+          1,
+          "# CONSTRUCTION-LIFETIME-01 — memory benefit, not promoted for speed"
+        ],
+        [
+          13,
+          "production lifetime remains unchanged."
+        ],
+        [
+          30,
+          "Decision: retain the isolated candidate as a measured memory/time tradeoff, but do"
+        ],
+        [
+          31,
+          "not enable it as a production speed optimization. It can be revisited if reducing"
+        ]
+      ],
+      "sha256": "8f6ec8182c137fe025b12054e102723b4d6167cb88f6f1d45fae3a58063a8e2e"
+    },
+    {
+      "path": "docs/CPU_SAMPLING_CURRENT_V2_20261023.md",
+      "title": "# Current V2 CPU sampling — 2026-10-23",
+      "lead": " Dataset: `build/source-cpu-sampling-02/capture-20261023-125921/`. Frozen binary: `build/source-cpu-sampling-02/frozen-current-v2/`. Production algorithms include lazy Header state and 4x member-name index growth. Release /O2 + IPO and matching native PDB; no hot-path audit counters or A/B switches.",
+      "decision_lines": [
+        [
+          65,
+          "share agrees with the accepted rehash reduction; cross-series shares are not a"
+        ],
+        [
+          66,
+          "paired speedup estimate. The previous cursor cached-view candidate remains rejected."
+        ]
+      ],
+      "sha256": "6b76eba88cfd825f504f51cdb29a56d79d89a277af3a2d1dd200851975c3bdb6"
+    },
+    {
+      "path": "docs/DIRECT_G_MMAP_AB_01.md",
+      "title": "# DIRECT-G-MMAP-AB-01 — no default adoption",
+      "lead": " Full UnitProXL: **24,027 types, 137,584 objects, 367,144 links**. Windows x64, MSVC 19.51, Release `/O2` + IPO `/GL` + `/LTCG`, no PGO. Date: 2026-10-26.  **Result:** current append/reallocate v27 is slower in total PUBLISH and roughly doubles compiled.bin. It lowers private commit, but not peak working set. The implementation has been rolled back from active engine code, including the feature flag, allocator and counters. The prior RAM G + packed encoder is restored; frozen v27 sources/binarie",
+      "decision_lines": [],
+      "sha256": "abe3426cbfecf4ee317c50282cec68006ee005a377d16a3391dd9eae83ef9797"
+    },
+    {
+      "path": "docs/EVALUATOR_ISOLATION_01.md",
+      "title": "# EVALUATOR-ISOLATION-01 — последовательная изоляция records",
+      "lead": " Дата: 2026-10-22. Эксперимент поверх SC03, без parallel evaluator, STATE-LAZY и изменений production PUBLISH. Код: `experiments/evaluator-isolation-01/`.  ## Результат",
+      "decision_lines": [
+        [
+          4,
+          "и изменений production PUBLISH. Код: `experiments/evaluator-isolation-01/`."
+        ],
+        [
+          31,
+          "Это архитектурный эксперимент корректности, не заявка на ускорение."
+        ],
+        [
+          106,
+          "сохраняется исходный порядок принятия решения. Сообщение не выбирается по времени"
+        ]
+      ],
+      "sha256": "83d0ccd667b61dbd64ba6b887df198ae36955ba6d2157d3767a7f03a69ef86c9"
+    },
+    {
+      "path": "docs/EVALUATOR_PARALLEL_01.md",
+      "title": "# EVALUATOR-PARALLEL-01",
+      "lead": " Эксперимент завершён: параллельный evaluator уменьшил полный semantic lifecycle UnitProXL до 144,63 мс при 8 workers и 145,09 мс при 16 workers. Это текущая constructor/type projection, а не production PUBLISH или полная Header V2 grammar. Production PUBLISH этим экспериментом не изменён.",
+      "decision_lines": [
+        [
+          55,
+          "двух независимых медиан; отрицательное значение означает ускорение."
+        ]
+      ],
+      "sha256": "f61c1146ac229987781c11d9899a62a4db6c0eba5fcb73c442b3a113dd81a51a"
+    },
+    {
+      "path": "docs/EVALUATOR_SCALING_01.md",
+      "title": "# EVALUATOR-SCALING-01 — cost breakdown и dependency audit",
+      "lead": " Дата: 2026-10-22. Основа — frozen SC03. Эксперимент только диагностический: алгоритмы, структуры semantic model, production PUBLISH и исходники SC03 не менялись. Код: `experiments/evaluator-scaling-01/`. ",
+      "decision_lines": [],
+      "sha256": "0556ba76099c0f6e4520ed3ce22c3705836e6e56656699ea4e979fdd009164f5"
+    },
+    {
+      "path": "docs/FRONTEND_PHYSICAL_11.md",
+      "title": "# FRONTEND-PHYSICAL-11 — Anchor replay of include directives",
+      "lead": " ## Scope and invariant  Only the **physical** include-discovery scanner changes. The lexer already records `lexical_directive_anchor{word_offset, source_base}` for every",
+      "decision_lines": [],
+      "sha256": "e1ab363939374ebbb821ab9dec533e436ac0cb2653285f4b6cd98c444e7ee1c9"
+    },
+    {
+      "path": "docs/FRONTEND_PHYSICAL_12.md",
+      "title": "# FRONTEND-PHYSICAL-12 — Positive include resolution reuse",
+      "lead": " ## Scope  `prepared_include_builder_v2` owns a **single-use**, single-threaded memo `(local candidate path, quoted/angled form) -> file_id`. Paths are native",
+      "decision_lines": [],
+      "sha256": "b7b2d37dea4ae35138ec7cd685c2710940ec91a0e434abab091f63ca5610828c"
+    },
+    {
+      "path": "docs/GRAPH_IDENTITY_APPEND_ARCHITECTURE.md",
+      "title": "# Graph Identity and Direct mmap BUILD Architecture",
+      "lead": " Status: **Target architecture decision**   Repository baseline: `proninb/ServerEngineV4`   Decision baseline: `c5e73eca19065aec8018b875a6ef9ef76e1c73e3`   Date: 2026-10-01",
+      "decision_lines": [],
+      "sha256": "6af35c21c8420cfa5ca89cc579c5b78702c650078069722b9a94c506514a4faf"
+    },
+    {
+      "path": "docs/GRAPH_IDENTITY_APPEND_HANDOFF.md",
+      "title": "# ServerEngineV4 — Graph Identity / Direct mmap BUILD handoff",
+      "lead": " Repository: `proninb/ServerEngineV4`   Branch: `work/ic-catalog`   Verified decision baseline: `c5e73eca19065aec8018b875a6ef9ef76e1c73e3` ",
+      "decision_lines": [],
+      "sha256": "5e3af1bbb3616a7cf573d1004c15eff526f11ea08b44e534804538d94fc6ff4d"
+    },
+    {
+      "path": "docs/HEADER_CHUNK_01.md",
+      "title": "# HEADER-CHUNK-01 — стоимость безопасного разделения root",
+      "lead": " Первый этап завершён: реализованы и измерены boundary discovery и планирование участков. Chunk Parser не добавлен. Production PUBLISH и SB04 не изменены.  ## Основной результат",
+      "decision_lines": [],
+      "sha256": "5393a8cdb6dfb8340b07f7fcc151770ae5bfa980e8cb6de9d9173d382f6e5a3c"
+    },
+    {
+      "path": "docs/HEADER_CHUNK_02.md",
+      "title": "# HEADER-CHUNK-02 — parallel extraction и ordered semantic assembly",
+      "lead": " Эксперимент реализован. Для проверяемой SB04 type-binding projection один длинный root действительно превращается в параллельные задачи без копирования накопленного каталога типов. Семантический порядок, WHO, типы, origins и первое diagnostic совпадают с whole-root SB04; отдельно выполнено сравнение с Header V2.",
+      "decision_lines": [
+        [
+          76,
+          "После 8 workers extraction почти не ускоряется, хотя длинный root уже не"
+        ],
+        [
+          83,
+          "само по себе не гарантирует ускорения всего пути."
+        ]
+      ],
+      "sha256": "ccc2966c0ea4ccdf4795380617fe3e316299791e3e97920e04d16e28dffec497"
+    },
+    {
+      "path": "docs/HEADER_DIRECT_G_01.md",
+      "title": "# HEADER-DIRECT-G-01 — 23 октября 2026",
+      "lead": " **Откатан по решению пользователя.** Production сохраняет Header V2. Исходники adapter и изменения общих экспериментальных файлов убраны из рабочего дерева; восстановимая копия и patch сохранены в `build/header-direct-g-01/rollback-20261023/`. Ниже — исторический отчёт эксперимента,",
+      "decision_lines": [
+        [
+          86,
+          "Этот baseline не равен production Header-only PUBLISH 409,13 мс из предыдущей"
+        ],
+        [
+          102,
+          "Member initializer gaps явно отклоняются. Callable grammar пока проверяется"
+        ],
+        [
+          104,
+          "является самостоятельной полной заменой production callable validation."
+        ],
+        [
+          107,
+          "незавершёнными. Полную Header V2 grammar parity и production integration не объявляем."
+        ]
+      ],
+      "sha256": "c0c59e200b9e9882914c1c3e3c8f9b59f40b8a2fa446789ab0a39e63e379d92d"
+    },
+    {
+      "path": "docs/HEADER_GRAPH_INDEX_01.md",
+      "title": "# HEADER-GRAPH-INDEX-01 — 23 октября 2026",
+      "lead": " **Принято:** growth factor 4× у существующего transient member-name index в G. Production остаётся на Header/Source V2 с ранее принятым lazy state. Нового индекса, промежуточной semantic модели или Graph слоя нет. ",
+      "decision_lines": [
+        [
+          3,
+          "**Принято:** growth factor 4× у существующего transient member-name index в G."
+        ],
+        [
+          4,
+          "Production остаётся на Header/Source V2 с ранее принятым lazy state. Нового индекса,"
+        ],
+        [
+          63,
+          "## Bridge против принятого V2+lazy executable"
+        ],
+        [
+          68,
+          "| Медиана, мс | Принятый V2+lazy | Новый index growth |"
+        ]
+      ],
+      "sha256": "f8a0d92e2bc7e23e6335567c6a4a4ff46de5a2a5921f9e992dd36a2914382aa7"
+    },
+    {
+      "path": "docs/HEADER_MODEL_V2_01.md",
+      "title": "# HEADER-MODEL-V2-01 — bounded syntax-model experiment",
+      "lead": " ## Contract  This is an **experimental first slice**, NOT a full structured Header Model. It does not replace Header V2 record-member/type validation. Its purpose is",
+      "decision_lines": [],
+      "sha256": "468530aa6ee51154d595befd4d113c1276dea9d9cf67d293dffdf2c0f365373d"
+    },
+    {
+      "path": "docs/HEADER_MODEL_V2_02B1.md",
+      "title": "# HEADER-MODEL-V2-02B1 — effective-token experiment",
+      "lead": " Status: opt-in A/B research slice; **not** a completed general Header Model. Depends on local HEADER-MODEL-V2-01 and 02A installers, PUBLISH Header V2.  ## Actual implementation",
+      "decision_lines": [],
+      "sha256": "0e1293b49a3c5bc77ff61d60951a48f13b9f25b9136e04141dc222b18f4f0c87"
+    },
+    {
+      "path": "docs/HEADER_MODEL_V2_02B2.md",
+      "title": "# HEADER-MODEL-V2-02B2 — physical syntax preparation, streaming semantic commit",
+      "lead": " **Status:** opt-in experiment; do not adopt or commit until Release/MSVC tests and UnitProXL byte parity pass. This patch is applied ON TOP OF 02B1; it replaces that experiment's prepass/replay implementation (not a clean-room standalone parser).",
+      "decision_lines": [],
+      "sha256": "bbb29b1ce35ea85d3f4de7320052efa942108bf268c2de355c87455ab7e0c151"
+    },
+    {
+      "path": "docs/HEADER_ONLY_PUBLISH_01.md",
+      "title": "# HEADER-ONLY-PUBLISH-01 — 23 октября 2026",
+      "lead": " Source inputs отключены в отдельной копии manifest UnitProXL. Исходный проект, production Parser и настройки PUBLISH не изменены. Полная контрольная копия и Header-only копия используют один frozen Release+IPO executable из SOURCE-CPU-SAMPLING-02. В обоих случаях включён production Header V2.",
+      "decision_lines": [
+        [
+          65,
+          "production header_ms или 409,134 мс полного Header-only PUBLISH."
+        ],
+        [
+          67,
+          "Вывод: production Header-only путь до конечных артефактов работает примерно за"
+        ],
+        [
+          68,
+          "409 мс. Удаление Sources не ускоряет собственно Header V2 существенно. Для"
+        ]
+      ],
+      "sha256": "8084a6092714f84a5cd451f2c3a0abaa5e2ceb5f21d572d61fdf001547e3cddc"
+    },
+    {
+      "path": "docs/HEADER_SEMANTIC_COVERAGE_01.md",
+      "title": "# HEADER-SEMANTIC-COVERAGE-01 — аудит и первый отдельный slice",
+      "lead": " **Статус: полное Header V2 coverage ещё не достигнуто.** Реализован первый изолированный slice: managed constructors с прямыми scalar operands. Reference targets, nested paths и другие категории этим результатом не закрыты. Production PUBLISH остаётся на прежней реализации; новых его измерений нет.",
+      "decision_lines": [],
+      "sha256": "4279f6f68226f4388faa845ab3c9ef01b38734a6074b0f7963c46549712ae779"
+    },
+    {
+      "path": "docs/HEADER_SEMANTIC_COVERAGE_02.md",
+      "title": "# HEADER-SEMANTIC-COVERAGE-02 — reference operands и targets",
+      "lead": " Reference slice реализован. Definitions без gaps на UnitProXL выросли **18 566 → 23 678 из 24 027**. Все **84 474** reference operands извлечены и классифицированы: **75 285** разрешены и проверены против Header V2, **9 189** остаются исключёнными вместе с definitions, содержащими nested targets.",
+      "decision_lines": [
+        [
+          9,
+          "Production PUBLISH не изменён. TypeRequest, canonicalization, WHO и алгоритм"
+        ]
+      ],
+      "sha256": "d4b8fe498f374e0af1301a3e1d7caba7e1430ca76088bdb18a157151dbadf7d8"
+    },
+    {
+      "path": "docs/HEADER_SEMANTIC_COVERAGE_03.md",
+      "title": "# HEADER-SEMANTIC-COVERAGE-03 — nested targets",
+      "lead": " Дата: 2026-10-22. Изолированный эксперимент, production PUBLISH не изменён. Исходники: `experiments/header-semantic-coverage-03/`.  ## Результат корректности",
+      "decision_lines": [],
+      "sha256": "7e3a31c6aaa4e4b383c7ce7d7d9e2d9626be090ed56fb8bfa18b5d3bb5567380"
+    },
+    {
+      "path": "docs/HEADER_SEMANTIC_SPACE.md",
+      "title": "# Header Semantic Space",
+      "lead": " `HEADER-SEMANTIC-SPACE-01` makes the Header parser's outer control state explicit.  The input boundary is the existing preprocessed `semantic_token` stream:",
+      "decision_lines": [],
+      "sha256": "a517d4a272b89f1987d27ee3e5a0f68f90e9f75ad316338be02943d44e08f970"
+    },
+    {
+      "path": "docs/HEADER_V2_CURSOR_OPT_17.md",
+      "title": "# HEADER-V2-CURSOR-OPT-17 â€” redundant hidden-token clears",
+      "lead": " Baseline: accepted PUBLISH-PHYSICAL-01 commit `7478593`.  ## Scope ",
+      "decision_lines": [
+        [
+          3,
+          "Baseline: accepted PUBLISH-PHYSICAL-01 commit `7478593`."
+        ],
+        [
+          38,
+          "1. Release compile: production server, frontend regression tests, PUBLISH"
+        ],
+        [
+          47,
+          "If the candidate does not improve total PUBLISH, reject. Keep accepted"
+        ]
+      ],
+      "sha256": "c9383df59c44ca8a4f8dc8c671445061437b17082c2bfd6641460ed5dbd7f8d3"
+    },
+    {
+      "path": "docs/HEADER_V2_CURSOR_VIEWS_01.md",
+      "title": "# HEADER-V2-CURSOR-VIEWS-01 — 23 октября 2026",
+      "lead": " **Итог: cursor candidate отклонён и удалён из production.** Остаются production Header V2 + ранее принятый lazy state, а также новые semantic contract tests.  ## Сохранённые проверки семантики",
+      "decision_lines": [
+        [
+          3,
+          "**Итог: cursor candidate отклонён и удалён из production.** Остаются production"
+        ],
+        [
+          4,
+          "Header V2 + ранее принятый lazy state, а также новые semantic contract tests."
+        ],
+        [
+          9,
+          "production frontend regression suite, без зависимости от экспериментального"
+        ],
+        [
+          71,
+          "Outliers не исключались. Обе CI пересекают ноль; принятие оптимизации не обосновано."
+        ]
+      ],
+      "sha256": "ae802304b38be92bcc7d3a0b06776edd996a1fad0a210a1bf2d1f486dc94138b"
+    },
+    {
+      "path": "docs/HEADER_V2_OPT_08.md",
+      "title": "# HEADER-V2-OPT-08 — Existing-first canonical symbol merge",
+      "lead": " Status: accepted as the baseline of **experimental Header Parser V2**. Full ServerEngineV4 PUBLISH, persisted BUILD-lineage and Source/Assign remain separate validation gates.  ## Algorithm ",
+      "decision_lines": [
+        [
+          3,
+          "Status: accepted as the baseline of **experimental Header Parser V2**. Full ServerEngineV4 PUBLISH, persisted BUILD-lineage and Source/Assign remain separate validation gates."
+        ],
+        [
+          21,
+          "These are **Header-only V2** measurements. They do not establish full-project PUBLISH/REBUILD speedups or compatibility with persisted mmap BUILD-lineage snapshots. Check those separately before enabling the optimized fr"
+        ]
+      ],
+      "sha256": "22025fbc9f07716d29307de1b97070bcc43a344030080782b04476727a2b989d"
+    },
+    {
+      "path": "docs/HEADER_V2_SEMANTIC_14.md",
+      "title": "# HEADER-V2-SEMANTIC-14 — Zero-Definition Macro Fastpath",
+      "lead": " ## Decision  **ACCEPT** as a small, parity-preserving optimization of `semantic_preprocessor_v2::seek_next`, on published OPT-08 checkpoint `96b68aebd21fc4d801f99ac231fe47710509d9bf`. ",
+      "decision_lines": [
+        [
+          33,
+          "The accepted mean improvement is modest. It does not justify broader preprocessor changes or a new persistent cache."
+        ],
+        [
+          43,
+          "Do **not** merge benchmark-only `opt06-dump` changes or any OPT-09/10/12/STREAM experiments into the production branch. Publish only after Windows Release build, native regression CTest, UnitProXL OLD/V2 parity and remot"
+        ]
+      ],
+      "sha256": "ce88d8ba42f5a76c62a2b98d59d8b4af2f2c55e5df4cb38960cce673e6c3c020"
+    },
+    {
+      "path": "docs/HEADER_V2_SEMANTIC_ONCE_01.md",
+      "title": "# Header V2 semantic reuse",
+      "lead": " PUBLISH only. Graph and persistence schemas, BUILD, REBUILD and LOAD are unchanged. The pre-existing experimental leaf cache has been replaced on the PUBLISH path by an ordered, construction-local semantic event cache. ",
+      "decision_lines": [],
+      "sha256": "522fff12023ba513e82f995259b7d0fdae1be3a1117d016446436aeb71163b08"
+    },
+    {
+      "path": "docs/HEADER_V2_STATE_LAZY_01.md",
+      "title": "# HEADER-V2-STATE-LAZY-01 — 23 октября 2026",
+      "lead": " **Принято для V2.** Узкая оптимизация production Header без новой semantic модели, Local G, event assembly или deferred writer. WHO, String IDs и Graph формат не меняются.  ## Изменение",
+      "decision_lines": [
+        [
+          3,
+          "**Принято для V2.** Узкая оптимизация production Header без новой semantic модели,"
+        ],
+        [
+          60,
+          "Наблюдаемая оценка выигрыша полного PUBLISH — около **0,8%**, а не кратное ускорение."
+        ],
+        [
+          81,
+          "Release A/B suite: **3/3**. Production option-OFF suite: **2/2**;"
+        ]
+      ],
+      "sha256": "4942d6b405ffb3e33785e04f52d0ad22551866baf0d4728644494e52d88aba41"
+    },
+    {
+      "path": "docs/INHERITANCE_ARENA_BOUND_01.md",
+      "title": "# INHERITANCE-ARENA-BOUND-01 — audit preparation",
+      "lead": " 2026-10-25. Production cache algorithm is unchanged. No arena cap has been selected or enabled.  `CW_SOURCE_INHERITANCE_ARENA_AUDIT` enables counters and the resolver's `inheritance_arena_audit()` snapshot: ",
+      "decision_lines": [
+        [
+          3,
+          "2026-10-25. Production cache algorithm is unchanged. No arena cap has been selected or enabled."
+        ]
+      ],
+      "sha256": "d64c4feca66d8cd9fa5a488bbfcbcd5025d14162436f65b45c2afdea6768463d"
+    },
+    {
+      "path": "docs/LEX_SYMBOL_GROWTH_04.md",
+      "title": "# LEX-SYMBOL-GROWTH-04 — geometric symbol buffer growth",
+      "lead": " Checkpoint: `work/parser-split-v1` at `365b5d9e15546e00cdea06bb72354ab5eb10af5c`.  ## Cause ",
+      "decision_lines": [],
+      "sha256": "381349b172bc8ad879e13b4cf674d43b6755d8fa7b70d3f10adf7bb0e677c092"
+    },
+    {
+      "path": "docs/PARALLEL_LOCAL_SOURCE_02.md",
+      "title": "# PARALLEL-LOCAL-SOURCE-02 — Semantic Event Pipeline",
+      "lead": " Дата: 2026-10-24. **Первый correctness slice реализован.** Production Source Parser, Graph API/ABI, compiled format, SourceMap и Runtime не изменены. Новый путь — standalone C++ executable, а не включённый production mode. Материализация итогового G/compiled.bin/runtime.bin/SHM в этом slice не реализуется.  ## Результат ",
+      "decision_lines": [
+        [
+          3,
+          "Дата: 2026-10-24. **Первый correctness slice реализован.** Production Source Parser, Graph API/ABI, compiled format, SourceMap и Runtime не изменены. Новый путь — standalone C++ executable, а не включённый production mod"
+        ],
+        [
+          53,
+          "Extractor выполняет Source grammar один раз. Это syntax extraction без global type catalog, object lookup, identity_space, string_table или Graph mutations. Он не копирует весь semantic Parser V2. Names и literals принад"
+        ],
+        [
+          65,
+          "Объекты регистрируются в существующем G, как было принято ранее; он служит единственным object/type catalog. Source initializations/links/path interning в G здесь не выполняются. Уже типизированные semantic operations по"
+        ],
+        [
+          77,
+          "* Source BIND targets, сами проходящие через references: direct bindings дают начальный каталог, indirect targets согласуются до устойчивого решения. Неразрешённые зависимости и отсутствие сходимости отклоняются; циклы r"
+        ]
+      ],
+      "sha256": "b46b3d2ac4eea41dfeafa17e0236705f4e4fbf55bd257dc5b2b0669f6e474d9f"
+    },
+    {
+      "path": "docs/PARALLEL_LOCAL_SOURCE_03.md",
+      "title": "# PARALLEL-LOCAL-SOURCE-03 — Alias Cost Breakdown",
+      "lead": " ## Scope and method  Isolated continuation of PLS02 on the same UnitProXL corpus. No workers, materialization, production Graph or Source V2 changes. Source syntax is still",
+      "decision_lines": [],
+      "sha256": "60bc3b911c9a37254efeed9374f5770976243744c85a39d50d8da10e9267d11a"
+    },
+    {
+      "path": "docs/PARALLEL_LOCAL_SOURCE_04.md",
+      "title": "# PARALLEL-LOCAL-SOURCE-04 — File-local Lifetime",
+      "lead": " ## Contract and isolated change  PLS03 flat canonical index is enabled in both control and candidate. The only semantic-path difference is the lifetime of local file columns: the candidate",
+      "decision_lines": [
+        [
+          10,
+          "Production PUBLISH is unchanged."
+        ],
+        [
+          15,
+          "new Parser state on release. `model = {}` was rejected during preliminary"
+        ]
+      ],
+      "sha256": "1a819085c35305aeba0695336c4dd24457fd2c57ebe5866f9d044176a1a14c39"
+    },
+    {
+      "path": "docs/PARALLEL_LOCAL_SOURCE_05.md",
+      "title": "# PLS05 — Bound/Alias Memory & Cost Audit",
+      "lead": " ## Scope and observation  Diagnostic experiment only. Both executables retain PLS04 file-local early release and PLS03 flat canonical-cell index. No semantic algorithm, scheduling,",
+      "decision_lines": [
+        [
+          7,
+          "materialization, production PUBLISH or consumer format is changed."
+        ],
+        [
+          57,
+          "production-consumer guarantee. Dropping paths or selected provenance then is"
+        ]
+      ],
+      "sha256": "c3309bc7fc8b4ef6ef2ee9d2abcdd868d654be7e569c4029253e651e414ecd05"
+    },
+    {
+      "path": "docs/PARALLEL_LOCAL_SOURCE_06.md",
+      "title": "# PLS06 — Dense Write Heads",
+      "lead": " ## Isolated candidate  Only the write-head index changes. Both arms retain PLS03 flat canonical-cell interning, PLS04 file-local release, binding-head maps, final reference linking,",
+      "decision_lines": [
+        [
+          8,
+          "Production PUBLISH, Graph/ABI, workers and materialization remain unchanged."
+        ],
+        [
+          62,
+          "production PUBLISH, final G or SHM materialization."
+        ],
+        [
+          81,
+          "local. No commit or production integration is part of this experiment."
+        ],
+        [
+          200,
+          "outliers or the deterministic allocation/semantic checks. Production adoption"
+        ]
+      ],
+      "sha256": "41985ba84ea412ff09fe431644c302f6ca160fae9e3ec4b502f527eea7be22ed"
+    },
+    {
+      "path": "docs/PARALLEL_LOCAL_SOURCE_07_A.md",
+      "title": "# PLS07-A — Final Result Ownership Transfer",
+      "lead": " ## Contract  PLS07-A introduces an owning semantic result without compacting its format. PLS03 flat canonical interning, PLS04 local-file release and PLS06 dense write",
+      "decision_lines": [],
+      "sha256": "c5e5ad3bd5b1cc571c116ad3e5756e0db1f407a63113aa074c5e2e98e606e751"
+    },
+    {
+      "path": "docs/PARALLEL_LOCAL_SOURCE_ARCH_01.md",
+      "title": "# PARALLEL-LOCAL-SOURCE-ARCH-01 — audit slice",
+      "lead": " Первый implementation slice выполнен отдельно в `PARALLEL_LOCAL_SOURCE_02.md`: реальная extraction, global semantic linking и symbolic alias-aware reduction без повторного разбора Source. Production и materialization по-прежнему не изменены. Ниже сохранён исходный audit baseline.  Дата: 2026-10-24. Выполнен аудит текущих зависимостей Source V2 и исполняемая проверка нового final-cell контракта. Production не изменён; parallel parser/merger и новый persistence format не реализованы. Масштабирова",
+      "decision_lines": [
+        [
+          3,
+          "Первый implementation slice выполнен отдельно в `PARALLEL_LOCAL_SOURCE_02.md`: реальная extraction, global semantic linking и symbolic alias-aware reduction без повторного разбора Source. Production и materialization по-"
+        ],
+        [
+          29,
+          "Production `parse_source_roots_v2` обходит `file_id{i+1}`. Full construction берёт `context.files.size()` после composition и не получает явную tree-order sequence."
+        ]
+      ],
+      "sha256": "9f5494fa9eb77abe5a1bda6c3c5145c01023b74e3d9c74633b0f3409afbb0806"
+    },
+    {
+      "path": "docs/PARSER_V2.md",
+      "title": "# Parser V2",
+      "lead": " ## Purpose  Parser V2 is a new frontend path. The existing `parser.cpp` remains the production/correctness oracle until V2 reaches syntax/semantic parity.",
+      "decision_lines": [
+        [
+          71,
+          "- production routing is unchanged."
+        ],
+        [
+          225,
+          "production parser, or the existing root-only `semantic_cursor_v2` replay path."
+        ],
+        [
+          449,
+          "are still unsupported; direct duplicate bases and incomplete bases are rejected."
+        ],
+        [
+          468,
+          "rejected. Parameter lists with actual parameters, operator overloads,"
+        ]
+      ],
+      "sha256": "02c8765ceec05d6482cd883615db8f5fb41a0ee13d1d375c1932336a1ad74f83"
+    },
+    {
+      "path": "docs/PARSER_V2_CURSOR_AB_DIRECTIVE_10.md",
+      "title": "# PARSER-V2-CURSOR-AB-DIRECTIVE-10",
+      "lead": " This slice answers two questions without changing Parser V2 semantics.  ## A/B control ",
+      "decision_lines": [
+        [
+          11,
+          "The normal project executable, tests and production continue to use DECODE-09."
+        ]
+      ],
+      "sha256": "4a80ba6689c330b6f68533ca296e205fa280fc1ed7ecaf2bd851653f00da8195"
+    },
+    {
+      "path": "docs/PARSER_V2_CURSOR_DECODE_09.md",
+      "title": "# PARSER-V2-CURSOR-DECODE-09",
+      "lead": " ## Goal and scope  Fast decoding of *ordinary nonfirst lexical words*, while preserving compact `lexical_token` format, extended delta/length layout, canonical identifier and",
+      "decision_lines": [],
+      "sha256": "f4dc6ff90d673d3f9e2f6b74275870a1bef31c3c6059ffdbfe8410d69b978f5d"
+    },
+    {
+      "path": "docs/PARSER_V2_CURSOR_PERF_07.md",
+      "title": "# PARSER-V2-CURSOR-PERF-07",
+      "lead": " ## Scope  Benchmark-only cursor/preprocessor instrumentation. Requires PERF-05 and DETAIL-06. The build target `ServerEngineV4ParserV2ProjectBenchmark` already defines",
+      "decision_lines": [],
+      "sha256": "ea5f051c473c4d6b88cb465a8d800b833772e089a26c0b7485f176422e9c7c3c"
+    },
+    {
+      "path": "docs/PARSER_V2_MACRO_FASTPATH_08.md",
+      "title": "# PARSER-V2-MACRO-FASTPATH-08",
+      "lead": " ## Scope  Accelerate zero-definition identifier expansion in `preprocessor::expand()`. This is a direct C++ path used by Semantic Preprocessor V2. It does not change",
+      "decision_lines": [],
+      "sha256": "38327aaaf81e65e16ef7d3b0d9b6cc2d8bb719b223fb8d34640c06bef7cb8e6e"
+    },
+    {
+      "path": "docs/PARSER_V2_PERF_03.md",
+      "title": "# PARSER-V2-PERF-03 — Physical Preparation telemetry",
+      "lead": " Status: opt-in instrumentation; no algorithmic optimization or runtime/Graph changes.  ## Contract ",
+      "decision_lines": [
+        [
+          10,
+          "mode. The production call sites use the unchanged 5-argument form."
+        ]
+      ],
+      "sha256": "ac921707301e5a01b1c36306bf08a7a1aad26a81c5a817d49e29636eb85f49bb"
+    },
+    {
+      "path": "docs/PARSER_V2_SEMANTIC_DETAIL_06.md",
+      "title": "# PARSER-V2-SEMANTIC-DETAIL-06",
+      "lead": " Depends on PARSER-V2-SEMANTIC-PERF-05 (compiled only in benchmark target). No G, Runtime, SHM, source grammar, CMake, or production ABI modifications.  ## Run",
+      "decision_lines": [
+        [
+          4,
+          "No G, Runtime, SHM, source grammar, CMake, or production ABI modifications."
+        ]
+      ],
+      "sha256": "d9ad7ceba997a873165aaff95cf82798c15ab3cf966549130575bd1703bec4bd"
+    },
+    {
+      "path": "docs/PARSER_V2_SEMANTIC_PERF_05.md",
+      "title": "# PARSER-V2-SEMANTIC-PERF-05",
+      "lead": " Baseline: `cc24108de8bbee53552252afe15d39c1608e321f` on `work/parser-split-v1`.  ## Scope ",
+      "decision_lines": [],
+      "sha256": "3b145d8746f40f285ad2cd4f75b39ed3d364ef556b83a812fec817d569aa6d5c"
+    },
+    {
+      "path": "docs/PLS07_B1_FINAL_WRITER_CONTRACT.md",
+      "title": "# PLS07-B1 — Final Writer Contract, revision 1",
+      "lead": " Status: experimental contract and executable reader checks. No compact format, Graph writer implementation, new workers, production change or speed claim.  ## Decision",
+      "decision_lines": [
+        [
+          16,
+          "archived endpoint ordinals. Do not silently reuse production sparse invalidation"
+        ],
+        [
+          105,
+          "   Source values and bindings override that baseline under the accepted"
+        ],
+        [
+          127,
+          "projection for diagnostics but does not promote it. Its `ok` means envelope/"
+        ],
+        [
+          219,
+          "cases. Production's current sparse BUILD/invalidation remains unchanged and is"
+        ]
+      ],
+      "sha256": "996aa513933591db2e11aa9ce8c3f48e3631334375e0596087a74c15a24eab88"
+    },
+    {
+      "path": "docs/PLS08_A_GRAPH_WRITER_FEASIBILITY.md",
+      "title": "# PLS08-A — Experimental PUBLISH Graph Writer Feasibility",
+      "lead": " ## Result and scope  Existing resolved Graph APIs can materialize the checked final-cell Source projection into a real G and native SourceMap. The resulting native-format",
+      "decision_lines": [
+        [
+          11,
+          "production semantic coverage, resident publication or PLS08-C full PUBLISH"
+        ],
+        [
+          12,
+          "benchmark. No production path, BUILD/REBUILD/LOAD, replay policy implementation,"
+        ],
+        [
+          36,
+          "token or implement its still-opaque production candidate factory. Accepted"
+        ],
+        [
+          148,
+          "The union fixture is deliberately rejected:"
+        ]
+      ],
+      "sha256": "4874b001102d58766c18e4032eea1be8fc571be1260183770d2fc8c350a76c28"
+    },
+    {
+      "path": "docs/PLS08_B_INTEGRATION_PARITY.md",
+      "title": "# PLS08-B — Integration Parity",
+      "lead": " 2026-10-24. PUBLISH-only experimental integration, Windows x64 / pack 8, MSVC Release + IPO. Production sources and BUILD/REBUILD/LOAD are unchanged.  ## Scope and result",
+      "decision_lines": [
+        [
+          4,
+          "MSVC Release + IPO. Production sources and BUILD/REBUILD/LOAD are unchanged."
+        ],
+        [
+          11,
+          "This does not promote the B1 `projection_only` reader to unrestricted Header/"
+        ],
+        [
+          69,
+          "* Assign inputs are rejected; user Assign materialization is not implemented."
+        ],
+        [
+          71,
+          "  rejected by extraction as a binding without an endpoint. Explicit writes to"
+        ]
+      ],
+      "sha256": "a11a41d9ed2a5c1a72e92b5e698e0418b1c540595b844db455cd5f5f6de63133"
+    },
+    {
+      "path": "docs/PLS08_C_FULL_PUBLISH_AB.md",
+      "title": "# PLS08-C — Native Full PUBLISH A/B",
+      "lead": " 2026-10-24. Result: **correct on the checked compatible domain; NO ADOPTION for performance**. No production PUBLISH/BUILD/REBUILD/LOAD source was changed.  ## What was measured",
+      "decision_lines": [
+        [
+          3,
+          "2026-10-24. Result: **correct on the checked compatible domain; NO ADOPTION for"
+        ],
+        [
+          23,
+          "Only PUBLISH CLI modes are accepted. The input is a private copied fixture under"
+        ],
+        [
+          145,
+          "production adoption for speed or a subsecond claim. Keep native V2 as production"
+        ]
+      ],
+      "sha256": "a9d44a85e9679d3ce009283c65d468c8fe156b793ec284f5cfec8472d7c0ea2a"
+    },
+    {
+      "path": "docs/PLS09_A_ALIAS_COST_BREAKDOWN.md",
+      "title": "# PLS09-A — Alias Cost Breakdown",
+      "lead": " 2026-10-24. **Diagnostic only; no algorithm adoption or production change.** PUBLISH only. No workers, compact ABI, Runtime changes or BUILD/replay work.  ## Method and correctness",
+      "decision_lines": [
+        [
+          31,
+          "the accepted SHA-256 `cb5aa2607c10f928b273ad8f5d33c29f3656190b3ec9597550cbf068a5f0d0e2`."
+        ]
+      ],
+      "sha256": "b70b031118b2ee02232a1b409dee12fa690448438d11321848e86a76b96fc9fc"
+    },
+    {
+      "path": "docs/PLS09_B1_INDEXED_REFERENCE_STATE.md",
+      "title": "# PLS09-B1 — Indexed Reference State",
+      "lead": " 2026-10-25. **Useful experimental candidate; no production integration.** Only cache/visiting representation changes. Production V2, binding catalog/copy, diagnostic heads, canonical flat index, parsing, linking order, LWW, Writer, SourceMap, Runtime, ABI and worker counts remain unchanged. BUILD is out of scope.",
+      "decision_lines": [
+        [
+          3,
+          "2026-10-25. **Useful experimental candidate; no production integration.**"
+        ],
+        [
+          81,
+          "the accepted SHA-256"
+        ]
+      ],
+      "sha256": "c9f7e04d6803044801c1ad1d1939ba1fbd8e7c288d5ce74fb6bcc16dcb5cf5e3"
+    },
+    {
+      "path": "docs/PLS10_A_FINAL_BINDING_REDUCTION.md",
+      "title": "# PLS10-A — Final Binding Reduction",
+      "lead": " 2026-10-25. **Step A implemented and measured; B/C remain unimplemented.** Production V2, G ABI/persistence format, Header type catalog, Runtime and worker counts are unchanged. No new Graph, Semantic Linker or persistent operation history was introduced. BUILD/replay is out of scope.",
+      "decision_lines": [
+        [
+          73,
+          "undeclared object being accepted for later lookup."
+        ],
+        [
+          115,
+          "All 2,116,048,327 object/default storage bytes retain accepted SHA-256"
+        ],
+        [
+          158,
+          "15-pair production V2/A comparison. Bootstrap95 is 20,000 resamples of paired"
+        ],
+        [
+          207,
+          "a renamed model. Production V2 is unchanged and remains faster."
+        ]
+      ],
+      "sha256": "6e7af5d95d58d1dc87e7355f2fbb5fb7c47a30c3e49d208c44f166f12903c7cd"
+    },
+    {
+      "path": "docs/PLS10_B_SPARSE_INDIRECT_WRITES.md",
+      "title": "# PLS10-B — Sparse Indirect Writes",
+      "lead": " Date: 2026-10-25. Decision: **NO ADOPTION** of early direct-winner preparation. Production V2 remains unchanged.  ## Implementation and semantics",
+      "decision_lines": [
+        [
+          3,
+          "Date: 2026-10-25. Decision: **NO ADOPTION** of early direct-winner"
+        ],
+        [
+          4,
+          "preparation. Production V2 remains unchanged."
+        ],
+        [
+          16,
+          "It is not PLS10-C, a new frontend or production integration. Extraction is"
+        ],
+        [
+          29,
+          "  Full 2,116,048,327-byte object storage SHA-256 matches the accepted oracle:"
+        ]
+      ],
+      "sha256": "702e50d02d324211299bb0410aa2e2a2d3e713bc356cc71a70c0f1d7474d4fdc"
+    },
+    {
+      "path": "docs/PLS10_C10_TYPED_ENDPOINT_SCRATCH.md",
+      "title": "# PLS10-C10 — typed-endpoint scratch lifetime",
+      "lead": " **Unsandboxed recheck, 2026-10-26:** V2 1353.49 ms versus C10 1426.55 ms; C10 loses 15/15 native pairs. Median paired penalty 83.06 ms, 95% CI 38.86–103.71 ms. Original series below did not record launch sandbox mode. See `docs/PLS10_C10_UNSANDBOXED_RECHECK_01.md` for explicit launch controls,",
+      "decision_lines": [
+        [
+          9,
+          "2026-10-25. **Successful experimental candidate; production V2 unchanged.**"
+        ],
+        [
+          56,
+          "binary off/on, and production V2 are compared in one series. Native executable"
+        ],
+        [
+          139,
+          "No production PUBLISH/BUILD/REBUILD/LOAD changes, persistent history or additional"
+        ]
+      ],
+      "sha256": "9d56890eae173f9e65d98cb85d291fa38a310dd2394eaeb133fd966c25ff3ef5"
+    },
+    {
+      "path": "docs/PLS10_C10_UNSANDBOXED_RECHECK_01.md",
+      "title": "# PLS10-C10 versus V2 — unsandboxed recheck",
+      "lead": " 2026-10-26. **C10 is slower than historical production V2 outside sandbox.**  | Native PUBLISH median | ms | |---|---:|",
+      "decision_lines": [],
+      "sha256": "7efae7ba22df5e236a70d728560c5ae261dca754294b57f37a57e218c196410c"
+    },
+    {
+      "path": "docs/PLS10_C11_STRING_ELEMENT_APPLY_ATTRIBUTION.md",
+      "title": "# PLS10-C11 — String Element Apply Attribution",
+      "lead": " 2026-10-25. **Diagnostic complete. No batching or production changes.** C10 scratch reuse remains the experimental baseline; C8 remains NO ADOPTION.  ## Scope and reproducibility",
+      "decision_lines": [
+        [
+          4,
+          "C10 scratch reuse remains the experimental baseline; C8 remains NO ADOPTION."
+        ],
+        [
+          91,
+          "production string CPU duration. It is about one fifth of the roughly 490 ms"
+        ],
+        [
+          160,
+          "C10 stays RETAIN; production V2 remains unchanged. No batching candidate or"
+        ],
+        [
+          161,
+          "production acceleration is claimed in this diagnostic stage."
+        ]
+      ],
+      "sha256": "10129addf7ad79b2c644939f8a32c4853be18a75f58a8b862b83887015356d1c"
+    },
+    {
+      "path": "docs/PLS10_C12_EXISTING_BATCH_API_FEASIBILITY.md",
+      "title": "# PLS10-C12 — Existing Batch API Feasibility",
+      "lead": " 2026-10-25. **NO ADOPTION for using the existing batch API in PLS10.** Source inspection only. No batching implementation, Graph API/ABI change, benchmark candidate, new index or semantic model was introduced. C10 remains RETAIN; production Source V2 is unchanged.",
+      "decision_lines": [
+        [
+          3,
+          "2026-10-25. **NO ADOPTION for using the existing batch API in PLS10.**"
+        ],
+        [
+          6,
+          "RETAIN; production Source V2 is unchanged."
+        ],
+        [
+          139,
+          "**C12 = NO ADOPTION of the existing batch API for PLS10 string commit.**"
+        ],
+        [
+          148,
+          "from this result to enlarge G, weaken diagnostics or replace the accepted C10"
+        ]
+      ],
+      "sha256": "aa210bc841e31d38774d5ae2e86f626378e8febb3344e5aa5a9ae122b62909a1"
+    },
+    {
+      "path": "docs/PLS10_C13_STRING_PATH_REUSE.md",
+      "title": "# PLS10-C13 — String Endpoint Path Reuse",
+      "lead": " 2026-10-25. **NO ADOPTION.** Correct bounded one-entry memo, no demonstrated PUBLISH speedup. C10 remains RETAIN; production V2 unchanged. No Graph API/ABI, slot-origin callback, Source semantics, batching or additional endpoint index. ",
+      "decision_lines": [
+        [
+          3,
+          "2026-10-25. **NO ADOPTION.** Correct bounded one-entry memo, no demonstrated"
+        ],
+        [
+          4,
+          "PUBLISH speedup. C10 remains RETAIN; production V2 unchanged. No Graph API/ABI,"
+        ],
+        [
+          126,
+          "**C13 = NO ADOPTION.** Do not integrate this memo into C10 or production. It is"
+        ]
+      ],
+      "sha256": "ee96663922a98cf85adc7e16bd2913aacf65305877b7a4801f925a7d1a7520f9"
+    },
+    {
+      "path": "docs/PLS10_C14_REMAINING_ORDERED_COMMIT_ATTRIBUTION.md",
+      "title": "# PLS10-C14 — Remaining Ordered Commit CPU Attribution",
+      "lead": " 2026-10-25. **DIAGNOSTIC COMPLETE.** C10 remains RETAIN. No C13 memo, batching, new index/model, Source semantic, Graph ABI or production dispatch changes.  ## Method and evidence",
+      "decision_lines": [
+        [
+          217,
+          "overlap and C8 already rejected a simple lookup-count reduction."
+        ]
+      ],
+      "sha256": "9dbe2c10be8fe3508a4f7900720c64e9ccb133bf64ba5be87985f8f1b3138cad"
+    },
+    {
+      "path": "docs/PLS10_C15_ENDPOINT_STRUCTURAL_AUDIT.md",
+      "title": "# PLS10-C15 — Endpoint Preparation Structural Audit",
+      "lead": " 2026-10-25. **Audit complete; tested candidate NO ADOPTION.**  The C10 extraction → binder chain was traced in `parallel-local-source-02/extract.hpp`, generated C10 `ordered_binder.hpp`,",
+      "decision_lines": [
+        [
+          3,
+          "2026-10-25. **Audit complete; tested candidate NO ADOPTION.**"
+        ],
+        [
+          97,
+          "C15 found and removed real repeated work, but **NO ADOPTION** of this candidate:"
+        ],
+        [
+          101,
+          "Production V2 and accepted C10 remain unchanged."
+        ]
+      ],
+      "sha256": "60a621cc9f12701ece2117fa9db77b1583b2ed92af96f4082fb91a8ac9728487"
+    },
+    {
+      "path": "docs/PLS10_C1_DIRECT_COMMIT_FEASIBILITY.md",
+      "title": "# PLS10-C1 — Direct Commit Feasibility",
+      "lead": " 2026-10-25. Scope: first feasibility slice on small typed-input fixtures. Production V2 and A2 are unchanged. PLS10-C integration is **not completed**.  ## Three required properties",
+      "decision_lines": [
+        [
+          4,
+          "Production V2 and A2 are unchanged. PLS10-C integration is **not completed**."
+        ],
+        [
+          54,
+          "- Header member defaults remain unchanged."
+        ]
+      ],
+      "sha256": "74e7c9c46971fbc60843fd155ffac26eca6a443910489be4f7ba0c5f07116eb0"
+    },
+    {
+      "path": "docs/PLS10_C2_SLOT_BASED_DIRECT_COMMIT.md",
+      "title": "# PLS10-C2 — Slot-Based Direct Commit",
+      "lead": " 2026-10-25. Result: **PASS at the transient API / typed-input kernel boundary**. Full Source integration and UnitProXL PUBLISH A/B are deliberately not part of C2.  ## Change",
+      "decision_lines": [
+        [
+          15,
+          "production V2 dispatch are unchanged. No data members were added to Graph,"
+        ],
+        [
+          88,
+          "PUBLISH be compared with A2 and production V2. C2 does not claim that integration,"
+        ]
+      ],
+      "sha256": "141bc176240634ee39f3550733a33d80b7dc4bf1dc453b540b028d9606f84fa5"
+    },
+    {
+      "path": "docs/PLS10_C3_ORDERED_SOURCE_COMMIT.md",
+      "title": "# PLS10-C3 — Parallel Parsing / Ordered Direct Commit",
+      "lead": " Date: 2026-10-25. Implemented as an isolated native PUBLISH candidate. Production V2 dispatch remains unchanged. Full UnitProXL acceptance/performance is **not established** because its historical fixture violates the required file-local declaration rule.",
+      "decision_lines": [
+        [
+          4,
+          "Production V2 dispatch remains unchanged. Full UnitProXL acceptance/performance"
+        ],
+        [
+          84,
+          "fixture. V2 cold preflight passes the accepted 2,116,048,327-byte object-storage"
+        ],
+        [
+          89,
+          "declared/extern in the consuming file. This is rejected intentionally under the"
+        ],
+        [
+          109,
+          "rejected rather than silently creating/missing a second semantic cell. No"
+        ]
+      ],
+      "sha256": "3ad7f7c63255f364bf5fb48af93846c3b3694cd2f8ae971a555fdb0d7f6b78d5"
+    },
+    {
+      "path": "docs/PLS10_C4_C5_PROJECT_VISIBILITY.md",
+      "title": "# PLS10-C4/C5 — Project Visibility and the Need for a Catalog Barrier",
+      "lead": " 2026-10-25. Production V2 remains selected. No persistence/G layout changes.  ## Contract and experiments ",
+      "decision_lines": [
+        [
+          45,
+          "the accepted V2 oracle. The parsed model vector capacities total **182,960,089"
+        ],
+        [
+          50,
+          "**529.80..583.57 ms**, 0/15 candidate wins. **NO ADOPTION**."
+        ],
+        [
+          110,
+          "experimental baseline for this corpus. **Do not adopt it into production on"
+        ],
+        [
+          133,
+          "Reproduction and limitations are in each experiment's README. Python compilation"
+        ]
+      ],
+      "sha256": "f1a5d9d193c283e57f2faf0deb5f58e6c18e8eae1a48141dd23d1371290f01ef"
+    },
+    {
+      "path": "docs/PLS10_C6_ORDERED_COMMIT_COST_BREAKDOWN.md",
+      "title": "# PLS10-C6 — Ordered Commit Cost Breakdown",
+      "lead": " 2026-10-25. Diagnostic extension only; C5 remains the experimental architecture baseline and production V2 remains selected. No optimization is adopted here.  ## Method and correctness",
+      "decision_lines": [
+        [
+          4,
+          "baseline and production V2 remains selected. No optimization is adopted here."
+        ],
+        [
+          20,
+          "The initial forced-descendant sampler was **rejected**: its extrapolated"
+        ],
+        [
+          33,
+          "accepted full 2,116,048,327-byte object-storage SHA. Artifact digests are checked"
+        ],
+        [
+          177,
+          "The rejected first sampler is under ab-01. Reproduction is in the experiment"
+        ]
+      ],
+      "sha256": "08b002c00a01ebbaad7d40b53e23d56073162692728ccf1101b061df3bb8c3a8"
+    },
+    {
+      "path": "docs/PLS10_C7_ALREADY_TYPED_ENDPOINT_VIEW.md",
+      "title": "# PLS10-C7 — Already-Typed Endpoint View Fast Path",
+      "lead": " 2026-10-25. Result: **retain as an experimental improvement over C5**. Production V2 remains faster and is not switched. No additional fast-path complexity or second optimization is included in this experiment. ",
+      "decision_lines": [
+        [
+          4,
+          "Production V2 remains faster and is not switched. No additional fast-path"
+        ],
+        [
+          47,
+          "unsupported virtual-base diagnostics. No unsupported path becomes accepted merely"
+        ],
+        [
+          123,
+          "Do not switch production: V2 still wins every full-PUBLISH comparison and the"
+        ]
+      ],
+      "sha256": "402c25b21c930a0864527c854466ea013e7535e4b47c5cf832a0aaf9cb4c94ff"
+    },
+    {
+      "path": "docs/PLS10_C8_SINGLE_BINDING_LOOKUP.md",
+      "title": "# PLS10-C8 — Single Binding Lookup",
+      "lead": " 2026-10-25. Decision: **NO ADOPTION**. C7 fast remains the experimental baseline; production V2 remains selected. The source-level duplicate lookup was removed correctly, but no meaningful full-PUBLISH improvement was established. ",
+      "decision_lines": [
+        [
+          3,
+          "2026-10-25. Decision: **NO ADOPTION**. C7 fast remains the experimental baseline;"
+        ],
+        [
+          106,
+          "Close C8 without adoption or further refinement. Do not promote a structural"
+        ],
+        [
+          114,
+          "Keep C7 fast as the experimental baseline and leave production unchanged. The"
+        ]
+      ],
+      "sha256": "54a38fc45d2d61b2d135681a48673eeab999c5a92a22c75c64770ab9935b0bf1"
+    },
+    {
+      "path": "docs/PLS10_C9_V2_C7_COST_ATTRIBUTION.md",
+      "title": "# PLS10-C9 — V2 vs C7 cost attribution",
+      "lead": " 2026-10-25. Diagnostic experiment only. Production V2, Graph ABI, persistence, Source semantics, C7 queue and algorithms are unchanged. C8 remains NO ADOPTION.  ## Method and controls",
+      "decision_lines": [
+        [
+          4,
+          "Source semantics, C7 queue and algorithms are unchanged. C8 remains NO ADOPTION."
+        ],
+        [
+          140,
+          "the fixture correctly rejected scheduling-dependent diagnostic text. Stats now"
+        ]
+      ],
+      "sha256": "41193b7f761fa6c584af1802cb8718c2cbff2eecdfe37a608d37aa4234c86b79"
+    },
+    {
+      "path": "docs/PRODUCTION_PGO_01.md",
+      "title": "# PRODUCTION-PGO-01 — выигрыш production server подтверждён",
+      "lead": " Status on 2026-10-25: validation completed for the tested scope; performance decision pending. Production algorithms and default PGO setting remain unchanged (OFF).  ## Completed ",
+      "decision_lines": [
+        [
+          3,
+          "Status on 2026-10-25: validation completed for the tested scope; performance decision pending. Production algorithms and default PGO setting remain unchanged (OFF)."
+        ],
+        [
+          7,
+          "- Frozen production sources at base commit `2ed70d627e3650a00f8d697745b053986a8f40f2`, with the production-only CMake PGO configuration recorded in `build/production-pgo-01/source.patch`."
+        ],
+        [
+          10,
+          "- Separate PUBLISH/LOAD, runtime RUN/FREEZE, legacy REBUILD and no-change BUILD checks. Semantic-changing BUILD is rejected by both versions under the existing deferred-support contract."
+        ],
+        [
+          11,
+          "- Cold artifact and native SHM parity for the tested projects, including 2,146,276,728 UnitProXL payload bytes. The mutable 72-byte runtime system header is excluded. Evidence: `build/production-pgo-01/validation.json`."
+        ]
+      ],
+      "sha256": "a5cb2e32a62c3cb2b9cabdcdaf0f9c2e0d8c53a1d7661dc84759c0e70550888f",
+      "current_decision": "ACCEPT trained USE profile for tested UnitProXL server workload; default OFF; no deployment",
+      "completed_evidence": "build/production-pgo-current-02/ab-01/summary.json"
+    },
+    {
+      "path": "docs/PUBLISH_ARCHITECTURE_REVIEW_22.md",
+      "title": "# Обзор архитектуры Server / Project / PUBLISH",
+      "lead": " Проверена текущая реализация, а не только целевая схема из документации. Область: владение Server/Project, границы PUBLISH/BUILD/REBUILD/LOAD, физический frontend, семантический Graph, сохранение физических планов и материализация resident Runtime. Это не полный аудит сети, лицензирования или безопасности.",
+      "decision_lines": [
+        [
+          56,
+          "принятым Source prehash, Release + IPO без PGO. Это одна серия; вложенные таймеры"
+        ]
+      ],
+      "sha256": "357075c7aeb0e61f3db20bbfd304317dd207067c3071fa095ac639aadd5e2dc5"
+    },
+    {
+      "path": "docs/PUBLISH_CRITICAL_PATH_02.md",
+      "title": "# PUBLISH-CRITICAL-PATH-02 — captured and analyzed",
+      "lead": " Kernel symbol follow-up completed in [RUNTIME-SHM-FAULTS-01](RUNTIME_SHM_FAULTS_01.md). The historical unresolved-kernel limitation below describes this first export; the follow-up resolves the same CPU events without another capture. ",
+      "decision_lines": [
+        [
+          54,
+          "insert_link_target_index 1309, assignment 1210, advance 1133. Rejected slot caching"
+        ],
+        [
+          91,
+          "range-cache reasoning. Production remains unchanged after profiling. Target <1 s"
+        ],
+        [
+          101,
+          "Matching /Zi + /DEBUG:FULL PDB, no A/B/trace/audit macros. Accepted Header lazy"
+        ],
+        [
+          113,
+          "production binaries contain none of the experimental environment selectors."
+        ]
+      ],
+      "sha256": "ccf7d019bff6265b3778ad2ee6b6a18da0037e7955aca057ab581f7b7ef05103"
+    },
+    {
+      "path": "docs/PUBLISH_DIFFERENTIAL_TRACE_01.md",
+      "title": "# PUBLISH-DIFFERENTIAL-TRACE-01 / COVERAGE-CONTRACT-01",
+      "lead": " Инструментирование и differential contract suite реализованы изолированно. Новый evaluator не интегрирован в production. Исходники production не менялись для trace: генератор создаёт копии шести translation units в build-каталоге. Остальные engine objects взяты из SB03 Release; provenance oracle использует",
+      "decision_lines": [
+        [
+          4,
+          "Новый evaluator не интегрирован в production. Исходники production не менялись"
+        ],
+        [
+          13,
+          "локальных задач. Production trace последовательности одинаковы при всех configs."
+        ],
+        [
+          36,
+          "- Неверный member initializer может быть пропущен с gap вместо production rejection."
+        ],
+        [
+          56,
+          "| Строка | Production string_id | Input preparation snapshot |"
+        ]
+      ],
+      "sha256": "0b270cbd2ce4a4799a3fe3dc837c479808c44c6f0c2fb2ec76b9fe9ddb373c82"
+    },
+    {
+      "path": "docs/PUBLISH_DIRECT_GRAPH_MMAP_01.md",
+      "title": "# PUBLISH: Parser Graph in final compiled.bin mmap",
+      "lead": " **Historical implementation note — rolled back.** After DIRECT-G-MMAP-AB-01 showed regressions, the v27 code, allocator, feature flag and counters were removed from the active source tree. PUBLISH again constructs RAM G and encodes the packed artifact. The implementation and commands below describe the archived",
+      "decision_lines": [],
+      "sha256": "9dc6cac73cc9fff58ed22e22fcd1dd61acfa28a38530336b0b08a424a2a565e0"
+    },
+    {
+      "path": "docs/PUBLISH_END_TO_END_PROFILE_01.md",
+      "title": "# PUBLISH-END-TO-END-PROFILE-01",
+      "lead": " Актуальный baseline текущего production PUBLISH, без нового Parser/evaluator и без trace hooks. Benchmark собран заново из корневого CMake, MSVC Release + IPO, PGO OFF, обычные default options. Header/Source overlap OFF; Source ready tokens, parallel prehash, string batch и path reuse ON. Использована build-копия UnitProXL; исходный",
+      "decision_lines": [
+        [
+          15,
+          "а не A/B нового алгоритма и не доказательство ускорения относительно старой серии."
+        ],
+        [
+          91,
+          "Production implementation в этом этапе не менялась. Новая архитектура остаётся"
+        ],
+        [
+          92,
+          "изолированным экспериментом; эта серия не подтверждает её ускорение PUBLISH."
+        ]
+      ],
+      "sha256": "2b64c0bcc7419402be1c12bf61f33e41d5c975f3265a3699caab3c6579e53c05"
+    },
+    {
+      "path": "docs/PUBLISH_ENDPOINT_CACHE_37.md",
+      "title": "# Whole Source endpoint cache: rejected (37)",
+      "lead": " Retested complete typed suffix caching on the current ready-token / batched string implementation. The existing member-transition cache already removes most member searches. Exact immutable lexical suffix + root type keys reused resolved steps, final type and dependency events at their original token",
+      "decision_lines": [
+        [
+          1,
+          "# Whole Source endpoint cache: rejected (37)"
+        ],
+        [
+          29,
+          "removed from production sources. Earlier optimizations are retained."
+        ]
+      ],
+      "sha256": "90c17bab5010037fb7ca756b26c4d23ef0eb347fa023c650608ed276d7a1d63c"
+    },
+    {
+      "path": "docs/PUBLISH_ENDPOINT_REUSE_13.md",
+      "title": "# Full Source endpoint reuse: rejected experiments 13–15",
+      "lead": " Three transient caches were evaluated on the full UnitProXL fixture. Keys used the exact root type and complete endpoint suffix, with full equality checks. WHO lookup, declaration-before-use and canonical Graph mutation order remained on the original Source path. Cached entries retained Source Map dependencies,",
+      "decision_lines": [
+        [
+          1,
+          "# Full Source endpoint reuse: rejected experiments 13–15"
+        ],
+        [
+          34,
+          "and the previously accepted dispatch/timing changes are retained."
+        ]
+      ],
+      "sha256": "221eaddd71d77eb9fbccbbc9585198cec8c6a7aa632680d092fa87edf043d4cf"
+    },
+    {
+      "path": "docs/PUBLISH_FAST_ACQUIRE_02.md",
+      "title": "# PUBLISH-FAST-ACQUIRE-02 — implementation and measurements",
+      "lead": " **Execution-mode correction:** the 1928.16 → 1659.42 ms series below ran inside the default tool sandbox. It establishes a sandbox-specific benefit, not an ordinary production speedup of 13.9%. Follow-up unsandboxed same-fixture A/B/C: historical 1354.65 ms, modern reference 1354.13 ms, fast 1313.58 ms (about 3%).",
+      "decision_lines": [
+        [
+          10,
+          "2026-10-26. Production fresh PUBLISH now selects byte-only physical file"
+        ],
+        [
+          78,
+          "The production working tree has no runtime A/B environment switch. Private"
+        ]
+      ],
+      "sha256": "9dff9db9c3b4a92e437dd445ac395a4f5d16bc42231f61ceb77a4bcbf4c065fb"
+    },
+    {
+      "path": "docs/PUBLISH_FIRST_TOUCH_06.md",
+      "title": "# Parallel first-touch of fresh compiled images",
+      "lead": " Large fresh compiled.bin mappings are zeroed in disjoint 64 KiB ranges before the existing serial semantic encoder runs. At least 4 MiB is assigned per lane, with at most 16 lanes. Images below 8 MiB and single-lane machines skip this optional preparation. Workers join before encoding begins.",
+      "decision_lines": [
+        [
+          27,
+          "the rejected static-path cache. No concurrent builds ran during timing."
+        ],
+        [
+          78,
+          "## Rejected path-cache trial"
+        ]
+      ],
+      "sha256": "c8b2545af125847094c5a695676c036aeb7ffac5533f7cdbc8c7394d536994bc"
+    },
+    {
+      "path": "docs/PUBLISH_FLUSH_OVERLAP_03.md",
+      "title": "# Overlap compiled-image flush with physical planning",
+      "lead": " The later [PUBLISH policy](PUBLISH_POLICY_04.md) removes explicit flush from PUBLISH. The overlap described here remains active for durable REBUILD; the measurements below document the earlier PUBLISH implementation. ",
+      "decision_lines": [],
+      "sha256": "039fcdac6898fd4e44bc77b8b6a8c53a7e5e4b5217469d7278311c70326b4c30"
+    },
+    {
+      "path": "docs/PUBLISH_GRAPH_UPSERT_11.md",
+      "title": "# Graph insertion algorithm experiments: not adopted",
+      "lead": " Two variants were implemented and measured against the accepted Source dispatch version (08), with identical PUBLISH acquisition and durability policy:  1. Link lookup and insertion were combined. The original new-link path probes",
+      "decision_lines": [
+        [
+          3,
+          "Two variants were implemented and measured against the accepted Source dispatch"
+        ]
+      ],
+      "sha256": "0be2b8351fab8423d822c896e95a072e1e7297f756602ec4501c7befd9ca824c"
+    },
+    {
+      "path": "docs/PUBLISH_HEADER_LEXER_TOKENS_31.md",
+      "title": "# Header: готовые физические tokens — эксперимент OFF",
+      "lead": " Обновление: шаг 32 реализует замену words готовыми 12-byte Header tokens, а не дублирование. См. `PUBLISH_HEADER_TOKEN_ONLY_32.md`; оба режима остаются экспериментальными OFF после измерений полного PUBLISH. ",
+      "decision_lines": [
+        [
+          7,
+          "Реализован `SERVER_ENGINE_HEADER_LEXER_TOKENS_V2`, по умолчанию OFF."
+        ],
+        [
+          33,
+          "использовать принятые в шаге 30 **5889225** ready Source tokens. Все 42 полных"
+        ],
+        [
+          39,
+          "Baseline — принятая сборка шага 30 без данного изменения. До измерений"
+        ],
+        [
+          64,
+          "ready cursor branches исключаются препроцессором. Принятый SOURCE_LEXER_TOKENS"
+        ]
+      ],
+      "sha256": "8552fe0d09052426bc1fe7c030777134d90c879deebe06dc6031f354e119001a"
+    },
+    {
+      "path": "docs/PUBLISH_HEADER_ONCE_18.md",
+      "title": "# Avoid whole-project once-state copies during Header reuse",
+      "lead": " Before every eligible cached Header replay, the preflight copied the current `#pragma once` state for every file in the project. Most replayed subtrees visit only a small portion of those files. This added a full file-table scan and hash lookup per file to every reuse attempt.",
+      "decision_lines": [],
+      "sha256": "3d232b334aac806155ab655799f6a5adbc3fa696282a536268fd3be9acfa4f7e"
+    },
+    {
+      "path": "docs/PUBLISH_HEADER_SHARED_MODEL_17.md",
+      "title": "# Share the experimental physical Header model across roots",
+      "lead": " The existing optional Header effective-field model was built inside the per-root loop. Its build scans the entire prepared physical closure, independent of the active root or macro state. On the full fixture, that repeated the same work for 2060 Header roots and made experimental full PUBLISH take roughly",
+      "decision_lines": [
+        [
+          46,
+          "The feature is therefore not promoted to the normal PUBLISH path."
+        ],
+        [
+          56,
+          "a production speedup or subsecond PUBLISH. The best previously controlled PGO"
+        ]
+      ],
+      "sha256": "9c4f2801116ce68082e97654eaf51820701cdf8f24302d2b07d940f4da1f3a91"
+    },
+    {
+      "path": "docs/PUBLISH_HEADER_SOURCE_OVERLAP_29.md",
+      "title": "# Header/Source overlap в PUBLISH",
+      "lead": " Обновление шага 30: default PUBLISH теперь получает готовые tokens/hashes непосредственно от lexer. При доступности этого буфера повторный decode/hash из данного pipeline больше не выполняется. См. `PUBLISH_SOURCE_LEXER_TOKENS_30.md`. ",
+      "decision_lines": [
+        [
+          7,
+          "Добавлен `SERVER_ENGINE_HEADER_SOURCE_OVERLAP_V2` (по умолчанию OFF)."
+        ],
+        [
+          96,
+          "ускорения от MODEL_DIRECT. Оба model флага также остаются OFF по умолчанию."
+        ]
+      ],
+      "sha256": "44edb72a1f67bea81e94ba1174c7ac0970c7e59cd1a914127a64163876500673"
+    },
+    {
+      "path": "docs/PUBLISH_HEADER_TOKEN_ONLY_32.md",
+      "title": "# Header: готовые токены вместо compact words",
+      "lead": " Реализована настоящая замена физического представления Header, без второго массива words. Включается двумя экспериментальными флагами:  ```cmake",
+      "decision_lines": [
+        [
+          11,
+          "Оба остаются OFF по умолчанию: измерения не показали ускорения. Принятый"
+        ],
+        [
+          34,
+          "новое представление нельзя незаметно принять за сохранённый BUILD lexical state."
+        ],
+        [
+          65,
+          "проверен относительно принятого baseline: все шесть контрольных запусков с"
+        ],
+        [
+          67,
+          "Эта короткая контрольная серия не используется для вывода об ускорении OFF-пути."
+        ]
+      ],
+      "sha256": "cd0e67bfe974270235df67a2fe9604f63026c9d1dd48ee69bf7c1b2702aec4a1"
+    },
+    {
+      "path": "docs/PUBLISH_IDENTITY_PIPELINE_23.md",
+      "title": "# Source PUBLISH: использование существующей WHO-модели",
+      "lead": " Первый срез реализации описан в `PUBLISH_SOURCE_RESOLVER_24.md`: выделены read-only запросы каталога и граница канонизации endpoint. Окна и workers из предлагаемой ниже схемы ещё не реализованы. ",
+      "decision_lines": [
+        [
+          11,
+          "на 64 разрешённые операции; по умолчанию commit немедленный. Workers отсутствуют."
+        ],
+        [
+          98,
+          "Это проект прототипа, не реализованное ускорение. Binding, объявления,"
+        ],
+        [
+          100,
+          "не обещает N-кратного ускорения. Новый путь должен заменять старую работу;"
+        ]
+      ],
+      "sha256": "b812319302b86aa1ec6719995c9c46a57578fae14715a4816d5eae3769cb1cdc"
+    },
+    {
+      "path": "docs/PUBLISH_INTEGRATION_GAP_01.md",
+      "title": "# PUBLISH-INTEGRATION-GAP-01",
+      "lead": " Read-only аудит после EVALUATOR-PARALLEL-01. Production и экспериментальный код не изменены. Экспериментальный baseline UnitProXL: frontend/Type Binding 16 workers, evaluator 8 workers, target 32768, semantic lifecycle 144,63 мс. ",
+      "decision_lines": [
+        [
+          11,
+          "поток интернирования и не создаёт production SourceMap/reuse tape. Нулевые constructor"
+        ],
+        [
+          43,
+          "| Контракт | Production Header V2 | Текущая projection | Необходимая проверка/доработка |"
+        ],
+        [
+          53,
+          "| Typedef | Production сохраняет только допустимый intrinsic alias, с semantic validation | Scope extractor также ограничен intrinsic, но реализует проверки самостоятельно | Негативные combinations/void/cv/derived и поря"
+        ],
+        [
+          57,
+          "| SourceMap/reuse | Root/file contributions, semantic dependencies, include replay, finalize | Physical origin и root events есть, production provenance не формируется | Воспроизвести root-contiguous ownership и reuse ta"
+        ]
+      ],
+      "sha256": "1d4497e123e4fadd3fe2d852bdaf831fa52479592759a5f793909ad3f307884b"
+    },
+    {
+      "path": "docs/PUBLISH_LEXER_KEYWORDS_19.md",
+      "title": "# Rejected: skip keyword hashes for long identifiers",
+      "lead": " The lexer scans identifier bytes, then computes their FNV hash to classify keywords. The longest supported keyword is `reinterpret_cast` (16 bytes). Experiment 19 skipped the hash for longer identifiers when no file-local symbol stream was requested. Symbol-producing Header preparation retained its original",
+      "decision_lines": [
+        [
+          1,
+          "# Rejected: skip keyword hashes for long identifiers"
+        ],
+        [
+          23,
+          "candidate was removed and the original lexer restored. The accepted Header"
+        ]
+      ],
+      "sha256": "bd921762490158564df6b5938aa4c493941a1bd0d3e955199a1045318344f62a"
+    },
+    {
+      "path": "docs/PUBLISH_MSVC_PGO_12.md",
+      "title": "# MSVC PGO: measured PUBLISH improvement",
+      "lead": " An isolated PUBLISH benchmark build with MSVC profile-guided optimization improves complete PUBLISH on the full UnitProXL fixture. Clang was not installed in the checked locations; the user chose to evaluate MSVC only for now. ",
+      "decision_lines": [],
+      "sha256": "6eace53ff6e2316aea37cae56797a561ce9652cc161afd12ab41fc2b4fa6b5b9"
+    },
+    {
+      "path": "docs/PUBLISH_NO_SHA256_01.md",
+      "title": "# PUBLISH-NO-SHA256-01 — accepted",
+      "lead": " ## Contract and active consumers  Fresh PUBLISH now acquires immutable owned Header/Source/configuration bytes without computing content SHA-256 or BUILD change tokens. It also omits the configuration",
+      "decision_lines": [
+        [
+          1,
+          "# PUBLISH-NO-SHA256-01 — accepted"
+        ],
+        [
+          31,
+          "measured full-PUBLISH pairs. Both variants retain accepted lazy Header state and"
+        ],
+        [
+          78,
+          "The first standalone production frontend test used different Source feature macros"
+        ],
+        [
+          87,
+          "Default OFF in production; there is no production environment override."
+        ]
+      ],
+      "sha256": "de19daf6f398d17d1a5b774a2a9a737c17a62f45706c8276b88f17e23bb431d8"
+    },
+    {
+      "path": "docs/PUBLISH_OWNED_SNAPSHOTS_02.md",
+      "title": "# PUBLISH verified snapshot ownership",
+      "lead": " ## Change  PUBLISH enables owned content before configuration composition. Initial source preparation and Header V2 include preparation explicitly call `adopt_acquire()`:",
+      "decision_lines": [],
+      "sha256": "3b9452a8c4bcffc6782695fcef38cae0e8ad59a448fba4dbc3957724e561a5ff"
+    },
+    {
+      "path": "docs/PUBLISH_PARALLEL_CANONICALIZATION_39.md",
+      "title": "# PUBLISH: parallel parsing, canonicalization and direct G",
+      "lead": " Status: architectural proposal and implementation constraints, not an enabled pipeline or a measured speedup. Supersedes the unfinished per-function sampling work. The tested publish-timeline mode from 38 is retained. No Local G is proposed. ",
+      "decision_lines": [],
+      "sha256": "ee9fb419098b0fa083d75d520e510728e15cf74e5809097eb0566dd9f8a04110"
+    },
+    {
+      "path": "docs/PUBLISH_PERFORMANCE.md",
+      "title": "# PUBLISH performance review",
+      "lead": " <!-- GRAPH_IDENTITY_APPEND_TARGET_BEGIN --> ## Identity-driven sparse persistence target (2026-10-01)  The next performance architecture is documented in",
+      "decision_lines": [
+        [
+          43,
+          "fixtures may link ordinary integer members and are rejected by the current"
+        ],
+        [
+          89,
+          "  contributions are accepted. PUBLISH therefore does not rescan every"
+        ],
+        [
+          206,
+          "### Rejected reservation experiment"
+        ],
+        [
+          345,
+          "| Stage | Before | After accepted changes |"
+        ]
+      ],
+      "sha256": "e730c88f67d6dda0d19ddf1c0fbe6182b35bf33d3dfbdd4cd9ddcd371740ef97"
+    },
+    {
+      "path": "docs/PUBLISH_PHYSICAL_01.md",
+      "title": "# PUBLISH-PHYSICAL-01 — eliminate duplicate initial Header lexing",
+      "lead": " Baseline: `1acc3a6acbed6c89fcb6e3b37aa90adee47e3510`.  ## Contract ",
+      "decision_lines": [],
+      "sha256": "ddf081481dde01325f10a449508c26ec23b54e82d0ee9f074562eb595b27f4c0"
+    },
+    {
+      "path": "docs/PUBLISH_PIPELINE_01.md",
+      "title": "# PUBLISH-PIPELINE-01 — experimental, no adoption",
+      "lead": " **Execution-mode correction (2026-10-26):** these timings were obtained inside the default tool sandbox. A same-binary crossover identifies a large sandbox execution cost, chiefly in acquisition/lexical preparation. These absolute results and pipeline conclusions must be scoped to that environment; an",
+      "decision_lines": [
+        [
+          1,
+          "# PUBLISH-PIPELINE-01 — experimental, no adoption"
+        ],
+        [
+          12,
+          "**Result:** overlap is implemented and content parity passes, but a reliable full-UnitProXL native PUBLISH win is not established. Active production sources are unchanged: RAM G + packed encoder remain the baseline. Dire"
+        ],
+        [
+          152,
+          "Implementation/reproduction instructions: `experiments/publish-pipeline-01/README.md`."
+        ],
+        [
+          161,
+          "Active engine/CMake tracked changes remain exactly the pre-existing production-PGO CMake block and Source endpoint resolver edits. All pipeline code lives under the standalone experiment/private generated sources; there "
+        ]
+      ],
+      "sha256": "02ac1005e3ac0e3a2426a6652e43e295feac65f15b0489bd632ccde979d39407"
+    },
+    {
+      "path": "docs/PUBLISH_POLICY_04.md",
+      "title": "# PUBLISH: content snapshots without BUILD tokens or durable flush",
+      "lead": " This aligns the implementation with the PROJECT.md invariant that BUILD/REBUILD own durability. PUBLISH creates no reusable BUILD lineage, so it needs neither USN/change tokens nor an explicit durable artifact flush. ",
+      "decision_lines": [],
+      "sha256": "458be6a671c3f56c463edcf9c35d3bfb2664f8e02bfd909e6eacfa3c999c3aef"
+    },
+    {
+      "path": "docs/PUBLISH_PROFILE.md",
+      "title": "# PUBLISH performance profile",
+      "lead": " `ServerEngineV4PublishBenchmark publish` measures the normal PUBLISH path. `publish-profile` performs the same construction with optional stage timers. Both modes create and replace the fixture's `compiled.bin` G image and `runtime.bin` ABI Runtime image; profile timings are diagnostic and should",
+      "decision_lines": [
+        [
+          346,
+          "scan was introduced. Preprocessing directives remain rejected in Source."
+        ]
+      ],
+      "sha256": "d6e3a4c4731658633f5b7217f6cb6d03a73e8b1d7647a77af634f3d46f7d595f"
+    },
+    {
+      "path": "docs/PUBLISH_RUNTIME_CHUNKS_21.md",
+      "title": "# Rejected: cyclic runtime object blocks",
+      "lead": " The existing runtime scheduler assigns each lane one contiguous range with an equal number of objects. Experiment 21 assigned whole-object blocks of 256 in round-robin order instead, aiming to reduce imbalance between regions with different object/array sizes. No object was split, and lanes still wrote only",
+      "decision_lines": [
+        [
+          1,
+          "# Rejected: cyclic runtime object blocks"
+        ],
+        [
+          30,
+          "scheduler was restored; accepted Source prehash and Header once-state changes"
+        ]
+      ],
+      "sha256": "0bcb003dd6dbe64dd169cd0832b6073d75fe3d285c9f0f64d89b841b0ddfca92"
+    },
+    {
+      "path": "docs/PUBLISH_RUNTIME_IMAGE_REUSE_01.md",
+      "title": "# Runtime image preparation reuse",
+      "lead": " Full construction already prepares a validated `shm_runtime_v2` physical plan before laying out `runtime.bin`. Previously, runtime layout sizing traversed every Graph link and initialization endpoint again to count dereference programs. Full construction now counts the compact owned physical plan instead. Link slot",
+      "decision_lines": [],
+      "sha256": "cf9a7f85635f111e49e3bd096dd6631e47819c4e9d6e35a9dbc58ab366725aff"
+    },
+    {
+      "path": "docs/PUBLISH_SOURCE_BOUND_RESOLVER_27.md",
+      "title": "# Связанные запросы Source resolver",
+      "lead": " Добавлены source_endpoint_request и source_endpoint_result. Вход содержит WHO объекта и borrowed span селекторов member(string_id)/index(uint64). Имена уже интернированы, WHO уже разрешён по действующей видимости. Результат владеет typed path, root/result типом и упорядоченными зависимостями. Ошибка возвращает",
+      "decision_lines": [
+        [
+          31,
+          "шаги последовательно. Окно commit 64 остаётся опциональным и OFF по умолчанию."
+        ],
+        [
+          36,
+          "Обновление: реальный dispatcher проверен в эксперименте 28 и отклонён из-за"
+        ],
+        [
+          46,
+          "Малые серии не подтверждают ускорение. Изменение структурное."
+        ]
+      ],
+      "sha256": "b27bbf886f7c6b4621a7c233843420a2b41aefd7bc55bd4caadbec950a657aa6"
+    },
+    {
+      "path": "docs/PUBLISH_SOURCE_DISPATCH_08.md",
+      "title": "# Source assignment dispatch",
+      "lead": " Source V2 previously resolved an existing object name again as a type and, on a miss, as a namespace before deciding whether the statement was an assignment. The new dispatch peeks at the next token first. `.`, `[` and `=` unambiguously select assignment syntax and avoid both extra identity searches.",
+      "decision_lines": [],
+      "sha256": "f36e8a7a396f0fed11902f3dc069ac773cf2ca81f5ab9a3624c308b75219ecfc"
+    },
+    {
+      "path": "docs/PUBLISH_SOURCE_LAYOUTS_33.md",
+      "title": "# Source: сравнение трёх физических представлений",
+      "lead": " Реализованы и проверены три режима на одних исходниках и копии UnitProXL. Header остаётся на принятом compact пути. Header/Source models, overlap, prebind и construction window во всех трёх режимах выключены. ",
+      "decision_lines": [
+        [
+          4,
+          "Header остаётся на принятом compact пути. Header/Source models, overlap,"
+        ],
+        [
+          96,
+          "compact cursor, а отказ от words пока не дал подтверждённого ускорения."
+        ]
+      ],
+      "sha256": "028aff87c6d510cc7f2d75888b91c22881891ef0b81eff56f83ca2a555adff1b"
+    },
+    {
+      "path": "docs/PUBLISH_SOURCE_LEXER_TOKENS_30.md",
+      "title": "# PUBLISH: lexer передаёт готовые Source tokens",
+      "lead": " Принят `SERVER_ENGINE_SOURCE_LEXER_TOKENS_V2=ON` по умолчанию в CMake. Требуется `SERVER_ENGINE_SOURCE_PREHASH_PARALLEL_V2=ON` (также default). Для сравнения прежний путь доступен с SOURCE_LEXER_TOKENS_V2=OFF. ",
+      "decision_lines": [
+        [
+          3,
+          "Принят `SERVER_ENGINE_SOURCE_LEXER_TOKENS_V2=ON` по умолчанию в CMake."
+        ],
+        [
+          26,
+          "совместимо с этим путём, но его флаг остаётся OFF по умолчанию."
+        ],
+        [
+          92,
+          "1404.890 → 1402.055 ms; она не даёт основания включать MODEL/OVERLAP по умолчанию."
+        ]
+      ],
+      "sha256": "fff674f25ca69b0ad4d8a26d1a01c724b2f515a5ecb6cff9badb543df47c400e"
+    },
+    {
+      "path": "docs/PUBLISH_SOURCE_MODEL_07.md",
+      "title": "# Source Model experiment and Source timer correction",
+      "lead": " The existing experimental `SERVER_ENGINE_SOURCE_MODEL_V2` and `SERVER_ENGINE_SOURCE_MODEL_DIRECT_V2` options were evaluated together in a separate Release + IPO build. Both remain OFF by default. This experiment does not establish a repeatable improvement in complete PUBLISH.",
+      "decision_lines": [],
+      "sha256": "c72f05e7e247ad6b17a559b96864661913488fcbf8c11678005eab569cf1e8ae"
+    },
+    {
+      "path": "docs/PUBLISH_SOURCE_OWNED_ENDPOINTS_25.md",
+      "title": "# Source: собственные endpoint paths и отложенная канонизация",
+      "lead": " Следующий срез после read-only resolver: нормальный Source путь сохраняет typed endpoint steps внутри результата endpoint. Target и source независимы от общего scratch buffer. Два результата переиспользуются между statements: reset очищает содержимое, сохраняя capacity. Аллокация на каждый endpoint не вводится.",
+      "decision_lines": [
+        [
+          39,
+          "проверкой изменения и не устанавливают подтверждённого ускорения."
+        ]
+      ],
+      "sha256": "5efc43ed9be646dc5c30663d5ece37c105f61df03842aaae7c0662b454de3c93"
+    },
+    {
+      "path": "docs/PUBLISH_SOURCE_PARALLEL_DISPATCH_28.md",
+      "title": "# Эксперимент 28: диспетчер bound requests — отклонён",
+      "lead": " В реальный Source parser был подключён экспериментальный путь: owner связывает имена и собирает до 64 простых scalar/link statements, четыре независимых resolver читают общий Graph, owner применяет результат в исходном порядке. Неподдерживаемые формы и ошибки возвращаются в канонический parser через replay",
+      "decision_lines": [
+        [
+          1,
+          "# Эксперимент 28: диспетчер bound requests — отклонён"
+        ],
+        [
+          29,
+          "Это короткая диагностическая серия, но регрессия слишком велика для принятия:"
+        ],
+        [
+          41,
+          "отклонённого прототипа сохранены в `build/publish-source-parallel-dispatch-28/`."
+        ]
+      ],
+      "sha256": "ec0ab0386fffd213604a8c4591e9fe6726f2e6a2f968dfaa2cf1e390d13f1ffa"
+    },
+    {
+      "path": "docs/PUBLISH_SOURCE_PREHASH_20.md",
+      "title": "# Parallel Source identifier hashes",
+      "lead": " Experiment 20 computes identifier FNV-1a hashes during per-file parallel token decoding. Workers read immutable file bytes and lexical words only. The serial Source cursor still interns names in canonical token order, using the existing `string_table::intern_prehashed` path. Full spelling equality, string IDs,",
+      "decision_lines": [],
+      "sha256": "51a1578c4055fa7056195131f353fdc233f9a27c66307bf27013da4e03690cb0"
+    },
+    {
+      "path": "docs/PUBLISH_SOURCE_READY_BATCH_36.md",
+      "title": "# Source ready-only tokens with batched strings (36)",
+      "lead": " This experiment combines `SERVER_ENGINE_SOURCE_TOKEN_ONLY_V2=ON` with `SERVER_ENGINE_SOURCE_STRING_BATCH_V2=ON`. The baseline is experiment 35: batched strings with ready tokens plus compact words. Both use Source lexer tokens and parallel prehash. Header token-only, Source Model and overlapping",
+      "decision_lines": [],
+      "sha256": "cb90331e7f769ec3a84b6023e7b425a2ec78f85598bfa4e2e60af3efa5795946"
+    },
+    {
+      "path": "docs/PUBLISH_SOURCE_RESOLVER_24.md",
+      "title": "# Source resolver: первый реализованный срез",
+      "lead": " Добавлен `parser/source_endpoint_resolver.hpp`. Resolver хранит `const graph&` и собственные transition/base caches. Он читает тип объекта по WHO, выбирает bounded array, определяет record/referent и разрешает члены с наследованием. У него нет доступа к string_table, identity_space, Source Map или mutable Graph;",
+      "decision_lines": [
+        [
+          38,
+          "серии не доказывают ни ускорения, ни стабильной регрессии. После них в resolver"
+        ]
+      ],
+      "sha256": "a1629df5a9b92f04deb01f9305c8df2497660ccb5b1e472462b5fa02d78d5e6d"
+    },
+    {
+      "path": "docs/PUBLISH_SOURCE_STRING_BATCH_35.md",
+      "title": "# Batched Source string writes (35)",
+      "lead": " Source V2 now collects resolved character initialization records in a reusable parser-owned buffer. Graph validates the scalar type and record keys once per batch and reserves index/vector capacity for the whole batch before applying records in order. Individual and batched writes share the same upsert logic.",
+      "decision_lines": [],
+      "sha256": "4d24a3bf714737129bd2351d686f16fa642a20df4534441b80688d3ddb93e092"
+    },
+    {
+      "path": "docs/PUBLISH_SOURCE_STRING_PROFILE_34.md",
+      "title": "# Source string initialization profile (34)",
+      "lead": " The Source V2 string path did not update the existing string statement and element counters. It now records completed statements and expanded array elements, and exposes `source_string_assignment_ms` in publish-profile. The timer is disabled in publish-stage and ordinary PUBLISH.",
+      "decision_lines": [],
+      "sha256": "7ee3561edb6375ad233eb60c05cd6fa169fcb4328ee1786f81ccf1f2c1180368"
+    },
+    {
+      "path": "docs/PUBLISH_SOURCE_WINDOW_26.md",
+      "title": "# Ограниченное окно последовательного Source commit",
+      "lead": " Реализовано окно из 64 уже разрешённых scalar/reference операций. Каждая хранит target/source WHO, собственные typed paths, значение/opcode и исходный токен commit. Endpoint buffers передаются swap и переиспользуют capacity; второй G или массив операций на весь проект не создаётся.",
+      "decision_lines": [
+        [
+          22,
+          "По умолчанию OFF: ёмкость 1 сохраняет немедленное применение тем же commit API."
+        ],
+        [
+          45,
+          "окупаются доказанным распараллеливанием, поэтому окно 64 не включено по умолчанию."
+        ]
+      ],
+      "sha256": "f33837215e4bcf4945ff625407fd5fd5d48f7ab325292c49f59d83ee0a60e58f"
+    },
+    {
+      "path": "docs/PUBLISH_TIMELINE_38.md",
+      "title": "# Accounting for full PUBLISH time (38)",
+      "lead": " ## Question and implementation  Header and Source semantics are sequential in the default configuration. `SERVER_ENGINE_HEADER_SOURCE_OVERLAP_V2=OFF`.",
+      "decision_lines": [
+        [
+          107,
+          "cause was established either. Do not promote those possibilities to findings."
+        ]
+      ],
+      "sha256": "4a4d245aecd6572f67f2699b6229c4d39ba9890cc077c0841b1fa17ae2ca402c"
+    },
+    {
+      "path": "docs/PUBLISH_TYPE_PLAN_09.md",
+      "title": "# Type-plan investigation: rejected flat program index",
+      "lead": " Temporary coarse instrumentation of full PUBLISH attributed type-plan work to:  | Stage | One diagnostic run, ms | |---|---:|",
+      "decision_lines": [
+        [
+          1,
+          "# Type-plan investigation: rejected flat program index"
+        ]
+      ],
+      "sha256": "74287478a9035fd496925ce647ae684fd28a1c45de047f3f3b13ba3977a0d037"
+    },
+    {
+      "path": "docs/PUBLISH_UNITPROXL_ABC_01.md",
+      "title": "# UnitProXL PUBLISH reference — A/B/C and execution-mode control",
+      "lead": " 2026-10-26. The large historical/current timing discrepancy is reproduced by changing **default tool sandbox versus unsandboxed execution**. There is no demonstrated large historical V2-versus-modern-control code regression in the controlled unsandboxed series. Earlier 1928.16 → 1659.42 ms / 13.9% reader",
+      "decision_lines": [
+        [
+          147,
+          "No Parser, reader, production source or production settings were changed during"
+        ]
+      ],
+      "sha256": "61be34be0f145aa5cd51868d79c0b11b6db406b9d0c995ddbb33d5df56c5ce14"
+    },
+    {
+      "path": "docs/RESOLVED_G_01.md",
+      "title": "# RESOLVED-G-01 — UnitProXL",
+      "lead": " Date: 2026-10-24. Diagnostic experiment; production PUBLISH remains unchanged.  ## Result ",
+      "decision_lines": [
+        [
+          3,
+          "Date: 2026-10-24. Diagnostic experiment; production PUBLISH remains unchanged."
+        ],
+        [
+          20,
+          "153.38 ms is about 36.17% of the independently measured Source median. This ratio is an orientation, not an additive decomposition of production CPU. In particular the remaining difference cannot be attributed entirely t"
+        ],
+        [
+          48,
+          "The disabled-hook cost is not statistically resolved in this series. Capture-mode PUBLISH/Source timers are intentionally excluded from production conclusions. No per-call stage timer is used in the Graph replay."
+        ]
+      ],
+      "sha256": "e57a3e7394dde311e1fa20c40e782a441fae0cdd0bbfca5d90cb92ccec3e7235"
+    },
+    {
+      "path": "docs/RESOLVED_G_02_PATH_INTERN_COST.md",
+      "title": "# RESOLVED-G-02 — PATH-INTERN-COST",
+      "lead": " Date: 2026-10-24. **No production adoption.**  ## Decision ",
+      "decision_lines": [
+        [
+          3,
+          "Date: 2026-10-24. **No production adoption.**"
+        ],
+        [
+          9,
+          "Keep the existing production Graph path interner. Do not turn an oracle reservation result into a production speed claim. The next priority is measurement of Source resolution/endpoint formation/provenance, with Graph un"
+        ],
+        [
+          68,
+          "A separate 10-pair calibration compared the unmodified production executable with RG02's inactive control under the same harness. Source medians: **812.7925 vs 808.702 ms**; paired inactive-minus-pure difference **-5.484"
+        ],
+        [
+          80,
+          "All changes to Graph behavior and the auxiliary field are behind `CW_PATH_INTERN_02`, defined only by the standalone experiment target. Root production PUBLISH remains unchanged."
+        ]
+      ],
+      "sha256": "f4d6b35caabc196d87ca7f44da4021b1f326148187fe4d0b9ee2c6254b42258a"
+    },
+    {
+      "path": "docs/RUNTIME_API_RANGES_01.md",
+      "title": "# RUNTIME-API-RANGES-01 — not promoted",
+      "lead": " An experiment-only executor-local byte array remembers successful validation of the seven immutable ranges in a type API. On first application, existing checks run unchanged; subsequent applications reuse the successful result. Dynamic type API index/base-offset checks, reference addresses, stores, children/repeats,",
+      "decision_lines": [
+        [
+          1,
+          "# RUNTIME-API-RANGES-01 — not promoted"
+        ],
+        [
+          15,
+          "No-cache remains the production implementation."
+        ],
+        [
+          29,
+          "passed with both policies. No production adoption or extra bridge justified."
+        ]
+      ],
+      "sha256": "6ac0161f53203ab1f6b133bf92cf2d7a6828737b74e3e307ed62477a14e87375"
+    },
+    {
+      "path": "docs/RUNTIME_FIRST_TOUCH_01.md",
+      "title": "# RUNTIME-FIRST-TOUCH-01",
+      "lead": " 2026-10-23. Decision: reject separate Object pretouch. Production remains unchanged: native 24 Object workers on this machine, first-touch during real construction.  ## Scope and safety ",
+      "decision_lines": [
+        [
+          3,
+          "2026-10-23. Decision: reject separate Object pretouch. Production remains unchanged: native 24 Object workers on this machine, first-touch during real construction."
+        ],
+        [
+          11,
+          "The experiment reuses `CW_RUNTIME_OBJECT_LANES_AB`, with `CW_RUNTIME_OBJECT_PRETOUCH=0/1`. No production build option enables it. Worker startup/join, boundary preparation, and pretouch all remain within resident creatio"
+        ],
+        [
+          15,
+          "Existing UnitProXL fixture `build/publish-subsecond-01/fixture/project.json`; same physical path in both modes. Complete post-SHA production objects from `build/publish-critical-path-02/symbols`, rebuilding benchmark and"
+        ],
+        [
+          38,
+          "This measures wall time, not fault counts or fault latency. It confirms that moving first-touch into a separate pass does not improve this workload. It does not contradict the earlier compiled-image persistence first-tou"
+        ]
+      ],
+      "sha256": "b7cbe13a66344130b7b0752de46fb657a92e4d04df3a8358719fe9b83407c56f"
+    },
+    {
+      "path": "docs/RUNTIME_OBJECT_LANES_01.md",
+      "title": "# RUNTIME-OBJECT-LANES-01 — Object worker limits",
+      "lead": " 2026-10-23. Decision: reject reduced worker limits; retain native capacity (24 on the measured machine). Production defaults are unchanged.  ## Hypothesis and scope ",
+      "decision_lines": [
+        [
+          3,
+          "2026-10-23. Decision: reject reduced worker limits; retain native capacity (24 on the measured machine). Production defaults are unchanged."
+        ],
+        [
+          13,
+          "MSVC Release /O2 with IPO, one executable, UnitProXL fixture at `build/publish-subsecond-01/fixture/project.json`. Reuse complete post-SHA production objects from `build/publish-critical-path-02/symbols`, rebuilding benc"
+        ],
+        [
+          40,
+          "Reducing Object concurrency does not improve this workload, despite observed kernel contention. The experiment does not measure whether fewer workers reduce fault counts or contention samples; it establishes that any ben"
+        ]
+      ],
+      "sha256": "c93b011c7996af1be7a2a8084184bd72a5881e3df49c60ec6073bd4e8e763126"
+    },
+    {
+      "path": "docs/RUNTIME_SHM_FAULTS_01.md",
+      "title": "# RUNTIME-SHM-FAULTS-01 — kernel attribution established",
+      "lead": " Проанализирована существующая ETW-серия `build/publish-critical-path-02/capture-20261023-144348/`. Новый захват, новый benchmark и изменения production не потребовались. ",
+      "decision_lines": [],
+      "sha256": "7dc5ba0bbb514d41aac1e30c898c53f518df1fc6e09e27301e38642d8ea44eb5"
+    },
+    {
+      "path": "docs/SEMANTIC_BIND_01.md",
+      "title": "# SEMANTIC-BIND-01: локальный Header Parser и binding типов",
+      "lead": " Реализован изолированный прототип. Рабочий PUBLISH не переключён. Проверяется модель локальных символов и разрешения **типовых ссылок**, а не вся семантика Headers и не новый полный PUBLISH.  ## Поток данных ",
+      "decision_lines": [
+        [
+          44,
+          "В первой разведочной версии стенд независимо разворачивал все includes каждого root. Это породило 20 590 702 запроса, около 17,5 ГБ пиковой памяти и многократную повторную работу. Такой прогон не является измерением рабо"
+        ],
+        [
+          85,
+          "- Существующий production CTest: 22/22, без изменения production-кода этим экспериментом."
+        ],
+        [
+          92,
+          "Локальные символы и отложенное типовое разрешение работают на реальном Header corpus без глобальных WHO в Parser и без Local G. Согласование идентичностей занимает малую часть текущей модели. Ускорение модели между 1 и 1"
+        ]
+      ],
+      "sha256": "b3b194b26aed68452a51ae548efa5fc1d746e770024d7756ae36568e1fa0118e"
+    },
+    {
+      "path": "docs/SEMANTIC_BIND_02.md",
+      "title": "# SEMANTIC-BIND-02: Scaling & Memory Audit",
+      "lead": " Аудит реализован и выполнен. Новые scheduler, Parser, формат записей и constructor/reference binding не включались. Production PUBLISH не изменён.  **Установлены две конкретные проблемы: root-level параллелизм ограничен одним длинным root; промежуточные данные удерживают большие записи, плотный массив пустых ошибок и копию формы типа в результатах.** Allocator тоже выполняет много операций, но его вклад в обычное время отдельно не доказан. ",
+      "decision_lines": [],
+      "sha256": "0cd0482a8a60249ac44d61ae063f7509d15147a12b9c8e3dc8d8763e05625674"
+    },
+    {
+      "path": "docs/SEMANTIC_BIND_03.md",
+      "title": "# SEMANTIC-BIND-03: Compact Storage & Lifetime",
+      "lead": " Эксперимент выполнен отдельно от production PUBLISH. Три изменения проверены независимо, затем совместно. Типовой Parser, semantic events, WHO numbering, scheduler и семантическое покрытие не менялись. `TypeRequest` по-прежнему занимает 120 байт; переход к полностью columnar/16-byte записи не смешан с этими измерениями.  **Результат:** sparse diagnostics убирает плотные пустые ошибки; segmented storage устраняет вторую полную материализацию requests; shared shape сокращает записи Binder, но тек",
+      "decision_lines": [
+        [
+          124,
+          "Production PUBLISH, его defaults, identity_ref ABI и файлы проекта не переключались. Полного Header semantics, construction/defaults, Direct G или нового результата PUBLISH <1 с этот эксперимент не доказывает."
+        ]
+      ],
+      "sha256": "c91c2a07aabbaa1e54bcfcee7f782f6f5d42e7378d6bb1e8de7e23fac07f66a8"
+    },
+    {
+      "path": "docs/SEMANTIC_BIND_04.md",
+      "title": "# SEMANTIC-BIND-04 — Final Bound Representation",
+      "lead": " Эксперимент устраняет зависимость bound type от полного массива Parser requests. Он остаётся изолированным: production PUBLISH, единица параллелизма Header root и семантическое покрытие Header Parser не изменены. ",
+      "decision_lines": [],
+      "sha256": "44e7bfa489c1b75f49fcd43ad09f411a9026379642876ce422df11e447d01ea6"
+    },
+    {
+      "path": "docs/SOURCE_COST_BREAKDOWN_01.md",
+      "title": "# SOURCE-COST-BREAKDOWN-01",
+      "lead": " Реализован отдельный диагностический executable текущего Source V2. Никаких новых object databases, operation streams, dispatcher/window или Graph algorithms. Production файлы не менялись: probes добавлены в генерируемые копии Source V2 и resolver header. Сборка использует остальные объекты свежего default production",
+      "decision_lines": [
+        [
+          131,
+          "парный полный PUBLISH. Этот этап не обещает и не демонстрирует ускорение production."
+        ]
+      ],
+      "sha256": "9e86818b0f50d31822fe36771911953e434b38744193629e77430634791eeb07"
+    },
+    {
+      "path": "docs/SOURCE_CPU_SAMPLING_02.md",
+      "title": "# SOURCE-CPU-SAMPLING-02",
+      "lead": " **Статус: фактический capture и анализ завершены; ranking пригоден с ограничениями полноты стеков.** Итоговые результаты приведены ниже. Предварительные проверки среды сохранены как история. Source V2, WHO/type resolution, Direct G, persisted formats и принятые архитектурные ограничения не менялись. ",
+      "decision_lines": [
+        [
+          5,
+          "Direct G, persisted formats и принятые архитектурные ограничения не менялись."
+        ],
+        [
+          19,
+          "а не отклонение действия автоматическим approval review. Дальнейшие попытки без"
+        ],
+        [
+          58,
+          "не свидетельство ускорения/регрессии из-за debug information."
+        ],
+        [
+          206,
+          "Production PUBLISH не изменён. Полученный control около 1,345 с — измерение"
+        ]
+      ],
+      "sha256": "c50a30e34a2a1bcd3da06058762bf6a073485e68d32a62fd3591fb7ceaf23501"
+    },
+    {
+      "path": "docs/SOURCE_DEFERRED_OBJECT_01.md",
+      "title": "# SOURCE-DEFERRED-OBJECT-01 — архитектурный аудит",
+      "lead": " Обновление контракта 2026-10-24: пользователь принял alias-aware last-write-wins по порядку Source в дереве проекта, независимо от старого first-slot execution order. См. `SOURCE_FINAL_CELL_CONTRACT_01.md`. Измерения и counterexamples ниже описывают прежний V2; требование сохранять именно его результат не переносится на новый semantic contract автоматически.  Дата: 2026-10-24. Область: текущий production Source V2, существующий G, SourceMap, persistence и Runtime V2. Оптимизатор и двухфазный bu",
+      "decision_lines": [
+        [
+          5,
+          "Дата: 2026-10-24. Область: текущий production Source V2, существующий G, SourceMap, persistence и Runtime V2. Оптимизатор и двухфазный builder не реализованы; production-файлы не изменены. Выполнены чтение кода и три мал"
+        ],
+        [
+          123,
+          "Согласно принятому RG01 capture UnitProXL, 705 237 input initialization records дали 705 237 final records; 367 144 link calls дали 367 144 links. **Replacement calls отсутствовали.** Поэтому устранение overwritten opera"
+        ],
+        [
+          125,
+          "Потенциальный резерв bulk builder — capacity planning, отсутствие repeated growth, один target lookup/insert, более выгодный проход по индексам и parallel writes в заранее назначенные slots. Их стоимость, стоимость новог"
+        ]
+      ],
+      "sha256": "76ec03e64f20596c6251fdab86a0cc0afce0e115e23ca8fb33bbbcb9728ef9cb"
+    },
+    {
+      "path": "docs/SOURCE_FINAL_CELL_CONTRACT_01.md",
+      "title": "# SOURCE-FINAL-CELL-CONTRACT-01",
+      "lead": " Дата: 2026-10-24. Основание — принятое пользователем правило из приложения к задаче: повторная явная инициализация одной конечной runtime-ячейки, в том числе через разные aliases, выдаёт warning; побеждает последняя запись по порядку Source в дереве проекта и позиции внутри файла.  **Это целевой контракт новой архитектуры, не описание уже внедрённого V2.** Production в данной задаче не изменён. Ранее измеренные реализации и golden artifacts остаются историческими контрольными точками. ",
+      "decision_lines": [
+        [
+          3,
+          "Дата: 2026-10-24. Основание — принятое пользователем правило из приложения к задаче: повторная явная инициализация одной конечной runtime-ячейки, в том числе через разные aliases, выдаёт warning; побеждает последняя запи"
+        ],
+        [
+          24,
+          "2. Выбрать окончательные bindings согласно логическому Source order. Для повторного BIND одного логического reference текущий принятый last-binding-wins сохраняется; это final-state linking, не исполнение промежуточных a"
+        ],
+        [
+          65,
+          "`experiments/parallel-local-source-arch-01/verify_contract.py` фиксирует scalar reduction contract на уже заданных final targets: 6 permutations результата worker completion, независимость от численных file IDs, local or"
+        ],
+        [
+          67,
+          "Тот же скрипт запускает текущий production PUBLISH на вложенном Project. При declaration-order DFS ожидается winner из `tail.cpp` со значением 2, но текущий V2 выдаёт 1 из nested child, поскольку его file_id назначен поз"
+        ]
+      ],
+      "sha256": "eeacde49c65744c936940f50f7af0cdd54a4b46abc81a13dcc73f38aecc8f6bd"
+    },
+    {
+      "path": "docs/SOURCE_LINK_INDEX_01.md",
+      "title": "# SOURCE-LINK-INDEX-01 — 4x growth rejected",
+      "lead": " Only the existing Graph link-target index was changed in the experiment. Production retains its original 2x capacity routine and insertion code through a compile-time branch; the candidate requires `CW_GRAPH_LINK_INDEX_AB`. Header member-name index remains on its previously accepted 4x policy.",
+      "decision_lines": [
+        [
+          1,
+          "# SOURCE-LINK-INDEX-01 — 4x growth rejected"
+        ],
+        [
+          4,
+          "Production retains its original 2x capacity routine and insertion code through a"
+        ],
+        [
+          6,
+          "Header member-name index remains on its previously accepted 4x policy."
+        ],
+        [
+          48,
+          "**Decision:** reject production adoption: no demonstrated full-PUBLISH benefit,"
+        ]
+      ],
+      "sha256": "cd19d2939ca94065419634d8febe758c7471b5ce87f2855f9ab5938dc73d63f5"
+    },
+    {
+      "path": "docs/SOURCE_LOCALITY_01.md",
+      "title": "# SOURCE-LOCALITY-01 — page working sets and target runs",
+      "lead": " 2026-10-23. The user's object/page locality hypothesis is supported by measurement. No production optimization is enabled in this audit. A small dedicated target context is justified as the next isolated experiment; a per-page WHO/type database is not required by these results.  ## Evidence levels ",
+      "decision_lines": [
+        [
+          3,
+          "2026-10-23. The user's object/page locality hypothesis is supported by measurement. No production optimization is enabled in this audit. A small dedicated target context is justified as the next isolated experiment; a pe"
+        ],
+        [
+          7,
+          "**UnitProXL:** actual production Source V2 events with semantic WHO/type refs and successful writes to the existing G. Same isolated fixture used throughout prior experiments. A counter-free production control and two di"
+        ],
+        [
+          9,
+          "**UnitProXL_V2 and ABB:** additional user-requested inputs were copied into build fixtures. Production compatibility was attempted, but neither completes the current PUBLISH. Their complete Source inputs were therefore m"
+        ],
+        [
+          75,
+          "The shared legacy importer gained optional `expand_chapters=True` / `--expand-chapters`; its default remains unchanged. Source `.chap` include containers now expand like `.book` in this experiment, preserving non-include"
+        ]
+      ],
+      "sha256": "c7def6c4224bd1ce62a1b6ac6b6d4efbad6038ae410551b5c53a6c36d89e2275"
+    },
+    {
+      "path": "docs/SOURCE_RESOLUTION_01.md",
+      "title": "# SOURCE-RESOLUTION-01 — 2026-10-24",
+      "lead": " RESOLVED-G-02 закрыт с решением **NO ADOPTION**. Этот эксперимент исследует Source V2; production Graph и Source не изменены. Реализация находится в `experiments/source-resolution-01` и генерирует отдельные translation units из текущих исходников. Core собран заново, Release + IPO, без RG01/RG02 Graph hooks.  ## Диагностическое измерение ",
+      "decision_lines": [
+        [
+          3,
+          "RESOLVED-G-02 закрыт с решением **NO ADOPTION**. Этот эксперимент исследует Source V2; production Graph и Source не изменены. Реализация находится в `experiments/source-resolution-01` и генерирует отдельные translation u"
+        ],
+        [
+          36,
+          "Диагностическая сборка даже в mode 0 оказалась дороже production: 7 пар, медиана overhead Source **48,37 мс**, bootstrap 95% CI [38,97; 60,89]; полного PUBLISH **61,53 мс**, CI [27,69; 83,44]. Кроме самих ветвлений прокс"
+        ],
+        [
+          42,
+          "Clean executable использует исходный Parser, полностью заново собранный core, Release + IPO. Все `SERVER_ENGINE_*:BOOL` настройки совпали с `build/enum-v4`. Калибровка неактивной clean-сборки против production baseline: "
+        ],
+        [
+          51,
+          "Именно парные разницы используются для решения. Разность независимых медиан не заменяет парную статистику. Полное ускорение PUBLISH **не доказано**, несмотря на положительный эффект в Source. Итог кандидата: **NO ADOPTIO"
+        ]
+      ],
+      "sha256": "cd86b5348085a1aeebe43057d7fd8ab19e3192524222b2f3ae73dc99a26f12fc"
+    },
+    {
+      "path": "docs/SOURCE_STRING_BATCH_AB_01.md",
+      "title": "# SOURCE-V2-STRING-BATCH-01 / SOURCE-STRING-BATCH-AB-01",
+      "lead": " 2026-10-26. **Existing production batch path confirmed beneficial.** Current checkout already defaults `SERVER_ENGINE_SOURCE_STRING_BATCH_V2=ON`, defining `CW_SOURCE_STRING_BATCH_V2`. No new production algorithm or enablement is needed. Keep this setting. No Parser, Graph, production CMake or binary-format change",
+      "decision_lines": [
+        [
+          3,
+          "2026-10-26. **Existing production batch path confirmed beneficial.** Current"
+        ],
+        [
+          88,
+          "  missing semicolon and reference-type mismatch. The currently accepted unbound-"
+        ],
+        [
+          93,
+          "  slots, input order and invalid middle endpoints rejected before mutation."
+        ],
+        [
+          113,
+          "## Reproduction and decision"
+        ]
+      ],
+      "sha256": "f80dd0f2aac5a8828d154402d430494f58e86fa20a79b7f1671472d03085de42"
+    },
+    {
+      "path": "docs/SOURCE_STRING_SCRATCH_01.md",
+      "title": "# SOURCE-STRING-SCRATCH-01",
+      "lead": " 2026-10-23. Implemented and validated as an isolated experiment. **Not enabled in production:** Source-stage savings are measurable in this series, but full-PUBLISH improvement is inconclusive.  ## Change and lifetime ",
+      "decision_lines": [
+        [
+          3,
+          "2026-10-23. Implemented and validated as an isolated experiment. **Not enabled in production:** Source-stage savings are measurable in this series, but full-PUBLISH improvement is inconclusive."
+        ],
+        [
+          27,
+          "MSVC Release /O2 /Ob2 + IPO, same executable, complete accepted post-SHA production object set with Source Parser and benchmark rebuilt. UnitProXL at the same `build/publish-subsecond-01/fixture/project.json` path in bot"
+        ],
+        [
+          53,
+          "Raw results: `build/source-string-scratch-01/results-20261023/{manifest.json,measurements.csv,summary.json}`. Growth audit: `build/source-string-scratch-01/audit-20261023/`. Its original generic runner control label is 2"
+        ],
+        [
+          55,
+          "Reproduction: `experiments/source-string-scratch-01/README.md`. No production bridge or adoption is justified by the current full-PUBLISH result. Keep the experiment and regression coverage; retain production behavior."
+        ]
+      ],
+      "sha256": "4307b1c8f8b3874831538848dfff388e329b20f67256f4fd5c1f7209082e54fe"
+    },
+    {
+      "path": "docs/SOURCE_TARGET_CONTEXT_01.md",
+      "title": "# SOURCE-TARGET-CONTEXT-01",
+      "lead": " 2026-10-23. Implemented and semantically validated. **Experiment retained, production default unchanged:** the native candidate improves the Source stage in this series, but neither series establishes a reliable full-PUBLISH improvement.  ## Implementation ",
+      "decision_lines": [
+        [
+          3,
+          "2026-10-23. Implemented and semantically validated. **Experiment retained, production default unchanged:** the native candidate improves the Source stage in this series, but neither series establishes a reliable full-PUB"
+        ],
+        [
+          41,
+          "MSVC Release /O2 /Ob2 + IPO. Current accepted post-SHA production objects with Source Parser and benchmark rebuilt. Same validated UnitProXL fixture and physical paths: `build/publish-subsecond-01/fixture/project.json`. "
+        ],
+        [
+          67,
+          "| Median, ms | Original production | Native context |"
+        ],
+        [
+          85,
+          "- Release builds and **4/4 test configurations pass**: reference, context, production without experiment macros, and native candidate. Full frontend suite includes 22 Header V2 semantic contract fixtures."
+        ]
+      ],
+      "sha256": "9d55c568a790683f3919885c837a2c06f28816f978908c64598451ef01936adb"
+    },
+    {
+      "path": "docs/SOURCE_TYPE_PREPARE_01.md",
+      "title": "# SOURCE-TYPE-PREPARE-01",
+      "lead": " 2026-10-23. Isolated resolver audit and type-preparation cache experiment completed. **No production adoption:** same-executable measurements show a small positive signal, but the separate production-candidate comparison is inconclusive. Existing Source V2 remains the baseline.  ## Audit before changing the algorithm ",
+      "decision_lines": [
+        [
+          3,
+          "2026-10-23. Isolated resolver audit and type-preparation cache experiment completed. **No production adoption:** same-executable measurements show a small positive signal, but the separate production-candidate comparison"
+        ],
+        [
+          50,
+          "High hit rate proves reuse, not the original operation's cost. In production `graph::named(type_ref, ...)` checks the kind and uses `find_type()` through the existing identity-location array. Ordinary named inputs do not"
+        ],
+        [
+          54,
+          "MSVC Release /O2 /Ob2 + IPO. Current accepted post-SHA production objects with Source Parser and benchmark rebuilt. Identical UnitProXL physical fixture `build/publish-subsecond-01/fixture/project.json`. Two excluded war"
+        ],
+        [
+          88,
+          "Both intervals include zero. Full-PUBLISH medians are effectively equal. The positive paired median alone is insufficient to establish a reliable production win. Bootstrap uses 10,000 paired resamples with a fixed seed i"
+        ]
+      ],
+      "sha256": "d893cc5ad3d860c487bca3835246cb5d6a8d95999122bb5575687624079b3f23"
+    },
+    {
+      "path": "docs/SOURCE_V2_CRITICAL_01.md",
+      "title": "# SOURCE-V2-CRITICAL-01 — current V2 CPU sampling and one bounded candidate",
+      "lead": " 2026-10-26. **Diagnostic completed. One candidate tested; NO ADOPTION.** Production remains current Header V2 / Source V2, Fast Reader ON, Batch ON, existing String Path Reuse, RAM G and packed persistence. No production source or configuration was changed. The prior STRING-BATCH result confirms an already",
+      "decision_lines": [
+        [
+          3,
+          "2026-10-26. **Diagnostic completed. One candidate tested; NO ADOPTION.**"
+        ],
+        [
+          4,
+          "Production remains current Header V2 / Source V2, Fast Reader ON, Batch ON,"
+        ],
+        [
+          103,
+          "the actual public production rebind_resolved_link entrypoint on fresh targets."
+        ],
+        [
+          162,
+          "Keep production V2 unchanged. Retain the accepted existing String Batch ON."
+        ]
+      ],
+      "sha256": "b61562c35e5c41e90cc10911aa15f49cf9c17d4642e0e247e9c21b7cf617b6e8"
+    },
+    {
+      "path": "docs/SOURCE_V2_ENDPOINT_COST_01.md",
+      "title": "# SOURCE-V2-ENDPOINT-COST-01 — saved ETL reanalysis",
+      "lead": " 2026-10-26. **Diagnostic complete; no implementation candidate justified.** Read-only analysis of the existing SOURCE-V2-CRITICAL-01 stacks and current source. No new benchmark runs, ETW capture, timers, counters, caches or production edits. The narrow goal is to identify avoidable work before another A/B.",
+      "decision_lines": [
+        [
+          141,
+          "| Full endpoint caches 13–15 and 37 | Rejected in their original series. Cache preparation/probing/copying outweighed removed traversal; do not repeat by renaming them. |"
+        ],
+        [
+          142,
+          "| Type preparation cache | NO ADOPTION; native full-PUBLISH comparison inconclusive. |"
+        ],
+        [
+          144,
+          "| String insertion vacant-slot reuse | STRING-INTERN-SLOT-01 not promoted; only targets misses, not the successful lookup cost. |"
+        ],
+        [
+          147,
+          "| New-link second lookup removal | SOURCE-V2-CRITICAL-01 NO ADOPTION; full native CI includes zero. |"
+        ]
+      ],
+      "sha256": "eb183215ccfb87384cadfe34877d0e1060f602a6ac00525d4f1cce68970bf414"
+    },
+    {
+      "path": "docs/SOURCE_V2_STRING_PATH_REUSE_01.md",
+      "title": "# SOURCE-V2-STRING-PATH-REUSE-01",
+      "lead": " ## Scope  Source Parser V2 reuses canonical `endpoint_path_handle` values for repeated `char[N]` initializations. The cache is a transient acceleration structure",
+      "decision_lines": [
+        [
+          33,
+          "## Accepted diagnostic A/B (prior to production integration)"
+        ],
+        [
+          48,
+          "performance. Use `run_production.ps1` for a fresh A/B of production code."
+        ]
+      ],
+      "sha256": "1873c7649d11c533a9a2fe6500f255c7179e2189ba3e4bf7f4cb1632074c6a75"
+    },
+    {
+      "path": "docs/STATE_LAZY_01.md",
+      "title": "# STATE-LAZY-01 — отложенное создание record-local containers",
+      "lead": " Дата: 2026-10-22. Изолированный эксперимент поверх EVALUATOR-ISOLATION-01. Production PUBLISH, WHO, Parser, Type Binding и конечный G не менялись. Код: `experiments/state-lazy-01/`. ",
+      "decision_lines": [
+        [
+          210,
+          "projection. Production PUBLISH не ускорен этим изолированным экспериментом."
+        ]
+      ],
+      "sha256": "af5b8ed36b669e7a2ba2b69e0e3e1880ea78d459af8cada1ae60aabc6c338736"
+    },
+    {
+      "path": "docs/STRING_INTERN_SLOT_01.md",
+      "title": "# STRING-INTERN-SLOT-01 — not promoted",
+      "lead": " Current CPU sampling attributes 1574 exclusive Source samples to `string_table::intern_prehashed`. Inspection found that a new spelling probes the index once during lookup, then again during insertion. Experiment: preserve the first vacant slot and insert there if index capacity has not changed. Rehash uses",
+      "decision_lines": [
+        [
+          1,
+          "# STRING-INTERN-SLOT-01 — not promoted"
+        ],
+        [
+          33,
+          "**Decision:** no reliable full-PUBLISH gain established in this noisy series;"
+        ],
+        [
+          34,
+          "do not promote. This does not prove the algorithm has zero benefit. No further"
+        ],
+        [
+          50,
+          "for other sources. In particular, Graph uses accepted Header member-index 4x growth"
+        ]
+      ],
+      "sha256": "250b76e4fd0f3c2241c88534d84820564668830bb74fa4130a74709bbafd3a07"
+    }
+  ],
+  "updated_on": "2026-10-27"
+}

@@ -1,0 +1,32 @@
+{
+  "status": "completed_pgo_benefit_confirmed_for_trained_UnitProXL_server",
+  "completed_on": "2026-10-27",
+  "base_commit": "87abe00f7b6abd611c045b20d999649b9152659a",
+  "timed_calls": 60,
+  "blocks": 15,
+  "execution": "unsandboxed",
+  "boundary": "external localhost TCP PUBLISH request latency; startup and parity checks excluded",
+  "speedup_percent": 10.396931528546558,
+  "binary_hashes": {
+    "ordinary": "354205b58ec799f280e8d48ad88d3f8fa43325a6a49e10ce1b5c631a2572af66",
+    "pgo": "98e8c489ff1b6d03f4058151ef6833d3750289e3483656e49d76c2c5a6617bcf"
+  },
+  "evidence_hashes": {
+    "freeze.json": "eb8355588c0a3e46d40812d99dd01a3f0877989f090c28c1a506ac47e88ec3a9",
+    "source.patch": "5b595818a5e0beeecb60f6cc067c44eb1b76d46153d2dafc37412ce199e4b186",
+    "ordinary-cache.txt": "2ca88c0499eff99b41379337ea50f3764e2bbcc04b642018ab21a2dd39989315",
+    "use-cache.txt": "9f562867559983d7e8ed82a2d7be8419682d204ec719387dc7ce1668ccf8bd1f",
+    "compiler/production.pgd": "7b471d67f64152d072f175a85d473f61cf4c34df9b71a7fce9e900b07877ea2e",
+    "ab-01/summary.json": "fbf1c0185d92ded78e8be5de704cad55be67024a17738a13110d201453fd9de0",
+    "ab-01/samples.json": "8003407878b4ddc109fec5e0ee20986e25ca03fe630005ac2b6559e01ad77ac0",
+    "ab-01/binary-manifest.json": "5d8387bb63343538ef40c00f50f0bc5836b4a87329fbe104c82b3e1797b14bc5",
+    "validation.json": "52024ae0d6abcc216fe807ca379afab8a6ca80ce30278d617c328a4402cb6665",
+    "validate-recheck.log": "37f8b1370d1ad7526def66bd7f30b0d2e873c17b0445f481cb7909b2d2d11efe",
+    "train.log": "b611f90343fa7e3707ae0efdd428ce1a2056f652651d4630cc31bcc3591461f8",
+    "train-retry.log": "8b6a66a7d86306e9ecabc3d3adc0329ae628a7a3f8ada0f3653d7ffdb37eb926",
+    "merge.log": "54425077104fb6b9103089423cb0c08918ddf09809e81a51fd96e28d13b300cf",
+    "build-use.log": "6c64984ba96526fb8471f316c78b0beeb45a7000884362bbddc1ecdc650ba812"
+  },
+  "default_pgo": "OFF; USE is a trained build profile, not a universal default",
+  "production_deployed": false
+}

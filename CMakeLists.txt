@@ -274,6 +274,35 @@ else()
     target_compile_options(ServerEngineV4 PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# Production executable PGO has its own database. Never reuse benchmark PGD.
+# OFF leaves the normal production build unchanged; algorithms are identical.
+set(SERVER_ENGINE_PRODUCTION_PGO "OFF" CACHE STRING
+    "MSVC ServerEngineV4 PGO: OFF, GENERATE, USE (Release only)")
+set_property(CACHE SERVER_ENGINE_PRODUCTION_PGO PROPERTY STRINGS OFF GENERATE USE)
+set(SERVER_ENGINE_PRODUCTION_PGO_DATABASE
+    "${CMAKE_CURRENT_BINARY_DIR}/server-engine.pgd" CACHE FILEPATH
+    "PGO database for the production ServerEngineV4 executable only")
+if(NOT SERVER_ENGINE_PRODUCTION_PGO STREQUAL "OFF")
+    if(NOT MSVC OR NOT SERVER_ENGINE_ENABLE_IPO OR NOT SERVER_ENGINE_IPO_SUPPORTED)
+        message(FATAL_ERROR "Production PGO requires MSVC with supported IPO")
+    endif()
+    if(NOT IS_ABSOLUTE "${SERVER_ENGINE_PRODUCTION_PGO_DATABASE}")
+        message(FATAL_ERROR "Production PGO database must be absolute")
+    endif()
+    if(SERVER_ENGINE_PRODUCTION_PGO STREQUAL "GENERATE")
+        set(production_pgo_option "/FASTGENPROFILE:NOEXACT,PGD=${SERVER_ENGINE_PRODUCTION_PGO_DATABASE}")
+    elseif(SERVER_ENGINE_PRODUCTION_PGO STREQUAL "USE")
+        if(NOT EXISTS "${SERVER_ENGINE_PRODUCTION_PGO_DATABASE}")
+            message(FATAL_ERROR "Train and merge production PGD before USE")
+        endif()
+        set(production_pgo_option "/USEPROFILE:PGD=${SERVER_ENGINE_PRODUCTION_PGO_DATABASE}")
+    else()
+        message(FATAL_ERROR "Production PGO must be OFF, GENERATE or USE")
+    endif()
+    target_link_options(ServerEngineV4 PRIVATE
+        "$<$<CONFIG:Release>:/LTCG>" "$<$<CONFIG:Release>:${production_pgo_option}>")
+endif()
+
 
 option(
     SERVER_ENGINE_BUILD_BENCHMARKS

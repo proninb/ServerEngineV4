@@ -1,0 +1,79 @@
+{
+  "blocks": 15,
+  "calls": 60,
+  "binary_hashes": {
+    "ordinary": "354205b58ec799f280e8d48ad88d3f8fa43325a6a49e10ce1b5c631a2572af66",
+    "pgo": "98e8c489ff1b6d03f4058151ef6833d3750289e3483656e49d76c2c5a6617bcf"
+  },
+  "artifact_hashes": {
+    "compiled.bin": "16a81fc1b08522803a6b71db97187fbae5babf144703fe30b306a845b6d0921e",
+    "runtime.bin": "a0281b3bb48103a7cd339cccd072d24f3524db9932bc67b58a714906996b5ee6"
+  },
+  "metrics": {
+    "publish_request_ms": {
+      "ordinary_median": 1261.443,
+      "pgo_median": 1124.7451999999998,
+      "mean_block_gain": 131.24775666666665,
+      "median_block_gain": 134.63459999999986,
+      "bootstrap_mean95": [
+        124.29064999999997,
+        137.51777333333328
+      ],
+      "winning_blocks": 15,
+      "ordinary_mean": 1262.3701166666667,
+      "pgo_mean": 1131.12236
+    },
+    "publish_process_cpu_ms": {
+      "ordinary_median": 4179.6875,
+      "pgo_median": 3906.25,
+      "mean_block_gain": 292.7083333333333,
+      "median_block_gain": 328.125,
+      "bootstrap_mean95": [
+        174.47916666666666,
+        403.6458333333333
+      ],
+      "winning_blocks": 13,
+      "ordinary_mean": 4169.791666666667,
+      "pgo_mean": 3877.0833333333335
+    },
+    "startup_ms": {
+      "ordinary_median": 513.8077000000294,
+      "pgo_median": 515.9993499999871,
+      "mean_block_gain": -1.5498566666622082,
+      "median_block_gain": -1.2259000000085507,
+      "bootstrap_mean95": [
+        -4.052186666676032,
+        1.1599800000017997
+      ],
+      "winning_blocks": 5,
+      "ordinary_mean": 514.0996566666681,
+      "pgo_mean": 515.6495133333303
+    },
+    "idle_request_ms": {
+      "ordinary_median": 0.1313,
+      "pgo_median": 0.1274,
+      "mean_block_gain": 0.0077533333333333326,
+      "median_block_gain": -0.003500000000000003,
+      "bootstrap_mean95": [
+        -0.00922666666666667,
+        0.02878
+      ],
+      "winning_blocks": 7,
+      "ordinary_mean": 0.14251666666666668,
+      "pgo_mean": 0.13476333333333335
+    },
+    "peak_ws_bytes": {
+      "ordinary_median": 2573072384.0,
+      "pgo_median": 2572441600.0,
+      "mean_block_gain": 604706.1333333333,
+      "median_block_gain": 585728,
+      "bootstrap_mean95": [
+        270199.4666666667,
+        954777.6
+      ],
+      "winning_blocks": 10,
+      "ordinary_mean": 2573023505.0666666,
+      "pgo_mean": 2572418798.9333334
+    }
+  }
+}
