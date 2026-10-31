@@ -5,6 +5,9 @@
  * diagnostic_collection. Nested layers append to that same collection.
  */
 #include "server.hpp"
+#if defined(CW_UNLOAD_HEAP_OPTIMIZATION)
+#include "unload_heap_optimization.hpp"
+#endif
 
 #include "configuration/server_configuration_loader.hpp"
 #include "diagnostics/diagnostic_builder.hpp"
@@ -2136,6 +2139,10 @@ server_status server::unload(
 
     context.project.reset();
     set_project_state(project_state::unloaded);
+
+#if defined(CW_UNLOAD_HEAP_OPTIMIZATION)
+    optimize_heap_after_unload(operation, diagnostics);
+#endif
 
     return server_status::success;
 }

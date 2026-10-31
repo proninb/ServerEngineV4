@@ -40,6 +40,7 @@ private:
 
 // Complete V4 diagnostic catalog.
 inline constexpr std::array diagnostic_descriptors{
+    diagnostics::server_heap_optimization_warning,
     diagnostics::server_initialization_failed,
     diagnostics::configuration_read_failed,
     diagnostics::configuration_invalid_json,

@@ -4,6 +4,11 @@ project(ServerEngineV4
     VERSION 4.0.0
     LANGUAGES CXX
 )
+option(SERVER_ENGINE_UNLOAD_HEAP_OPTIMIZATION
+    "Inactive candidate: optimize process LFH caches after high-commit UNLOAD" OFF)
+if(SERVER_ENGINE_UNLOAD_HEAP_OPTIMIZATION)
+    add_compile_definitions(CW_UNLOAD_HEAP_OPTIMIZATION=1)
+endif()
 option(SERVER_ENGINE_PUBLISH_NO_SHA256_AB "Benchmark reference/candidate PUBLISH content digests" OFF)
 if(SERVER_ENGINE_PUBLISH_NO_SHA256_AB)
     add_compile_definitions(CW_PUBLISH_NO_SHA256_AB=1)
@@ -751,6 +756,16 @@ if(MSVC)
 endif()
 
 include(CTest)
+if(BUILD_TESTING)
+    add_executable(ServerEngineV4UnloadHeapOptimizationTests
+        tests/unload_heap_optimization_tests.cpp
+        server_engine/diagnostics/diagnostic_collection.cpp
+        server_engine/diagnostics/diagnostic_source_cache.cpp)
+    target_include_directories(ServerEngineV4UnloadHeapOptimizationTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+    target_compile_features(ServerEngineV4UnloadHeapOptimizationTests PRIVATE cxx_std_20)
+    add_test(NAME unload_heap_optimization COMMAND ServerEngineV4UnloadHeapOptimizationTests)
+endif()
 if(BUILD_TESTING)
     add_executable(ServerEngineV4HeaderRecordIndexTests tests/header_record_index_tests.cpp)
     target_include_directories(ServerEngineV4HeaderRecordIndexTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)

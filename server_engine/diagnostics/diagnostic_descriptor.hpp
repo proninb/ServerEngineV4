@@ -32,6 +32,14 @@ struct diagnostic_descriptor {
 
 namespace diagnostics {
 
+inline constexpr diagnostic_descriptor server_heap_optimization_warning{
+    diagnostic_id{1004},
+    diagnostic_domain::server,
+    diagnostic_severity::warning,
+    "server.heap_optimization_warning",
+    "UNLOAD completed; optional heap optimization could not meet its target",
+};
+
 // Server startup could not complete because of an unexpected internal failure.
 inline constexpr diagnostic_descriptor server_initialization_failed{
     diagnostic_id{1001},
