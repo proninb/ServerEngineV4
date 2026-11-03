@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.25)
+﻿cmake_minimum_required(VERSION 3.25)
 
 project(ServerEngineV4
     VERSION 4.0.0
@@ -241,6 +241,7 @@ add_executable(ServerEngineV4
     server_engine/project/project_rebuild.cpp
     server_engine/project/project_full_construction.cpp
     server_engine/project/project_configuration_loader.cpp
+    server_engine/project/task/task_configuration.cpp
 )
 
 if(WIN32)
@@ -1165,6 +1166,7 @@ if(BUILD_TESTING)
     add_executable(ServerEngineV4ProjectRuntimeConfigurationTests
         tests/project_runtime_configuration_tests.cpp
         server_engine/project/project_configuration_loader.cpp
+    server_engine/project/task/task_configuration.cpp
         server_engine/filesystem_path.cpp
         server_engine/json/json_parser.cpp
         server_engine/diagnostics/diagnostic_collection.cpp
@@ -1461,3 +1463,21 @@ if(BUILD_TESTING)
     endif()
 endif()
 
+
+# TASK-CONFIG-01 standalone configuration tests.
+add_executable(task_configuration_tests
+    tests/task_configuration_tests.cpp
+    server_engine/project/task/task_configuration.cpp
+    server_engine/json/json_parser.cpp
+)
+
+enable_testing()
+add_test(NAME task_configuration COMMAND task_configuration_tests)
+
+# TASK-CONFIG-02 negative tests (Release-safe).
+add_executable(task_config_02_negative_tests
+    tests/task_config_02_negative_tests.cpp
+    server_engine/project/task/task_configuration.cpp
+    server_engine/json/json_parser.cpp
+)
+add_test(NAME task_config_02_negative COMMAND task_config_02_negative_tests)

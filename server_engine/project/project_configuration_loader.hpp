@@ -8,6 +8,7 @@
 
 #include "project_configuration_manifest.hpp"
 #include "preprocessor_configuration.hpp"
+#include "task/task_configuration.hpp"
 #include "file/file_kind.hpp"
 #include "../diagnostics/diagnostic_collection.hpp"
 #include "../operation.hpp"
@@ -34,6 +35,8 @@ struct project_configuration_dependency final {
 
 struct project_runtime_configuration final {
     std::filesystem::path ic;
+    std::filesystem::path tasks;
+    task_configuration task_definitions;
 };
 
 [[nodiscard]] server_status read_project_configuration(

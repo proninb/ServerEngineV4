@@ -1,0 +1,317 @@
+﻿#include "task_configuration.hpp"
+#include "../../json/json_parser.hpp"
+
+#include <functional>
+#include <limits>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+
+namespace cw::server {
+
+bool task_is_scheduled(
+    const task_settings& settings,
+    std::uint64_t cycle,
+    bool frozen) noexcept {
+
+    if (settings.calls == 0 ||
+        settings.cycles == 0 ||
+        settings.starting_from_cycle == 0 ||
+        cycle < settings.starting_from_cycle ||
+        (frozen && !settings.run_in_freeze)) {
+        return false;
+    }
+
+    return (cycle - settings.starting_from_cycle) %
+        settings.cycles == 0;
+}
+
+bool validate_task_configuration(
+    task_configuration& configuration,
+    std::string& error) {
+
+    error.clear();
+    configuration.execution_order.clear();
+
+    std::unordered_map<std::string, std::size_t> ids;
+
+    for (std::size_t i = 0; i < configuration.tasks.size(); ++i) {
+        const auto& task = configuration.tasks[i];
+
+        if (task.id.empty() || task.executable.empty()) {
+            error = "Task id and executable must not be empty";
+            return false;
+        }
+
+        if (!ids.emplace(task.id, i).second) {
+            error = "Duplicate Task id: " + task.id;
+            return false;
+        }
+
+        if (task.settings.calls == 0 ||
+            task.settings.cycles == 0 ||
+            task.settings.starting_from_cycle == 0) {
+            error = "Invalid schedule for Task: " + task.id;
+            return false;
+        }
+    }
+
+    std::vector<unsigned char> state(
+        configuration.tasks.size(), 0);
+
+    std::function<bool(std::size_t)> visit =
+        [&](std::size_t index) -> bool {
+            if (state[index] == 1) {
+                error = "Circular Task dependency: " +
+                    configuration.tasks[index].id;
+                return false;
+            }
+
+            if (state[index] == 2) {
+                return true;
+            }
+
+            state[index] = 1;
+
+            std::unordered_set<std::string> seen;
+
+            for (const auto& dependency :
+                 configuration.tasks[index].dependencies) {
+
+                if (!seen.insert(dependency).second) {
+                    error = "Duplicate dependency: " + dependency;
+                    return false;
+                }
+
+                const auto found = ids.find(dependency);
+
+                if (found == ids.end()) {
+                    error = "Unknown Task dependency: " + dependency;
+                    return false;
+                }
+
+                if (!visit(found->second)) {
+                    return false;
+                }
+            }
+
+            state[index] = 2;
+            configuration.execution_order.push_back(index);
+            return true;
+        };
+
+    for (std::size_t i = 0; i < configuration.tasks.size(); ++i) {
+        if (!visit(i)) {
+            configuration.execution_order.clear();
+            return false;
+        }
+    }
+
+    return true;
+}
+
+namespace {
+
+enum class context {
+    root,
+    tasks,
+    task,
+    dependencies,
+    settings
+};
+
+class handler final : public json_event_handler {
+public:
+    explicit handler(task_configuration& output)
+        : output(output) {
+    }
+
+    void object_begin() override {
+        if (!error.empty()) return;
+
+        if (stack.empty()) {
+            stack.push_back(context::root);
+        }
+        else if (stack.back() == context::tasks) {
+            output.tasks.emplace_back();
+            stack.push_back(context::task);
+        }
+        else if (stack.back() == context::task &&
+                 key_value == "settings") {
+            stack.push_back(context::settings);
+        }
+        else {
+            fail("Unexpected object");
+        }
+    }
+
+    void object_end() override {
+        if (!error.empty()) return;
+        if (stack.empty()) {
+            fail("Unexpected object end");
+            return;
+        }
+        stack.pop_back();
+    }
+
+    void array_begin() override {
+        if (!error.empty() || stack.empty()) return;
+
+        if (stack.back() == context::root &&
+            key_value == "tasks") {
+            stack.push_back(context::tasks);
+        }
+        else if (stack.back() == context::task &&
+                 key_value == "dependencies") {
+            stack.push_back(context::dependencies);
+        }
+        else {
+            fail("Unexpected array");
+        }
+    }
+
+    void array_end() override {
+        if (!error.empty()) return;
+        if (stack.empty() ||
+            (stack.back() != context::tasks &&
+             stack.back() != context::dependencies)) {
+            fail("Unexpected array end");
+            return;
+        }
+        stack.pop_back();
+    }
+
+    void key(std::string_view key) override {
+        key_value.assign(key);
+    }
+
+    void value(json_value_view value) override {
+        if (!error.empty() || stack.empty()) return;
+
+        if (stack.back() == context::root) {
+            if (key_value == "version") {
+                std::uint32_t version = 0;
+                if (!value.get(version) || version != 1) {
+                    fail("Unsupported Tasks.json version");
+                }
+                else {
+                    version_seen = true;
+                }
+            }
+            else {
+                fail("Unknown root field");
+            }
+            return;
+        }
+
+        if (output.tasks.empty()) {
+            fail("Task value without Task");
+            return;
+        }
+
+        auto& task = output.tasks.back();
+
+        if (stack.back() == context::dependencies) {
+            std::string dependency;
+            if (!value.get(dependency)) {
+                fail("Dependency must be a string");
+                return;
+            }
+            task.dependencies.push_back(std::move(dependency));
+            return;
+        }
+
+        if (stack.back() == context::task) {
+            if (key_value == "id") {
+                if (!value.get(task.id)) fail("Invalid Task id");
+            }
+            else if (key_value == "executable") {
+                if (!value.get(task.executable)) {
+                    fail("Invalid Task executable");
+                }
+            }
+            else if (key_value == "enabled") {
+                if (!value.get(task.enabled)) {
+                    fail("Invalid enabled value");
+                }
+            }
+            else {
+                fail("Unknown Task field");
+            }
+            return;
+        }
+
+        if (stack.back() == context::settings) {
+            auto& settings = task.settings;
+
+            if (key_value == "calls") {
+                if (!value.get(settings.calls)) fail("Invalid calls");
+            }
+            else if (key_value == "cycles") {
+                if (!value.get(settings.cycles)) fail("Invalid cycles");
+            }
+            else if (key_value == "starting_from_cycle") {
+                if (!value.get(settings.starting_from_cycle)) {
+                    fail("Invalid starting_from_cycle");
+                }
+            }
+            else if (key_value == "run_in_freeze") {
+                if (!value.get(settings.run_in_freeze)) {
+                    fail("Invalid run_in_freeze");
+                }
+            }
+            else {
+                fail("Unknown Task setting");
+            }
+        }
+    }
+
+    void fail(std::string message) {
+        if (error.empty()) error = std::move(message);
+    }
+
+    task_configuration& output;
+    std::vector<context> stack;
+    std::string key_value;
+    std::string error;
+    bool version_seen = false;
+};
+
+}
+
+bool parse_task_configuration(
+    std::string_view json,
+    task_configuration& output,
+    std::string& error) {
+
+    output = {};
+    error.clear();
+
+    handler reader(output);
+    const auto result = parse_json(json, reader);
+
+    if (!result.ok()) {
+        error = std::string(json_error_message(result.code));
+        output = {};
+        return false;
+    }
+
+    if (!reader.error.empty() || !reader.version_seen ||
+        !reader.stack.empty()) {
+        error = reader.error.empty()
+            ? "Incomplete Tasks.json"
+            : reader.error;
+        output = {};
+        return false;
+    }
+
+    if (!validate_task_configuration(output, error)) {
+        output = {};
+        return false;
+    }
+
+    return true;
+}
+
+}

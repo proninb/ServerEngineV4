@@ -165,13 +165,14 @@ public:
             const bool complete =
                 scope == project_configuration_scope::root
                     ? ended.index == 4 ||
-                        ended.index == 5
+                        ended.index == 5 ||
+                        ended.index == 6
                     : ended.index == 3;
 
             if (!complete) {
                 fail(
                     scope == project_configuration_scope::root
-                        ? "root Project configuration requires fields in order: version, name, project, preprocessor[, ic]"
+                        ? "root Project configuration requires fields in order: version, name, project, preprocessor[, ic][, tasks]"
                         : "nested Project configuration requires fields in order: version, name, project");
                 return;
             }
@@ -284,6 +285,7 @@ public:
 
         switch (current.context) {
         case schema_context::root:
+            root_optional_tasks = key == "tasks";
             validate_root_key(current, key);
             return;
 
@@ -410,12 +412,13 @@ private:
         const frame& current,
         std::string_view key) {
 
-        static constexpr std::array<std::string_view, 5> root_keys{
+        static constexpr std::array<std::string_view, 6> root_keys{
             "version",
             "name",
             "project",
             "preprocessor",
             "ic",
+            "tasks",
         };
 
         if (scope == project_configuration_scope::nested &&
@@ -429,7 +432,7 @@ private:
 
         const auto key_count =
             scope == project_configuration_scope::root
-                ? std::size_t{5}
+                ? std::size_t{6}
                 : std::size_t{3};
 
         if (current.index >= key_count) {
@@ -437,6 +440,12 @@ private:
                 scope == project_configuration_scope::root
                     ? "root Project configuration contains extra field"
                     : "nested Project configuration contains extra field");
+            return;
+        }
+
+        if (scope == project_configuration_scope::root &&
+            current.index == 4 && key == "tasks") {
+            root_optional_tasks = true;
             return;
         }
 
@@ -520,13 +529,18 @@ private:
             return;
         }
 
-        if (current.index == 4) {
+        if (current.index == 4 || current.index == 5) {
+            const bool tasks_field = root_optional_tasks;
+            if (current.index == 5 && !tasks_field) {
+                fail("only tasks may follow ic");
+                return;
+            }
             std::string path_text;
 
             if (!value.get(path_text) ||
                 path_text.empty()) {
 
-                fail("ic must be a non-empty path string");
+                fail(tasks_field ? "tasks must be a non-empty path string" : "ic must be a non-empty path string");
                 return;
             }
 
@@ -556,10 +570,14 @@ private:
             }
 
             if (runtime != nullptr) {
-                runtime->ic = path_value.lexically_normal();
+                if (tasks_field) {
+                    runtime->tasks = path_value.lexically_normal();
+                } else {
+                    runtime->ic = path_value.lexically_normal();
+                }
             }
 
-            ++current.index;
+            current.index = tasks_field ? 6 : 5;
             return;
         }
 
@@ -790,6 +808,7 @@ private:
     std::size_t current_length = 0;
     bool root_started = false;
     bool root_completed = false;
+    bool root_optional_tasks = false;
     schema_error error_value;
 };
 
@@ -826,9 +845,9 @@ public:
         }
 
         if (depth == 1 &&
-            key_value == "ic") {
+            (key_value == "ic" || key_value == "tasks")) {
 
-            fail("ic must be a path string");
+            fail("runtime resource path must be a string");
             return;
         }
 
@@ -859,9 +878,9 @@ public:
         }
 
         if (depth == 1 &&
-            key_value == "ic") {
+            (key_value == "ic" || key_value == "tasks")) {
 
-            fail("ic must be a path string");
+            fail("runtime resource path must be a string");
             return;
         }
 
@@ -893,17 +912,18 @@ public:
     void value(json_value_view value) override {
         if (!valid_value ||
             depth != 1 ||
-            key_value != "ic") {
+            (key_value != "ic" && key_value != "tasks")) {
 
             return;
         }
 
-        if (ic_seen) {
-            fail("root Project configuration contains duplicate ic");
+        auto& seen = key_value == "ic" ? ic_seen : tasks_seen;
+        if (seen) {
+            fail("root Project configuration contains duplicate runtime path");
             return;
         }
 
-        ic_seen = true;
+        seen = true;
 
         std::string path_text;
 
@@ -939,8 +959,11 @@ public:
             return;
         }
 
-        output.ic =
-            path_value.lexically_normal();
+        if (key_value == "ic") {
+            output.ic = path_value.lexically_normal();
+        } else {
+            output.tasks = path_value.lexically_normal();
+        }
     }
 
     [[nodiscard]] bool valid() const noexcept {
@@ -977,6 +1000,7 @@ private:
     bool root_started = false;
     bool root_completed = false;
     bool ic_seen = false;
+    bool tasks_seen = false;
     schema_error error_value;
 };
 
@@ -995,7 +1019,7 @@ server_status read_project_configuration(
     dependencies.clear();
 
     if (runtime != nullptr) {
-        runtime->ic.clear();
+        *runtime = {};
     }
 
     if (scope == project_configuration_scope::root) {
@@ -1183,6 +1207,45 @@ server_status load_project_runtime_configuration(
 
             output = {};
             return server_status::project_configuration_invalid;
+        }
+
+        if (!output.tasks.empty()) {
+            const auto task_path = output.tasks.is_absolute()
+                ? output.tasks
+                : (path.parent_path() / output.tasks).lexically_normal();
+            std::ifstream task_input(task_path, std::ios::binary);
+            if (!task_input) {
+                diagnostics.emit(
+                    diagnostic(diagnostics::project_configuration_read_failed, operation)
+                        .file(task_path)
+                        .detail("Cannot read Tasks.json")
+                        .build());
+                output = {};
+                return server_status::io_error;
+            }
+            std::string task_bytes{
+                std::istreambuf_iterator<char>{task_input},
+                std::istreambuf_iterator<char>{}};
+            if (!task_input.good() && !task_input.eof()) {
+                diagnostics.emit(
+                    diagnostic(diagnostics::project_configuration_read_failed, operation)
+                        .file(task_path)
+                        .detail("Cannot complete Tasks.json read")
+                        .build());
+                output = {};
+                return server_status::io_error;
+            }
+            std::string task_error;
+            if (!parse_task_configuration(
+                    task_bytes, output.task_definitions, task_error)) {
+                diagnostics.emit(
+                    diagnostic(diagnostics::project_invalid_configuration, operation)
+                        .file(task_path)
+                        .detail(task_error)
+                        .build());
+                output = {};
+                return server_status::project_configuration_invalid;
+            }
         }
 
         return server_status::success;
