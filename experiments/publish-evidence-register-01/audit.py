@@ -10,7 +10,7 @@ SNAPSHOT = DOC.with_suffix(".json")
 
 def main():
     data = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
-    reports = data["reports"]
+    reports = data["reports"] + data.get("follow_up_reports", [])
     errors = []
     paths = [item["path"] for item in reports]
     if len(paths) != len(set(paths)):

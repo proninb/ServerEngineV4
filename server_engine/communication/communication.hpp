@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cstddef>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 namespace cw::server {
@@ -39,6 +40,9 @@ public:
     // Server-control-thread-only active logged-in connection registry.
     [[nodiscard]] bool register_connection(communication_connection& connection);
     void unregister_connection(client_session_id id) noexcept;
+    // Register before publishing login state; every failure closes the connection.
+    [[nodiscard]] bool login_connection(
+        communication_connection& connection, std::string_view name) noexcept;
 
     void publish_server_state(project_state old_state, project_state new_state);
 
@@ -48,6 +52,8 @@ public:
         const client_message& message);
 
 private:
+    void reap_closed_connections() noexcept;
+
     // Owned console endpoints. Empty when no console transport is configured.
     // Future transport types receive their own owned collections/backends.
     std::vector<std::unique_ptr<server_console>> consoles;

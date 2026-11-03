@@ -444,20 +444,9 @@ void server::execute_login(
     server_response result;
     result.operation = next_operation();
 
-    const auto login =
-        message.connection->commit_login(
-            message.name);
-
-    if (login != client_session_login_result::success ||
-        !context.communications.register_connection(
-            *message.connection)) {
-
-        result.status =
-            server_status::communication_invalid_request;
-
-        (void)message.connection->enqueue_response(
-            message.request,
-            result);
+    if (!context.communications.login_connection(
+            *message.connection, message.name)) {
+        // Failed login is terminal; no success state or subsequent commands.
         return;
     }
 
@@ -470,9 +459,12 @@ void server::execute_login(
     result.status =
         server_status::success;
 
-    (void)message.connection->enqueue_response(
-        message.request,
-        result);
+    try {
+        (void)message.connection->enqueue_response(message.request, result);
+    } catch (...) {
+        (void)message.connection->begin_close();
+        context.communications.unregister_connection(message.connection->id());
+    }
 }
 
 void server::execute_connection_close(
@@ -519,6 +511,14 @@ void server::execute_client(
 
 server_response server::execute_message(
     const server_request_message& message) {
+
+    if (message.connection != nullptr &&
+        (!message.connection->logged_in() || message.connection->closing())) {
+        server_response rejected;
+        rejected.operation = next_operation();
+        rejected.status = server_status::communication_invalid_request;
+        return rejected;
+    }
 
     if (context.policy.allows(
             context.mode,

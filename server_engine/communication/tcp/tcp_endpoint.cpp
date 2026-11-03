@@ -1,5 +1,6 @@
 #include "tcp_endpoint.hpp"
 #include "tcp_send.hpp"
+#include "../testing/fault_injection.hpp"
 
 #include "../connection/communication_connection.hpp"
 #include "../protocol/json_protocol.hpp"
@@ -494,13 +495,19 @@ public:
             false,
             std::memory_order_release);
 
-        worker =
-            std::jthread(
-                [this] {
-                    run();
-                });
+        worker_failed.store(false, std::memory_order_release);
+        try {
+            worker = std::jthread([this] { run(); });
+        } catch (...) {
+            stop();
+            return false;
+        }
 
         return true;
+    }
+
+    [[nodiscard]] bool failed() const noexcept {
+        return worker_failed.load(std::memory_order_acquire);
     }
 
     void stop() noexcept {
@@ -558,7 +565,22 @@ private:
                 1));
     }
 
-    void run() {
+    void run() noexcept {
+        try {
+            run_loop();
+        } catch (...) {
+            worker_failed.store(true, std::memory_order_release);
+        }
+        // Also fail closed on a terminal poll error. No allocations required.
+        if (!stopping.load(std::memory_order_acquire)) {
+            worker_failed.store(true, std::memory_order_release);
+        }
+        for (auto& value : peers) close_peer(value, true);
+        peers.clear();
+        listener.reset();
+    }
+
+    void run_loop() {
         while (!stopping.load(
                    std::memory_order_acquire)) {
 
@@ -568,6 +590,7 @@ private:
             std::vector<poll_descriptor>
                 descriptors;
 
+            CW_COMMUNICATION_FAULT(poll);
             descriptors.reserve(
                 2 + peers.size());
 
@@ -657,37 +680,41 @@ private:
                     descriptors[
                         index + 2].revents;
 
-                bool alive = true;
+                bool alive = !peers[index].connection->closing();
+                try {
+                    if ((events &
+                         (POLLERR |
+                          POLLHUP |
+                          POLLNVAL)) != 0) {
 
-                if ((events &
-                     (POLLERR |
-                      POLLHUP |
-                      POLLNVAL)) != 0) {
+                        alive = false;
+                    }
 
-                    alive = false;
-                }
+                    if (alive &&
+                        (events & POLLIN) != 0) {
 
-                if (alive &&
-                    (events & POLLIN) != 0) {
+                        alive =
+                            receive(
+                                peers[index]);
+                    }
 
-                    alive =
-                        receive(
-                            peers[index]);
-                }
+                    if (alive &&
+                        (events & POLLOUT) != 0) {
 
-                if (alive &&
-                    (events & POLLOUT) != 0) {
+                        alive =
+                            send_pending(
+                                peers[index]);
+                    }
 
-                    alive =
-                        send_pending(
-                            peers[index]);
-                }
+                    if (alive &&
+                        peers[index]
+                            .connection
+                            ->closing()) {
 
-                if (alive &&
-                    peers[index]
-                        .connection
-                        ->closing()) {
+                        alive = false;
+                    }
 
+                } catch (...) {
                     alive = false;
                 }
 
@@ -716,6 +743,7 @@ private:
             socklen_t length = sizeof(address);
 #endif
 
+            if (CW_COMMUNICATION_FAILS(accept_error)) return;
             socket_owner accepted{
                 accept(
                     listener.value,
@@ -744,41 +772,55 @@ private:
                 continue;
             }
 
-            const auto id_value =
-                next_session->fetch_add(
-                    1,
-                    std::memory_order_relaxed);
+            // The permit covers every allocation between acquire and publication.
+            struct permit final {
+                tcp_connection_gate* gate;
+                ~permit() { if (gate) gate->release(); }
+            } acquired{gate};
+            try {
+                const auto id_value =
+                    next_session->fetch_add(
+                        1,
+                        std::memory_order_relaxed);
 
-            const auto id =
-                client_session_id{
-                    id_value == 0
-                        ? next_session->fetch_add(
-                              1,
-                              std::memory_order_relaxed)
-                        : id_value,
-                };
+                const auto id =
+                    client_session_id{
+                        id_value == 0
+                            ? next_session->fetch_add(
+                                  1,
+                                  std::memory_order_relaxed)
+                            : id_value,
+                    };
 
-            auto connection =
-                communication_connection::create(
-                    id,
-                    tcp_json_outbound_budget_bytes,
-                    this,
-                    &implementation::notify);
+                CW_COMMUNICATION_FAULT(accept_connection);
+                auto connection =
+                    communication_connection::create(
+                        id,
+                        tcp_json_outbound_budget_bytes,
+                        this,
+                        &implementation::notify);
 
-            peer value;
-            value.socket =
-                std::move(accepted);
-            value.connection =
-                std::move(connection);
-            value.accepted_at =
-                std::chrono::steady_clock::now();
-            value.gate_acquired = true;
+                peer value;
+                value.socket =
+                    std::move(accepted);
+                value.connection =
+                    std::move(connection);
+                value.accepted_at =
+                    std::chrono::steady_clock::now();
+                value.gate_acquired = true;
 
-            value.receive_buffer.reserve(
-                8192);
+                CW_COMMUNICATION_FAULT(accept_buffer);
+                value.receive_buffer.reserve(
+                    8192);
 
-            peers.push_back(
-                std::move(value));
+                CW_COMMUNICATION_FAULT(accept_insert);
+                peers.push_back(
+                    std::move(value));
+                acquired.gate = nullptr;
+            } catch (...) {
+                // accepted/value own the socket and connection; permit frees gate.
+                return;
+            }
         }
     }
 
@@ -804,44 +846,18 @@ private:
 
     void prepare_output() {
         for (auto& value : peers) {
-            if (!value.send_buffer.empty() ||
-                value.connection->closing()) {
-
-                continue;
+            try {
+                prepare_one_output(value);
+            } catch (...) {
+                (void)value.connection->begin_close();
             }
-
-            outbound_write message;
-
-            if (!value.connection
-                    ->try_next(message)) {
-
-                continue;
-            }
-
-            std::string json;
-
-            if (!encode_json_outbound(
-                    message,
-                    json)) {
-
-                (void)value.connection
-                    ->begin_close();
-                continue;
-            }
-
-            encode_tcp_frame(
-                json,
-                value.send_buffer);
-
-            value.send_offset = 0;
-            value.sending =
-                std::move(message);
         }
     }
 
     [[nodiscard]] bool receive(
         peer& value) {
 
+        if (CW_COMMUNICATION_FAILS(receive_error)) return false;
         std::array<std::byte, 8192> buffer{};
 
         while (true) {
@@ -855,6 +871,7 @@ private:
                     0);
 
             if (received > 0) {
+                CW_COMMUNICATION_FAULT(receive_buffer);
                 value.receive_buffer.insert(
                     value.receive_buffer.end(),
                     buffer.begin(),
@@ -1105,6 +1122,7 @@ private:
         }
 
         server_request_message message;
+        message.connection = value.connection.get();
         message.request =
             std::get<server_request>(
                 std::move(
@@ -1208,6 +1226,7 @@ private:
             return;
         }
 
+        CW_COMMUNICATION_FAULT(output);
         std::string json;
 
         if (!encode_json_outbound(
@@ -1249,11 +1268,13 @@ private:
             close_message.lifetime =
                 value.connection->hold();
 
-            static_cast<void>(
-                requests->push(
-                    communication_control_message{
-                        std::move(
-                            close_message)}));
+            try {
+                CW_COMMUNICATION_FAULT(close_post);
+                static_cast<void>(requests->push(
+                    communication_control_message{std::move(close_message)}));
+            } catch (...) {
+                // Cleanup must still release the socket and gate on queue failure.
+            }
 
             value.close_posted = true;
         }
@@ -1267,6 +1288,7 @@ private:
     }
 
     std::atomic_bool stopping = false;
+    std::atomic_bool worker_failed = false;
     std::jthread worker;
 
     socket_owner listener;
@@ -1311,6 +1333,10 @@ bool tcp_endpoint::start(
         gate,
         next_session_id,
         max_lifetime);
+}
+
+bool tcp_endpoint::failed() const noexcept {
+    return impl && impl->failed();
 }
 
 void tcp_endpoint::stop() noexcept {

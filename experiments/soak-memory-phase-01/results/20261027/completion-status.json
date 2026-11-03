@@ -1,0 +1,35 @@
+{
+  "experiment": "SOAK-MEMORY-PHASE-01",
+  "date": "2026-10-27",
+  "status": "PASS_DIAGNOSTIC",
+  "release_blocked": true,
+  "server_source_changed": false,
+  "new_build_or_training": false,
+  "gate_results_unchanged": true,
+  "binary_sha256": "6cd312cbc030765718ad0e2fb847723d97efc0395455052cc8a8522843cc3429",
+  "cycles": 111,
+  "phase_samples": 888,
+  "transitions": {
+    "first_high_cycle": 80,
+    "following_low_cycle": 100,
+    "second_high_cycle": 110
+  },
+  "localization": "Large private-memory rise and later drop are first observed after PUBLISH; retained owner/heap implementation not identified",
+  "evidence_sha256": {
+    "analysis.json": "4ffdbcab82dae2d8547ed6a4d8bf90571afcf50b2adb0a5d6e758f90aed8532a",
+    "executed-harness.py": "b2ffcd6fa17a9318b920ec0377629f39732b321baaa04187d44a26fd880ffb20",
+    "first-high-regions.csv": "60c4f71ddaced49f25f63c34edf6718cf0b26b99336de1034fd7cffa97dd345a",
+    "first-high-summary.json": "ebe438a29f9f6b1f3e10d97179fd4be7ba49c20a684d69b44eed384cad45561b",
+    "following-low-regions.csv": "21904c26542c0304c4f817afe76cd384a023a22fea7ffb7764b9b6342ee7ad16",
+    "following-low-summary.json": "d4b26815f09ae69ef69de234b8331cd66281797b370d221418cfecf11b88f007",
+    "initial-low-regions.csv": "acb3f3e161be9b9de628667f8c6981f1a6419be56d83fa1acfb4ad3cd60e559d",
+    "initial-low-summary.json": "416c88aea39e146544afa8b6eb9cafb505941efd82fcfb010861dc02cb200089",
+    "phases.csv": "0e22376e3c095e44cc7ac39bdc4dd58eeafb21a664ec576bdc369c24013e20ec",
+    "phases.jsonl": "3abe374b5d88479c424c6cdb13077422e4d73c17a8059820c62c494ccba765e0",
+    "private-allocation-comparison.csv": "b2aaffc32f6cdc4c06d3b1abf8975a0187ecbd338997c6d5c48f2aba806ca53b",
+    "second-high-regions.csv": "4d5d31643a0265e9cc2c06c60d726a9081fd07e55ee7de0299e43126d967f91b",
+    "second-high-summary.json": "749a49e40265331f20387e777c5227580b8019fcad60158d5eed3d4157a1e4f9",
+    "stage-deltas.csv": "b96cd862bb8c34237c4a2e6533d7a6bfb01055424f534ee68339b649f670924d",
+    "status.json": "94080323df6f696b9f6da3cd4127b298827a68b31b374ed11b4b4b4b1d13fb5a"
+  }
+}

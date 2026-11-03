@@ -2,6 +2,8 @@
 #include "communication/protocol/json_protocol.hpp"
 #include "communication/tcp/tcp_endpoint.hpp"
 #include "communication/tcp/tcp_send.hpp"
+#include "communication/testing/fault_injection.hpp"
+#include <iostream>
 
 #include <atomic>
 #include <chrono>
@@ -691,6 +693,212 @@ void unregister_subscription(
     return closed;
 }
 
+// These tests exercise real socket cleanup and the production login transaction.
+[[nodiscard]] bool wait_fault_consumed() {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (communication_test::pending.load() == communication_test::fault::none) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds{5});
+    }
+    return false;
+}
+
+[[nodiscard]] bool pop_login(request_queue& requests, communication& registry,
+    test_socket socket, std::uint64_t request = 1) {
+    std::string frame;
+    encode_tcp_frame("{\"request_id\":" + std::to_string(request) +
+        ",\"command\":\"LOGIN\",\"arguments\":{\"name\":\"TrustedLAN\"}}", frame);
+    if (!send_all(socket, frame)) return false;
+    communication_control_message message;
+    const auto deadline = std::chrono::system_clock::now() + std::chrono::seconds{2};
+    while (requests.wait_pop_until(deadline, message)) {
+        if (auto* login = std::get_if<login_control_message>(&message)) {
+            if (!registry.login_connection(*login->connection, login->name)) return false;
+            server_response response;
+            response.status = server_status::success;
+            return login->connection->enqueue_response(login->request, response);
+        }
+        if (auto* close = std::get_if<connection_close_control_message>(&message))
+            registry.unregister_connection(close->connection->id());
+        else return false;
+    }
+    return false;
+}
+
+[[nodiscard]] bool test_login_transaction_failures() {
+    for (auto point : {communication_test::fault::registration,
+                       communication_test::fault::login_name}) {
+        communication registry;
+        auto connection = communication_connection::create(client_session_id{100}, 4096);
+        communication_test::pending.store(point);
+        if (registry.login_connection(*connection, "Client") ||
+            connection->logged_in() || !connection->closing() ||
+            connection->reserve_request(request_id{2})) return false;
+        request_identity identity;
+        if (connection->make_request_identity(identity)) return false;
+        registry.stop();
+    }
+    communication registry;
+    auto first = communication_connection::create(client_session_id{100}, 4096);
+    auto duplicate = communication_connection::create(client_session_id{100}, 4096);
+    if (!registry.login_connection(*first, "A") ||
+        registry.login_connection(*duplicate, "B") || !duplicate->closing() ||
+        duplicate->logged_in() || !first->logged_in()) return false;
+    auto invalid = communication_connection::create(client_session_id{101}, 4096);
+    return !registry.login_connection(*invalid, "") && invalid->closing() &&
+        !invalid->logged_in();
+}
+
+[[nodiscard]] bool test_tcp_failure_recovery(communication_test::fault point) {
+    request_queue requests;
+    tcp_connection_gate gate;
+    gate.reset(1);
+    std::atomic_uint64_t next_session = 1;
+    tcp_endpoint endpoint;
+    communication registry;
+    std::uint16_t port = 0;
+    if (!start_loopback_endpoint(endpoint, requests, gate, next_session, port)) return false;
+    const bool accept_fault = point == communication_test::fault::accept_connection ||
+        point == communication_test::fault::accept_buffer ||
+        point == communication_test::fault::accept_insert ||
+        point == communication_test::fault::accept_error;
+    if (accept_fault) communication_test::pending.store(point);
+    auto client = connect_loopback(port);
+    if (!client) return false;
+    if (!accept_fault && !wait_for_sessions(next_session, 2, std::chrono::seconds{2})) return false;
+    if (!accept_fault) communication_test::pending.store(point);
+    if (point == communication_test::fault::output) {
+        if (!pop_login(requests, registry, client.value)) return false;
+    } else if (point == communication_test::fault::close_post) {
+        close_with_reset(client);
+    } else if (point == communication_test::fault::accept_error) {
+        if (!wait_fault_consumed() || !pop_login(requests, registry, client.value)) return false;
+        endpoint.stop();
+        return !endpoint.failed();
+    } else if (!accept_fault) {
+        if (!send_all(client.value, "x")) return false;
+    }
+    if (!wait_fault_consumed()) return false;
+    if (client && !wait_for_closed(client.value, std::chrono::seconds{2})) return false;
+    client.reset();
+    if (endpoint.failed()) return false;
+    // A cap of one makes a leaked gate permit observable on the next connection.
+    auto replacement = connect_loopback(port);
+    if (!replacement || !pop_login(requests, registry, replacement.value)) return false;
+    endpoint.stop();
+    return !endpoint.failed();
+}
+
+[[nodiscard]] bool test_tcp_failed_login_is_terminal() {
+    for (auto point : {communication_test::fault::registration,
+                       communication_test::fault::login_name}) {
+        request_queue requests;
+        tcp_connection_gate gate;
+        gate.reset(1);
+        std::atomic_uint64_t next_session = 1;
+        tcp_endpoint endpoint;
+        communication registry;
+        std::uint16_t port = 0;
+        if (!start_loopback_endpoint(endpoint, requests, gate, next_session, port)) return false;
+        auto client = connect_loopback(port);
+        if (!client) return false;
+        communication_test::pending.store(point);
+        if (pop_login(requests, registry, client.value)) return false;
+        std::string next;
+        encode_tcp_frame(R"({"request_id":2,"command":"SHUTDOWN"})", next);
+        (void)send_all(client.value, next);
+        if (!wait_for_closed(client.value, std::chrono::seconds{2})) return false;
+        communication_control_message message;
+        const auto deadline = std::chrono::system_clock::now() + std::chrono::milliseconds{100};
+        while (requests.wait_pop_until(deadline, message)) {
+            if (!std::holds_alternative<connection_close_control_message>(message)) return false;
+        }
+        auto replacement = connect_loopback(port);
+        if (!replacement || !pop_login(requests, registry, replacement.value)) return false;
+        endpoint.stop();
+    }
+    return true;
+}
+
+[[nodiscard]] bool test_receive_failure_keeps_other_peer() {
+    request_queue requests;
+    tcp_connection_gate gate;
+    gate.reset(2);
+    std::atomic_uint64_t next_session = 1;
+    tcp_endpoint endpoint;
+    communication registry;
+    std::uint16_t port = 0;
+    if (!start_loopback_endpoint(endpoint, requests, gate, next_session, port)) return false;
+    auto bad = connect_loopback(port);
+    auto healthy = connect_loopback(port);
+    if (!bad || !healthy || !wait_for_sessions(next_session, 3, std::chrono::seconds{2})) return false;
+    communication_test::pending.store(communication_test::fault::receive_buffer);
+    if (!send_all(bad.value, "x") || !wait_for_closed(bad.value, std::chrono::seconds{2})) return false;
+    if (!pop_login(requests, registry, healthy.value)) return false;
+    endpoint.stop();
+    return !endpoint.failed();
+}
+
+[[nodiscard]] bool test_registry_reaps_missing_close_notification() {
+    communication registry;
+    std::atomic_uint32_t unregistered = 0;
+    auto connection = communication_connection::create(client_session_id{200}, 4096);
+    if (!registry.login_connection(*connection, "Old") ||
+        !connection->add_subscription(subscription_id{7},
+            subscription_registration{&unregistered, &unregister_subscription})) return false;
+    (void)connection->begin_close();
+    // No close message: model a queue allocation failure.
+    auto next = communication_connection::create(client_session_id{201}, 4096);
+    if (!registry.login_connection(*next, "Next")) return false;
+    return unregistered.load() == 1;
+}
+
+[[nodiscard]] bool test_worker_exception_boundary() {
+    request_queue requests;
+    tcp_connection_gate gate;
+    gate.reset(1);
+    std::atomic_uint64_t next_session = 1;
+    tcp_endpoint endpoint;
+    std::uint16_t port = 0;
+    if (!start_loopback_endpoint(endpoint, requests, gate, next_session, port)) return false;
+    auto client = connect_loopback(port);
+    if (!client || !wait_for_sessions(next_session, 2, std::chrono::seconds{2})) return false;
+    communication_test::pending.store(communication_test::fault::poll);
+    if (!send_all(client.value, "x") || !wait_fault_consumed()) return false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    while (!endpoint.failed() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds{5});
+    if (!endpoint.failed() || !wait_for_closed(client.value, std::chrono::seconds{2})) return false;
+    endpoint.stop();
+    if (!gate.acquire()) return false;
+    gate.release();
+    if (!start_loopback_endpoint(endpoint, requests, gate, next_session, port)) return false;
+    endpoint.stop();
+    return !endpoint.failed();
+}
+
+[[nodiscard]] bool test_requests_before_login_denied() {
+    request_queue requests;
+    tcp_connection_gate gate;
+    gate.reset(1);
+    std::atomic_uint64_t next_session = 1;
+    tcp_endpoint endpoint;
+    std::uint16_t port = 0;
+    if (!start_loopback_endpoint(endpoint, requests, gate, next_session, port)) return false;
+    auto client = connect_loopback(port);
+    if (!client) return false;
+    std::string frame;
+    encode_tcp_frame(R"({"request_id":1,"command":"SHUTDOWN"})", frame);
+    if (!send_all(client.value, frame)) return false;
+    communication_control_message message;
+    const bool queued = requests.wait_pop_until(
+        std::chrono::system_clock::now() + std::chrono::milliseconds{250}, message);
+    communication registry;
+    if (queued || !pop_login(requests, registry, client.value, 2)) return false;
+    endpoint.stop();
+    return true;
+}
+
 [[nodiscard]] bool test_posix_sigpipe_boundary() {
 #ifdef _WIN32
     return true;
@@ -752,6 +960,26 @@ int main() {
 
     if (!test_tcp_overload_closes_peer()) {
         return 4;
+    }
+
+    if (!test_login_transaction_failures()) return 10;
+    if (!test_requests_before_login_denied()) return 11;
+    if (!test_worker_exception_boundary()) return 12;
+    if (!test_tcp_failed_login_is_terminal()) return 13;
+    if (!test_receive_failure_keeps_other_peer()) return 14;
+    if (!test_registry_reaps_missing_close_notification()) return 15;
+    for (auto point : {communication_test::fault::accept_connection,
+                       communication_test::fault::accept_buffer,
+                       communication_test::fault::accept_insert,
+                       communication_test::fault::accept_error,
+                       communication_test::fault::receive_buffer,
+                       communication_test::fault::receive_error,
+                       communication_test::fault::output,
+                       communication_test::fault::close_post}) {
+        if (!test_tcp_failure_recovery(point)) {
+            std::cerr << "TCP fault recovery failed: " << static_cast<int>(point) << "\n";
+            return 20 + static_cast<int>(point);
+        }
     }
 
     if (!test_posix_sigpipe_boundary()) {

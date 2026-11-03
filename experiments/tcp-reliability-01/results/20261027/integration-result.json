@@ -1,0 +1,64 @@
+{
+  "binary_hashes": {
+    "reference": "98e8c489ff1b6d03f4058151ef6833d3750289e3483656e49d76c2c5a6617bcf",
+    "candidate": "b041181617339c00218637e3aa052a72be44b7656e40ed8c6e787daee2bb2764"
+  },
+  "arms": {
+    "reference": {
+      "holdout": {
+        "images": {
+          "compiled.bin": "5666dd92a0863a50a021e4a0b1a7755fbc5fe49915547bc29536470068e45c6f",
+          "runtime.bin": "57e557fc7412f10b4468dc908d080e8a8dc6b21829eec048261249c1ae7df46c"
+        },
+        "native": {
+          "bytes": 16,
+          "sha256": "41fbd78fe55c87f7b490ea7650efd66da7404cf9760438818ab52c6f890d32c1",
+          "excluded_system_bytes": 72,
+          "fixed_base": "0x0000010000000000"
+        }
+      },
+      "unit": {
+        "images": {
+          "compiled.bin": "16a81fc1b08522803a6b71db97187fbae5babf144703fe30b306a845b6d0921e",
+          "runtime.bin": "a0281b3bb48103a7cd339cccd072d24f3524db9932bc67b58a714906996b5ee6"
+        },
+        "native": {
+          "bytes": 2146276728,
+          "sha256": "3864b27bbaa8e54e30eb4a2e2c806ecf77b78434b10e49b70a26659fe74f0743",
+          "excluded_system_bytes": 72,
+          "fixed_base": "0x0000010000000000"
+        }
+      }
+    },
+    "candidate": {
+      "holdout": {
+        "images": {
+          "compiled.bin": "5666dd92a0863a50a021e4a0b1a7755fbc5fe49915547bc29536470068e45c6f",
+          "runtime.bin": "57e557fc7412f10b4468dc908d080e8a8dc6b21829eec048261249c1ae7df46c"
+        },
+        "native": {
+          "bytes": 16,
+          "sha256": "41fbd78fe55c87f7b490ea7650efd66da7404cf9760438818ab52c6f890d32c1",
+          "excluded_system_bytes": 72,
+          "fixed_base": "0x0000010000000000"
+        }
+      },
+      "unit": {
+        "images": {
+          "compiled.bin": "16a81fc1b08522803a6b71db97187fbae5babf144703fe30b306a845b6d0921e",
+          "runtime.bin": "a0281b3bb48103a7cd339cccd072d24f3524db9932bc67b58a714906996b5ee6"
+        },
+        "native": {
+          "bytes": 2146276728,
+          "sha256": "3864b27bbaa8e54e30eb4a2e2c806ecf77b78434b10e49b70a26659fe74f0743",
+          "excluded_system_bytes": 72,
+          "fixed_base": "0x0000010000000000"
+        }
+      }
+    }
+  },
+  "candidate_lifecycle_cycles": 50,
+  "failed_login_pipelined_shutdown_denied": true,
+  "status": "PASS",
+  "scope": "Bounded 50-cycle correctness check; not a long-duration soak or performance test"
+}

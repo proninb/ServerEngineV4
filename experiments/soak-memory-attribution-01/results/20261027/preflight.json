@@ -1,0 +1,16 @@
+{
+  "binary_hashes": {
+    "ordinary": "6cd312cbc030765718ad0e2fb847723d97efc0395455052cc8a8522843cc3429",
+    "pgo": "509373908a081d913876445ab4c09f54dd072d4e23c16e6fc158b42d1720b554"
+  },
+  "seconds": 600,
+  "warmup_cycles": 10,
+  "checkpoints": "Unchanged: UNLOADED after reconnect/GET_STATE",
+  "private_growth_limit_bytes": 134217728,
+  "handle_growth_limit": 16,
+  "original_harness_sha256": "410c3fa8f6ab9e2b34fc2322ca3fda34f0b00125aa80174b32dc2b6f535194ac",
+  "off_harness_sha256": "0dc47ba2092b68eb40a14732fa2bb042b0ce2cf225963a1553bf0d53cfa32b6a",
+  "changes": "Only arm argument and executable/output selection; no lifecycle, timing or sampling changes",
+  "use_samples_sha256": "8582c21e9e814f3f1ab41d0eb4ca3c5c197b4c5f8024ca264a32adecbd014dac",
+  "pgd_sha256": "b3a6fe175e377900959fab72754ee8ffed109b942da09a6fbf93b3feb545a11a"
+}

@@ -36,8 +36,21 @@ python scripts/verify_production_pgo.py build/production-pgo-current-02 --source
 
 ## Условия перед рабочим deployment
 
-- Завершить отдельный разбор сообщённых пользователем ошибок TCP login и обработки отказов, сохранить точные reproducer/исправления/регрессионные проверки. В performance-реестре и просмотренном `CODE_ARCHITECTURE_REVIEW_20261025.md` конкретный security-аудит этих ошибок не найден; здесь они не объявляются ни исправленными, ни повторно доказанными. PGO не решает эти замечания.
+- [TCP-RELIABILITY-01](TCP_RELIABILITY_01.md) выполнен 27 октября после получения пользовательского TCP-аудита: P1 login/registration и worker failure paths исправлены и проверены. Пользователь явно сохранил name-only LOGIN без аутентификации для доверенной LAN; это не аутентификация для недоверенной сети. Новые TCP-исходники требуют свежей PGD и повторного release gate; старый PGO reference сохранён. Это не заменяет holdout и длительный soak.
 - Проверить holdout-проекты и длительный lifecycle сервера с повторными PUBLISH/LOAD/UNLOAD, памятью, отказами и восстановлением. Успешные малые validation fixtures текущей серии не являются доказательством ускорения на других проектах или длительной устойчивости.
 - Подготовить принятую схему canary/rollback с проверенным OFF image и конфигурацией, не затрагивающую данные проекта. Исполнить deployment отдельным явно разрешённым действием после reliability gates.
 
 Итог текущей стадии: сборочная оптимизация ACCEPT, exact-image integrity gate готов; рабочий deployment остаётся отдельным незавершённым этапом.
+
+
+## TCP-PGO-RELEASE-02 — 2026-10-27
+
+[Новый TCP PGO цикл](TCP_PGO_RELEASE_02.md): fresh OFF/GENERATE/USE, TCP suites/parity, 15 real-server A/B blocks и три post-training holdout завершены. Новый USE mean 1170,279 против OFF 1295,784 мс, экономия 9,686%, CI положительный. Старый reference не изменён.
+
+Выбранный пользователем 10-минутный предварительный soak завершён, но private-memory drift +238,8…241,9 MiB превысил объявленный gate 128 MiB; handles стабильны. Общий release gate FAIL, deployment и продвижение кандидата не выполняются. Причина памяти пока не установлена; следующий шаг — контролируемый OFF soak тем же протоколом, без изменения Parser/G/Runtime и без подмены порога после измерения. Верификатор умеет различать preliminary release-02 PASS и failed gate и отклоняет этот конкретный bundle.
+
+
+[SOAK-MEMORY-ATTRIBUTION-01](SOAK_MEMORY_ATTRIBUTION_01.md): требовавшийся OFF control выполнен, UnitProXL drift +240,906 MiB также FAIL. В общем префиксе рядов высокий уровень практически одинаков; проблема не эксклюзивна PGO. Release всё ещё заблокирован, следующий шаг — общая lifecycle/allocator attribution с отдельными phase observations. Предыдущие критерии и результаты не заменяются новым окном остановки.
+
+
+[SOAK-MEMORY-PHASE-01](SOAK_MEMORY_PHASE_01.md) локализовал large rise/drop в интервалах UnitProXL PUBLISH и private commit/reserve тех же reservations, а не в сохранённом fixed SHM view. Root cause и owner ещё не доказаны; следующий диагностический предел — live heap/alloc-free attribution. Release gates не изменены и остаются FAIL.

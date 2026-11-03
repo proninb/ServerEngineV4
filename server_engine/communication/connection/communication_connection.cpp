@@ -1,4 +1,5 @@
 #include "communication_connection.hpp"
+#include "../testing/fault_injection.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -110,7 +111,7 @@ client_session_id communication_connection::id() const noexcept {
 }
 
 bool communication_connection::logged_in() const noexcept {
-    return login_committed.load(
+    return !closing() && login_committed.load(
         std::memory_order_acquire);
 }
 
@@ -135,8 +136,14 @@ client_session_login_result communication_connection::commit_login(
         return client_session_login_result::invalid_request;
     }
 
-    const auto result =
-        session.login(name);
+    client_session_login_result result;
+    try {
+        CW_COMMUNICATION_FAULT(login_name);
+        result = session.login(name);
+    } catch (...) {
+        (void)begin_close();
+        return client_session_login_result::invalid_request;
+    }
 
     if (result == client_session_login_result::success) {
         login_committed.store(

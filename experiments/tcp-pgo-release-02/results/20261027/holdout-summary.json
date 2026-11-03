@@ -1,0 +1,86 @@
+{
+  "correctness": "PASS",
+  "binary_hashes": {
+    "ordinary": "6cd312cbc030765718ad0e2fb847723d97efc0395455052cc8a8522843cc3429",
+    "pgo": "509373908a081d913876445ab4c09f54dd072d4e23c16e6fc158b42d1720b554"
+  },
+  "scope": "Three post-training synthetic holdouts, warm persistent-server protocol; not arbitrary customer projects",
+  "cases": {
+    "strings": {
+      "mean_ms": {
+        "ordinary": 33.41567,
+        "pgo": 30.509083333333333
+      },
+      "mean_block_gain_ms": 2.9065866666666675,
+      "bootstrap_mean95": [
+        2.4002033333333337,
+        3.452959999999999
+      ],
+      "winning_blocks": 15,
+      "gold": {
+        "images": {
+          "compiled.bin": "cd5555835feaa81a576d289fc410b69c4cadc8ef46d7514e380ebfabf12af7e7",
+          "runtime.bin": "bdd3012626af6c329a8716715bb43d317e3fec5bcb35f51ea3ac9eeda7e79782"
+        },
+        "native": {
+          "bytes": 139264,
+          "sha256": "32338d7cf0681e6571fc142fe4112fe049db29a0051db8774f3ef1d2c726dbed",
+          "excluded_system_bytes": 72,
+          "fixed_base": "0x0000010000000000"
+        }
+      },
+      "significant_regression_over_5_percent": false
+    },
+    "inheritance": {
+      "mean_ms": {
+        "ordinary": 10.0193,
+        "pgo": 9.359316666666667
+      },
+      "mean_block_gain_ms": 0.6599833333333329,
+      "bootstrap_mean95": [
+        0.27429333333333333,
+        1.0196199999999995
+      ],
+      "winning_blocks": 11,
+      "gold": {
+        "images": {
+          "compiled.bin": "a2cb06ad2f0d50c10ee26b013ce45a3cfd0a32745897d0cba2394ec71ae03815",
+          "runtime.bin": "55ae9b811046f7fda68ddf656768dd12bb1fe6cfd9d1003dca7b7a0af2c91b1d"
+        },
+        "native": {
+          "bytes": 24576,
+          "sha256": "dfdf2d5676e8e62085ed87f31556d88cab437bdb0429ee38ac954f0f97e516a6",
+          "excluded_system_bytes": 72,
+          "fixed_base": "0x0000010000000000"
+        }
+      },
+      "significant_regression_over_5_percent": false
+    },
+    "links": {
+      "mean_ms": {
+        "ordinary": 13.184893333333333,
+        "pgo": 12.148996666666667
+      },
+      "mean_block_gain_ms": 1.0358966666666671,
+      "bootstrap_mean95": [
+        0.7067700000000009,
+        1.4203733333333335
+      ],
+      "winning_blocks": 14,
+      "gold": {
+        "images": {
+          "compiled.bin": "cdee20479797c644d325278076ca2c7d4063fb4c1afa8f61832bebb1e18c86b8",
+          "runtime.bin": "ad2fc5f5be3b2746b47e5508e4b36042ef6f168e0794dec020303645d9c1a7fe"
+        },
+        "native": {
+          "bytes": 49160,
+          "sha256": "ecbd88f532cd6a9b9589fc55f9ef3215ad40cae9c027291f606f359d49c90a11",
+          "excluded_system_bytes": 72,
+          "fixed_base": "0x0000010000000000"
+        }
+      },
+      "significant_regression_over_5_percent": false
+    }
+  },
+  "calls": 180
+}

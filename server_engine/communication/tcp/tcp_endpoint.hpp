@@ -44,6 +44,8 @@ public:
         std::chrono::steady_clock::duration max_lifetime);
 
     void stop() noexcept;
+    // Terminal worker failure closes the listener; stop/start can recover it.
+    [[nodiscard]] bool failed() const noexcept;
 
 private:
     class implementation;

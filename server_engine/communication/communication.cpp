@@ -5,6 +5,7 @@
  * fails, endpoints already started by this call are stopped before returning.
  */
 #include "communication.hpp"
+#include "testing/fault_injection.hpp"
 
 #include <algorithm>
 #include <string>
@@ -109,6 +110,7 @@ void communication::stop() noexcept {
 bool communication::register_connection(
     communication_connection& connection) {
 
+    reap_closed_connections();
     const auto duplicate =
         std::find_if(
             connections.begin(),
@@ -124,6 +126,7 @@ bool communication::register_connection(
     }
 
     try {
+        CW_COMMUNICATION_FAULT(registration);
         connections.push_back({
             &connection,
             connection.hold(),
@@ -133,6 +136,34 @@ bool communication::register_connection(
         return false;
     }
 
+    return true;
+}
+
+void communication::reap_closed_connections() noexcept {
+    // A close notification can itself fail allocation. Reap on the next
+    // registry operation as well, without needing another queue allocation.
+    std::erase_if(connections, [](registered_connection& entry) {
+        if (entry.connection && entry.connection->closing()) {
+            entry.connection->teardown_subscriptions();
+            return true;
+        }
+        return false;
+    });
+}
+
+bool communication::login_connection(
+    communication_connection& connection, std::string_view name) noexcept {
+    // No logged_in visibility until the registry owns the connection.
+    if (connection.closing() || connection.logged_in() ||
+        !register_connection(connection)) {
+        (void)connection.begin_close();
+        return false;
+    }
+    if (connection.commit_login(name) != client_session_login_result::success) {
+        (void)connection.begin_close();
+        unregister_connection(connection.id());
+        return false;
+    }
     return true;
 }
 
@@ -160,6 +191,7 @@ void communication::publish_server_state(
     project_state old_state,
     project_state new_state) {
 
+    reap_closed_connections();
     if (old_state == new_state) {
         return;
     }
@@ -183,6 +215,7 @@ std::size_t communication::route_client(
     const communication_connection& sender,
     const client_message& message) {
 
+    reap_closed_connections();
     if (!sender.logged_in() || sender.closing()) {
         return 0;
     }

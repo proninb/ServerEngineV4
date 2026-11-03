@@ -1,0 +1,651 @@
+{
+  "status": "PASS_DIAGNOSTIC",
+  "cycles": 111,
+  "samples": 888,
+  "elapsed_seconds": 73.14916760000006,
+  "first_observed_phase_above_128MiB": {
+    "cycle": 80,
+    "fixture": "unit",
+    "stage": "after_publish",
+    "warmup": false,
+    "timestamp_utc": "2026-10-27T18:45:17.639504+00:00",
+    "elapsed_seconds": 50.24932540000009,
+    "private_bytes": 167415808,
+    "working_set_bytes": 2294702080,
+    "peak_ws_bytes": 2628001792,
+    "handles": 91,
+    "page_faults": 12273094
+  },
+  "transitions": [
+    {
+      "label": "first-high",
+      "cycle": 80,
+      "fixture": "unit",
+      "stage": "after_reconnect_get_state",
+      "warmup": false,
+      "timestamp_utc": "2026-10-27T18:45:22.020293+00:00",
+      "elapsed_seconds": 54.630105300000196,
+      "private_bytes": 158879744,
+      "working_set_bytes": 144547840,
+      "peak_ws_bytes": 2628001792,
+      "handles": 88,
+      "page_faults": 12815691
+    },
+    {
+      "label": "following-low",
+      "cycle": 100,
+      "fixture": "unit",
+      "stage": "after_reconnect_get_state",
+      "warmup": false,
+      "timestamp_utc": "2026-10-27T18:45:34.298061+00:00",
+      "elapsed_seconds": 66.90787240000009,
+      "private_bytes": 20189184,
+      "working_set_bytes": 21475328,
+      "peak_ws_bytes": 2629038080,
+      "handles": 88,
+      "page_faults": 15598347
+    },
+    {
+      "label": "second-high",
+      "cycle": 110,
+      "fixture": "unit",
+      "stage": "after_reconnect_get_state",
+      "warmup": false,
+      "timestamp_utc": "2026-10-27T18:45:40.508346+00:00",
+      "elapsed_seconds": 73.11815780000006,
+      "private_bytes": 177606656,
+      "working_set_bytes": 158609408,
+      "peak_ws_bytes": 2634092544,
+      "handles": 88,
+      "page_faults": 17018682
+    }
+  ],
+  "largest_private_rises": [
+    {
+      "cycle": 110,
+      "fixture": "unit",
+      "from": "before_publish",
+      "to": "after_publish",
+      "private_delta_bytes": 156741632,
+      "working_set_delta_bytes": 2278895616,
+      "handle_delta": 3
+    },
+    {
+      "cycle": 80,
+      "fixture": "unit",
+      "from": "before_publish",
+      "to": "after_publish",
+      "private_delta_bytes": 141434880,
+      "working_set_delta_bytes": 2268262400,
+      "handle_delta": 3
+    },
+    {
+      "cycle": 90,
+      "fixture": "unit",
+      "from": "before_publish",
+      "to": "after_publish",
+      "private_delta_bytes": 18108416,
+      "working_set_delta_bytes": 2162397184,
+      "handle_delta": 3
+    },
+    {
+      "cycle": 0,
+      "fixture": "unit",
+      "from": "before_publish",
+      "to": "after_publish",
+      "private_delta_bytes": 17289216,
+      "working_set_delta_bytes": 2157416448,
+      "handle_delta": 3
+    },
+    {
+      "cycle": 20,
+      "fixture": "unit",
+      "from": "before_publish",
+      "to": "after_publish",
+      "private_delta_bytes": 14860288,
+      "working_set_delta_bytes": 2153811968,
+      "handle_delta": 3
+    },
+    {
+      "cycle": 50,
+      "fixture": "unit",
+      "from": "before_publish",
+      "to": "after_publish",
+      "private_delta_bytes": 14630912,
+      "working_set_delta_bytes": 2153078784,
+      "handle_delta": 3
+    },
+    {
+      "cycle": 30,
+      "fixture": "unit",
+      "from": "before_publish",
+      "to": "after_publish",
+      "private_delta_bytes": 13651968,
+      "working_set_delta_bytes": 2153234432,
+      "handle_delta": 3
+    },
+    {
+      "cycle": 40,
+      "fixture": "unit",
+      "from": "before_publish",
+      "to": "after_publish",
+      "private_delta_bytes": 11788288,
+      "working_set_delta_bytes": 2151174144,
+      "handle_delta": 3
+    },
+    {
+      "cycle": 10,
+      "fixture": "unit",
+      "from": "after_unload_1",
+      "to": "after_load",
+      "private_delta_bytes": 11251712,
+      "working_set_delta_bytes": 2152841216,
+      "handle_delta": 3
+    },
+    {
+      "cycle": 20,
+      "fixture": "unit",
+      "from": "after_unload_1",
+      "to": "after_load",
+      "private_delta_bytes": 10473472,
+      "working_set_delta_bytes": 2150559744,
+      "handle_delta": 3
+    }
+  ],
+  "largest_private_drops": [
+    {
+      "cycle": 100,
+      "fixture": "unit",
+      "from": "before_publish",
+      "to": "after_publish",
+      "private_delta_bytes": -140972032,
+      "working_set_delta_bytes": 2015010816,
+      "handle_delta": 3
+    },
+    {
+      "cycle": 10,
+      "fixture": "unit",
+      "from": "after_load",
+      "to": "after_unload_2",
+      "private_delta_bytes": -11345920,
+      "working_set_delta_bytes": -2152935424,
+      "handle_delta": -3
+    },
+    {
+      "cycle": 40,
+      "fixture": "unit",
+      "from": "after_load",
+      "to": "after_unload_2",
+      "private_delta_bytes": -8630272,
+      "working_set_delta_bytes": -2150166528,
+      "handle_delta": -3
+    },
+    {
+      "cycle": 100,
+      "fixture": "unit",
+      "from": "after_run_freeze",
+      "to": "after_unload_1",
+      "private_delta_bytes": -8544256,
+      "working_set_delta_bytes": -2150154240,
+      "handle_delta": -3
+    },
+    {
+      "cycle": 110,
+      "fixture": "unit",
+      "from": "after_run_freeze",
+      "to": "after_unload_1",
+      "private_delta_bytes": -8540160,
+      "working_set_delta_bytes": -2150154240,
+      "handle_delta": -3
+    },
+    {
+      "cycle": 10,
+      "fixture": "unit",
+      "from": "after_run_freeze",
+      "to": "after_unload_1",
+      "private_delta_bytes": -8536064,
+      "working_set_delta_bytes": -2150154240,
+      "handle_delta": -3
+    },
+    {
+      "cycle": 30,
+      "fixture": "unit",
+      "from": "after_run_freeze",
+      "to": "after_unload_1",
+      "private_delta_bytes": -8536064,
+      "working_set_delta_bytes": -2150154240,
+      "handle_delta": -3
+    },
+    {
+      "cycle": 50,
+      "fixture": "unit",
+      "from": "after_run_freeze",
+      "to": "after_unload_1",
+      "private_delta_bytes": -8536064,
+      "working_set_delta_bytes": -2150154240,
+      "handle_delta": -3
+    },
+    {
+      "cycle": 60,
+      "fixture": "unit",
+      "from": "after_run_freeze",
+      "to": "after_unload_1",
+      "private_delta_bytes": -8536064,
+      "working_set_delta_bytes": -2150154240,
+      "handle_delta": -3
+    },
+    {
+      "cycle": 80,
+      "fixture": "unit",
+      "from": "after_run_freeze",
+      "to": "after_unload_1",
+      "private_delta_bytes": -8536064,
+      "working_set_delta_bytes": -2150154240,
+      "handle_delta": -3
+    }
+  ],
+  "per_stage_private_delta_range_bytes": {
+    "after_publish": [
+      -140972032,
+      156741632
+    ],
+    "after_run_freeze": [
+      0,
+      0
+    ],
+    "after_unload_1": [
+      -8544256,
+      184320
+    ],
+    "after_load": [
+      -28672,
+      11251712
+    ],
+    "after_unload_2": [
+      -11345920,
+      -8192
+    ],
+    "after_tcp_error": [
+      -1794048,
+      1523712
+    ],
+    "after_reconnect_get_state": [
+      -5722112,
+      61440
+    ]
+  },
+  "handles_by_stage": {
+    "before_publish": [
+      88,
+      88
+    ],
+    "after_publish": [
+      91,
+      91
+    ],
+    "after_run_freeze": [
+      91,
+      91
+    ],
+    "after_unload_1": [
+      88,
+      88
+    ],
+    "after_load": [
+      91,
+      91
+    ],
+    "after_unload_2": [
+      88,
+      88
+    ],
+    "after_tcp_error": [
+      87,
+      87
+    ],
+    "after_reconnect_get_state": [
+      88,
+      88
+    ]
+  },
+  "private_allocation_extents_equal_high_low_rehigh": true,
+  "private_allocation_count_high": 32,
+  "private_allocations_with_changed_commit_high_low": 21,
+  "maps": [
+    {
+      "label": "initial-low",
+      "checkpoint": {
+        "cycle": 9,
+        "fixture": "strings",
+        "stage": "after_reconnect_get_state",
+        "warmup": true,
+        "timestamp_utc": "2026-10-27T18:44:34.158502+00:00",
+        "elapsed_seconds": 6.768313200000193,
+        "private_bytes": 10153984,
+        "working_set_bytes": 14151680,
+        "peak_ws_bytes": 2573197312,
+        "handles": 88,
+        "page_faults": 1438210
+      },
+      "query_ms": 4.6574,
+      "regions": 999,
+      "memory_before": {
+        "private_bytes": 10153984,
+        "working_set_bytes": 14151680,
+        "peak_ws_bytes": 2573197312,
+        "handles": 88,
+        "page_faults": 1438210
+      },
+      "memory_after": {
+        "private_bytes": 10153984,
+        "working_set_bytes": 14151680,
+        "peak_ws_bytes": 2573197312,
+        "handles": 88,
+        "page_faults": 1438210
+      },
+      "totals_bytes": {
+        "MEM_FREE/undefined": 140732861657088,
+        "MEM_COMMIT/MEM_PRIVATE": 8900608,
+        "COMMIT_TOTAL": 30027776,
+        "MEM_RESERVE/MEM_PRIVATE": 4595310592,
+        "MEM_COMMIT/MEM_MAPPED": 1683456,
+        "MEM_RESERVE/MEM_MAPPED": 1032192,
+        "MEM_COMMIT/MEM_IMAGE": 19443712,
+        "MEM_RESERVE/MEM_IMAGE": 262144
+      },
+      "committed_private_by_allocation_base": {
+        "0x7ffe0000": 4096,
+        "0x7ffe9000": 4096,
+        "0xa36a00000": 45056,
+        "0xa36c00000": 118784,
+        "0xa36d00000": 24576,
+        "0xa36e00000": 24576,
+        "0xa36f00000": 24576,
+        "0xa37000000": 32768,
+        "0x144138c0000": 8192,
+        "0x14413980000": 217088,
+        "0x14413a80000": 212992,
+        "0x14413d40000": 61440,
+        "0x14413d50000": 8192,
+        "0x14413e20000": 8192,
+        "0x14413f20000": 36864,
+        "0x14414250000": 16384,
+        "0x14414920000": 36864,
+        "0x14415120000": 32768,
+        "0x144160f0000": 49152,
+        "0x144170c0000": 544768,
+        "0x14418090000": 192512,
+        "0x14419ea0000": 356352,
+        "0x1441bee0000": 24576,
+        "0x1441c300000": 139264,
+        "0x14425960000": 118784,
+        "0x14428ce0000": 188416,
+        "0x14429cb0000": 77824,
+        "0x1442ac80000": 106496,
+        "0x1442bc50000": 643072,
+        "0x1442cc20000": 1359872,
+        "0x1442dbf0000": 1650688,
+        "0x1442ebc0000": 2514944,
+        "0x1442fb90000": 12288,
+        "0x7ff5d2f90000": 4096
+      },
+      "fixed_shm_probe": {
+        "address": "0x0000010000000000",
+        "state": "MEM_FREE",
+        "type": "undefined"
+      },
+      "limits": "Non-atomic read-only region query; no page content/heap owner/live-object attribution; COW pages can retain mapped/image type"
+    },
+    {
+      "label": "first-high",
+      "checkpoint": {
+        "cycle": 80,
+        "fixture": "unit",
+        "stage": "after_reconnect_get_state",
+        "warmup": false,
+        "timestamp_utc": "2026-10-27T18:45:22.020293+00:00",
+        "elapsed_seconds": 54.630105300000196,
+        "private_bytes": 158879744,
+        "working_set_bytes": 144547840,
+        "peak_ws_bytes": 2628001792,
+        "handles": 88,
+        "page_faults": 12815691
+      },
+      "query_ms": 2.9721,
+      "regions": 473,
+      "memory_before": {
+        "private_bytes": 158879744,
+        "working_set_bytes": 144547840,
+        "peak_ws_bytes": 2628001792,
+        "handles": 88,
+        "page_faults": 12815691
+      },
+      "memory_after": {
+        "private_bytes": 158879744,
+        "working_set_bytes": 144547840,
+        "peak_ws_bytes": 2628001792,
+        "handles": 88,
+        "page_faults": 12815691
+      },
+      "totals_bytes": {
+        "MEM_FREE/undefined": 140732864802816,
+        "MEM_COMMIT/MEM_PRIVATE": 157560832,
+        "COMMIT_TOTAL": 178688000,
+        "MEM_RESERVE/MEM_PRIVATE": 4443504640,
+        "MEM_COMMIT/MEM_MAPPED": 1683456,
+        "MEM_RESERVE/MEM_MAPPED": 1032192,
+        "MEM_COMMIT/MEM_IMAGE": 19443712,
+        "MEM_RESERVE/MEM_IMAGE": 262144
+      },
+      "committed_private_by_allocation_base": {
+        "0x7ffe0000": 4096,
+        "0x7ffe9000": 4096,
+        "0xa36a00000": 20480,
+        "0xa36c00000": 118784,
+        "0xa37000000": 32768,
+        "0x144138c0000": 8192,
+        "0x14413980000": 323584,
+        "0x14413a80000": 1044480,
+        "0x14413d40000": 61440,
+        "0x14413d50000": 8192,
+        "0x14413e20000": 1044480,
+        "0x14413f20000": 2093056,
+        "0x14414250000": 2039808,
+        "0x14414920000": 4866048,
+        "0x14415120000": 8536064,
+        "0x144160f0000": 8658944,
+        "0x144170c0000": 7450624,
+        "0x14418090000": 12410880,
+        "0x14419ea0000": 8351744,
+        "0x1441bee0000": 24576,
+        "0x1441c300000": 10903552,
+        "0x14425960000": 11890688,
+        "0x14428ce0000": 9072640,
+        "0x14429cb0000": 10076160,
+        "0x1442ac80000": 11235328,
+        "0x1442bc50000": 10440704,
+        "0x1442cc20000": 9617408,
+        "0x1442dbf0000": 12173312,
+        "0x1442ebc0000": 12197888,
+        "0x1442fb90000": 2846720,
+        "0x7ff5d2f90000": 4096
+      },
+      "fixed_shm_probe": {
+        "address": "0x0000010000000000",
+        "state": "MEM_FREE",
+        "type": "undefined"
+      },
+      "limits": "Non-atomic read-only region query; no page content/heap owner/live-object attribution; COW pages can retain mapped/image type"
+    },
+    {
+      "label": "following-low",
+      "checkpoint": {
+        "cycle": 100,
+        "fixture": "unit",
+        "stage": "after_reconnect_get_state",
+        "warmup": false,
+        "timestamp_utc": "2026-10-27T18:45:34.298061+00:00",
+        "elapsed_seconds": 66.90787240000009,
+        "private_bytes": 20189184,
+        "working_set_bytes": 21475328,
+        "peak_ws_bytes": 2629038080,
+        "handles": 88,
+        "page_faults": 15598347
+      },
+      "query_ms": 6.9776,
+      "regions": 1487,
+      "memory_before": {
+        "private_bytes": 20189184,
+        "working_set_bytes": 21475328,
+        "peak_ws_bytes": 2629038080,
+        "handles": 88,
+        "page_faults": 15598347
+      },
+      "memory_after": {
+        "private_bytes": 20189184,
+        "working_set_bytes": 21475328,
+        "peak_ws_bytes": 2629038080,
+        "handles": 88,
+        "page_faults": 15598347
+      },
+      "totals_bytes": {
+        "MEM_FREE/undefined": 140732864802816,
+        "MEM_COMMIT/MEM_PRIVATE": 18870272,
+        "COMMIT_TOTAL": 39997440,
+        "MEM_RESERVE/MEM_PRIVATE": 4582195200,
+        "MEM_COMMIT/MEM_MAPPED": 1683456,
+        "MEM_RESERVE/MEM_MAPPED": 1032192,
+        "MEM_COMMIT/MEM_IMAGE": 19443712,
+        "MEM_RESERVE/MEM_IMAGE": 262144
+      },
+      "committed_private_by_allocation_base": {
+        "0x7ffe0000": 4096,
+        "0x7ffe9000": 4096,
+        "0xa36a00000": 20480,
+        "0xa36c00000": 118784,
+        "0xa37000000": 32768,
+        "0x144138c0000": 8192,
+        "0x14413980000": 327680,
+        "0x14413a80000": 212992,
+        "0x14413d40000": 61440,
+        "0x14413d50000": 8192,
+        "0x14413e20000": 8192,
+        "0x14413f20000": 200704,
+        "0x14414250000": 901120,
+        "0x14414920000": 528384,
+        "0x14415120000": 839680,
+        "0x144160f0000": 1318912,
+        "0x144170c0000": 1085440,
+        "0x14418090000": 802816,
+        "0x14419ea0000": 704512,
+        "0x1441bee0000": 24576,
+        "0x1441c300000": 1654784,
+        "0x14425960000": 1142784,
+        "0x14428ce0000": 581632,
+        "0x14429cb0000": 925696,
+        "0x1442ac80000": 884736,
+        "0x1442bc50000": 1155072,
+        "0x1442cc20000": 1110016,
+        "0x1442dbf0000": 978944,
+        "0x1442ebc0000": 1462272,
+        "0x1442fb90000": 1757184,
+        "0x7ff5d2f90000": 4096
+      },
+      "fixed_shm_probe": {
+        "address": "0x0000010000000000",
+        "state": "MEM_FREE",
+        "type": "undefined"
+      },
+      "limits": "Non-atomic read-only region query; no page content/heap owner/live-object attribution; COW pages can retain mapped/image type"
+    },
+    {
+      "label": "second-high",
+      "checkpoint": {
+        "cycle": 110,
+        "fixture": "unit",
+        "stage": "after_reconnect_get_state",
+        "warmup": false,
+        "timestamp_utc": "2026-10-27T18:45:40.508346+00:00",
+        "elapsed_seconds": 73.11815780000006,
+        "private_bytes": 177606656,
+        "working_set_bytes": 158609408,
+        "peak_ws_bytes": 2634092544,
+        "handles": 88,
+        "page_faults": 17018682
+      },
+      "query_ms": 3.1215,
+      "regions": 459,
+      "memory_before": {
+        "private_bytes": 177606656,
+        "working_set_bytes": 158609408,
+        "peak_ws_bytes": 2634092544,
+        "handles": 88,
+        "page_faults": 17018682
+      },
+      "memory_after": {
+        "private_bytes": 177606656,
+        "working_set_bytes": 158609408,
+        "peak_ws_bytes": 2634092544,
+        "handles": 88,
+        "page_faults": 17018682
+      },
+      "totals_bytes": {
+        "MEM_FREE/undefined": 140732864802816,
+        "MEM_COMMIT/MEM_PRIVATE": 176287744,
+        "COMMIT_TOTAL": 197414912,
+        "MEM_RESERVE/MEM_PRIVATE": 4424777728,
+        "MEM_COMMIT/MEM_MAPPED": 1683456,
+        "MEM_RESERVE/MEM_MAPPED": 1032192,
+        "MEM_COMMIT/MEM_IMAGE": 19443712,
+        "MEM_RESERVE/MEM_IMAGE": 262144
+      },
+      "committed_private_by_allocation_base": {
+        "0x7ffe0000": 4096,
+        "0x7ffe9000": 4096,
+        "0xa36a00000": 20480,
+        "0xa36c00000": 118784,
+        "0xa37000000": 32768,
+        "0x144138c0000": 8192,
+        "0x14413980000": 327680,
+        "0x14413a80000": 1044480,
+        "0x14413d40000": 61440,
+        "0x14413d50000": 8192,
+        "0x14413e20000": 1044480,
+        "0x14413f20000": 2093056,
+        "0x14414250000": 3145728,
+        "0x14414920000": 6217728,
+        "0x14415120000": 8773632,
+        "0x144160f0000": 9445376,
+        "0x144170c0000": 7634944,
+        "0x14418090000": 9019392,
+        "0x14419ea0000": 9871360,
+        "0x1441bee0000": 24576,
+        "0x1441c300000": 13086720,
+        "0x14425960000": 14487552,
+        "0x14428ce0000": 8359936,
+        "0x14429cb0000": 13078528,
+        "0x1442ac80000": 12087296,
+        "0x1442bc50000": 13025280,
+        "0x1442cc20000": 12206080,
+        "0x1442dbf0000": 12263424,
+        "0x1442ebc0000": 14467072,
+        "0x1442fb90000": 4321280,
+        "0x7ff5d2f90000": 4096
+      },
+      "fixed_shm_probe": {
+        "address": "0x0000010000000000",
+        "state": "MEM_FREE",
+        "type": "undefined"
+      },
+      "limits": "Non-atomic read-only region query; no page content/heap owner/live-object attribution; COW pages can retain mapped/image type"
+    }
+  ],
+  "immutable_after_verified": true,
+  "release_blocked": true,
+  "limits": [
+    "Diagnostic snapshots and mapping scans perturb timing; not a repeated release gate",
+    "Snapshots bracket whole commands, not lexical/parser/Graph/persistence subphases",
+    "Region maps identify memory state/type/allocation base, not heap owner or live C++ objects",
+    "Matching allocation extents at snapshots do not trace every allocation/decommit between them"
+  ]
+}

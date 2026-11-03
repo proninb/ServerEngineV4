@@ -1,0 +1,1114 @@
+{
+  "experiment": "SOAK-MEMORY-ATTRIBUTION-01",
+  "date": "2026-10-27",
+  "arms": {
+    "OFF": {
+      "status": "FAIL",
+      "elapsed_seconds": 604.7624249999999,
+      "measured_cycles": 1071,
+      "counts_including_warmup": {
+        "duplicate_login_closed": 271,
+        "prelogin_shutdown_denied": 1081,
+        "cycles": 1081,
+        "partial_frame_reset": 270,
+        "oversize_frame_closed": 270,
+        "disconnect": 270,
+        "measured_cycles": 1071
+      },
+      "cases": {
+        "unit": {
+          "samples": 108,
+          "first5_median_private_bytes": 20353024,
+          "last5_median_private_bytes": 272961536,
+          "drift_bytes": 252608512,
+          "handles_drift": 0,
+          "first_sample_over_baseline_plus_128MiB": {
+            "cycle": 80,
+            "case": "unit",
+            "elapsed_seconds": 44.31158340000002,
+            "measured": true,
+            "private_bytes": 197484544,
+            "working_set_bytes": 169451520,
+            "peak_ws_bytes": 2647289856,
+            "handles": 88,
+            "page_faults": 12811687
+          },
+          "quiescent_drift_gate_pass": false
+        },
+        "strings": {
+          "samples": 321,
+          "first5_median_private_bytes": 16429056,
+          "last5_median_private_bytes": 33128448,
+          "drift_bytes": 16699392,
+          "handles_drift": 0,
+          "first_sample_over_baseline_plus_128MiB": {
+            "cycle": 81,
+            "case": "strings",
+            "elapsed_seconds": 44.36062149999998,
+            "measured": true,
+            "private_bytes": 197484544,
+            "working_set_bytes": 170196992,
+            "peak_ws_bytes": 2647289856,
+            "handles": 88,
+            "page_faults": 12825222
+          },
+          "quiescent_drift_gate_pass": true
+        },
+        "inheritance": {
+          "samples": 321,
+          "first5_median_private_bytes": 15527936,
+          "last5_median_private_bytes": 33128448,
+          "drift_bytes": 17600512,
+          "handles_drift": 0,
+          "first_sample_over_baseline_plus_128MiB": {
+            "cycle": 82,
+            "case": "inheritance",
+            "elapsed_seconds": 44.373304599999756,
+            "measured": true,
+            "private_bytes": 197484544,
+            "working_set_bytes": 170737664,
+            "peak_ws_bytes": 2647289856,
+            "handles": 88,
+            "page_faults": 12826583
+          },
+          "quiescent_drift_gate_pass": true
+        },
+        "links": {
+          "samples": 321,
+          "first5_median_private_bytes": 15777792,
+          "last5_median_private_bytes": 33169408,
+          "drift_bytes": 17391616,
+          "handles_drift": 0,
+          "first_sample_over_baseline_plus_128MiB": {
+            "cycle": 83,
+            "case": "links",
+            "elapsed_seconds": 44.389153799999804,
+            "measured": true,
+            "private_bytes": 197484544,
+            "working_set_bytes": 170942464,
+            "peak_ws_bytes": 2647289856,
+            "handles": 88,
+            "page_faults": 12828207
+          },
+          "quiescent_drift_gate_pass": true
+        }
+      },
+      "private_min_bytes": 14483456,
+      "private_max_bytes": 274149376,
+      "handles_min": 88,
+      "handles_max": 88,
+      "first_sample_absolute_over_128MiB": {
+        "cycle": 80,
+        "case": "unit",
+        "elapsed_seconds": 44.31158340000002,
+        "measured": true,
+        "private_bytes": 197484544,
+        "working_set_bytes": 169451520,
+        "peak_ws_bytes": 2647289856,
+        "handles": 88,
+        "page_faults": 12811687
+      },
+      "high_quiescent_samples": 669,
+      "high_quiescent_sample_fraction": 0.6246498599439776,
+      "sample_held_high_seconds_estimate": 370.5708749000023,
+      "high_checkpoint_runs": [
+        {
+          "first_cycle": 80,
+          "last_cycle": 99,
+          "samples": 20,
+          "first_seconds": 44.31158340000002,
+          "last_seconds": 50.12627739999971,
+          "observed_checkpoint_span_seconds": 5.81469399999969
+        },
+        {
+          "first_cycle": 110,
+          "last_cycle": 129,
+          "samples": 20,
+          "first_seconds": 61.06579559999955,
+          "last_seconds": 66.87666959999933,
+          "observed_checkpoint_span_seconds": 5.810873999999785
+        },
+        {
+          "first_cycle": 140,
+          "last_cycle": 149,
+          "samples": 10,
+          "first_seconds": 77.85466749999978,
+          "last_seconds": 78.0793036999994,
+          "observed_checkpoint_span_seconds": 0.22463619999962248
+        },
+        {
+          "first_cycle": 160,
+          "last_cycle": 169,
+          "samples": 10,
+          "first_seconds": 89.0163720999999,
+          "last_seconds": 89.25068329999976,
+          "observed_checkpoint_span_seconds": 0.2343111999998655
+        },
+        {
+          "first_cycle": 180,
+          "last_cycle": 199,
+          "samples": 20,
+          "first_seconds": 100.26190199999928,
+          "last_seconds": 106.08706189999975,
+          "observed_checkpoint_span_seconds": 5.825159900000472
+        },
+        {
+          "first_cycle": 210,
+          "last_cycle": 259,
+          "samples": 50,
+          "first_seconds": 116.81403640000008,
+          "last_seconds": 139.22379899999942,
+          "observed_checkpoint_span_seconds": 22.40976259999934
+        },
+        {
+          "first_cycle": 280,
+          "last_cycle": 309,
+          "samples": 30,
+          "first_seconds": 155.8101483999999,
+          "last_seconds": 167.17617639999935,
+          "observed_checkpoint_span_seconds": 11.36602799999946
+        },
+        {
+          "first_cycle": 330,
+          "last_cycle": 339,
+          "samples": 10,
+          "first_seconds": 183.99691189999976,
+          "last_seconds": 184.2563043,
+          "observed_checkpoint_span_seconds": 0.25939240000025166
+        },
+        {
+          "first_cycle": 350,
+          "last_cycle": 369,
+          "samples": 20,
+          "first_seconds": 195.24800109999978,
+          "last_seconds": 201.33022290000008,
+          "observed_checkpoint_span_seconds": 6.082221800000298
+        },
+        {
+          "first_cycle": 390,
+          "last_cycle": 390,
+          "samples": 1,
+          "first_seconds": 218.45180139999957,
+          "last_seconds": 218.45180139999957,
+          "observed_checkpoint_span_seconds": 0.0
+        },
+        {
+          "first_cycle": 400,
+          "last_cycle": 429,
+          "samples": 30,
+          "first_seconds": 224.02077729999928,
+          "last_seconds": 235.5729879999999,
+          "observed_checkpoint_span_seconds": 11.552210700000614
+        },
+        {
+          "first_cycle": 440,
+          "last_cycle": 444,
+          "samples": 5,
+          "first_seconds": 246.32864439999958,
+          "last_seconds": 246.4828792999997,
+          "observed_checkpoint_span_seconds": 0.15423490000011952
+        },
+        {
+          "first_cycle": 450,
+          "last_cycle": 479,
+          "samples": 30,
+          "first_seconds": 251.75956189999943,
+          "last_seconds": 263.26384659999985,
+          "observed_checkpoint_span_seconds": 11.504284700000426
+        },
+        {
+          "first_cycle": 500,
+          "last_cycle": 529,
+          "samples": 30,
+          "first_seconds": 279.5920307999995,
+          "last_seconds": 291.10933059999934,
+          "observed_checkpoint_span_seconds": 11.517299799999819
+        },
+        {
+          "first_cycle": 550,
+          "last_cycle": 599,
+          "samples": 50,
+          "first_seconds": 308.0849236999993,
+          "last_seconds": 331.3722104999997,
+          "observed_checkpoint_span_seconds": 23.287286800000402
+        },
+        {
+          "first_cycle": 610,
+          "last_cycle": 659,
+          "samples": 50,
+          "first_seconds": 342.62202720000005,
+          "last_seconds": 365.2743383999996,
+          "observed_checkpoint_span_seconds": 22.65231119999953
+        },
+        {
+          "first_cycle": 670,
+          "last_cycle": 671,
+          "samples": 2,
+          "first_seconds": 376.3225103999994,
+          "last_seconds": 376.34052489999976,
+          "observed_checkpoint_span_seconds": 0.0180145000003904
+        },
+        {
+          "first_cycle": 680,
+          "last_cycle": 709,
+          "samples": 30,
+          "first_seconds": 382.27023349999945,
+          "last_seconds": 393.7501419,
+          "observed_checkpoint_span_seconds": 11.479908400000568
+        },
+        {
+          "first_cycle": 740,
+          "last_cycle": 769,
+          "samples": 30,
+          "first_seconds": 416.3599762999993,
+          "last_seconds": 428.2619427999998,
+          "observed_checkpoint_span_seconds": 11.901966500000526
+        },
+        {
+          "first_cycle": 780,
+          "last_cycle": 829,
+          "samples": 50,
+          "first_seconds": 439.2328930999993,
+          "last_seconds": 461.7447969999994,
+          "observed_checkpoint_span_seconds": 22.511903900000107
+        },
+        {
+          "first_cycle": 840,
+          "last_cycle": 879,
+          "samples": 40,
+          "first_seconds": 472.6600681,
+          "last_seconds": 489.56208499999957,
+          "observed_checkpoint_span_seconds": 16.90201689999958
+        },
+        {
+          "first_cycle": 900,
+          "last_cycle": 949,
+          "samples": 50,
+          "first_seconds": 506.3199488999999,
+          "last_seconds": 528.9895337999997,
+          "observed_checkpoint_span_seconds": 22.66958489999979
+        },
+        {
+          "first_cycle": 980,
+          "last_cycle": 1009,
+          "samples": 30,
+          "first_seconds": 550.4811942999995,
+          "last_seconds": 561.4590158000001,
+          "observed_checkpoint_span_seconds": 10.977821500000573
+        },
+        {
+          "first_cycle": 1020,
+          "last_cycle": 1069,
+          "samples": 50,
+          "first_seconds": 572.0225574999995,
+          "last_seconds": 594.0085055999998,
+          "observed_checkpoint_span_seconds": 21.985948100000314
+        },
+        {
+          "first_cycle": 1080,
+          "last_cycle": 1080,
+          "samples": 1,
+          "first_seconds": 604.7615993999998,
+          "last_seconds": 604.7615993999998,
+          "observed_checkpoint_span_seconds": 0.0
+        }
+      ],
+      "returns_below_128MiB": [
+        {
+          "cycle": 100,
+          "case": "unit",
+          "seconds": 55.55861249999998,
+          "reconnect_mode": "duplicate_LOGIN",
+          "previous_private_bytes": 208953344,
+          "private_bytes": 19472384
+        },
+        {
+          "cycle": 130,
+          "case": "unit",
+          "seconds": 72.37677729999996,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 223698944,
+          "private_bytes": 19664896
+        },
+        {
+          "cycle": 150,
+          "case": "unit",
+          "seconds": 83.54210650000005,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 212525056,
+          "private_bytes": 21155840
+        },
+        {
+          "cycle": 170,
+          "case": "unit",
+          "seconds": 94.62468509999962,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 224268288,
+          "private_bytes": 21643264
+        },
+        {
+          "cycle": 200,
+          "case": "unit",
+          "seconds": 111.32146609999927,
+          "reconnect_mode": "duplicate_LOGIN",
+          "previous_private_bytes": 224411648,
+          "private_bytes": 21041152
+        },
+        {
+          "cycle": 260,
+          "case": "unit",
+          "seconds": 144.6060411999997,
+          "reconnect_mode": "duplicate_LOGIN",
+          "previous_private_bytes": 241860608,
+          "private_bytes": 22278144
+        },
+        {
+          "cycle": 310,
+          "case": "unit",
+          "seconds": 172.5920985999992,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 245960704,
+          "private_bytes": 22122496
+        },
+        {
+          "cycle": 340,
+          "case": "unit",
+          "seconds": 189.61179489999995,
+          "reconnect_mode": "duplicate_LOGIN",
+          "previous_private_bytes": 252149760,
+          "private_bytes": 25751552
+        },
+        {
+          "cycle": 370,
+          "case": "unit",
+          "seconds": 207.07117909999943,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 253444096,
+          "private_bytes": 23244800
+        },
+        {
+          "cycle": 391,
+          "case": "inheritance",
+          "seconds": 218.4847461999998,
+          "reconnect_mode": "disconnect",
+          "previous_private_bytes": 253194240,
+          "private_bytes": 18243584
+        },
+        {
+          "cycle": 430,
+          "case": "unit",
+          "seconds": 240.89848689999963,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 255807488,
+          "private_bytes": 22077440
+        },
+        {
+          "cycle": 445,
+          "case": "inheritance",
+          "seconds": 246.52809979999984,
+          "reconnect_mode": "partial_frame_RST",
+          "previous_private_bytes": 258150400,
+          "private_bytes": 18378752
+        },
+        {
+          "cycle": 480,
+          "case": "unit",
+          "seconds": 268.5879834999996,
+          "reconnect_mode": "duplicate_LOGIN",
+          "previous_private_bytes": 261017600,
+          "private_bytes": 21782528
+        },
+        {
+          "cycle": 530,
+          "case": "unit",
+          "seconds": 296.58841289999964,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 259026944,
+          "private_bytes": 22855680
+        },
+        {
+          "cycle": 600,
+          "case": "unit",
+          "seconds": 336.8349797000001,
+          "reconnect_mode": "duplicate_LOGIN",
+          "previous_private_bytes": 267890688,
+          "private_bytes": 23408640
+        },
+        {
+          "cycle": 660,
+          "case": "unit",
+          "seconds": 370.6373273999998,
+          "reconnect_mode": "duplicate_LOGIN",
+          "previous_private_bytes": 268095488,
+          "private_bytes": 23830528
+        },
+        {
+          "cycle": 672,
+          "case": "strings",
+          "seconds": 376.4304007999999,
+          "reconnect_mode": "duplicate_LOGIN",
+          "previous_private_bytes": 269488128,
+          "private_bytes": 18612224
+        },
+        {
+          "cycle": 710,
+          "case": "unit",
+          "seconds": 399.0221082999997,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 269713408,
+          "private_bytes": 24395776
+        },
+        {
+          "cycle": 770,
+          "case": "unit",
+          "seconds": 433.7114241999998,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 271859712,
+          "private_bytes": 23949312
+        },
+        {
+          "cycle": 830,
+          "case": "unit",
+          "seconds": 467.2407384999997,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 271077376,
+          "private_bytes": 24133632
+        },
+        {
+          "cycle": 880,
+          "case": "unit",
+          "seconds": 494.8846751000001,
+          "reconnect_mode": "duplicate_LOGIN",
+          "previous_private_bytes": 271663104,
+          "private_bytes": 24018944
+        },
+        {
+          "cycle": 950,
+          "case": "unit",
+          "seconds": 534.2583492999993,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 271425536,
+          "private_bytes": 29831168
+        },
+        {
+          "cycle": 1010,
+          "case": "unit",
+          "seconds": 566.6126989999993,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 273977344,
+          "private_bytes": 25333760
+        },
+        {
+          "cycle": 1070,
+          "case": "unit",
+          "seconds": 599.4542492,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 273035264,
+          "private_bytes": 21872640
+        }
+      ],
+      "return_cases": {
+        "unit": 21,
+        "inheritance": 2,
+        "strings": 1
+      },
+      "return_reconnect_modes": {
+        "duplicate_LOGIN": 9,
+        "oversized_frame": 13,
+        "disconnect": 1,
+        "partial_frame_RST": 1
+      }
+    },
+    "USE": {
+      "status": "FAIL",
+      "elapsed_seconds": 604.9254125999996,
+      "measured_cycles": 1041,
+      "counts_including_warmup": {
+        "duplicate_login_closed": 263,
+        "prelogin_shutdown_denied": 1051,
+        "cycles": 1051,
+        "partial_frame_reset": 263,
+        "oversize_frame_closed": 263,
+        "disconnect": 262,
+        "measured_cycles": 1041
+      },
+      "cases": {
+        "unit": {
+          "samples": 105,
+          "first5_median_private_bytes": 19136512,
+          "last5_median_private_bytes": 269492224,
+          "drift_bytes": 250355712,
+          "handles_drift": 0,
+          "first_sample_over_baseline_plus_128MiB": {
+            "cycle": 80,
+            "case": "unit",
+            "elapsed_seconds": 46.73132309999983,
+            "measured": true,
+            "private_bytes": 189173760,
+            "working_set_bytes": 165322752,
+            "peak_ws_bytes": 2638651392,
+            "handles": 88,
+            "page_faults": 12815264
+          },
+          "quiescent_drift_gate_pass": false
+        },
+        "strings": {
+          "samples": 312,
+          "first5_median_private_bytes": 16408576,
+          "last5_median_private_bytes": 269492224,
+          "drift_bytes": 253083648,
+          "handles_drift": 0,
+          "first_sample_over_baseline_plus_128MiB": {
+            "cycle": 81,
+            "case": "strings",
+            "elapsed_seconds": 46.77746619999971,
+            "measured": true,
+            "private_bytes": 187781120,
+            "working_set_bytes": 163966976,
+            "peak_ws_bytes": 2638651392,
+            "handles": 88,
+            "page_faults": 12828626
+          },
+          "quiescent_drift_gate_pass": false
+        },
+        "inheritance": {
+          "samples": 312,
+          "first5_median_private_bytes": 15888384,
+          "last5_median_private_bytes": 269492224,
+          "drift_bytes": 253603840,
+          "handles_drift": 0,
+          "first_sample_over_baseline_plus_128MiB": {
+            "cycle": 82,
+            "case": "inheritance",
+            "elapsed_seconds": 46.792483999999604,
+            "measured": true,
+            "private_bytes": 187781120,
+            "working_set_bytes": 164446208,
+            "peak_ws_bytes": 2638651392,
+            "handles": 88,
+            "page_faults": 12829966
+          },
+          "quiescent_drift_gate_pass": false
+        },
+        "links": {
+          "samples": 312,
+          "first5_median_private_bytes": 15892480,
+          "last5_median_private_bytes": 269492224,
+          "drift_bytes": 253599744,
+          "handles_drift": 0,
+          "first_sample_over_baseline_plus_128MiB": {
+            "cycle": 83,
+            "case": "links",
+            "elapsed_seconds": 46.80948020000005,
+            "measured": true,
+            "private_bytes": 186675200,
+            "working_set_bytes": 164249600,
+            "peak_ws_bytes": 2638651392,
+            "handles": 88,
+            "page_faults": 12831653
+          },
+          "quiescent_drift_gate_pass": false
+        }
+      },
+      "private_min_bytes": 12791808,
+      "private_max_bytes": 271220736,
+      "handles_min": 88,
+      "handles_max": 88,
+      "first_sample_absolute_over_128MiB": {
+        "cycle": 80,
+        "case": "unit",
+        "elapsed_seconds": 46.73132309999983,
+        "measured": true,
+        "private_bytes": 189173760,
+        "working_set_bytes": 165322752,
+        "peak_ws_bytes": 2638651392,
+        "handles": 88,
+        "page_faults": 12815264
+      },
+      "high_quiescent_samples": 675,
+      "high_quiescent_sample_fraction": 0.6484149855907781,
+      "sample_held_high_seconds_estimate": 387.40622719999965,
+      "high_checkpoint_runs": [
+        {
+          "first_cycle": 80,
+          "last_cycle": 99,
+          "samples": 20,
+          "first_seconds": 46.73132309999983,
+          "last_seconds": 52.82601109999996,
+          "observed_checkpoint_span_seconds": 6.094688000000133
+        },
+        {
+          "first_cycle": 110,
+          "last_cycle": 149,
+          "samples": 40,
+          "first_seconds": 64.31173059999992,
+          "last_seconds": 82.22364279999965,
+          "observed_checkpoint_span_seconds": 17.911912199999733
+        },
+        {
+          "first_cycle": 160,
+          "last_cycle": 199,
+          "samples": 40,
+          "first_seconds": 93.91755039999998,
+          "last_seconds": 111.67169590000003,
+          "observed_checkpoint_span_seconds": 17.75414550000005
+        },
+        {
+          "first_cycle": 210,
+          "last_cycle": 259,
+          "samples": 50,
+          "first_seconds": 123.38367849999986,
+          "last_seconds": 147.30057109999962,
+          "observed_checkpoint_span_seconds": 23.916892599999755
+        },
+        {
+          "first_cycle": 270,
+          "last_cycle": 310,
+          "samples": 41,
+          "first_seconds": 159.06902409999975,
+          "last_seconds": 182.7826353999999,
+          "observed_checkpoint_span_seconds": 23.71361130000014
+        },
+        {
+          "first_cycle": 320,
+          "last_cycle": 329,
+          "samples": 10,
+          "first_seconds": 188.52911909999966,
+          "last_seconds": 188.7541597999998,
+          "observed_checkpoint_span_seconds": 0.22504070000013598
+        },
+        {
+          "first_cycle": 340,
+          "last_cycle": 369,
+          "samples": 30,
+          "first_seconds": 200.28967109999985,
+          "last_seconds": 212.4893780999996,
+          "observed_checkpoint_span_seconds": 12.199706999999762
+        },
+        {
+          "first_cycle": 380,
+          "last_cycle": 401,
+          "samples": 22,
+          "first_seconds": 224.12087129999964,
+          "last_seconds": 236.09699329999967,
+          "observed_checkpoint_span_seconds": 11.976122000000032
+        },
+        {
+          "first_cycle": 410,
+          "last_cycle": 429,
+          "samples": 20,
+          "first_seconds": 242.08284809999986,
+          "last_seconds": 248.34410789999993,
+          "observed_checkpoint_span_seconds": 6.261259800000062
+        },
+        {
+          "first_cycle": 440,
+          "last_cycle": 489,
+          "samples": 50,
+          "first_seconds": 260.06909689999975,
+          "last_seconds": 283.74802999999974,
+          "observed_checkpoint_span_seconds": 23.678933099999995
+        },
+        {
+          "first_cycle": 500,
+          "last_cycle": 509,
+          "samples": 10,
+          "first_seconds": 295.2205555999999,
+          "last_seconds": 295.44900229999985,
+          "observed_checkpoint_span_seconds": 0.2284466999999495
+        },
+        {
+          "first_cycle": 520,
+          "last_cycle": 549,
+          "samples": 30,
+          "first_seconds": 306.88622399999986,
+          "last_seconds": 318.7746567999998,
+          "observed_checkpoint_span_seconds": 11.888432799999919
+        },
+        {
+          "first_cycle": 560,
+          "last_cycle": 609,
+          "samples": 50,
+          "first_seconds": 330.2277571999998,
+          "last_seconds": 353.8359384999999,
+          "observed_checkpoint_span_seconds": 23.60818130000007
+        },
+        {
+          "first_cycle": 630,
+          "last_cycle": 639,
+          "samples": 10,
+          "first_seconds": 370.20283070000005,
+          "last_seconds": 370.4487755,
+          "observed_checkpoint_span_seconds": 0.2459447999999611
+        },
+        {
+          "first_cycle": 650,
+          "last_cycle": 669,
+          "samples": 20,
+          "first_seconds": 381.2420229999998,
+          "last_seconds": 386.9608149999999,
+          "observed_checkpoint_span_seconds": 5.718792000000121
+        },
+        {
+          "first_cycle": 680,
+          "last_cycle": 729,
+          "samples": 50,
+          "first_seconds": 397.7983049999998,
+          "last_seconds": 420.32249969999975,
+          "observed_checkpoint_span_seconds": 22.524194699999953
+        },
+        {
+          "first_cycle": 740,
+          "last_cycle": 750,
+          "samples": 11,
+          "first_seconds": 430.9974264999996,
+          "last_seconds": 436.398647,
+          "observed_checkpoint_span_seconds": 5.401220500000363
+        },
+        {
+          "first_cycle": 760,
+          "last_cycle": 769,
+          "samples": 10,
+          "first_seconds": 441.9323642999998,
+          "last_seconds": 442.19401679999964,
+          "observed_checkpoint_span_seconds": 0.2616524999998546
+        },
+        {
+          "first_cycle": 780,
+          "last_cycle": 789,
+          "samples": 10,
+          "first_seconds": 452.93417550000004,
+          "last_seconds": 453.18337589999965,
+          "observed_checkpoint_span_seconds": 0.24920039999960863
+        },
+        {
+          "first_cycle": 810,
+          "last_cycle": 849,
+          "samples": 40,
+          "first_seconds": 469.27678130000004,
+          "last_seconds": 485.9930086999998,
+          "observed_checkpoint_span_seconds": 16.716227399999752
+        },
+        {
+          "first_cycle": 870,
+          "last_cycle": 889,
+          "samples": 20,
+          "first_seconds": 502.0030638999997,
+          "last_seconds": 507.9310046999999,
+          "observed_checkpoint_span_seconds": 5.927940800000215
+        },
+        {
+          "first_cycle": 900,
+          "last_cycle": 909,
+          "samples": 10,
+          "first_seconds": 519.1704838999999,
+          "last_seconds": 519.4081062,
+          "observed_checkpoint_span_seconds": 0.23762230000011186
+        },
+        {
+          "first_cycle": 920,
+          "last_cycle": 929,
+          "samples": 10,
+          "first_seconds": 531.0793827999996,
+          "last_seconds": 531.3280614,
+          "observed_checkpoint_span_seconds": 0.2486786000004031
+        },
+        {
+          "first_cycle": 940,
+          "last_cycle": 969,
+          "samples": 30,
+          "first_seconds": 542.6130469,
+          "last_seconds": 554.3634837999998,
+          "observed_checkpoint_span_seconds": 11.75043689999984
+        },
+        {
+          "first_cycle": 990,
+          "last_cycle": 1019,
+          "samples": 30,
+          "first_seconds": 571.0704157999999,
+          "last_seconds": 582.5926164999996,
+          "observed_checkpoint_span_seconds": 11.522200699999757
+        },
+        {
+          "first_cycle": 1040,
+          "last_cycle": 1050,
+          "samples": 11,
+          "first_seconds": 599.3067713,
+          "last_seconds": 604.9245824999998,
+          "observed_checkpoint_span_seconds": 5.617811199999778
+        }
+      ],
+      "returns_below_128MiB": [
+        {
+          "cycle": 100,
+          "case": "unit",
+          "seconds": 58.457791799999995,
+          "reconnect_mode": "duplicate_LOGIN",
+          "previous_private_bytes": 186974208,
+          "private_bytes": 21069824
+        },
+        {
+          "cycle": 150,
+          "case": "unit",
+          "seconds": 87.96954370000003,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 199938048,
+          "private_bytes": 21966848
+        },
+        {
+          "cycle": 200,
+          "case": "unit",
+          "seconds": 117.33349129999988,
+          "reconnect_mode": "duplicate_LOGIN",
+          "previous_private_bytes": 196026368,
+          "private_bytes": 21405696
+        },
+        {
+          "cycle": 260,
+          "case": "unit",
+          "seconds": 153.06724659999963,
+          "reconnect_mode": "duplicate_LOGIN",
+          "previous_private_bytes": 210845696,
+          "private_bytes": 21307392
+        },
+        {
+          "cycle": 311,
+          "case": "links",
+          "seconds": 182.81641979999995,
+          "reconnect_mode": "disconnect",
+          "previous_private_bytes": 212344832,
+          "private_bytes": 17829888
+        },
+        {
+          "cycle": 330,
+          "case": "unit",
+          "seconds": 194.3463595999997,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 216662016,
+          "private_bytes": 20492288
+        },
+        {
+          "cycle": 370,
+          "case": "unit",
+          "seconds": 218.2999477999997,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 214032384,
+          "private_bytes": 20570112
+        },
+        {
+          "cycle": 402,
+          "case": "strings",
+          "seconds": 236.15956259999984,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 224690176,
+          "private_bytes": 16457728
+        },
+        {
+          "cycle": 430,
+          "case": "unit",
+          "seconds": 254.12894740000002,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 216039424,
+          "private_bytes": 22405120
+        },
+        {
+          "cycle": 490,
+          "case": "unit",
+          "seconds": 289.37321159999965,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 227303424,
+          "private_bytes": 21139456
+        },
+        {
+          "cycle": 510,
+          "case": "unit",
+          "seconds": 301.1799802999999,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 230092800,
+          "private_bytes": 21946368
+        },
+        {
+          "cycle": 550,
+          "case": "unit",
+          "seconds": 324.4077693999998,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 235290624,
+          "private_bytes": 24993792
+        },
+        {
+          "cycle": 610,
+          "case": "unit",
+          "seconds": 359.0858109999999,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 241688576,
+          "private_bytes": 24166400
+        },
+        {
+          "cycle": 640,
+          "case": "unit",
+          "seconds": 375.8053467999998,
+          "reconnect_mode": "duplicate_LOGIN",
+          "previous_private_bytes": 249077760,
+          "private_bytes": 18681856
+        },
+        {
+          "cycle": 670,
+          "case": "unit",
+          "seconds": 392.28992149999976,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 250986496,
+          "private_bytes": 22077440
+        },
+        {
+          "cycle": 730,
+          "case": "unit",
+          "seconds": 425.4741475999999,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 259739648,
+          "private_bytes": 23408640
+        },
+        {
+          "cycle": 751,
+          "case": "inheritance",
+          "seconds": 436.4346768999999,
+          "reconnect_mode": "disconnect",
+          "previous_private_bytes": 265613312,
+          "private_bytes": 19046400
+        },
+        {
+          "cycle": 770,
+          "case": "unit",
+          "seconds": 447.4429538999998,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 253804544,
+          "private_bytes": 24186880
+        },
+        {
+          "cycle": 790,
+          "case": "unit",
+          "seconds": 458.36856549999993,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 262758400,
+          "private_bytes": 26451968
+        },
+        {
+          "cycle": 850,
+          "case": "unit",
+          "seconds": 491.08757749999995,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 262090752,
+          "private_bytes": 27361280
+        },
+        {
+          "cycle": 890,
+          "case": "unit",
+          "seconds": 513.40436,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 267329536,
+          "private_bytes": 22204416
+        },
+        {
+          "cycle": 910,
+          "case": "unit",
+          "seconds": 525.3156987999996,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 261513216,
+          "private_bytes": 26484736
+        },
+        {
+          "cycle": 930,
+          "case": "unit",
+          "seconds": 536.8721923999997,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 266235904,
+          "private_bytes": 25460736
+        },
+        {
+          "cycle": 970,
+          "case": "unit",
+          "seconds": 559.7658635999996,
+          "reconnect_mode": "oversized_frame",
+          "previous_private_bytes": 266862592,
+          "private_bytes": 25378816
+        },
+        {
+          "cycle": 1020,
+          "case": "unit",
+          "seconds": 588.0607781999997,
+          "reconnect_mode": "duplicate_LOGIN",
+          "previous_private_bytes": 269692928,
+          "private_bytes": 23838720
+        }
+      ],
+      "return_cases": {
+        "unit": 22,
+        "links": 1,
+        "strings": 1,
+        "inheritance": 1
+      },
+      "return_reconnect_modes": {
+        "duplicate_LOGIN": 5,
+        "oversized_frame": 18,
+        "disconnect": 2
+      }
+    }
+  },
+  "common_measured_cycles": 1041,
+  "common_prefix_by_case": {
+    "unit": {
+      "common_cycles": 105,
+      "median_USE_minus_OFF_MiB": -11.94921875,
+      "last_quarter_median_USE_minus_OFF_MiB": -7.728515625,
+      "OFF_common_first5_median_MiB": 19.41015625,
+      "OFF_common_last5_median_MiB": 260.203125,
+      "USE_common_first5_median_MiB": 18.25,
+      "USE_common_last5_median_MiB": 257.0078125
+    },
+    "strings": {
+      "common_cycles": 312,
+      "median_USE_minus_OFF_MiB": -11.708984375,
+      "last_quarter_median_USE_minus_OFF_MiB": -9.400390625,
+      "OFF_common_first5_median_MiB": 15.66796875,
+      "OFF_common_last5_median_MiB": 260.203125,
+      "USE_common_first5_median_MiB": 15.6484375,
+      "USE_common_last5_median_MiB": 257.0078125
+    },
+    "inheritance": {
+      "common_cycles": 312,
+      "median_USE_minus_OFF_MiB": -11.46875,
+      "last_quarter_median_USE_minus_OFF_MiB": -9.40234375,
+      "OFF_common_first5_median_MiB": 14.80859375,
+      "OFF_common_last5_median_MiB": 260.203125,
+      "USE_common_first5_median_MiB": 15.15234375,
+      "USE_common_last5_median_MiB": 257.0078125
+    },
+    "links": {
+      "common_cycles": 312,
+      "median_USE_minus_OFF_MiB": -11.94921875,
+      "last_quarter_median_USE_minus_OFF_MiB": -9.40234375,
+      "OFF_common_first5_median_MiB": 15.046875,
+      "OFF_common_last5_median_MiB": 260.203125,
+      "USE_common_first5_median_MiB": 15.15625,
+      "USE_common_last5_median_MiB": 257.0078125
+    }
+  },
+  "conclusion": "Memory gate reproduced in OFF: not exclusive to PGO; common lifecycle/allocator attribution needed",
+  "release_blocked": true,
+  "evidence": {
+    "OFF": {
+      "samples_sha256": "7dada566ab2a6b7ebc0754d756ed1e79d3ce63c56d7ab1eb1f8835f0e02e34bb",
+      "status_sha256": "a44d919796354e5ced81ce8651dcb19684d1a9a0075ebf04a9f37ed69d599ef1"
+    },
+    "USE": {
+      "samples_sha256": "8582c21e9e814f3f1ab41d0eb4ca3c5c197b4c5f8024ca264a32adecbd014dac",
+      "status_sha256": "76845ea1838b32c324b20d9e8d5ffd572b8787eb55f5aabfa16b622b25e37123"
+    }
+  },
+  "limits": [
+    "One OFF control compared with an earlier USE run, not randomized replicated memory A/B",
+    "Checkpoint phase is unchanged and singular; no separate after-PUBLISH/after-UNLOAD observations",
+    "Return case/mode associations describe completed cycles, not the operation causing deallocation",
+    "Sample-held durations and high runs do not prove continuous high memory between checkpoints",
+    "Different throughput means different cycle counts over 600 seconds; common-prefix comparison retained"
+  ]
+}

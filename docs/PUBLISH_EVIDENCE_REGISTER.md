@@ -243,3 +243,22 @@ String Batch сокращает Graph API calls 705237→196469, но low-level 
 | [SOURCE_V2_STRING_PATH_REUSE_01](SOURCE_V2_STRING_PATH_REUSE_01.md) | ## Accepted diagnostic A/B (prior to production integration) |
 | [STATE_LAZY_01](STATE_LAZY_01.md) | projection. Production PUBLISH не ускорен этим изолированным экспериментом. |
 | [STRING_INTERN_SLOT_01](STRING_INTERN_SLOT_01.md) | # STRING-INTERN-SLOT-01 — not promoted |
+
+
+## Дополнение 27 октября: TCP-PGO-RELEASE-02
+
+[Новая исправленная TCP-версия](TCP_PGO_RELEASE_02.md), отдельный source snapshot e238ae1 + TCP patch: fresh PGO OFF 1295,784 → USE 1170,279 мс, экономия 125,505 мс / 9,686%, CI 111,355–139,811, 15/15 блоков. Три post-training holdout и correctness PASS. Это не контролируемое сравнение с прежними 1131,12 мс и не замена исходного native baseline 1308,80 мс.
+
+**Общий release gate FAIL:** выбранный пользователем 10-минутный предварительный soak прошёл semantic/connection assertions и 1041 measured cycles, handles drift 0, но private bytes median drift +238,8…241,9 MiB превысил заранее заданные 128 MiB. Причина не установлена; порог после результатов не менялся. Кандидат не продвигается, старый reference frozen. Следующее необходимое диагностическое измерение — идентичный OFF soak, без новых алгоритмов. Данный follow-up добавлен отдельно к исходному каталогу 143 отчётов.
+
+
+## Дополнение 27 октября: SOAK-MEMORY-ATTRIBUTION-01
+
+[Единственный новый OFF control](SOAK_MEMORY_ATTRIBUTION_01.md) без пересборки повторил UnitProXL memory FAIL: +240,906 MiB. Предыдущий USE FAIL сохранён. На общем префиксе 1041 measured cycles последние private median всех fixture: OFF 260,203 MiB, USE 257,008 MiB; первое пересечение — cycle 80 в обеих версиях. Handles 88 в обоих. Изменение конечного окна малых fixture у полного OFF связано с дополнительными 30 циклами, а не с отсутствием высоких уровней.
+
+Вывод: memory phenotype не специфичен для PGO. Следующий диагностический приоритет — общий lifecycle/allocator и отдельные phase snapshots после PUBLISH/UNLOAD/reconnect, не меняя release gate. Такой phase-прогон ещё не выполнен. Новые PGO A/B, training и изменения Parser/G/Runtime не требуются по текущим данным. Release остаётся заблокированным; точная причина удержания памяти неизвестна.
+
+
+## Дополнение 27 октября: SOAK-MEMORY-PHASE-01
+
+[Phase diagnosis PASS](SOAK_MEMORY_PHASE_01.md): frozen OFF, 111 cycles / 888 external snapshots / 4 VirtualQueryEx maps. На cycle 80 private memory выросла 24,78→159,66 MiB уже после PUBLISH и осталась 151,52 после UNLOAD/reconnect. На cycle 100 private memory снизилась 159,61→25,17 MiB уже после PUBLISH; на cycle 110 повторный rise. В high/low картах mapped/image commit неизменен, fixed SHM base MEM_FREE; меняется committed часть тех же private reservations. Это локализует интервал, но не heap/C++ owner. Следующий шаг — live-allocation attribution без allocator intervention. Release остаётся BLOCKED, старые gate FAIL не заменяются diagnostic PASS.

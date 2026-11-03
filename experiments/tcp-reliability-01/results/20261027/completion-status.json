@@ -1,0 +1,34 @@
+{
+  "status": "PASS within tested scope",
+  "date": "2026-10-27",
+  "model": "Name-only LOGIN, trusted LAN without authentication, explicitly selected by user",
+  "ctest_suites_passed": 6,
+  "integration_result": "integration-03/result.json",
+  "reference_unchanged": true,
+  "binary_hashes": {
+    "reference": "98e8c489ff1b6d03f4058151ef6833d3750289e3483656e49d76c2c5a6617bcf",
+    "candidate": "b041181617339c00218637e3aa052a72be44b7656e40ed8c6e787daee2bb2764"
+  },
+  "new_version_pgo": "OFF; fresh training and release validation required",
+  "production_fault_hooks": false,
+  "source_sha256": {
+    "CMakeLists.txt": "1f82c29ce2a9939d8090a88d27ea590d23490924d5933107b1a97ee0458886d8",
+    "server_engine/server.cpp": "dcdc75f0049af54adc2f43d1cb3ea68e9363e5883238e1c6b2b02501c529859b",
+    "server_engine/communication/communication.cpp": "29bc52dde6707bed461ede303aa300cc92498f974bbcfff8a6c7022e11eb0ce4",
+    "server_engine/communication/communication.hpp": "98cd6b8642bb28a36e1d12d584e6e791f9e0fb260675ba520f63f72c29ca8324",
+    "server_engine/communication/server_request_message.hpp": "d7ae83ae36ed6ff7857904ecdc96b66f91a75be5445777fc349009bea6f152b2",
+    "server_engine/communication/connection/communication_connection.cpp": "326f84abc9319d03da44ee493785cf4d307d57ec6eb667bd6d9eac527336211f",
+    "server_engine/communication/tcp/tcp_endpoint.cpp": "f2b724091e57e686b88ea2bdb60cceb3a57511cd33af1771c530285ba94b4dee",
+    "server_engine/communication/tcp/tcp_endpoint.hpp": "447808ac213dba97063ee1e01836f3e2e70d1c9a03e624e427ec0f5c3f98bce8",
+    "server_engine/communication/testing/fault_injection.hpp": "a7438b01b194dd3c691074d569689a6887e453353010187f3ce1128efe7ff5d0",
+    "tests/communication_regression_tests.cpp": "4a868ee8a7aca5ca311714996c0f64dea570a73aeaf5b346d3c7208f5d629a1a"
+  },
+  "audit_sha256": "76163bec0835dcc1a253c93da31febd66b92bc351a1f952e146e68896b644580",
+  "limitations": [
+    "No credential/RBAC layer, intentional trusted-network model",
+    "No long-duration soak, only 50 lifecycle cycles",
+    "Synthetic per-site faults, not global exhausted-memory certification",
+    "Terminal worker/poll failure closes listener; restart required; closed registry entries can await next registry operation if close message allocation failed",
+    "No new performance measurement or PGO training"
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "strings": {
+    "project": "C:\\Boris\\ServerEngineV4\\build\\tcp-pgo-release-02\\holdout\\strings\\project.json",
+    "expected": {
+      "item0.value": 0,
+      "item2047.value": 53
+    },
+    "inputs": {
+      "project.json": "7c14b78b4367f63e379db78a025b849915eeecd4eb7d7acedaf709d92052fdf7",
+      "source.cpp": "aa470293f940707287db4a808039e645a76ead67c537b53c21b10b6adbafe7d1",
+      "types.h": "be037fadc8713403250a3977b42d61f82ae3849f436ee2c5ff1da2e6e2eca5d2"
+    }
+  },
+  "inheritance": {
+    "project": "C:\\Boris\\ServerEngineV4\\build\\tcp-pgo-release-02\\holdout\\inheritance\\project.json",
+    "expected": {
+      "item0.base": 1,
+      "item0.middle": 2,
+      "item2047.leaf": 2050
+    },
+    "inputs": {
+      "project.json": "92ae316b29c191655f655696b0f7c3cf8f66e12b9a967f72f1c72f59f0bf5ea2",
+      "source.cpp": "6d62b1687c5c4d61a837c2475fd3b8ac7cf4c56f95a2fccb22dc5f6dda5324a3",
+      "types.h": "be0eead2e5e5a3a4b9fc2b4a8e4da566e6119e9b9d1085d21969cc90b95c0ecb"
+    }
+  },
+  "links": {
+    "project": "C:\\Boris\\ServerEngineV4\\build\\tcp-pgo-release-02\\holdout\\links\\project.json",
+    "expected": {
+      "pair0.ref.value": 17,
+      "pair0.child.value": 3,
+      "other2047.value": 2064
+    },
+    "inputs": {
+      "project.json": "40825852c12f60795cf15e50c10fa9e1822500700e57ff14442def88b8aca1d1",
+      "source.cpp": "ceccaf0d9b209365e41043daf73067a4a4357bc5c75b0bd86535a10c5f399e8a",
+      "types.h": "374ea7f8babdd38102bd5a0b4f56edec5a620b1248440667a12f03bd0e09ff68"
+    }
+  }
+}

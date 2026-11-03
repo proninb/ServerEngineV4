@@ -1,0 +1,49 @@
+{
+  "status": "FAIL",
+  "requested_seconds": 600,
+  "private_growth_limit_bytes": 134217728,
+  "handle_growth_limit": 16,
+  "binary_sha256": "6cd312cbc030765718ad0e2fb847723d97efc0395455052cc8a8522843cc3429",
+  "scope": "Preliminary 10-minute sample, synthetic holdouts plus UnitProXL; not long-duration certification",
+  "elapsed_seconds": 604.7624249999999,
+  "counts": {
+    "duplicate_login_closed": 271,
+    "prelogin_shutdown_denied": 1081,
+    "cycles": 1081,
+    "partial_frame_reset": 270,
+    "oversize_frame_closed": 270,
+    "disconnect": 270,
+    "measured_cycles": 1071
+  },
+  "latest_memory": {
+    "cycle": 1080,
+    "case": "unit",
+    "elapsed_seconds": 604.7615993999998,
+    "measured": true,
+    "private_bytes": 273600512,
+    "working_set_bytes": 224575488,
+    "peak_ws_bytes": 2710523904,
+    "handles": 88,
+    "page_faults": 152266198
+  },
+  "pid": 7784,
+  "quiescent_last5_minus_first5_by_case": {
+    "strings": {
+      "private_bytes": 16699392,
+      "handles": 0
+    },
+    "inheritance": {
+      "private_bytes": 17600512,
+      "handles": 0
+    },
+    "links": {
+      "private_bytes": 17391616,
+      "handles": 0
+    },
+    "unit": {
+      "private_bytes": 252608512,
+      "handles": 0
+    }
+  },
+  "error": "AssertionError({'strings': {'private_bytes': 16699392, 'handles': 0}, 'inheritance': {'private_bytes': 17600512, 'handles': 0}, 'links': {'private_bytes': 17391616, 'handles': 0}, 'unit': {'private_bytes': 252608512, 'handles': 0}})"
+}

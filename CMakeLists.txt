@@ -1111,6 +1111,9 @@ if(BUILD_TESTING)
         target_compile_options(ServerEngineV4CommunicationRegressionTests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
 
+    target_compile_definitions(ServerEngineV4CommunicationRegressionTests PRIVATE
+        CW_COMMUNICATION_FAULT_INJECTION=1)
+
     add_test(
         NAME communication_regressions
         COMMAND ServerEngineV4CommunicationRegressionTests

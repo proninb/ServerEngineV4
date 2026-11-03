@@ -1,0 +1,12 @@
+{
+  "experiment": "SOAK-MEMORY-ATTRIBUTION-01",
+  "scope": "One new OFF 600-second control; earlier USE evidence retained",
+  "new_training": false,
+  "new_build": false,
+  "pgo_ab_repeated": false,
+  "source_changes": false,
+  "new_phase_checkpoints": false,
+  "allocator_changes": false,
+  "forced_trim": false,
+  "release_blocked": true
+}

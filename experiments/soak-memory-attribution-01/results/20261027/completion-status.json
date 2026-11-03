@@ -1,0 +1,25 @@
+{
+  "experiment": "SOAK-MEMORY-ATTRIBUTION-01",
+  "date": "2026-10-27",
+  "status": "measurement_and_series_comparison_complete",
+  "new_OFF_gate": "FAIL",
+  "prior_USE_gate": "FAIL preserved",
+  "release_blocked": true,
+  "source_fixture_PGD_and_prior_release_evidence_unchanged": true,
+  "PGO_AB_repeated": false,
+  "new_build_or_training": false,
+  "phase_snapshots_added": false,
+  "conclusion": "Memory gate reproduced in OFF: not exclusive to PGO; common lifecycle/allocator attribution needed",
+  "evidence_sha256": {
+    "preflight.json": "c198d6009d828896a423ce6847ba078e997f052747eba768e2906d1f5ec3fc1f",
+    "run-notes.json": "5586930dab9e6570b71cb24fbf9c5fb3cf6c503d965b8adb7ceffe4522689ebe",
+    "harness-selection.patch": "9f8be1288d310461d8d4020e35bc422d36b4b8139d1a3e271c7f4c418b7e8155",
+    "soak-use-original.py": "410c3fa8f6ab9e2b34fc2322ca3fda34f0b00125aa80174b32dc2b6f535194ac",
+    "soak-off-executed.py": "0dc47ba2092b68eb40a14732fa2bb042b0ce2cf225963a1553bf0d53cfa32b6a",
+    "analysis.json": "a4bcdda7a8fcb2d132890d11aefa26fddc18fcd61a66dc39a1421c4e4dd46f6f",
+    "aligned-cycles.csv": "d340037bb294cebd202c392d1366816ecf621adfe1b63d02c8f24f4e882fa630",
+    "memory-timeline.svg": "522a7608284a73a356b012f8a0a11fa4cea9053f378253f37e718e09865425e2"
+  },
+  "off_status_sha256": "a44d919796354e5ced81ce8651dcb19684d1a9a0075ebf04a9f37ed69d599ef1",
+  "off_samples_sha256": "7dada566ab2a6b7ebc0754d756ed1e79d3ce63c56d7ab1eb1f8835f0e02e34bb"
+}

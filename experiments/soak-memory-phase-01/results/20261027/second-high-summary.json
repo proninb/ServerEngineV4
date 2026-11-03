@@ -1,0 +1,81 @@
+{
+  "label": "second-high",
+  "checkpoint": {
+    "cycle": 110,
+    "fixture": "unit",
+    "stage": "after_reconnect_get_state",
+    "warmup": false,
+    "timestamp_utc": "2026-10-27T18:45:40.508346+00:00",
+    "elapsed_seconds": 73.11815780000006,
+    "private_bytes": 177606656,
+    "working_set_bytes": 158609408,
+    "peak_ws_bytes": 2634092544,
+    "handles": 88,
+    "page_faults": 17018682
+  },
+  "query_ms": 3.1215,
+  "regions": 459,
+  "memory_before": {
+    "private_bytes": 177606656,
+    "working_set_bytes": 158609408,
+    "peak_ws_bytes": 2634092544,
+    "handles": 88,
+    "page_faults": 17018682
+  },
+  "memory_after": {
+    "private_bytes": 177606656,
+    "working_set_bytes": 158609408,
+    "peak_ws_bytes": 2634092544,
+    "handles": 88,
+    "page_faults": 17018682
+  },
+  "totals_bytes": {
+    "MEM_FREE/undefined": 140732864802816,
+    "MEM_COMMIT/MEM_PRIVATE": 176287744,
+    "COMMIT_TOTAL": 197414912,
+    "MEM_RESERVE/MEM_PRIVATE": 4424777728,
+    "MEM_COMMIT/MEM_MAPPED": 1683456,
+    "MEM_RESERVE/MEM_MAPPED": 1032192,
+    "MEM_COMMIT/MEM_IMAGE": 19443712,
+    "MEM_RESERVE/MEM_IMAGE": 262144
+  },
+  "committed_private_by_allocation_base": {
+    "0x7ffe0000": 4096,
+    "0x7ffe9000": 4096,
+    "0xa36a00000": 20480,
+    "0xa36c00000": 118784,
+    "0xa37000000": 32768,
+    "0x144138c0000": 8192,
+    "0x14413980000": 327680,
+    "0x14413a80000": 1044480,
+    "0x14413d40000": 61440,
+    "0x14413d50000": 8192,
+    "0x14413e20000": 1044480,
+    "0x14413f20000": 2093056,
+    "0x14414250000": 3145728,
+    "0x14414920000": 6217728,
+    "0x14415120000": 8773632,
+    "0x144160f0000": 9445376,
+    "0x144170c0000": 7634944,
+    "0x14418090000": 9019392,
+    "0x14419ea0000": 9871360,
+    "0x1441bee0000": 24576,
+    "0x1441c300000": 13086720,
+    "0x14425960000": 14487552,
+    "0x14428ce0000": 8359936,
+    "0x14429cb0000": 13078528,
+    "0x1442ac80000": 12087296,
+    "0x1442bc50000": 13025280,
+    "0x1442cc20000": 12206080,
+    "0x1442dbf0000": 12263424,
+    "0x1442ebc0000": 14467072,
+    "0x1442fb90000": 4321280,
+    "0x7ff5d2f90000": 4096
+  },
+  "fixed_shm_probe": {
+    "address": "0x0000010000000000",
+    "state": "MEM_FREE",
+    "type": "undefined"
+  },
+  "limits": "Non-atomic read-only region query; no page content/heap owner/live-object attribution; COW pages can retain mapped/image type"
+}

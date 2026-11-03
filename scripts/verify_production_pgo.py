@@ -19,7 +19,12 @@ def contained(root, relative):
 
 def verify(bundle, source):
     status = json.loads((bundle / "completion-status.json").read_text(encoding="utf-8"))
-    if status["status"] != "completed_pgo_benefit_confirmed_for_trained_UnitProXL_server":
+    if status["status"] == "tcp_pgo_release_02_soak_or_release_gate_failed":
+        raise ValueError("Release-02 preliminary soak/release gate failed; candidate not accepted")
+    if status["status"] not in {
+        "completed_pgo_benefit_confirmed_for_trained_UnitProXL_server",
+        "completed_tcp_pgo_release_02_preliminary",
+    }:
         raise ValueError("Experiment is incomplete or has no accepted performance result")
     for relative, expected in status["evidence_hashes"].items():
         if digest(contained(bundle, relative)) != expected:
@@ -41,6 +46,32 @@ def verify(bundle, source):
     validation = json.loads((bundle / "validation.json").read_text(encoding="utf-8"))
     if validation["ordinary"] != validation["pgo"]:
         raise ValueError("Validation parity failed")
+    if set(status["binary_hashes"]) != {"ordinary", "pgo"}:
+        raise ValueError("Both measured arms are required")
+    if status["status"] == "completed_tcp_pgo_release_02_preliminary":
+        required = {"driver-status.json", "tcp-regressions.log", "tcp-integration/result.json",
+            "holdout/manifest.json", "holdout-results/summary.json", "holdout-results/samples.json",
+            "soak-01/status.json", "soak-01/samples.jsonl"}
+        if not required.issubset(status["evidence_hashes"]):
+            raise ValueError("Release-02 evidence coverage is incomplete")
+        driver = json.loads((bundle / "driver-status.json").read_text(encoding="utf-8"))
+        tcp = json.loads((bundle / "tcp-integration/result.json").read_text(encoding="utf-8"))
+        holdout = json.loads((bundle / "holdout-results/summary.json").read_text(encoding="utf-8"))
+        soak = json.loads((bundle / "soak-01/status.json").read_text(encoding="utf-8"))
+        if not driver["completed"] or "tcp-regressions" not in driver["stages"]:
+            raise ValueError("TCP/build validation incomplete")
+        if tcp["status"] != "PASS" or not tcp["failed_login_pipelined_shutdown_denied"]:
+            raise ValueError("TCP integration failed")
+        if summary["metrics"]["publish_request_ms"]["bootstrap_mean95"][0] <= 0:
+            raise ValueError("PGO performance gate failed")
+        if holdout["correctness"] != "PASS" or holdout["calls"] != 180:
+            raise ValueError("Holdout validation incomplete")
+        if any(case["significant_regression_over_5_percent"] for case in holdout["cases"].values()):
+            raise ValueError("Holdout regression gate failed")
+        if soak["status"] != "PASS_PRELIMINARY" or soak["elapsed_seconds"] < 600:
+            raise ValueError("Preliminary soak incomplete or failed")
+        if soak["binary_sha256"] != status["binary_hashes"]["pgo"]:
+            raise ValueError("Soak used another executable")
     for arm, expected in status["binary_hashes"].items():
         if summary["binary_hashes"][arm] != expected:
             raise ValueError("Binary manifest mismatch: " + arm)
@@ -50,6 +81,7 @@ def verify(bundle, source):
             "pgo_executable": str(bundle / "ab-01/binaries/pgo/ServerEngineV4.exe"),
             "pgo_sha256": status["binary_hashes"]["pgo"],
             "deployment_approved": False,
+            "preliminary_release_02": status["status"] == "completed_tcp_pgo_release_02_preliminary",
             "scope": "Exact tested images and source snapshot; no retraining, toolchain or deployment approval"}
 
 

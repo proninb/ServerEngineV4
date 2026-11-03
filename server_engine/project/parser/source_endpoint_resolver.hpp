@@ -38,6 +38,28 @@ struct source_endpoint_result final {
 
 class source_endpoint_resolver final {
 public:
+#ifdef CW_SOURCE_INHERITANCE_ARENA_AUDIT
+    // Diagnostic builds only: counters, never per-call clocks. Rebuild every
+    // translation unit using this class with the same definition (class layout).
+    struct arena_audit_snapshot {
+        std::uint64_t requests = 0, hits = 0, overwritten_slots = 0;
+        std::uint64_t retired_base_steps = 0;
+        std::size_t live_slots = 0, live_base_steps = 0;
+        std::size_t stored_base_steps = 0, capacity_base_steps = 0;
+    };
+    [[nodiscard]] arena_audit_snapshot inheritance_arena_audit() const noexcept {
+        auto result = arena_audit;
+        for (const auto& entry : member_transitions) {
+            if (entry.key && entry.member) {
+                ++result.live_slots;
+                result.live_base_steps += entry.base_count;
+            }
+        }
+        result.stored_base_steps = transition_bases.size();
+        result.capacity_base_steps = transition_bases.capacity();
+        return result;
+    }
+#endif
     enum class failure { none, inherited_depth, member_missing, definition_missing,
         object_missing, array_required, index_out_of_range, record_required, endpoint_depth };
     explicit source_endpoint_resolver(const graph& value,
@@ -313,6 +335,9 @@ private:
     [[nodiscard]] bool cached_transition(type_handle record, string_id name,
         member_index& member, type_handle& owner, type_ref& value_type,
         std::vector<endpoint_path_step>& ancestry) noexcept {
+#ifdef CW_SOURCE_INHERITANCE_ARENA_AUDIT
+        ++arena_audit.requests;
+#endif
 #ifdef CW_SOURCE_TYPE_PREPARE_AUDIT
         const auto key = transition_key(record, name);
         auto& counts = detail::source_resolver_counts;
@@ -348,6 +373,9 @@ private:
             } catch (...) { return false; }
         }
         member = entry.member;
+#ifdef CW_SOURCE_INHERITANCE_ARENA_AUDIT
+        ++arena_audit.hits;
+#endif
 #ifdef CW_SOURCE_TYPE_PREPARE_AUDIT
         ++counts.member_hits;
         counts.copied_base_steps += entry.base_count;
@@ -381,6 +409,13 @@ private:
             } catch (...) { return; }
         }
         const auto key = transition_key(record, name);
+#ifdef CW_SOURCE_INHERITANCE_ARENA_AUDIT
+        const auto& previous = member_transitions[transition_slot(key)];
+        if (previous.key && previous.member) {
+            ++arena_audit.overwritten_slots;
+            arena_audit.retired_base_steps += previous.base_count;
+        }
+#endif
         member_transitions[transition_slot(key)] = {
             key, member, owner, value_type, begin,
             static_cast<std::uint32_t>(base_steps.size())};
@@ -421,5 +456,8 @@ private:
     std::vector<endpoint_path_step> transition_bases;
     bool transition_allocation_attempted = false;
     bool depth_exceeded = false;
+#ifdef CW_SOURCE_INHERITANCE_ARENA_AUDIT
+    arena_audit_snapshot arena_audit{};
+#endif
 };
 } // namespace cw::server

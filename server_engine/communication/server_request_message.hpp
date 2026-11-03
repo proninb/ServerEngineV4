@@ -16,6 +16,7 @@
 namespace cw::server {
 
 struct server_response;
+class communication_connection;
 
 // Direct response target for one queued request.
 class server_request_origin final {
@@ -111,6 +112,10 @@ struct server_request_message {
 
     // Origin/application metadata evaluated by Server Policy.
     request_identity identity;
+
+    // Optional live session gate. The origin lifetime keeps this pointer alive.
+    // Rechecked by Server after dequeue, since LOGIN/close may precede execution.
+    communication_connection* connection = nullptr;
 
     // Direct response destination; not used for access decisions.
     server_request_origin origin;

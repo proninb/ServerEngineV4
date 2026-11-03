@@ -1,0 +1,17 @@
+Test project C:/Boris/ServerEngineV4/build/tcp-pgo-release-02/compiler
+    Start  7: server_policy
+1/6 Test  #7: server_policy ....................   Passed    0.01 sec
+    Start 10: client_session
+2/6 Test #10: client_session ...................   Passed    0.01 sec
+    Start 11: communication_protocol
+3/6 Test #11: communication_protocol ...........   Passed    0.01 sec
+    Start 12: communication_connection_core
+4/6 Test #12: communication_connection_core ....   Passed    0.01 sec
+    Start 13: communication_control
+5/6 Test #13: communication_control ............   Passed    0.01 sec
+    Start 14: communication_regressions
+6/6 Test #14: communication_regressions ........   Passed    1.02 sec
+
+100% tests passed out of 6
+
+Total Test time (real) =   1.09 sec

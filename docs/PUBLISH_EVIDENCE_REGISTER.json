@@ -2266,5 +2266,28 @@
       "sha256": "250b76e4fd0f3c2241c88534d84820564668830bb74fa4130a74709bbafd3a07"
     }
   ],
-  "updated_on": "2026-10-27"
+  "updated_on": "2026-10-27",
+  "follow_up_reports": [
+    {
+      "path": "docs/TCP_PGO_RELEASE_02.md",
+      "title": "# TCP-PGO-RELEASE-02 — performance PASS, release gate FAIL",
+      "sha256": "174c5050755e4e63def123de1aabca92804efc11d3db251e12783ba518e50c3a",
+      "current_decision": "PGO wall-time and correctness PASS; preliminary soak memory gate FAIL; release candidate not accepted",
+      "completed_evidence": "build/tcp-pgo-release-02/completion-status.json"
+    },
+    {
+      "path": "docs/SOAK_MEMORY_ATTRIBUTION_01.md",
+      "title": "# SOAK-MEMORY-ATTRIBUTION-01 — OFF воспроизводит высокий memory level",
+      "sha256": "0860bc10b5dd58e8c35a9008942180203751212be23ce88e86de1cae822609c7",
+      "current_decision": "OFF memory gate FAIL reproduces phenotype without PGO; common lifecycle/allocator attribution needed; release remains blocked",
+      "completed_evidence": "build/soak-memory-attribution-01/analysis.json"
+    },
+    {
+      "path": "docs/SOAK_MEMORY_PHASE_01.md",
+      "title": "# SOAK-MEMORY-PHASE-01 — переходы локализованы в интервалах PUBLISH",
+      "sha256": "1fca91efa2624fcb6b4c364f7ac86103aaa7c1973a2a0ef7bd4b6b04ea635478",
+      "current_decision": "Phase diagnosis PASS; large private commit rise/drop bracketed by PUBLISH; owner unknown; release blocked",
+      "completed_evidence": "build/soak-memory-phase-01/completion-status.json"
+    }
+  ]
 }
