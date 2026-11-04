@@ -1,9 +1,33 @@
 #include "task_manager.hpp"
+#include "task_perf_probe.hpp"
 #include <future>
+#include <chrono>
 #include <unordered_map>
 #include <utility>
+#include <cstdio>
+#include <cstdlib>
+#include <mutex>
 
 namespace cw::server::task_runtime {
+// TASK_SCHEDULER_PERF_04: opt-in per-task trace; time is wall-clock, including IPC.
+namespace {
+void task_trace(const char* mode, std::uint64_t cycle, const std::string& id,
+                const char* event, long long duration_us = 0) noexcept {
+    static std::mutex trace_mutex;
+    const char* path = std::getenv("TASK_SCHEDULER_TASK_CSV");
+    if (!path || !*path) return;
+    std::lock_guard<std::mutex> lock(trace_mutex);
+    FILE* file = nullptr;
+    if (fopen_s(&file, path, "a+") != 0 || !file) return;
+    std::fseek(file, 0, SEEK_END);
+    if (std::ftell(file) == 0)
+        std::fputs("mode,cycle,task,event,duration_us\n", file);
+    // Task IDs are configuration identifiers, not arbitrary CSV content.
+    std::fprintf(file, "%s,%llu,%s,%s,%lld\n", mode,
+                 static_cast<unsigned long long>(cycle), id.c_str(), event, duration_us);
+    std::fclose(file);
+}
+}
 manager::~manager() { terminate(); }
 
 bool manager::start(task_configuration value,
@@ -55,6 +79,7 @@ bool manager::start(task_configuration value,
 }
 
 bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
+    const auto perf_start = perf::clock::now();
     if (!started) { error = "Task Manager not started"; return false; }
     const auto count = configuration.tasks.size();
     std::vector<bool> scheduled(count, false);
@@ -64,6 +89,8 @@ bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
         const auto& task = configuration.tasks[i];
         scheduled[i] = task.enabled && task_is_scheduled(task.settings, cycle, frozen);
     }
+    for (std::size_t i = 0; i < count; ++i)
+        if (scheduled[i]) task_trace("LOCKSTEP", cycle, configuration.tasks[i].id, "scheduled");
     // Each wave contains independent tasks. Join every worker before the next wave.
     std::vector<bool> completed(count, false);
     std::size_t remaining = 0;
@@ -84,13 +111,20 @@ bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
         std::vector<std::future<outcome>> pending;
         pending.reserve(ready.size());
         for (const auto index : ready) {
+            task_trace("LOCKSTEP", cycle, configuration.tasks[index].id, "dispatched");
             pending.push_back(std::async(std::launch::async, [this, index, cycle] {
                 outcome result{false, {}};
+                const auto start = std::chrono::steady_clock::now();
                 result.ok = workers[index].child->run(
                     cycle, configuration.tasks[index].settings.calls, result.error);
+                const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - start).count();
+                task_trace("LOCKSTEP", cycle, configuration.tasks[index].id,
+                           result.ok ? "completed" : "failed", elapsed);
                 return result;
             }));
         }
+        const auto barrier_start = perf::clock::now();
         bool success = true;
         for (std::size_t i = 0; i < pending.size(); ++i) {
             const auto result = pending[i].get();
@@ -99,14 +133,154 @@ bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
                 success = false;
             }
         }
+        perf::record("barrier_wait", cycle, barrier_start);
         // All in-flight requests are finished before failure is reported.
         if (!success) return false;
         for (const auto index : ready) { completed[index] = true; --remaining; }
     }
+    perf::record("manager_tick", cycle, perf_start);
     return true;
 }
 
+bool manager::reap(std::string& error) {
+    using namespace std::chrono_literals;
+    bool success = true;
+    for (std::size_t i = 0; i < workers.size(); ++i) {
+        auto& worker = workers[i];
+        if (!worker.busy || worker.pending.wait_for(0ms) != std::future_status::ready) continue;
+        const auto result = worker.pending.get();
+        worker.busy = false;
+        if (!result.first && success) {
+            error = "Task '" + configuration.tasks[i].id + "': " + result.second;
+            success = false;
+        }
+    }
+    return success;
+}
+
+bool manager::tick_overlap(std::uint64_t cycle, bool frozen, std::string& error) {
+    if (!started) { error = "Task Manager not started"; return false; }
+    if (!reap(error)) return false;
+
+    const auto count = configuration.tasks.size();
+    std::unordered_map<std::string, std::size_t> ids;
+    std::vector<bool> scheduled(count, false);
+    std::vector<bool> dispatched(count, false);
+    for (std::size_t i = 0; i < count; ++i) {
+        ids.emplace(configuration.tasks[i].id, i);
+        scheduled[i] = configuration.tasks[i].enabled &&
+            task_is_scheduled(configuration.tasks[i].settings, cycle, frozen);
+    }
+
+    // Admit each scheduled dependency component atomically. If any member is
+    // still busy, skip the entire component for this cycle; never dispatch A
+    // without its scheduled dependent B (or vice versa).
+    std::vector<bool> eligible = scheduled;
+    for (std::size_t i = 0; i < count; ++i) {
+        if (workers[i].busy) eligible[i] = false;
+        if (!scheduled[i]) continue;
+        for (const auto& name : configuration.tasks[i].dependencies) {
+            const auto dep = ids.at(name);
+            if (!scheduled[dep] && workers[dep].busy) eligible[i] = false;
+        }
+    }
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (!scheduled[i]) continue;
+            for (const auto& name : configuration.tasks[i].dependencies) {
+                const auto dep = ids.at(name);
+                if (!scheduled[dep]) continue;
+                if (!eligible[i] || !eligible[dep]) {
+                    if (eligible[i] || eligible[dep]) changed = true;
+                    eligible[i] = false;
+                    eligible[dep] = false;
+                }
+            }
+        }
+    }
+
+    for (std::size_t i = 0; i < count; ++i) {
+        if (!scheduled[i]) continue;
+        task_trace("OVERLAP", cycle, configuration.tasks[i].id, "scheduled");
+        if (!eligible[i]) task_trace("OVERLAP", cycle, configuration.tasks[i].id, "skipped_busy");
+    }
+
+    // Retain the futures for this cycle. A dependent waits inside its own
+    // worker, not on the server scheduler thread.
+    std::vector<std::shared_future<std::pair<bool, std::string>>> current(count);
+    for (const auto index : configuration.execution_order) {
+        if (!eligible[index]) continue;
+        auto& worker = workers[index];
+        task_trace("OVERLAP", cycle, configuration.tasks[index].id, "dispatched");
+
+        bool blocked = false;
+        std::vector<std::shared_future<std::pair<bool, std::string>>> dependencies;
+        for (const auto& name : configuration.tasks[index].dependencies) {
+            const auto dep = ids.at(name);
+            if (scheduled[dep]) {
+                // A same-cycle dependency must be dispatched in this cycle.
+                if (!dispatched[dep]) { blocked = true; break; }
+                dependencies.push_back(current[dep]);
+            } else if (workers[dep].busy) {
+                // Do not consume an incomplete prior-cycle dependency.
+                blocked = true;
+                break;
+            }
+        }
+        if (blocked) continue;
+
+        try {
+            worker.pending = std::async(std::launch::async,
+                [this, index, cycle, dependencies = std::move(dependencies)]() {
+                    const auto dependency_start = std::chrono::steady_clock::now();
+                    for (const auto& dependency : dependencies) {
+                        const auto result = dependency.get();
+                        if (!result.first)
+                            return std::make_pair(false,
+                                std::string("Dependency failed: ") + result.second);
+                    }
+                    const auto dependency_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - dependency_start).count();
+                    task_trace("OVERLAP", cycle, configuration.tasks[index].id,
+                               "dependency_wait", dependency_us);
+                    std::string local;
+                    const auto run_start = std::chrono::steady_clock::now();
+                    const bool ok = workers[index].child->run(
+                        cycle, configuration.tasks[index].settings.calls, local);
+                    const auto run_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - run_start).count();
+                    task_trace("OVERLAP", cycle, configuration.tasks[index].id,
+                               ok ? "completed" : "failed", run_us);
+                    return std::make_pair(ok, std::move(local));
+                }).share();
+            worker.busy = true;
+            current[index] = worker.pending;
+            dispatched[index] = true;
+        } catch (const std::exception& ex) {
+            error = "Failed to dispatch Task '" + configuration.tasks[index].id +
+                "': " + ex.what();
+            return false;
+        } catch (...) {
+            error = "Failed to dispatch Task '" + configuration.tasks[index].id + "'";
+            return false;
+        }
+    }
+    return true;
+}
+
+void manager::drain() noexcept {
+    for (auto& worker : workers) {
+        if (worker.busy) {
+            try { (void)worker.pending.get(); } catch (...) {}
+            worker.busy = false;
+        }
+    }
+}
+
 bool manager::stop(std::string& error) {
+    drain();
     bool success = true;
     for (auto it = configuration.execution_order.rbegin();
          it != configuration.execution_order.rend(); ++it) {
@@ -123,6 +297,7 @@ bool manager::stop(std::string& error) {
 }
 
 void manager::terminate() noexcept {
+    drain();
     for (auto& worker : workers) if (worker.child) worker.child->terminate();
     workers.clear();
     configuration = {};

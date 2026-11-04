@@ -7,7 +7,9 @@
 #include "task_process.hpp"
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <memory>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -27,12 +29,17 @@ public:
                std::uint32_t timeout_ms, const shm_attachment& attachment,
                std::string& error);
     bool tick(std::uint64_t cycle, bool frozen, std::string& error);
+    bool tick_overlap(std::uint64_t cycle, bool frozen, std::string& error);
+    bool reap(std::string& error);
+    void drain() noexcept;
     bool stop(std::string& error);
     void terminate() noexcept;
     [[nodiscard]] bool active() const noexcept { return started; }
 private:
     struct worker {
         std::unique_ptr<process> child;
+        std::shared_future<std::pair<bool, std::string>> pending;
+        bool busy = false;
     };
     task_configuration configuration;
     std::vector<worker> workers;

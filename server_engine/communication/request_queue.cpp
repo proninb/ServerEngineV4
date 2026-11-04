@@ -6,6 +6,14 @@
  */
 #include "request_queue.hpp"
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+
 #include <algorithm>
 #include <filesystem>
 #include <limits>
@@ -54,6 +62,18 @@ void add_elements(
         total);
 }
 
+}
+
+request_queue::~request_queue() noexcept {
+    if (wake_event) CloseHandle(wake_event);
+}
+
+void* request_queue::native_wake_event() noexcept {
+    std::lock_guard lock(mutex);
+    if (!wake_event) {
+        wake_event = CreateEventW(nullptr, TRUE, !queue.empty() || !accepting, nullptr);
+    }
+    return wake_event;
 }
 
 std::size_t request_queue::estimate_message_bytes(
@@ -183,6 +203,7 @@ request_queue_push_result request_queue::try_push(
                 failed;
         }
 
+        if (wake_event) SetEvent(wake_event);
         if (!close_control) {
             ++accounted_messages;
             accounted_bytes += bytes;
@@ -213,6 +234,7 @@ void request_queue::stop_accepting_and_discard() noexcept {
         accounted_messages = 0;
         accounted_bytes = 0;
         discarded.swap(queue);
+        if (wake_event) SetEvent(wake_event);
     }
 
     condition.notify_all();
@@ -245,6 +267,7 @@ bool request_queue::wait_pop(
     }
 
     queue.pop();
+    if (wake_event && queue.empty() && accepting) ResetEvent(wake_event);
     return true;
 }
 
@@ -282,6 +305,7 @@ bool request_queue::wait_pop_until(
     }
 
     queue.pop();
+    if (wake_event && queue.empty() && accepting) ResetEvent(wake_event);
     return true;
 }
 

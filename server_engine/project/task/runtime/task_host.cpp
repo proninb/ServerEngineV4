@@ -1,67 +1,96 @@
 #include "task_host.hpp"
-#include "task_protocol.hpp"
+#include "task_control.hpp"
+#include "task_trace.hpp"
 #include "../../../fixed_shared_memory.hpp"
+#include <Windows.h>
 #include <cstring>
 #include <limits>
-#include <Windows.h>
+#include <string>
+#include <cwchar>
 namespace cw::server::task_runtime {
 namespace {
 cw::server::fixed_shared_memory attached_mapping;
-bool read_bytes(HANDLE h, void* data, unsigned count) {
-    char* p=static_cast<char*>(data);
-    while(count) { DWORD got=0; if(!ReadFile(h,p,count,&got,nullptr)||!got) return false; p+=got; count-=got; }
-    return true;
-}
-bool read_exact(HANDLE h,message& m) {
-    char* p=reinterpret_cast<char*>(&m); unsigned remaining=sizeof(m);
-    while(remaining) { DWORD got=0; if(!ReadFile(h,p,remaining,&got,nullptr)||!got) return false; p+=got; remaining-=got; }
-    return true;
-}
-bool send(HANDLE h,command action,std::uint64_t cycle=0,std::uint32_t status=0) {
-    message reply{magic,version,action,0,cycle,0,status}; DWORD n=0;
-    return WriteFile(h,&reply,sizeof(reply),&n,nullptr)&&n==sizeof(reply);
-}
 }
 void* shared_memory_data() noexcept { return attached_mapping.data(); }
 std::size_t shared_memory_size() noexcept { return attached_mapping.size(); }
 int run_host(callbacks cb) {
-    if(!cb.init||!cb.main||!cb.done) return 2;
-    HANDLE in=GetStdHandle(STD_INPUT_HANDLE),out=GetStdHandle(STD_OUTPUT_HANDLE);
-    if(in==INVALID_HANDLE_VALUE||out==INVALID_HANDLE_VALUE) return 3;
-    message request{};
-    if(!read_exact(in,request)||request.signature!=magic||request.protocol_version!=version) return 4;
-    if(request.action==command::attach) {
-        shm_attachment attachment{};
-        if(!read_bytes(in,&attachment,sizeof(attachment)) ||
-           attachment.name[0]=='\0' || attachment.name[128]!='\0' ||
-           std::memchr(attachment.name,'\0',sizeof(attachment.name))==nullptr ||
-           attachment.size>static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)()) ||
-           attachment.address>static_cast<std::uint64_t>((std::numeric_limits<std::uintptr_t>::max)()) ||
-           attached_mapping.open(attachment.name,static_cast<std::size_t>(attachment.size),
-               static_cast<std::uintptr_t>(attachment.address))!=cw::server::fixed_shared_memory_result::success) {
-            send(out,command::error,0,12);
-            return 12;
-        }
-        if(!send(out,command::attached)) return 13;
-        if(!read_exact(in,request)||request.signature!=magic||request.protocol_version!=version) return 4;
+    if(!cb.init || !cb.main || !cb.done) return 2;
+    // The host library owns main() and passes the mapping name via argv.
+    const wchar_t* command_line=GetCommandLineW();
+    const std::wstring args(command_line?command_line:L"");
+    const auto marker=args.find(L"--serverengine-task-shm");
+    if(marker==std::wstring::npos) return 3;
+    auto pos=args.find_first_not_of(L" \t",marker+wcslen(L"--serverengine-task-shm"));
+    if(pos==std::wstring::npos) return 3;
+    if(args[pos]==L'"') ++pos;
+    auto end=args.find_first_of(L"\" \t",pos);
+    const auto name=args.substr(pos,end==std::wstring::npos?std::wstring::npos:end-pos);
+    if(name.empty()) return 3;
+    HANDLE mapping=OpenFileMappingW(FILE_MAP_ALL_ACCESS,FALSE,name.c_str());
+    if(!mapping) return 4;
+    auto* control=static_cast<task_control*>(MapViewOfFile(mapping,FILE_MAP_ALL_ACCESS,0,0,sizeof(task_control)));
+    if(!control) { CloseHandle(mapping); return 4; }
+    const auto cmd_name=name+L"_command",done_name=name+L"_completion";
+    HANDLE command_event=OpenEventW(SYNCHRONIZE,FALSE,cmd_name.c_str());
+    HANDLE completion_event=OpenEventW(EVENT_MODIFY_STATE,FALSE,done_name.c_str());
+    if(!command_event || !completion_event || control->signature!=control_magic || control->version!=control_version) {
+        if(command_event) CloseHandle(command_event);
+        if(completion_event) CloseHandle(completion_event);
+        UnmapViewOfFile(control); CloseHandle(mapping); return 4;
     }
-    if(request.action!=command::init) return 4;
+    perf07::trace perf_trace;
+    perf_trace.open(name,L"child");
+    int result=0;
+    LONG last=0;
     bool initialized=false;
-    try { initialized=cb.init(); } catch(...) { initialized=false; }
-    if(!initialized) { send(out,command::error,0,1); return 5; }
-    if(!send(out,command::ready)) return 6;
-    while(read_exact(in,request)) {
-        if(request.signature!=magic||request.protocol_version!=version) break;
-        if(request.action==command::stop) {
-            try { cb.done(); } catch(...) { send(out,command::error,0,3); return 7; }
-            return send(out,command::stopped)?0:8;
-        }
-        if(request.action!=command::run||!request.calls) break;
-        bool ok=true;
-        try { for(std::uint32_t i=0;i<request.calls;++i) if(!cb.main()) { ok=false; break; } } catch(...) { ok=false; }
-        if(!ok) { send(out,command::error,request.cycle,2); return 9; }
-        if(!send(out,command::done,request.cycle)) return 10;
+    while(true) {
+        if(WaitForSingleObject(command_event,INFINITE)!=WAIT_OBJECT_0) { result=5; break; }
+        const LONG seq=InterlockedCompareExchange(&control->request_sequence,0,0);
+        if(seq==last) continue;
+        last=seq;
+        const auto trace_received=perf07::qpc();
+        const message req=control->request;
+        long long trace_main_start=0,trace_main_end=0;
+        command response=command::error;
+        std::uint32_t status=0;
+        bool exit_after=false;
+        if(req.signature!=magic || req.protocol_version!=version) { status=4; exit_after=true; }
+        else if(req.action==command::init && !initialized) {
+            const auto& a=control->attachment;
+            if(a.name[0]) {
+                if(a.name[128]!='\0' || !std::memchr(a.name,'\0',sizeof(a.name)) || !a.size || !a.address ||
+                   a.size>static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)()) ||
+                   a.address>static_cast<std::uint64_t>((std::numeric_limits<std::uintptr_t>::max)()) ||
+                   attached_mapping.open(a.name,static_cast<std::size_t>(a.size),
+                       static_cast<std::uintptr_t>(a.address))!=cw::server::fixed_shared_memory_result::success) status=12;
+            }
+            if(!status) { try { initialized=cb.init(); } catch(...) { initialized=false; } if(!initialized) status=1; }
+            response=status?command::error:command::ready;
+            exit_after=status!=0;
+        } else if(req.action==command::run && initialized && req.calls) {
+            trace_main_start=perf07::qpc();
+            bool ok=true;
+            try { for(std::uint32_t i=0;i<req.calls;++i) if(!cb.main()) { ok=false; break; } }
+            catch(...) { ok=false; }
+            trace_main_end=perf07::qpc();
+            response=ok?command::done:command::error;
+            status=ok?0:2;
+            exit_after=!ok;
+        } else if(req.action==command::stop && initialized) {
+            try { cb.done(); response=command::stopped; }
+            catch(...) { response=command::error; status=3; }
+            exit_after=true;
+        } else { status=4; exit_after=true; }
+        control->response=message{magic,version,response,0,req.cycle,0,status};
+        InterlockedExchange(&control->response_sequence,seq);
+        const auto trace_signaled=perf07::qpc();
+        if(req.action==command::run) perf_trace.write(seq,req.cycle,trace_received,trace_main_start,trace_main_end,trace_signaled,status==0);
+        SetEvent(completion_event);
+        if(exit_after) { result=status?static_cast<int>(status):0; break; }
     }
-    return 11; // Abnormal control-channel closure: no graceful TaskDone.
+    CloseHandle(command_event); CloseHandle(completion_event);
+    UnmapViewOfFile(control); CloseHandle(mapping);
+    attached_mapping.reset();
+    return result;
 }
 }

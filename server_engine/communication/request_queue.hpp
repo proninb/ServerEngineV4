@@ -10,6 +10,7 @@
 #include "control/communication_control.hpp"
 
 #include <chrono>
+
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -47,6 +48,9 @@ public:
         : limits(limits) {
     }
 
+    ~request_queue() noexcept;
+    [[nodiscard]] void* native_wake_event() noexcept;
+
     [[nodiscard]] request_queue_push_result try_push(
         communication_control_message request);
 
@@ -78,6 +82,7 @@ private:
 
     // Protects queue mutation and inspection performed by producers/consumer.
     std::mutex mutex;
+    void* wake_event = nullptr;
 
     // Wakes the Server control thread when a producer publishes work.
     std::condition_variable condition;

@@ -5,6 +5,17 @@
  * diagnostic_collection. Nested layers append to that same collection.
  */
 #include "server.hpp"
+// TASK_SCHEDULER_V2_01: opt-in precision timer; no permanent system timer change.
+#include <cstdlib>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+
+#include "project/task/runtime/task_perf_probe.hpp"
 #if defined(CW_UNLOAD_HEAP_OPTIMIZATION)
 #include "unload_heap_optimization.hpp"
 #endif
@@ -31,6 +42,7 @@
 #include <chrono>
 #include <algorithm>
 #include <cstdio>
+#include <cstdint>
 #include <limits>
 #include <cstring>
 #include <memory>
@@ -323,7 +335,104 @@ server_status server::start(
     return server_status::success;
 }
 
+namespace {
+// Timer resolution is requested only while the server run loop is active.
+class scheduler_timer_resolution final {
+public:
+    scheduler_timer_resolution() noexcept {
+        const char* enabled = std::getenv("TASK_SCHEDULER_V2");
+        if (!enabled || enabled[0] != '1' || enabled[1] != '\0') return;
+        module = LoadLibraryW(L"winmm.dll");
+        if (!module) return;
+        begin = reinterpret_cast<timer_function>(GetProcAddress(module, "timeBeginPeriod"));
+        end = reinterpret_cast<timer_function>(GetProcAddress(module, "timeEndPeriod"));
+        if (begin && end && begin(1) == 0) active = true;
+    }
+    ~scheduler_timer_resolution() noexcept {
+        if (active) end(1);
+        if (module) FreeLibrary(module);
+    }
+    scheduler_timer_resolution(const scheduler_timer_resolution&) = delete;
+    scheduler_timer_resolution& operator=(const scheduler_timer_resolution&) = delete;
+    bool enabled() const noexcept { return active; }
+private:
+    using timer_function = unsigned int (WINAPI*)(unsigned int);
+    HMODULE module = nullptr;
+    timer_function begin = nullptr;
+    timer_function end = nullptr;
+    bool active = false;
+};
+}
+
+namespace {
+class scheduler_hr_timer final {
+public:
+    scheduler_hr_timer() noexcept {
+        handle = CreateWaitableTimerExW(nullptr, nullptr,
+            CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_MODIFY_STATE | SYNCHRONIZE);
+        if (!handle) handle = CreateWaitableTimerW(nullptr, FALSE, nullptr);
+    }
+    ~scheduler_hr_timer() noexcept { if (handle) CloseHandle(handle); }
+    scheduler_hr_timer(const scheduler_hr_timer&) = delete;
+    scheduler_hr_timer& operator=(const scheduler_hr_timer&) = delete;
+    bool wait(HANDLE queue_event, std::chrono::steady_clock::time_point target) const noexcept {
+        if (!handle || !queue_event) return false;
+        auto remaining = target - std::chrono::steady_clock::now();
+        if (remaining <= std::chrono::steady_clock::duration::zero()) return true;
+        auto units = std::chrono::duration_cast<std::chrono::nanoseconds>(remaining).count() / 100;
+        if (units < 1) units = 1;
+        LARGE_INTEGER due{};
+        due.QuadPart = -units;
+        if (!SetWaitableTimer(handle, &due, 0, nullptr, nullptr, FALSE)) return false;
+        HANDLE waits[] = {queue_event, handle};
+        const DWORD result = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
+        CancelWaitableTimer(handle);
+        return result == WAIT_OBJECT_0 + 1;
+    }
+private:
+    HANDLE handle = nullptr;
+};
+}
+
 int server::run() {
+    // TASK_SCHEDULER_DEADLINE_01: optional per-cycle diagnostics, no scheduling changes.
+    const char* deadline_enabled = std::getenv("TASK_SCHEDULER_DEADLINE");
+    const bool deadline_diagnostics = deadline_enabled &&
+        deadline_enabled[0] == '1' && deadline_enabled[1] == '\0';
+    std::FILE* deadline_file = nullptr;
+    if (deadline_diagnostics) {
+        const char* output = std::getenv("TASK_SCHEDULER_DEADLINE_CSV");
+        if (!output || !output[0]) output = "task-scheduler-deadline.csv";
+        if (fopen_s(&deadline_file, output, "a+") != 0 || !deadline_file) {
+            std::fprintf(stderr, "Deadline diagnostics: cannot open %s\n", output);
+        } else {
+            // E2E-02 restarts the server three times per mode. Keep all sessions.
+            // Write the header only for a new/empty file.
+            std::fseek(deadline_file, 0, SEEK_END);
+            const auto existing_bytes = std::ftell(deadline_file);
+            if (existing_bytes == 0) {
+                std::fputs("runtime_tick,scheduled_ns,wakeup_ns,dispatch_ns,barrier_complete_ns,cycle_complete_ns,wakeup_lateness_us,barrier_duration_us,cycle_duration_us,deadline_miss,overrun_us,skipped_periods\n", deadline_file);
+            }
+        }
+    }
+    const auto deadline_origin = std::chrono::steady_clock::now();
+    const auto deadline_ns = [&](std::chrono::steady_clock::time_point point) {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(
+            point - deadline_origin).count();
+    };
+    const scheduler_timer_resolution precision_timer;
+    const scheduler_hr_timer hr_timer;
+    const auto env_equal = [](const char* name, const char* value) {
+        const char* found = std::getenv(name);
+        return found && std::strcmp(found, value) == 0;
+    };
+    const bool hr_enabled = env_equal("TASK_SCHEDULER_TIMER", "HRTIMER") ||
+        env_equal("TASK_SCHEDULER_TIMER", "HYBRID");
+    const bool hybrid = env_equal("TASK_SCHEDULER_TIMER", "HYBRID");
+    const bool overlap = env_equal("TASK_SCHEDULER_EXECUTION", "OVERLAP");
+    const auto spin_budget = std::chrono::microseconds(150);
+    const HANDLE queue_event = hr_enabled ? context.requests.native_wake_event() : nullptr;
+    const auto scheduler_period = std::chrono::milliseconds(2);
     while (running) {
         const auto now =
             std::chrono::system_clock::now();
@@ -338,21 +447,57 @@ int server::run() {
         const bool ticking = context.project && !task_runtime_failed &&
             (project_state_value == project_state::run ||
              project_state_value == project_state::freeze);
+        // Convert the steady-clock deadline to the queue's system-clock domain.
+        // Re-evaluate each iteration so wall-clock adjustments cannot accumulate.
+        const auto steady_now = std::chrono::steady_clock::now();
+        const auto remaining = next_task_tick > steady_now
+            ? next_task_tick - steady_now
+            : std::chrono::steady_clock::duration::zero();
         const auto deadline = ticking
             ? (std::min)(context.lease.expires_at(),
-                std::chrono::system_clock::now() + std::chrono::milliseconds(2))
+                std::chrono::system_clock::now() +
+                    std::chrono::duration_cast<std::chrono::system_clock::duration>(remaining))
             : context.lease.expires_at();
-        if (!context.requests.wait_pop_until(deadline, message)) {
+        bool received = false;
+        if (ticking && hr_enabled && queue_event) {
+            const auto target = hybrid ? next_task_tick - spin_budget : next_task_tick;
+            const bool timer_fired = hr_timer.wait(queue_event, target);
+            if (timer_fired && hybrid) {
+                // Keep TCP responsive during the final spin by checking the queue event.
+                while (std::chrono::steady_clock::now() < next_task_tick) {
+                    if (WaitForSingleObject(queue_event, 0) == WAIT_OBJECT_0) break;
+                    YieldProcessor();
+                }
+            }
+            if (WaitForSingleObject(queue_event, 0) == WAIT_OBJECT_0) {
+                received = context.requests.wait_pop_until(
+                    std::chrono::system_clock::now(), message);
+            }
+        } else {
+            received = context.requests.wait_pop_until(deadline, message);
+        }
+        if (!received) {
             if (ticking && context.lease.valid_at(std::chrono::system_clock::now())) {
                 const auto now_tick = std::chrono::steady_clock::now();
                 if (now_tick >= next_task_tick) {
+                    const auto scheduled_tick = next_task_tick;
+                    const auto actual_wakeup = now_tick;
+                    const auto perf_tick_start = task_runtime::perf::clock::now();
+                    static auto perf_previous_tick = perf_tick_start;
+                    task_runtime::perf::record("cycle_interval", runtime_tick, perf_previous_tick);
+                    perf_previous_tick = perf_tick_start;
                     ++runtime_tick;
                     const bool frozen = project_state_value == project_state::freeze;
                     if (!frozen) ++model_cycle;
                     std::string task_error;
                     // Runtime tick advances in FREEZE; model cycle remains stable.
                     const auto cycle = frozen ? runtime_tick : model_cycle;
-                    if (task_manager.active() && !task_manager.tick(cycle, frozen, task_error)) {
+                    const auto task_dispatch = std::chrono::steady_clock::now();
+                    const bool task_tick_ok = !task_manager.active() ||
+                        (overlap ? task_manager.tick_overlap(cycle, frozen, task_error) :
+                            task_manager.tick(cycle, frozen, task_error));
+                    const auto barrier_complete = std::chrono::steady_clock::now();
+                    if (!task_tick_ok) {
                         task_runtime_failed = true;
                         task_manager.terminate();
                         std::fprintf(stderr, "Task runtime failure: %s\n", task_error.c_str());
@@ -360,8 +505,47 @@ int server::run() {
                         set_project_state(project_state::freeze);
                         context.communications.publish_server_state(previous, project_state_value);
                     }
-                    next_task_tick = std::chrono::steady_clock::now() +
-                        std::chrono::milliseconds(2);
+                    task_runtime::perf::record("server_tick", runtime_tick, perf_tick_start);
+                    const auto cycle_complete = std::chrono::steady_clock::now();
+                    std::int64_t skipped_periods = 0;
+                    if (precision_timer.enabled() || hr_enabled) {
+                        // Absolute cadence; skip missed deadlines without catch-up bursts.
+                        const auto completed = std::chrono::steady_clock::now();
+                        next_task_tick += scheduler_period;
+                        if (next_task_tick <= completed) {
+                            const auto missed = (completed - next_task_tick) /
+                                scheduler_period + 1;
+                            skipped_periods = static_cast<std::int64_t>(missed);
+                            next_task_tick += scheduler_period * missed;
+                        }
+                    } else {
+                        next_task_tick = std::chrono::steady_clock::now() +
+                            scheduler_period;
+                    }
+                    if (deadline_file) {
+                        const auto budget_end = scheduled_tick + scheduler_period;
+                        const auto lateness = actual_wakeup > scheduled_tick
+                            ? actual_wakeup - scheduled_tick
+                            : std::chrono::steady_clock::duration::zero();
+                        const auto overrun = cycle_complete > budget_end
+                            ? cycle_complete - budget_end
+                            : std::chrono::steady_clock::duration::zero();
+                        const auto us = [](std::chrono::steady_clock::duration value) {
+                            return std::chrono::duration<double, std::micro>(value).count();
+                        };
+                        std::fprintf(deadline_file,
+                            "%llu,%lld,%lld,%lld,%lld,%lld,%.3f,%.3f,%.3f,%d,%.3f,%lld\n",
+                            static_cast<unsigned long long>(runtime_tick),
+                            static_cast<long long>(deadline_ns(scheduled_tick)),
+                            static_cast<long long>(deadline_ns(actual_wakeup)),
+                            static_cast<long long>(deadline_ns(task_dispatch)),
+                            static_cast<long long>(deadline_ns(barrier_complete)),
+                            static_cast<long long>(deadline_ns(cycle_complete)),
+                            us(lateness), us(barrier_complete - task_dispatch),
+                            us(cycle_complete - actual_wakeup),
+                            cycle_complete > budget_end ? 1 : 0,
+                            us(overrun), static_cast<long long>(skipped_periods));
+                    }
                 }
                 continue;
             }
@@ -422,6 +606,7 @@ int server::run() {
         }
     }
 
+    if (deadline_file) std::fclose(deadline_file);
     // SHUTDOWN result has already been presented to its originating endpoint.
     shutdown();
 
