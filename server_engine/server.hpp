@@ -14,10 +14,12 @@
 #include "diagnostics/diagnostic_collection.hpp"
 #include "operation.hpp"
 #include "project/ic/ic_catalog.hpp"
+#include "project/task/runtime/task_manager.hpp"
 #include "server_context.hpp"
 #include "server_status.hpp"
 
 #include <cstdint>
+#include <chrono>
 #include <filesystem>
 #include <string>
 
@@ -102,6 +104,13 @@ private:
     void set_project_state(project_state state) noexcept;
     void update_system_datetime() noexcept;
     [[nodiscard]] operation_id next_operation() noexcept;
+
+    // Child lifetime ends before resident SHM lifetime.
+    task_runtime::manager task_manager;
+    std::uint64_t runtime_tick = 0;
+    std::uint64_t model_cycle = 0;
+    std::chrono::steady_clock::time_point next_task_tick{};
+    bool task_runtime_failed = false;
 
     server_context context;
     project_state project_state_value = project_state::unloaded;

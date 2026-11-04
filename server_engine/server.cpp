@@ -29,6 +29,9 @@
 #include "writable_file_mapping.hpp"
 
 #include <chrono>
+#include <algorithm>
+#include <cstdio>
+#include <limits>
 #include <cstring>
 #include <memory>
 #include <system_error>
@@ -67,6 +70,7 @@ inline constexpr auto shutdown_ack_timeout =
         return status;
     }
 
+    value.set_task_configuration(std::move(configuration.task_definitions));
     ic_catalog catalog;
 
     if (configuration.ic.empty()) {
@@ -331,10 +335,36 @@ int server::run() {
 
         communication_control_message message;
 
-        if (!context.requests.wait_pop_until(
-                context.lease.expires_at(),
-                message)) {
-
+        const bool ticking = context.project && !task_runtime_failed &&
+            (project_state_value == project_state::run ||
+             project_state_value == project_state::freeze);
+        const auto deadline = ticking
+            ? (std::min)(context.lease.expires_at(),
+                std::chrono::system_clock::now() + std::chrono::milliseconds(2))
+            : context.lease.expires_at();
+        if (!context.requests.wait_pop_until(deadline, message)) {
+            if (ticking && context.lease.valid_at(std::chrono::system_clock::now())) {
+                const auto now_tick = std::chrono::steady_clock::now();
+                if (now_tick >= next_task_tick) {
+                    ++runtime_tick;
+                    const bool frozen = project_state_value == project_state::freeze;
+                    if (!frozen) ++model_cycle;
+                    std::string task_error;
+                    // Runtime tick advances in FREEZE; model cycle remains stable.
+                    const auto cycle = frozen ? runtime_tick : model_cycle;
+                    if (task_manager.active() && !task_manager.tick(cycle, frozen, task_error)) {
+                        task_runtime_failed = true;
+                        task_manager.terminate();
+                        std::fprintf(stderr, "Task runtime failure: %s\n", task_error.c_str());
+                        const auto previous = project_state_value;
+                        set_project_state(project_state::freeze);
+                        context.communications.publish_server_state(previous, project_state_value);
+                    }
+                    next_task_tick = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(2);
+                }
+                continue;
+            }
             running = false;
             break;
         }
@@ -2071,6 +2101,37 @@ server_status server::run_project(
         return server_status::runtime_state_invalid;
     }
 
+    if (task_runtime_failed) {
+        diagnostics.emit(diagnostic(diagnostics::runtime_state_invalid, operation)
+            .detail("Task failure requires UNLOAD").build());
+        return server_status::project_runtime_failed;
+    }
+    if (project_state_value == project_state::loaded) {
+        runtime_tick = 0;
+        model_cycle = 0;
+        const auto& shm = context.project->shm();
+        const auto& config = context.project->tasks();
+        if (!config.tasks.empty()) {
+            const auto name = shm.name();
+            if (!shm.valid() || name.empty() || name.size() > 128) {
+                diagnostics.emit(diagnostic(diagnostics::runtime_state_invalid, operation)
+                    .detail("Task SHM name/address unavailable").build());
+                return server_status::project_runtime_failed;
+            }
+            task_runtime::shm_attachment attachment{};
+            attachment.size = static_cast<std::uint64_t>(shm.size());
+            attachment.address = static_cast<std::uint64_t>(shm.address());
+            std::memcpy(attachment.name, name.data(), name.size());
+            std::string error;
+            if (!task_manager.start(config, context.project->path().parent_path(),
+                    5000, attachment, error)) {
+                diagnostics.emit(diagnostic(diagnostics::runtime_state_invalid, operation)
+                    .detail("Task startup failed: " + error).build());
+                return server_status::project_runtime_failed;
+            }
+        }
+    }
+    next_task_tick = std::chrono::steady_clock::now();
     set_project_state(project_state::run);
 
     return server_status::success;
@@ -2137,6 +2198,15 @@ server_status server::unload(
         return server_status::runtime_state_invalid;
     }
 
+    std::string task_error;
+    const bool stopped = !task_manager.active() || task_manager.stop(task_error);
+    task_runtime_failed = false;
+    runtime_tick = 0;
+    model_cycle = 0;
+    if (!stopped) {
+        diagnostics.emit(diagnostic(diagnostics::runtime_state_invalid, operation)
+            .detail("Task STOP failed: " + task_error).build());
+    }
     context.project.reset();
     set_project_state(project_state::unloaded);
 
@@ -2144,13 +2214,16 @@ server_status server::unload(
     optimize_heap_after_unload(operation, diagnostics);
 #endif
 
-    return server_status::success;
+    return stopped ? server_status::success : server_status::project_runtime_failed;
 }
 
 void server::shutdown() noexcept {
     running = false;
     context.requests.stop_accepting_and_discard();
     context.communications.stop();
+    std::string task_error;
+    if (task_manager.active()) (void)task_manager.stop(task_error);
+    task_manager.terminate();
     context.project.reset();
     set_project_state(project_state::unloaded);
     context.authentication.stop();

@@ -12,11 +12,16 @@ public:
     process(const process&) = delete;
     process& operator=(const process&) = delete;
     bool start(const std::wstring& executable, std::uint32_t timeout_ms, std::string& error);
+    bool start(const std::wstring& executable, std::uint32_t timeout_ms,
+        const shm_attachment& attachment, std::string& error);
     bool run(std::uint64_t cycle, std::uint32_t calls, std::string& error);
     bool stop(std::string& error);
     void terminate() noexcept;
 private:
     bool exchange(message request, command expected, std::string& error);
+    bool receive(command expected, std::uint64_t cycle, std::string& error);
+    bool start_impl(const std::wstring& executable, std::uint32_t timeout_ms,
+        const shm_attachment* attachment, std::string& error);
     HANDLE child = nullptr;
     HANDLE thread = nullptr;
     HANDLE input = nullptr;

@@ -91,6 +91,10 @@ public:
             address_value);
     }
 
+    [[nodiscard]] std::string_view name() const noexcept {
+        return native_name;
+    }
+
     [[nodiscard]] std::size_t size() const noexcept {
         return length;
     }

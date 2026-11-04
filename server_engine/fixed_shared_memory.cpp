@@ -401,6 +401,7 @@ fixed_shared_memory::create(
             view);
 
     length = size;
+    native_name.assign(name);
 
     return fixed_shared_memory_result::
         success;
@@ -626,6 +627,7 @@ fixed_shared_memory::open(
             view);
 
     length = size;
+    native_name.assign(name);
 
     return fixed_shared_memory_result::
         success;

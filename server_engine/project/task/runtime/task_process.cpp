@@ -19,6 +19,14 @@ void process::terminate() noexcept {
     initialized=false;
 }
 bool process::start(const std::wstring& executable, std::uint32_t timeout_ms, std::string& error) {
+    return start_impl(executable,timeout_ms,nullptr,error);
+}
+bool process::start(const std::wstring& executable, std::uint32_t timeout_ms,
+    const shm_attachment& attachment, std::string& error) {
+    return start_impl(executable,timeout_ms,&attachment,error);
+}
+bool process::start_impl(const std::wstring& executable, std::uint32_t timeout_ms,
+    const shm_attachment* attachment, std::string& error) {
     terminate(); timeout=timeout_ms;
     SECURITY_ATTRIBUTES sa{sizeof(sa),nullptr,TRUE};
     HANDLE child_read=nullptr, child_write=nullptr;
@@ -35,11 +43,27 @@ bool process::start(const std::wstring& executable, std::uint32_t timeout_ms, st
     close_handle(child_read); close_handle(child_write);
     if(!ok) { error="CreateProcessW failed: "+std::to_string(GetLastError()); terminate(); return false; }
     child=info.hProcess; thread=info.hThread;
+    if(attachment) {
+        if(!attachment->name[0] || attachment->name[128]!='\0' ||
+           !std::memchr(attachment->name,'\0',sizeof(attachment->name)) ||
+           !attachment->size || !attachment->address) {
+            error="Invalid Task SHM attachment"; terminate(); return false;
+        }
+        const message request{magic,version,command::attach};
+        DWORD written=0;
+        if(!write_exact(input,request) ||
+           !WriteFile(input,attachment,sizeof(*attachment),&written,nullptr) ||
+           written!=sizeof(*attachment) ||
+           !receive(command::attached,0,error)) { terminate(); return false; }
+    }
     if(!exchange(message{magic,version,command::init},command::ready,error)) { terminate(); return false; }
     initialized=true; return true;
 }
 bool process::exchange(message request,command expected,std::string& error) {
     if(!child || !write_exact(input,request)) { error="Task control write failed"; return false; }
+    return receive(expected,request.cycle,error);
+}
+bool process::receive(command expected,std::uint64_t cycle,std::string& error) {
     // Pipes are blocking: poll availability with bounded wall-clock timeout, and process liveness.
     const ULONGLONG deadline=GetTickCount64()+timeout;
     message response{}; std::size_t received=0;
@@ -56,7 +80,7 @@ bool process::exchange(message request,command expected,std::string& error) {
         if(GetTickCount64()>=deadline) { error="Task reply timeout"; return false; }
         Sleep(1);
     }
-    if(response.signature!=magic || response.protocol_version!=version || response.action!=expected || response.cycle!=request.cycle || response.status!=0) {
+    if(response.signature!=magic || response.protocol_version!=version || response.action!=expected || response.cycle!=cycle || response.status!=0) {
         error="Invalid Task reply, cycle or status"; return false;
     }
     return true;

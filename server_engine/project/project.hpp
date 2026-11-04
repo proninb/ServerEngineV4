@@ -11,6 +11,7 @@
 #include "ic/ic_catalog.hpp"
 #include "runtime/runtime_binding.hpp"
 #include "runtime/runtime_system.hpp"
+#include "task/task_configuration.hpp"
 #include "../fixed_shared_memory.hpp"
 #include "../read_only_file_mapping.hpp"
 
@@ -69,6 +70,14 @@ public:
         return runtime_bindings_value;
     }
 
+    void set_task_configuration(task_configuration value) {
+        task_configuration_value = std::move(value);
+    }
+
+    [[nodiscard]] const task_configuration& tasks() const noexcept {
+        return task_configuration_value;
+    }
+
     void set_ic_catalog_path(std::filesystem::path path) {
         ic_catalog_path_value = std::move(path);
     }
@@ -97,6 +106,7 @@ private:
     std::uint64_t runtime_size_value = 0;
     std::filesystem::path ic_catalog_path_value;
     ic_catalog ic_catalog_value;
+    task_configuration task_configuration_value;
 };
 
 }

@@ -243,6 +243,12 @@ add_executable(ServerEngineV4
     server_engine/project/project_configuration_loader.cpp
     server_engine/project/task/task_configuration.cpp
 )
+if(WIN32)
+    target_sources(ServerEngineV4 PRIVATE
+        server_engine/project/task/runtime/task_manager.cpp
+        server_engine/project/task/runtime/task_process.cpp
+    )
+endif()
 
 if(WIN32)
     target_sources(ServerEngineV4 PRIVATE
@@ -1486,7 +1492,8 @@ add_test(NAME task_config_02_negative COMMAND task_config_02_negative_tests)
 if(WIN32)
     add_executable(task_runtime_01a_fixture
         tests/task_fixture.cpp
-        server_engine/project/task/runtime/task_host.cpp)
+        server_engine/project/task/runtime/task_host.cpp
+        server_engine/fixed_shared_memory.cpp)
     target_include_directories(task_runtime_01a_fixture PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/server_engine/project/task/runtime")
 
@@ -1498,4 +1505,81 @@ if(WIN32)
     add_dependencies(task_runtime_01a_tests task_runtime_01a_fixture)
     add_test(NAME task_runtime_01a
         COMMAND $<TARGET_FILE:task_runtime_01a_tests> $<TARGET_FILE:task_runtime_01a_fixture>)
+endif()
+# SIMTASK-LIB-01: standalone Task entrypoint and 01A protocol integration
+if(WIN32)
+    add_library(SimTask STATIC
+        simtask/src/SimTask.cpp
+        server_engine/project/task/runtime/task_host.cpp
+        server_engine/fixed_shared_memory.cpp
+    )
+    target_include_directories(SimTask PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/simtask/include
+    )
+    target_compile_features(SimTask PUBLIC cxx_std_20)
+
+    add_executable(SimTaskFixture tests/SimTaskFixture.cpp)
+    target_link_libraries(SimTaskFixture PRIVATE SimTask)
+
+    add_executable(simtask_integration_tests
+        tests/task_runtime_tests.cpp
+        server_engine/project/task/runtime/task_process.cpp
+    )
+    target_include_directories(simtask_integration_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine/project/task/runtime
+    )
+    enable_testing()
+    add_test(NAME simtask_integration
+        COMMAND $<TARGET_FILE:simtask_integration_tests> $<TARGET_FILE:SimTaskFixture>)
+endif()
+
+# TASK-MANAGER-01 standalone build target (not wired to Server lifecycle yet).
+if(WIN32)
+    add_library(task_manager_runtime STATIC
+        server_engine/project/task/runtime/task_manager.cpp
+        server_engine/project/task/runtime/task_process.cpp
+        server_engine/project/task/task_configuration.cpp
+        server_engine/json/json_parser.cpp
+    )
+    target_include_directories(task_manager_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+endif()
+
+
+# TASK-INTEGRATION-TEST-01: real Task processes and SHM barrier checks.
+if(WIN32)
+    foreach(task_id IN ITEMS 0 1 2)
+        add_executable(task_e2e_fixture_${task_id} tests/task_e2e_fixture.cpp)
+        target_link_libraries(task_e2e_fixture_${task_id} PRIVATE SimTask)
+        target_compile_definitions(task_e2e_fixture_${task_id} PRIVATE TASK_ID=${task_id})
+    endforeach()
+    target_compile_definitions(task_e2e_fixture_2 PRIVATE TASK_FORCE_FAIL=1)
+
+    add_executable(task_e2e_tests
+        tests/task_e2e_tests.cpp
+        server_engine/project/task/runtime/task_manager.cpp
+        server_engine/project/task/runtime/task_process.cpp
+        server_engine/project/task/task_configuration.cpp
+        server_engine/json/json_parser.cpp
+        server_engine/fixed_shared_memory.cpp)
+    target_include_directories(task_e2e_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+    add_dependencies(task_e2e_tests
+        task_e2e_fixture_0 task_e2e_fixture_1 task_e2e_fixture_2)
+    add_test(NAME task_e2e_01
+        COMMAND $<TARGET_FILE:task_e2e_tests>
+                $<TARGET_FILE:task_e2e_fixture_0>
+                $<TARGET_FILE:task_e2e_fixture_1>
+                $<TARGET_FILE:task_e2e_fixture_2>)
+    set_tests_properties(task_e2e_01 PROPERTIES TIMEOUT 30)
+endif()
+
+# TASK-SERVER-E2E-02 fixture targets.
+if(WIN32)
+    foreach(task_id IN ITEMS 0 1 2)
+        add_executable(task_server_e2e_fixture_${task_id}
+            tests/task_server_e2e_fixture.cpp)
+        target_link_libraries(task_server_e2e_fixture_${task_id} PRIVATE SimTask)
+        target_compile_definitions(task_server_e2e_fixture_${task_id} PRIVATE TASK_ID=${task_id})
+    endforeach()
+    target_compile_definitions(task_server_e2e_fixture_2 PRIVATE TASK_FORCE_FAIL=1)
 endif()
