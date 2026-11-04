@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.25)
+cmake_minimum_required(VERSION 3.25)
 
 project(ServerEngineV4
     VERSION 4.0.0
@@ -1481,3 +1481,21 @@ add_executable(task_config_02_negative_tests
     server_engine/json/json_parser.cpp
 )
 add_test(NAME task_config_02_negative COMMAND task_config_02_negative_tests)
+
+# TASK-RUNTIME-01A isolated process protocol tests (no server loop integration).
+if(WIN32)
+    add_executable(task_runtime_01a_fixture
+        tests/task_fixture.cpp
+        server_engine/project/task/runtime/task_host.cpp)
+    target_include_directories(task_runtime_01a_fixture PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/server_engine/project/task/runtime")
+
+    add_executable(task_runtime_01a_tests
+        tests/task_runtime_tests.cpp
+        server_engine/project/task/runtime/task_process.cpp)
+    target_include_directories(task_runtime_01a_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/server_engine/project/task/runtime")
+    add_dependencies(task_runtime_01a_tests task_runtime_01a_fixture)
+    add_test(NAME task_runtime_01a
+        COMMAND $<TARGET_FILE:task_runtime_01a_tests> $<TARGET_FILE:task_runtime_01a_fixture>)
+endif()
