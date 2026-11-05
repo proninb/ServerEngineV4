@@ -6,10 +6,84 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <filesystem>
+#include <system_error>
 #include <cwchar>
+#include <cstdio>
 namespace cw::server::task_runtime {
 namespace {
 cw::server::fixed_shared_memory attached_mapping;
+
+// TASK_DIAG_29_CPU: diagnostic QPC wall and thread CPU time per call.
+
+// TASK_DIAG_30_CYCLES: thread cycle counts are raw hardware counts, NOT microseconds.
+struct cycle_trace {
+    FILE* file = nullptr;
+    explicit cycle_trace(const std::wstring& name) {
+        wchar_t directory[32768]{};
+        const DWORD n = GetEnvironmentVariableW(L"TASK_SHM_PERF07_DIR", directory, 32768);
+        if (!n || n >= 32768) return;
+        CreateDirectoryW(directory, nullptr);
+        std::wstring safe = name;
+        for (auto& c : safe) if (c == L'\\' || c == L'/' || c == L':' || c == L' ') c = L'_';
+        const auto path = std::wstring(directory) + L"\\cycles_" + safe + L".csv";
+        if (_wfopen_s(&file, path.c_str(), L"wb") || !file) return;
+        std::fprintf(file, "cycle,call_index,thread_cycles,cycle_valid,ok\n");
+        std::fflush(file);
+    }
+    ~cycle_trace() { if (file) std::fclose(file); }
+    static bool sample(ULONG64& value) {
+        return QueryThreadCycleTime(GetCurrentThread(), &value) != 0;
+    }
+    void record(unsigned long long cycle, unsigned index, ULONG64 begin,
+                ULONG64 end, bool valid, bool ok) {
+        if (!file) return;
+        const bool good = valid && end >= begin;
+        std::fprintf(file, "%llu,%u,%llu,%d,%d\n", cycle, index,
+            static_cast<unsigned long long>(good ? end - begin : 0),
+            good ? 1 : 0, ok ? 1 : 0);
+        std::fflush(file);
+    }
+};
+
+struct cpu_trace {
+    FILE* file = nullptr;
+    LARGE_INTEGER frequency{};
+    explicit cpu_trace(const std::wstring& name) {
+        wchar_t directory[32768]{};
+        const DWORD n = GetEnvironmentVariableW(L"TASK_SHM_PERF07_DIR", directory, 32768);
+        if (!n || n >= 32768) return;
+        if (!QueryPerformanceFrequency(&frequency) || !frequency.QuadPart) return;
+        CreateDirectoryW(directory, nullptr);
+        std::wstring safe = name;
+        for (auto& c : safe) if (c == L'\\' || c == L'/' || c == L':' || c == L' ') c = L'_';
+        const auto path = std::wstring(directory) + L"\\cpu_" + safe + L".csv";
+        if (_wfopen_s(&file, path.c_str(), L"wb") || !file) return;
+        std::fprintf(file, "cycle,call_index,wall_us,cpu_us,off_cpu_us,cpu_valid,ok\n");
+        std::fflush(file);
+    }
+    ~cpu_trace() { if (file) std::fclose(file); }
+    static bool sample(ULONGLONG& ticks) {
+        FILETIME a{}, b{}, k{}, u{};
+        if (!GetThreadTimes(GetCurrentThread(), &a, &b, &k, &u)) return false;
+        ULARGE_INTEGER x{}, y{};
+        x.LowPart = k.dwLowDateTime; x.HighPart = k.dwHighDateTime;
+        y.LowPart = u.dwLowDateTime; y.HighPart = u.dwHighDateTime;
+        ticks = x.QuadPart + y.QuadPart;
+        return true;
+    }
+    void record(unsigned long long cycle, unsigned index, LONGLONG t0,
+                LONGLONG t1, ULONGLONG c0, ULONGLONG c1, bool valid, bool ok) {
+        if (!file) return;
+        const double wall = double(t1 - t0) * 1000000.0 / double(frequency.QuadPart);
+        const double cpu = valid && c1 >= c0 ? double(c1 - c0) / 10.0 : 0.0;
+        std::fprintf(file, "%llu,%u,%.3f,%.3f,%.3f,%d,%d\n",
+            cycle, index, wall, cpu, valid ? (wall > cpu ? wall - cpu : 0.0) : 0.0,
+            valid ? 1 : 0, ok ? 1 : 0);
+        std::fflush(file);
+    }
+};
+
 }
 void* shared_memory_data() noexcept { return attached_mapping.data(); }
 std::size_t shared_memory_size() noexcept { return attached_mapping.size(); }
@@ -40,6 +114,30 @@ int run_host(callbacks cb) {
     }
     perf07::trace perf_trace;
     perf_trace.open(name,L"child");
+    cpu_trace cpu(name);
+    cycle_trace cycles(name);
+    // Diagnostic-only per-invocation trace; no protocol or SHM ABI changes.
+    FILE* call_file = nullptr;
+    wchar_t trace_directory[32768]{};
+    DWORD trace_length = GetEnvironmentVariableW(L"TASK_SHM_PERF07_DIR", trace_directory, 32768);
+    if(!trace_length) {
+        const DWORD cwd=GetCurrentDirectoryW(32768,trace_directory);
+        if(cwd && cwd<32768) {
+            const std::wstring path=std::wstring(trace_directory)+L"\\build\\task-diag-22";
+            if(path.size()<32768) { wcscpy_s(trace_directory,32768,path.c_str()); trace_length=static_cast<DWORD>(path.size()); }
+        }
+    }
+    if (trace_length && trace_length < 32768) {
+        std::error_code ec;
+        std::filesystem::create_directories(trace_directory,ec);
+        std::wstring safe = name;
+        for (auto& c : safe) if (c == L'\\' || c == L'/' || c == L':' || c == L' ' || c == L'"') c = L'_';
+        const auto path = std::wstring(trace_directory) + L"\\calls_" + safe + L".csv";
+        if (_wfopen_s(&call_file, path.c_str(), L"wb") == 0 && call_file) {
+            setvbuf(call_file, nullptr, _IOLBF, 4096);
+            std::fprintf(call_file, "seq,cycle,call_index,call_count,start_qpc,end_qpc,ok,frequency\n");
+        }
+    }
     int result=0;
     LONG last=0;
     bool initialized=false;
@@ -69,9 +167,55 @@ int run_host(callbacks cb) {
             exit_after=status!=0;
         } else if(req.action==command::run && initialized && req.calls) {
             trace_main_start=perf07::qpc();
+            unsigned cpu_call_index = 0;
             bool ok=true;
-            try { for(std::uint32_t i=0;i<req.calls;++i) if(!cb.main()) { ok=false; break; } }
-            catch(...) { ok=false; }
+            try {
+                for (std::uint32_t i = 0; i < req.calls; ++i) {
+                    const auto call_start = call_file ? perf07::qpc() : 0;
+                    bool call_ok = false;
+                    try { call_ok = ([&]() -> bool {
+                const unsigned index = ++cpu_call_index;
+                LARGE_INTEGER t0{}, t1{};
+                ULONGLONG c0 = 0, c1 = 0;
+                const bool valid0 = cpu.sample(c0);
+                ULONG64 cycles0 = 0, cycles1 = 0;
+                const bool cycles_valid0 = cycles.sample(cycles0);
+                QueryPerformanceCounter(&t0);
+                bool call_ok = false;
+                try { call_ok = cb.main(); }
+                catch (...) {
+                    QueryPerformanceCounter(&t1);
+                    const bool valid1 = cpu.sample(c1);
+                const bool cycles_valid1 = cycles.sample(cycles1);
+                    cpu.record(req.cycle, index, t0.QuadPart, t1.QuadPart,
+                               c0, c1, valid0 && valid1, false);
+                    cycles.record(req.cycle, index, cycles0, cycles1,
+                                  cycles_valid0 && cycles_valid1, false);
+                    throw;
+                }
+                QueryPerformanceCounter(&t1);
+                const bool valid1 = cpu.sample(c1);
+                const bool cycles_valid1 = cycles.sample(cycles1);
+                cpu.record(req.cycle, index, t0.QuadPart, t1.QuadPart,
+                           c0, c1, valid0 && valid1, call_ok);
+                cycles.record(req.cycle, index, cycles0, cycles1,
+                              cycles_valid0 && cycles_valid1, call_ok);
+                return call_ok;
+            }()); } catch (...) { call_ok = false; }
+                    if (call_file) {
+                        const auto call_end = perf07::qpc();
+                        LARGE_INTEGER frequency{};
+                        QueryPerformanceFrequency(&frequency);
+                        std::fprintf(call_file, "%ld,%llu,%u,%u,%lld,%lld,%d,%lld\n",
+                            static_cast<long>(seq), static_cast<unsigned long long>(req.cycle),
+                            static_cast<unsigned>(i + 1), static_cast<unsigned>(req.calls),
+                            call_start, call_end, call_ok ? 1 : 0,
+                            static_cast<long long>(frequency.QuadPart));
+                    }
+                    if (call_file) std::fflush(call_file);
+                    if (!call_ok) { ok = false; break; }
+                }
+            } catch (...) { ok = false; }
             trace_main_end=perf07::qpc();
             response=ok?command::done:command::error;
             status=ok?0:2;
@@ -88,6 +232,7 @@ int run_host(callbacks cb) {
         SetEvent(completion_event);
         if(exit_after) { result=status?static_cast<int>(status):0; break; }
     }
+    if (call_file) { std::fflush(call_file); std::fclose(call_file); }
     CloseHandle(command_event); CloseHandle(completion_event);
     UnmapViewOfFile(control); CloseHandle(mapping);
     attached_mapping.reset();

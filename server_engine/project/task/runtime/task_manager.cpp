@@ -113,6 +113,29 @@ bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
             if (!blocked) ready.push_back(index);
         }
         if (ready.empty()) { error = "Task dependency scheduling stalled"; return false; }
+        // A single ready Task does not need an executor handoff. Keep the
+        // scheduler thread in the strict barrier until this Task completes.
+        if (ready.size() == 1) {
+            const auto index = ready.front();
+            trace->record("LOCKSTEP", cycle, configuration.tasks[index].id, "dispatched");
+            std::string local;
+            const auto run_start = std::chrono::steady_clock::now();
+            const auto barrier_start = perf::clock::now();
+            const bool ok = workers[index].child->run(
+                cycle, configuration.tasks[index].settings.calls, local);
+            const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - run_start).count();
+            trace->record("LOCKSTEP", cycle, configuration.tasks[index].id,
+                          ok ? "completed" : "failed", elapsed);
+            perf::record("barrier_wait", cycle, barrier_start);
+            if (!ok) {
+                error = "Task '" + configuration.tasks[index].id + "': " + local;
+                return false;
+            }
+            completed[index] = true;
+            --remaining;
+            continue;
+        }
         struct outcome { bool ok; std::string error; };
         std::vector<std::future<outcome>> pending;
         pending.reserve(ready.size());
