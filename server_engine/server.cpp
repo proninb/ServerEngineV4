@@ -46,6 +46,8 @@
 #include <limits>
 #include <cstring>
 #include <memory>
+#include <mutex>
+#include <thread>
 #include <system_error>
 #include <vector>
 
@@ -444,6 +446,114 @@ int server::run() {
         }
     }
     const auto scheduler_period = std::chrono::milliseconds(scheduler_period_ms);
+    // Opt-in while THREAD-20 is being validated; legacy scheduling remains the baseline.
+    scheduler_thread_enabled = env_equal("TASK_SCHEDULER_THREAD", "1");
+    if (scheduler_thread_enabled) {
+        scheduler_exit = false;
+        scheduler_thread = std::thread([this, scheduler_period, hr_enabled, hybrid, spin_budget,
+                                        deadline_file, deadline_origin]() {
+            // Dedicated scheduler: never waits on the TCP/control queue event.
+            (void)SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+            scheduler_hr_timer timer;
+            const HANDLE stop_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            auto next_tick = std::chrono::steady_clock::now();
+            auto previous_tick = task_runtime::perf::clock::now();
+            const auto deadline_ns = [deadline_origin](std::chrono::steady_clock::time_point point) {
+                return std::chrono::duration_cast<std::chrono::nanoseconds>(point - deadline_origin).count();
+            };
+            for (;;) {
+                {
+                    std::unique_lock<std::mutex> lock(scheduler_mutex);
+                    scheduler_cv.wait(lock, [this]() {
+                        return scheduler_exit || (context.project && !task_runtime_failed &&
+                            (project_state_value == project_state::run ||
+                             project_state_value == project_state::freeze));
+                    });
+                    if (scheduler_exit) break;
+                    next_tick = next_task_tick;
+                }
+                for (;;) {
+                    // No control-queue wakeups can disturb this deadline.
+                    if (hr_enabled && stop_event) {
+                        const auto target = hybrid ? next_tick - spin_budget : next_tick;
+                        (void)timer.wait(stop_event, target);
+                        if (hybrid) {
+                            while (std::chrono::steady_clock::now() < next_tick) {
+                                if (WaitForSingleObject(stop_event, 0) == WAIT_OBJECT_0) break;
+                                YieldProcessor();
+                            }
+                        }
+                    } else {
+                        std::this_thread::sleep_until(next_tick);
+                    }
+                    std::unique_lock<std::mutex> lock(scheduler_mutex);
+                    if (scheduler_exit) break;
+                    if (!context.project || task_runtime_failed ||
+                        (project_state_value != project_state::run &&
+                         project_state_value != project_state::freeze)) break;
+                    const auto actual_wakeup = std::chrono::steady_clock::now();
+                    if (actual_wakeup < next_tick) continue;
+                    const auto scheduled_tick = next_tick;
+                    const auto perf_tick_start = task_runtime::perf::clock::now();
+                    task_runtime::perf::record("cycle_interval", runtime_tick, previous_tick);
+                    previous_tick = perf_tick_start;
+                    ++runtime_tick;
+                    const bool frozen = project_state_value == project_state::freeze;
+                    if (!frozen) ++model_cycle;
+                    const auto cycle = frozen ? runtime_tick : model_cycle;
+                    const auto task_dispatch = std::chrono::steady_clock::now();
+                    std::string task_error;
+                    const char* mode = std::getenv("TASK_SCHEDULER_EXECUTION");
+                    const bool overlap_mode = mode && std::strcmp(mode, "OVERLAP") == 0;
+                    const bool task_tick_ok = !task_manager.active() ||
+                        (overlap_mode ? task_manager.tick_overlap(cycle, frozen, task_error) :
+                                        task_manager.tick(cycle, frozen, task_error));
+                    const auto barrier_complete = std::chrono::steady_clock::now();
+                    if (!task_tick_ok) {
+                        task_runtime_failed = true;
+                        task_manager.terminate();
+                        std::fprintf(stderr, "Task runtime failure: %s\n", task_error.c_str());
+                        const auto previous = project_state_value;
+                        set_project_state(project_state::freeze);
+                        context.communications.publish_server_state(previous, project_state_value);
+                    }
+                    task_runtime::perf::record("server_tick", runtime_tick, perf_tick_start);
+                    const auto cycle_complete = std::chrono::steady_clock::now();
+                    next_tick += scheduler_period;
+                    std::int64_t skipped_periods = 0;
+                    if (next_tick <= cycle_complete) {
+                        const auto missed = (cycle_complete - next_tick) / scheduler_period + 1;
+                        skipped_periods = static_cast<std::int64_t>(missed);
+                        next_tick += scheduler_period * missed;
+                    }
+                    next_task_tick = next_tick;
+                    if (deadline_file) {
+                        const auto budget_end = scheduled_tick + scheduler_period;
+                        const auto lateness = actual_wakeup > scheduled_tick
+                            ? actual_wakeup - scheduled_tick : std::chrono::steady_clock::duration::zero();
+                        const auto overrun = cycle_complete > budget_end
+                            ? cycle_complete - budget_end : std::chrono::steady_clock::duration::zero();
+                        const auto us = [](std::chrono::steady_clock::duration value) {
+                            return std::chrono::duration<double, std::micro>(value).count();
+                        };
+                        std::fprintf(deadline_file,
+                            "%llu,%lld,%lld,%lld,%lld,%lld,%.3f,%.3f,%.3f,%d,%.3f,%lld\n",
+                            static_cast<unsigned long long>(runtime_tick),
+                            static_cast<long long>(deadline_ns(scheduled_tick)),
+                            static_cast<long long>(deadline_ns(actual_wakeup)),
+                            static_cast<long long>(deadline_ns(task_dispatch)),
+                            static_cast<long long>(deadline_ns(barrier_complete)),
+                            static_cast<long long>(deadline_ns(cycle_complete)),
+                            us(lateness), us(barrier_complete - task_dispatch),
+                            us(cycle_complete - actual_wakeup), cycle_complete > budget_end ? 1 : 0,
+                            us(overrun), static_cast<long long>(skipped_periods));
+                    }
+                    if (!task_tick_ok) break;
+                }
+            }
+            if (stop_event) CloseHandle(stop_event);
+        });
+    }
     while (running) {
         const auto now =
             std::chrono::system_clock::now();
@@ -455,7 +565,7 @@ int server::run() {
 
         communication_control_message message;
 
-        const bool ticking = context.project && !task_runtime_failed &&
+        const bool ticking = !scheduler_thread_enabled && context.project && !task_runtime_failed &&
             (project_state_value == project_state::run ||
              project_state_value == project_state::freeze);
         // Convert the steady-clock deadline to the queue's system-clock domain.
@@ -617,6 +727,13 @@ int server::run() {
         }
     }
 
+    // Join before closing the diagnostics file or destroying Project/SHM.
+    {
+        std::lock_guard<std::mutex> lock(scheduler_mutex);
+        scheduler_exit = true;
+    }
+    scheduler_cv.notify_all();
+    if (scheduler_thread.joinable()) scheduler_thread.join();
     if (deadline_file) std::fclose(deadline_file);
     // SHUTDOWN result has already been presented to its originating endpoint.
     shutdown();
@@ -2297,6 +2414,8 @@ server_status server::run_project(
         return server_status::runtime_state_invalid;
     }
 
+    std::unique_lock<std::mutex> scheduler_lock(scheduler_mutex, std::defer_lock);
+    if (scheduler_thread_enabled) scheduler_lock.lock();
     if (task_runtime_failed) {
         diagnostics.emit(diagnostic(diagnostics::runtime_state_invalid, operation)
             .detail("Task failure requires UNLOAD").build());
@@ -2329,6 +2448,7 @@ server_status server::run_project(
     }
     next_task_tick = std::chrono::steady_clock::now();
     set_project_state(project_state::run);
+    if (scheduler_thread_enabled) scheduler_cv.notify_all();
 
     return server_status::success;
 }
@@ -2336,6 +2456,8 @@ server_status server::run_project(
 server_status server::freeze_project(
     operation_id operation,
     diagnostic_collection& diagnostics) {
+    std::unique_lock<std::mutex> scheduler_lock(scheduler_mutex, std::defer_lock);
+    if (scheduler_thread_enabled) scheduler_lock.lock();
 
     if (!context.project) {
         diagnostics.emit(
@@ -2369,6 +2491,8 @@ server_status server::freeze_project(
 server_status server::unload(
     operation_id operation,
     diagnostic_collection& diagnostics) {
+    std::unique_lock<std::mutex> scheduler_lock(scheduler_mutex, std::defer_lock);
+    if (scheduler_thread_enabled) scheduler_lock.lock();
 
     if (!context.project) {
         diagnostics.emit(
@@ -2414,6 +2538,7 @@ server_status server::unload(
 }
 
 void server::shutdown() noexcept {
+    // run() has already joined the scheduler thread.
     running = false;
     context.requests.stop_accepting_and_discard();
     context.communications.stop();

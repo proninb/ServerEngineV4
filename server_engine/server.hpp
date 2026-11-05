@@ -18,7 +18,10 @@
 #include "server_context.hpp"
 #include "server_status.hpp"
 
+#include <condition_variable>
 #include <cstdint>
+#include <mutex>
+#include <thread>
 #include <chrono>
 #include <filesystem>
 #include <string>
@@ -104,6 +107,13 @@ private:
     void set_project_state(project_state state) noexcept;
     void update_system_datetime() noexcept;
     [[nodiscard]] operation_id next_operation() noexcept;
+
+    // Scheduler holds this lock throughout a Task tick; lifecycle operations wait for the barrier.
+    std::mutex scheduler_mutex;
+    std::condition_variable scheduler_cv;
+    std::thread scheduler_thread;
+    bool scheduler_exit = false;
+    bool scheduler_thread_enabled = false;
 
     // Child lifetime ends before resident SHM lifetime.
     task_runtime::manager task_manager;
