@@ -88,8 +88,21 @@ bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
     const auto perf_start = perf::clock::now();
     if (!started) { error = "Task Manager not started"; return false; }
     const auto count = configuration.tasks.size();
-    std::vector<bool> scheduled(count, false);
-    std::unordered_map<std::string, std::size_t> ids;
+    // TASK_RUNTIME_PERF_34: retain scratch capacity between LOCKSTEP ticks.
+    // Only the scheduler thread calls tick(); no state escapes the invocation.
+    static thread_local std::vector<bool> scheduled;
+    static thread_local std::vector<bool> completed;
+    static thread_local std::vector<std::size_t> ready;
+    static thread_local std::vector<std::future<std::pair<bool, std::string>>> pending;
+    static thread_local std::unordered_map<std::string, std::size_t> ids;
+    scheduled.assign(count, false);
+    completed.assign(count, false);
+    ids.clear();
+    ids.reserve(count);
+    ready.clear();
+    pending.clear();
+    ready.reserve(count);
+    pending.reserve(count);
     for (std::size_t i = 0; i < count; ++i) {
         ids.emplace(configuration.tasks[i].id, i);
         const auto& task = configuration.tasks[i];
@@ -98,11 +111,10 @@ bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
     for (std::size_t i = 0; i < count; ++i)
         if (scheduled[i]) trace->record("LOCKSTEP", cycle, configuration.tasks[i].id, "scheduled");
     // Each wave contains independent tasks. Join every worker before the next wave.
-    std::vector<bool> completed(count, false);
     std::size_t remaining = 0;
     for (const bool run : scheduled) if (run) ++remaining;
     while (remaining) {
-        std::vector<std::size_t> ready;
+        ready.clear();
         for (const auto index : configuration.execution_order) {
             if (!scheduled[index] || completed[index]) continue;
             bool blocked = false;
@@ -136,20 +148,18 @@ bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
             --remaining;
             continue;
         }
-        struct outcome { bool ok; std::string error; };
-        std::vector<std::future<outcome>> pending;
-        pending.reserve(ready.size());
+        pending.clear();
         for (const auto index : ready) {
             trace->record("LOCKSTEP", cycle, configuration.tasks[index].id, "dispatched");
             pending.push_back(executor->submit( [this, index, cycle] {
-                outcome result{false, {}};
+                std::pair<bool, std::string> result{false, {}};
                 const auto start = std::chrono::steady_clock::now();
-                result.ok = workers[index].child->run(
-                    cycle, configuration.tasks[index].settings.calls, result.error);
+                result.first = workers[index].child->run(
+                    cycle, configuration.tasks[index].settings.calls, result.second);
                 const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::steady_clock::now() - start).count();
                 trace->record("LOCKSTEP", cycle, configuration.tasks[index].id,
-                           result.ok ? "completed" : "failed", elapsed);
+                           result.first ? "completed" : "failed", elapsed);
                 return result;
             }));
         }
@@ -157,8 +167,8 @@ bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
         bool success = true;
         for (std::size_t i = 0; i < pending.size(); ++i) {
             const auto result = pending[i].get();
-            if (!result.ok && success) {
-                error = "Task '" + configuration.tasks[ready[i]].id + "': " + result.error;
+            if (!result.first && success) {
+                error = "Task '" + configuration.tasks[ready[i]].id + "': " + result.second;
                 success = false;
             }
         }
@@ -166,6 +176,7 @@ bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
         // All in-flight requests are finished before failure is reported.
         if (!success) return false;
         for (const auto index : ready) { completed[index] = true; --remaining; }
+        pending.clear();
     }
     perf::record("manager_tick", cycle, perf_start);
     return true;

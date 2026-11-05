@@ -120,13 +120,6 @@ int run_host(callbacks cb) {
     FILE* call_file = nullptr;
     wchar_t trace_directory[32768]{};
     DWORD trace_length = GetEnvironmentVariableW(L"TASK_SHM_PERF07_DIR", trace_directory, 32768);
-    if(!trace_length) {
-        const DWORD cwd=GetCurrentDirectoryW(32768,trace_directory);
-        if(cwd && cwd<32768) {
-            const std::wstring path=std::wstring(trace_directory)+L"\\build\\task-diag-22";
-            if(path.size()<32768) { wcscpy_s(trace_directory,32768,path.c_str()); trace_length=static_cast<DWORD>(path.size()); }
-        }
-    }
     if (trace_length && trace_length < 32768) {
         std::error_code ec;
         std::filesystem::create_directories(trace_directory,ec);
@@ -138,6 +131,8 @@ int run_host(callbacks cb) {
             std::fprintf(call_file, "seq,cycle,call_index,call_count,start_qpc,end_qpc,ok,frequency\n");
         }
     }
+    // Per-call probes and CSV writes are enabled only by TASK_SHM_PERF07_DIR.
+    const bool diagnostics = trace_length && trace_length < 32768;
     int result=0;
     LONG last=0;
     bool initialized=false;
@@ -177,28 +172,28 @@ int run_host(callbacks cb) {
                 const unsigned index = ++cpu_call_index;
                 LARGE_INTEGER t0{}, t1{};
                 ULONGLONG c0 = 0, c1 = 0;
-                const bool valid0 = cpu.sample(c0);
+                const bool valid0 = diagnostics && cpu.sample(c0);
                 ULONG64 cycles0 = 0, cycles1 = 0;
-                const bool cycles_valid0 = cycles.sample(cycles0);
-                QueryPerformanceCounter(&t0);
+                const bool cycles_valid0 = diagnostics && cycles.sample(cycles0);
+                if (diagnostics) QueryPerformanceCounter(&t0);
                 bool call_ok = false;
                 try { call_ok = cb.main(); }
                 catch (...) {
-                    QueryPerformanceCounter(&t1);
-                    const bool valid1 = cpu.sample(c1);
-                const bool cycles_valid1 = cycles.sample(cycles1);
-                    cpu.record(req.cycle, index, t0.QuadPart, t1.QuadPart,
+                    if (diagnostics) QueryPerformanceCounter(&t1);
+                    const bool valid1 = diagnostics && cpu.sample(c1);
+                const bool cycles_valid1 = diagnostics && cycles.sample(cycles1);
+                    if (diagnostics) cpu.record(req.cycle, index, t0.QuadPart, t1.QuadPart,
                                c0, c1, valid0 && valid1, false);
-                    cycles.record(req.cycle, index, cycles0, cycles1,
+                    if (diagnostics) cycles.record(req.cycle, index, cycles0, cycles1,
                                   cycles_valid0 && cycles_valid1, false);
                     throw;
                 }
-                QueryPerformanceCounter(&t1);
-                const bool valid1 = cpu.sample(c1);
-                const bool cycles_valid1 = cycles.sample(cycles1);
-                cpu.record(req.cycle, index, t0.QuadPart, t1.QuadPart,
+                if (diagnostics) QueryPerformanceCounter(&t1);
+                const bool valid1 = diagnostics && cpu.sample(c1);
+                const bool cycles_valid1 = diagnostics && cycles.sample(cycles1);
+                if (diagnostics) cpu.record(req.cycle, index, t0.QuadPart, t1.QuadPart,
                            c0, c1, valid0 && valid1, call_ok);
-                cycles.record(req.cycle, index, cycles0, cycles1,
+                if (diagnostics) cycles.record(req.cycle, index, cycles0, cycles1,
                               cycles_valid0 && cycles_valid1, call_ok);
                 return call_ok;
             }()); } catch (...) { call_ok = false; }

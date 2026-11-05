@@ -3,7 +3,10 @@
 #include <Windows.h>
 #include <cstdio>
 #include <string>
+#include <filesystem>
+#include <system_error>
 #include <cwchar>
+#include <cstring>
 
 namespace cw::server::task_runtime::perf07 {
 struct trace {
@@ -18,7 +21,9 @@ struct trace {
         wchar_t directory[32768]{};
         DWORD n=GetEnvironmentVariableW(L"TASK_SHM_PERF07_DIR",directory,32768);
         if(!n || n>=32768) return;
-        CreateDirectoryW(directory,nullptr);
+        std::error_code ec;
+        std::filesystem::create_directories(directory,ec);
+        if(ec) return;
         std::wstring safe=mapping_name;
         for(auto& c:safe) if(c==L'\\' || c==L'/' || c==L':' || c==L' ' || c==L'"') c=L'_';
         std::wstring path=std::wstring(directory)+L"\\"+side+L"_"+safe+L".csv";
