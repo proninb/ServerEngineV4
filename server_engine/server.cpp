@@ -432,7 +432,18 @@ int server::run() {
     const bool overlap = env_equal("TASK_SCHEDULER_EXECUTION", "OVERLAP");
     const auto spin_budget = std::chrono::microseconds(150);
     const HANDLE queue_event = hr_enabled ? context.requests.native_wake_event() : nullptr;
-    const auto scheduler_period = std::chrono::milliseconds(2);
+    // TASK_SHM_SCHEDULER_08: opt-in benchmark period; production default remains 2 ms.
+    int scheduler_period_ms = 2;
+    if (const char* value = std::getenv("TASK_SCHEDULER_PERIOD_MS")) {
+        if (std::strcmp(value, "1") == 0) scheduler_period_ms = 1;
+        else if (std::strcmp(value, "2") == 0) scheduler_period_ms = 2;
+        else if (std::strcmp(value, "5") == 0) scheduler_period_ms = 5;
+        else {
+            std::fprintf(stderr, "Invalid TASK_SCHEDULER_PERIOD_MS: expected 1, 2 or 5\n");
+            return 1;
+        }
+    }
+    const auto scheduler_period = std::chrono::milliseconds(scheduler_period_ms);
     while (running) {
         const auto now =
             std::chrono::system_clock::now();

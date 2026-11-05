@@ -162,21 +162,24 @@ def main():
                                 client.request('UNLOAD')
                                 client.state('UNLOADED')
                                 events = read_events(event_log)[before:]
+                                empty_main = os.environ.get('TASK_EMPTY_MAIN') == '1'
                                 for task_id in ('0', '1'):
                                     require(sum(x[:2] == (task_id, 'INIT') for x in events) == 1,
                                             f'Task {task_id} INIT count')
                                     require(sum(x[:2] == (task_id, 'DONE') for x in events) == 1,
                                             f'Task {task_id} DONE count')
-                                    require(sum(x[:2] == (task_id, 'MAIN') for x in events) > 0,
-                                            f'Task {task_id} MAIN missing')
-                                # Each dependent MAIN must follow a preceding A MAIN.
-                                a = b = 0
-                                for item in events:
-                                    if item[:2] == ('0', 'MAIN'): a += 1
-                                    if item[:2] == ('1', 'MAIN'):
-                                        b += 1
-                                        require(b <= a, 'Dependency B overtook A')
-                                require(a == b, 'Dependency A/B call counts differ')
+                                    if not empty_main:
+                                        require(sum(x[:2] == (task_id, 'MAIN') for x in events) > 0,
+                                                f'Task {task_id} MAIN missing')
+                                if not empty_main:
+                                    # Each dependent MAIN must follow a preceding A MAIN.
+                                    a = b = 0
+                                    for item in events:
+                                        if item[:2] == ('0', 'MAIN'): a += 1
+                                        if item[:2] == ('1', 'MAIN'):
+                                            b += 1
+                                            require(b <= a, 'Dependency B overtook A')
+                                    require(a == b, 'Dependency A/B call counts differ')
                             print('PASS server task cycle', iteration + 1, 'failure' if fail else 'normal')
                         client.request('SHUTDOWN')
                     process.wait(timeout=args.timeout)

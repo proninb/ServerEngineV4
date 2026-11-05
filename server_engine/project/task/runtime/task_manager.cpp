@@ -1,4 +1,5 @@
 #include "task_manager.hpp"
+#include "task_trace_buffer.hpp"
 #include "task_perf_probe.hpp"
 #include <future>
 #include <chrono>
@@ -9,25 +10,6 @@
 #include <mutex>
 
 namespace cw::server::task_runtime {
-// TASK_SCHEDULER_PERF_04: opt-in per-task trace; time is wall-clock, including IPC.
-namespace {
-void task_trace(const char* mode, std::uint64_t cycle, const std::string& id,
-                const char* event, long long duration_us = 0) noexcept {
-    static std::mutex trace_mutex;
-    const char* path = std::getenv("TASK_SCHEDULER_TASK_CSV");
-    if (!path || !*path) return;
-    std::lock_guard<std::mutex> lock(trace_mutex);
-    FILE* file = nullptr;
-    if (fopen_s(&file, path, "a+") != 0 || !file) return;
-    std::fseek(file, 0, SEEK_END);
-    if (std::ftell(file) == 0)
-        std::fputs("mode,cycle,task,event,duration_us\n", file);
-    // Task IDs are configuration identifiers, not arbitrary CSV content.
-    std::fprintf(file, "%s,%llu,%s,%s,%lld\n", mode,
-                 static_cast<unsigned long long>(cycle), id.c_str(), event, duration_us);
-    std::fclose(file);
-}
-}
 manager::~manager() { terminate(); }
 
 bool manager::start(task_configuration value,
@@ -50,6 +32,18 @@ bool manager::start(task_configuration value,
             terminate();
             return false;
         }
+    }
+    try {
+        executor = std::make_unique<task_executor>(workers.size());
+        trace = std::make_unique<task_trace_buffer>();
+    } catch (const std::exception& ex) {
+        error = std::string("Task runtime initialization failed: ") + ex.what();
+        terminate();
+        return false;
+    } catch (...) {
+        error = "Task runtime initialization failed: unknown exception";
+        terminate();
+        return false;
     }
     started = true;
     return true;
@@ -74,6 +68,18 @@ bool manager::start(task_configuration value,
             return false;
         }
     }
+    try {
+        executor = std::make_unique<task_executor>(workers.size());
+        trace = std::make_unique<task_trace_buffer>();
+    } catch (const std::exception& ex) {
+        error = std::string("Task runtime initialization failed: ") + ex.what();
+        terminate();
+        return false;
+    } catch (...) {
+        error = "Task runtime initialization failed: unknown exception";
+        terminate();
+        return false;
+    }
     started = true;
     return true;
 }
@@ -90,7 +96,7 @@ bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
         scheduled[i] = task.enabled && task_is_scheduled(task.settings, cycle, frozen);
     }
     for (std::size_t i = 0; i < count; ++i)
-        if (scheduled[i]) task_trace("LOCKSTEP", cycle, configuration.tasks[i].id, "scheduled");
+        if (scheduled[i]) trace->record("LOCKSTEP", cycle, configuration.tasks[i].id, "scheduled");
     // Each wave contains independent tasks. Join every worker before the next wave.
     std::vector<bool> completed(count, false);
     std::size_t remaining = 0;
@@ -111,15 +117,15 @@ bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
         std::vector<std::future<outcome>> pending;
         pending.reserve(ready.size());
         for (const auto index : ready) {
-            task_trace("LOCKSTEP", cycle, configuration.tasks[index].id, "dispatched");
-            pending.push_back(std::async(std::launch::async, [this, index, cycle] {
+            trace->record("LOCKSTEP", cycle, configuration.tasks[index].id, "dispatched");
+            pending.push_back(executor->submit( [this, index, cycle] {
                 outcome result{false, {}};
                 const auto start = std::chrono::steady_clock::now();
                 result.ok = workers[index].child->run(
                     cycle, configuration.tasks[index].settings.calls, result.error);
                 const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::steady_clock::now() - start).count();
-                task_trace("LOCKSTEP", cycle, configuration.tasks[index].id,
+                trace->record("LOCKSTEP", cycle, configuration.tasks[index].id,
                            result.ok ? "completed" : "failed", elapsed);
                 return result;
             }));
@@ -203,8 +209,8 @@ bool manager::tick_overlap(std::uint64_t cycle, bool frozen, std::string& error)
 
     for (std::size_t i = 0; i < count; ++i) {
         if (!scheduled[i]) continue;
-        task_trace("OVERLAP", cycle, configuration.tasks[i].id, "scheduled");
-        if (!eligible[i]) task_trace("OVERLAP", cycle, configuration.tasks[i].id, "skipped_busy");
+        trace->record("OVERLAP", cycle, configuration.tasks[i].id, "scheduled");
+        if (!eligible[i]) trace->record("OVERLAP", cycle, configuration.tasks[i].id, "skipped_busy");
     }
 
     // Retain the futures for this cycle. A dependent waits inside its own
@@ -213,7 +219,7 @@ bool manager::tick_overlap(std::uint64_t cycle, bool frozen, std::string& error)
     for (const auto index : configuration.execution_order) {
         if (!eligible[index]) continue;
         auto& worker = workers[index];
-        task_trace("OVERLAP", cycle, configuration.tasks[index].id, "dispatched");
+        trace->record("OVERLAP", cycle, configuration.tasks[index].id, "dispatched");
 
         bool blocked = false;
         std::vector<std::shared_future<std::pair<bool, std::string>>> dependencies;
@@ -232,7 +238,7 @@ bool manager::tick_overlap(std::uint64_t cycle, bool frozen, std::string& error)
         if (blocked) continue;
 
         try {
-            worker.pending = std::async(std::launch::async,
+            worker.pending = executor->submit(
                 [this, index, cycle, dependencies = std::move(dependencies)]() {
                     const auto dependency_start = std::chrono::steady_clock::now();
                     for (const auto& dependency : dependencies) {
@@ -243,7 +249,7 @@ bool manager::tick_overlap(std::uint64_t cycle, bool frozen, std::string& error)
                     }
                     const auto dependency_us = std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::steady_clock::now() - dependency_start).count();
-                    task_trace("OVERLAP", cycle, configuration.tasks[index].id,
+                    trace->record("OVERLAP", cycle, configuration.tasks[index].id,
                                "dependency_wait", dependency_us);
                     std::string local;
                     const auto run_start = std::chrono::steady_clock::now();
@@ -251,7 +257,7 @@ bool manager::tick_overlap(std::uint64_t cycle, bool frozen, std::string& error)
                         cycle, configuration.tasks[index].settings.calls, local);
                     const auto run_us = std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::steady_clock::now() - run_start).count();
-                    task_trace("OVERLAP", cycle, configuration.tasks[index].id,
+                    trace->record("OVERLAP", cycle, configuration.tasks[index].id,
                                ok ? "completed" : "failed", run_us);
                     return std::make_pair(ok, std::move(local));
                 }).share();
@@ -299,6 +305,8 @@ bool manager::stop(std::string& error) {
 void manager::terminate() noexcept {
     drain();
     for (auto& worker : workers) if (worker.child) worker.child->terminate();
+    executor.reset();
+    trace.reset(); // flush and join before unloading Project state
     workers.clear();
     configuration = {};
     started = false;

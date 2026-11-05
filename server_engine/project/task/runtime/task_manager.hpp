@@ -5,6 +5,8 @@
 #pragma once
 #include "../task_configuration.hpp"
 #include "task_process.hpp"
+#include "task_trace_buffer.hpp"
+#include "task_executor.hpp"
 #include <cstdint>
 #include <filesystem>
 #include <future>
@@ -43,6 +45,8 @@ private:
     };
     task_configuration configuration;
     std::vector<worker> workers;
+    std::unique_ptr<task_executor> executor;
+    std::unique_ptr<task_trace_buffer> trace;
     bool started = false;
 };
 }

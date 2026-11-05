@@ -31,7 +31,8 @@ int TASKMAIN() {
         record("NO_SHM");
         return TASK_FAIL;
     }
-    record("MAIN");
+    // TASK-EMPTY-LATENCY-10: skip per-cycle file I/O in the empty benchmark.
+    if (GetEnvironmentVariableA("TASK_EMPTY_MAIN", nullptr, 0) == 0) record("MAIN");
 #ifdef TASK_FORCE_FAIL
     return TASK_FAIL;
 #else
