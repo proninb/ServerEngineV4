@@ -1,0 +1,4 @@
+period_ms_requested,task_count,elapsed_s,main_calls,cycles_observed,cycles_per_s,effective_cycle_ms,requested_cycles_per_s
+2,1,8.001209,257,257.0,32.12,31.133,500.0
+2,2,8.001179,514,257.0,32.12,31.133,500.0
+2,4,8.012911,1028,257.0,32.07,31.179,500.0

@@ -28,8 +28,8 @@ struct cycle_trace {
         for (auto& c : safe) if (c == L'\\' || c == L'/' || c == L':' || c == L' ') c = L'_';
         const auto path = std::wstring(directory) + L"\\cycles_" + safe + L".csv";
         if (_wfopen_s(&file, path.c_str(), L"wb") || !file) return;
+        setvbuf(file, nullptr, _IOFBF, 1024 * 1024);
         std::fprintf(file, "cycle,call_index,thread_cycles,cycle_valid,ok\n");
-        std::fflush(file);
     }
     ~cycle_trace() { if (file) std::fclose(file); }
     static bool sample(ULONG64& value) {
@@ -42,7 +42,6 @@ struct cycle_trace {
         std::fprintf(file, "%llu,%u,%llu,%d,%d\n", cycle, index,
             static_cast<unsigned long long>(good ? end - begin : 0),
             good ? 1 : 0, ok ? 1 : 0);
-        std::fflush(file);
     }
 };
 
@@ -59,8 +58,8 @@ struct cpu_trace {
         for (auto& c : safe) if (c == L'\\' || c == L'/' || c == L':' || c == L' ') c = L'_';
         const auto path = std::wstring(directory) + L"\\cpu_" + safe + L".csv";
         if (_wfopen_s(&file, path.c_str(), L"wb") || !file) return;
+        setvbuf(file, nullptr, _IOFBF, 1024 * 1024);
         std::fprintf(file, "cycle,call_index,wall_us,cpu_us,off_cpu_us,cpu_valid,ok\n");
-        std::fflush(file);
     }
     ~cpu_trace() { if (file) std::fclose(file); }
     static bool sample(ULONGLONG& ticks) {
@@ -80,7 +79,6 @@ struct cpu_trace {
         std::fprintf(file, "%llu,%u,%.3f,%.3f,%.3f,%d,%d\n",
             cycle, index, wall, cpu, valid ? (wall > cpu ? wall - cpu : 0.0) : 0.0,
             valid ? 1 : 0, ok ? 1 : 0);
-        std::fflush(file);
     }
 };
 
@@ -127,7 +125,7 @@ int run_host(callbacks cb) {
         for (auto& c : safe) if (c == L'\\' || c == L'/' || c == L':' || c == L' ' || c == L'"') c = L'_';
         const auto path = std::wstring(trace_directory) + L"\\calls_" + safe + L".csv";
         if (_wfopen_s(&call_file, path.c_str(), L"wb") == 0 && call_file) {
-            setvbuf(call_file, nullptr, _IOLBF, 4096);
+            setvbuf(call_file, nullptr, _IOFBF, 1024 * 1024);
             std::fprintf(call_file, "seq,cycle,call_index,call_count,start_qpc,end_qpc,ok,frequency\n");
         }
     }
@@ -207,7 +205,6 @@ int run_host(callbacks cb) {
                             call_start, call_end, call_ok ? 1 : 0,
                             static_cast<long long>(frequency.QuadPart));
                     }
-                    if (call_file) std::fflush(call_file);
                     if (!call_ok) { ok = false; break; }
                 }
             } catch (...) { ok = false; }

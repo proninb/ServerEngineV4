@@ -25,7 +25,8 @@ void process::terminate() noexcept {
     close_handle(command_event); close_handle(completion_event);
     close_handle(mapping); close_handle(thread); close_handle(child);
     perf_trace.close();
-    initialized=false; sequence=0;
+    if (dispatch_file) { std::fclose(dispatch_file); dispatch_file=nullptr; }
+    initialized=false; sequence=0; in_flight=false; in_flight_sequence=0; in_flight_cycle=0; in_flight_start=0;
 }
 bool process::start(const std::wstring& executable,std::uint32_t timeout_ms,std::string& error) {
     return start_impl(executable,timeout_ms,nullptr,error);
@@ -39,6 +40,18 @@ bool process::start_impl(const std::wstring& executable,std::uint32_t timeout_ms
     terminate(); timeout=timeout_ms;
     const auto name=unique_name();
     perf_trace.open(name,L"parent");
+    // PERF-49C: opt-in, buffered dispatch timestamps; no SHM ABI changes.
+    wchar_t diagnostic_directory[32768]{};
+    const DWORD diagnostic_length=GetEnvironmentVariableW(L"TASK_SHM_PERF07_DIR",diagnostic_directory,32768);
+    if (diagnostic_length && diagnostic_length < 32768) {
+        std::wstring safe=name;
+        for (auto& c:safe) if (c==L'\\' || c==L'/' || c==L':' || c==L' ') c=L'_';
+        const auto path=std::wstring(diagnostic_directory)+L"\\dispatch_"+safe+L".csv";
+        if (_wfopen_s(&dispatch_file,path.c_str(),L"wb")==0 && dispatch_file) {
+            setvbuf(dispatch_file,nullptr,_IOFBF,1024*1024);
+            std::fprintf(dispatch_file,"seq,cycle,before_setevent_qpc,after_setevent_qpc,completion_qpc,ok,frequency\n");
+        }
+    }
     mapping=CreateFileMappingW(INVALID_HANDLE_VALUE,nullptr,PAGE_READWRITE,0,sizeof(task_control),name.c_str());
     if(!mapping || GetLastError()==ERROR_ALREADY_EXISTS) { error="CreateFileMappingW failed"; terminate(); return false; }
     control=static_cast<task_control*>(MapViewOfFile(mapping,FILE_MAP_ALL_ACCESS,0,0,sizeof(task_control)));
@@ -88,6 +101,56 @@ bool process::exchange(message request,command expected,std::string& error) {
         return true;
     }
 }
+bool process::begin_run(std::uint64_t cycle, std::uint32_t calls, std::string& error) {
+    if (!initialized || !calls || in_flight || !child || !control) {
+        error = "Task not initialized, calls zero, or request already in flight";
+        return false;
+    }
+    in_flight_sequence = ++sequence;
+    in_flight_cycle = cycle;
+    in_flight_start = perf07::qpc();
+    control->request = message{magic, version, command::run, 0, cycle, calls};
+    InterlockedExchange(&control->request_sequence, in_flight_sequence);
+    in_flight = true;
+    dispatch_before = perf07::qpc();
+    const BOOL signaled=SetEvent(command_event);
+    dispatch_after = perf07::qpc();
+    if (!signaled) {
+        in_flight = false;
+        error = "Task command event failed";
+        return false;
+    }
+    return true;
+}
+
+bool process::complete_run(std::string& error) {
+    if (!in_flight || !control) {
+        error = "No outstanding Task request";
+        return false;
+    }
+    const LONG response_sequence = InterlockedCompareExchange(&control->response_sequence, 0, 0);
+    if (response_sequence != in_flight_sequence) {
+        error = "Stale Task completion sequence";
+        return false;
+    }
+    const auto response = control->response;
+    const bool ok = response.signature == magic && response.protocol_version == version &&
+        response.action == command::done && response.cycle == in_flight_cycle && response.status == 0;
+    const auto completion_qpc=perf07::qpc();
+    perf_trace.write(in_flight_sequence, in_flight_cycle, in_flight_start, completion_qpc, 0, 0, ok);
+    if (dispatch_file) {
+        LARGE_INTEGER frequency{};
+        QueryPerformanceFrequency(&frequency);
+        std::fprintf(dispatch_file,"%ld,%llu,%lld,%lld,%lld,%d,%lld\n",
+            static_cast<long>(in_flight_sequence),static_cast<unsigned long long>(in_flight_cycle),
+            static_cast<long long>(dispatch_before),static_cast<long long>(dispatch_after),
+            static_cast<long long>(completion_qpc),ok?1:0,static_cast<long long>(frequency.QuadPart));
+    }
+    in_flight = false;
+    if (!ok) error = "Invalid Task reply, cycle or status";
+    return ok;
+}
+
 bool process::run(std::uint64_t cycle,std::uint32_t calls,std::string& error) {
     if(!initialized || !calls) { error="Task not initialized or calls zero"; return false; }
     if(!exchange(message{magic,version,command::run,0,cycle,calls},command::done,error)) {

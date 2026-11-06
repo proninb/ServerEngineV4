@@ -2,6 +2,8 @@
 #include "task_trace_buffer.hpp"
 #include "task_perf_probe.hpp"
 #include <future>
+#include <algorithm>
+#include <Windows.h>
 #include <chrono>
 #include <unordered_map>
 #include <utility>
@@ -19,6 +21,18 @@ bool manager::start(task_configuration value,
     terminate();
     if (!validate_task_configuration(value, error)) return false;
     configuration = std::move(value);
+    dependency_indices.clear();
+    dependency_indices.resize(configuration.tasks.size());
+    std::unordered_map<std::string, std::size_t> dependency_ids;
+    dependency_ids.reserve(configuration.tasks.size());
+    for (std::size_t i = 0; i < configuration.tasks.size(); ++i)
+        dependency_ids.emplace(configuration.tasks[i].id, i);
+    for (std::size_t i = 0; i < configuration.tasks.size(); ++i) {
+        auto& indices = dependency_indices[i];
+        indices.reserve(configuration.tasks[i].dependencies.size());
+        for (const auto& name : configuration.tasks[i].dependencies)
+            indices.push_back(dependency_ids.at(name));
+    }
     workers.resize(configuration.tasks.size());
     for (const auto index : configuration.execution_order) {
         const auto& task = configuration.tasks[index];
@@ -34,7 +48,6 @@ bool manager::start(task_configuration value,
         }
     }
     try {
-        executor = std::make_unique<task_executor>(workers.size());
         trace = std::make_unique<task_trace_buffer>();
     } catch (const std::exception& ex) {
         error = std::string("Task runtime initialization failed: ") + ex.what();
@@ -55,6 +68,18 @@ bool manager::start(task_configuration value,
     terminate();
     if (!validate_task_configuration(value, error)) return false;
     configuration = std::move(value);
+    dependency_indices.clear();
+    dependency_indices.resize(configuration.tasks.size());
+    std::unordered_map<std::string, std::size_t> dependency_ids;
+    dependency_ids.reserve(configuration.tasks.size());
+    for (std::size_t i = 0; i < configuration.tasks.size(); ++i)
+        dependency_ids.emplace(configuration.tasks[i].id, i);
+    for (std::size_t i = 0; i < configuration.tasks.size(); ++i) {
+        auto& indices = dependency_indices[i];
+        indices.reserve(configuration.tasks[i].dependencies.size());
+        for (const auto& name : configuration.tasks[i].dependencies)
+            indices.push_back(dependency_ids.at(name));
+    }
     workers.resize(configuration.tasks.size());
     for (const auto index : configuration.execution_order) {
         const auto& task = configuration.tasks[index];
@@ -69,7 +94,6 @@ bool manager::start(task_configuration value,
         }
     }
     try {
-        executor = std::make_unique<task_executor>(workers.size());
         trace = std::make_unique<task_trace_buffer>();
     } catch (const std::exception& ex) {
         error = std::string("Task runtime initialization failed: ") + ex.what();
@@ -88,95 +112,144 @@ bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
     const auto perf_start = perf::clock::now();
     if (!started) { error = "Task Manager not started"; return false; }
     const auto count = configuration.tasks.size();
-    // TASK_RUNTIME_PERF_34: retain scratch capacity between LOCKSTEP ticks.
-    // Only the scheduler thread calls tick(); no state escapes the invocation.
-    static thread_local std::vector<bool> scheduled;
-    static thread_local std::vector<bool> completed;
-    static thread_local std::vector<std::size_t> ready;
-    static thread_local std::vector<std::future<std::pair<bool, std::string>>> pending;
-    static thread_local std::unordered_map<std::string, std::size_t> ids;
-    scheduled.assign(count, false);
-    completed.assign(count, false);
-    ids.clear();
-    ids.reserve(count);
-    ready.clear();
-    pending.clear();
-    ready.reserve(count);
-    pending.reserve(count);
-    for (std::size_t i = 0; i < count; ++i) {
-        ids.emplace(configuration.tasks[i].id, i);
-        const auto& task = configuration.tasks[i];
-        scheduled[i] = task.enabled && task_is_scheduled(task.settings, cycle, frozen);
-    }
-    for (std::size_t i = 0; i < count; ++i)
-        if (scheduled[i]) trace->record("LOCKSTEP", cycle, configuration.tasks[i].id, "scheduled");
-    // Each wave contains independent tasks. Join every worker before the next wave.
+    // Fixed-size scratch: allocated once after SHM/Task configuration is fixed.
+    struct state {
+        std::vector<unsigned char> scheduled, completed;
+        std::vector<std::size_t> ready;
+        std::vector<HANDLE> handles;
+        std::vector<std::size_t> handle_tasks;
+        std::vector<ULONGLONG> deadlines;
+        std::vector<unsigned char> done;
+        std::vector<HANDLE> waiting;
+        std::vector<std::size_t> mapping;
+    };
+    static thread_local state scratch;
+    auto& s = scratch;
+    s.scheduled.assign(count, 0);
+    s.completed.assign(count, 0);
+    s.ready.clear();
+    s.ready.reserve(count);
+    s.handles.clear();
+    s.handles.reserve(62);
+    s.handle_tasks.clear();
+    s.handle_tasks.reserve(31);
+    s.deadlines.assign(count, 0);
+    s.done.reserve(31);
+    s.waiting.reserve(62);
+    s.mapping.reserve(31);
     std::size_t remaining = 0;
-    for (const bool run : scheduled) if (run) ++remaining;
-    while (remaining) {
-        ready.clear();
-        for (const auto index : configuration.execution_order) {
-            if (!scheduled[index] || completed[index]) continue;
-            bool blocked = false;
-            for (const auto& dependency : configuration.tasks[index].dependencies) {
-                const auto dep = ids.at(dependency);
-                if (scheduled[dep] && !completed[dep]) { blocked = true; break; }
-            }
-            if (!blocked) ready.push_back(index);
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto& task = configuration.tasks[i];
+        s.scheduled[i] = task.enabled && task_is_scheduled(task.settings, cycle, frozen);
+        if (s.scheduled[i]) {
+            ++remaining;
+            trace->record("LOCKSTEP", cycle, task.id, "scheduled");
         }
-        if (ready.empty()) { error = "Task dependency scheduling stalled"; return false; }
-        // A single ready Task does not need an executor handoff. Keep the
-        // scheduler thread in the strict barrier until this Task completes.
-        if (ready.size() == 1) {
-            const auto index = ready.front();
-            trace->record("LOCKSTEP", cycle, configuration.tasks[index].id, "dispatched");
-            std::string local;
-            const auto run_start = std::chrono::steady_clock::now();
+    }
+    // The configuration's execution_order is already topologically sorted.
+    // Dispatch ready nodes directly to child processes. No executor/futures.
+    while (remaining) {
+        s.ready.clear();
+        for (const auto index : configuration.execution_order) {
+            if (!s.scheduled[index] || s.completed[index]) continue;
+            bool blocked = false;
+            for (const auto& name : configuration.tasks[index].dependencies) {
+                // PERF-47 keeps configuration compatibility; compile this lookup
+                // into indices in a separate, independently measured change.
+                const auto it = std::find_if(configuration.tasks.begin(), configuration.tasks.end(),
+                    [&](const auto& t) { return t.id == name; });
+                if (it == configuration.tasks.end()) { error = "Unknown Task dependency"; return false; }
+                const auto dep = static_cast<std::size_t>(it - configuration.tasks.begin());
+                if (s.scheduled[dep] && !s.completed[dep]) { blocked = true; break; }
+            }
+            if (!blocked) s.ready.push_back(index);
+        }
+        if (s.ready.empty()) { error = "Task dependency scheduling stalled"; return false; }
+        // Windows WaitForMultipleObjects has a 64-handle limit. Reserve two
+        // handles per Task (completion + process exit); bounded batches of 31.
+        for (std::size_t offset = 0; offset < s.ready.size(); offset += 31) {
+            const auto last = (std::min)(offset + 31, s.ready.size());
+            s.handles.clear();
+            s.handle_tasks.clear();
+            bool dispatched_ok = true;
+            for (std::size_t j = offset; j < last; ++j) {
+                const auto index = s.ready[j];
+                auto& child = *workers[index].child;
+                trace->record("LOCKSTEP", cycle, configuration.tasks[index].id, "dispatched");
+                std::string local;
+                if (!child.begin_run(cycle, configuration.tasks[index].settings.calls, local)) {
+                    error = "Task '" + configuration.tasks[index].id + "': " + local;
+                    dispatched_ok = false;
+                    break;
+                }
+                s.deadlines[index] = GetTickCount64() + child.timeout_ms();
+                s.handle_tasks.push_back(index);
+                s.handles.push_back(child.completion_handle());
+                s.handles.push_back(child.process_handle());
+            }
+            // Always drain successfully dispatched children, even on dispatch failure.
             const auto barrier_start = perf::clock::now();
-            const bool ok = workers[index].child->run(
-                cycle, configuration.tasks[index].settings.calls, local);
-            const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - run_start).count();
-            trace->record("LOCKSTEP", cycle, configuration.tasks[index].id,
-                          ok ? "completed" : "failed", elapsed);
+            std::size_t outstanding = s.handle_tasks.size();
+            s.done.assign(s.handle_tasks.size(), 0);
+            while (outstanding) {
+                ULONGLONG nearest = ~ULONGLONG{0};
+                for (std::size_t k = 0; k < s.done.size(); ++k)
+                    if (!s.done[k]) nearest = (std::min)(nearest, s.deadlines[s.handle_tasks[k]]);
+                const auto now = GetTickCount64();
+                const auto wait_ms = now >= nearest ? DWORD{0} :
+                    static_cast<DWORD>((std::min<ULONGLONG>)(nearest - now, 0xFFFFFFFEull));
+                // Remove completed handles to prevent a signalled process handle
+                // from repeatedly winning the wait.
+                s.waiting.clear();
+                s.mapping.clear();
+                for (std::size_t k = 0; k < s.done.size(); ++k) if (!s.done[k]) {
+                    s.waiting.push_back(s.handles[2*k]);
+                    s.waiting.push_back(s.handles[2*k+1]);
+                    s.mapping.push_back(k);
+                }
+                const DWORD result = WaitForMultipleObjects(
+                    static_cast<DWORD>(s.waiting.size()), s.waiting.data(), FALSE, wait_ms);
+                if (result == WAIT_TIMEOUT || result == WAIT_FAILED) {
+                    if (dispatched_ok) error = result == WAIT_TIMEOUT ? "Task reply timeout" : "Task completion wait failed";
+                    dispatched_ok = false;
+                    break;
+                }
+                const auto position = static_cast<std::size_t>(result - WAIT_OBJECT_0);
+                if (position >= s.waiting.size()) {
+                    if (dispatched_ok) error = "Unexpected Task wait result";
+                    dispatched_ok = false;
+                    break;
+                }
+                const auto k = s.mapping[position / 2];
+                const auto index = s.handle_tasks[k];
+                if (position % 2) {
+                    if (dispatched_ok) error = "Task '" + configuration.tasks[index].id + "' exited before reply";
+                    dispatched_ok = false;
+                    break;
+                }
+                std::string local;
+                const bool ok = workers[index].child->complete_run(local);
+                trace->record("LOCKSTEP", cycle, configuration.tasks[index].id,
+                    ok ? "completed" : "failed");
+                s.done[k] = 1;
+                --outstanding;
+                if (!ok && dispatched_ok) {
+                    error = "Task '" + configuration.tasks[index].id + "': " + local;
+                    dispatched_ok = false;
+                }
+            }
             perf::record("barrier_wait", cycle, barrier_start);
-            if (!ok) {
-                error = "Task '" + configuration.tasks[index].id + "': " + local;
+            if (!dispatched_ok) {
+                // A failed cycle cannot continue. terminate() stops any still
+                // outstanding child before the project SHM can be unloaded.
+                terminate();
                 return false;
             }
-            completed[index] = true;
-            --remaining;
-            continue;
-        }
-        pending.clear();
-        for (const auto index : ready) {
-            trace->record("LOCKSTEP", cycle, configuration.tasks[index].id, "dispatched");
-            pending.push_back(executor->submit( [this, index, cycle] {
-                std::pair<bool, std::string> result{false, {}};
-                const auto start = std::chrono::steady_clock::now();
-                result.first = workers[index].child->run(
-                    cycle, configuration.tasks[index].settings.calls, result.second);
-                const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - start).count();
-                trace->record("LOCKSTEP", cycle, configuration.tasks[index].id,
-                           result.first ? "completed" : "failed", elapsed);
-                return result;
-            }));
-        }
-        const auto barrier_start = perf::clock::now();
-        bool success = true;
-        for (std::size_t i = 0; i < pending.size(); ++i) {
-            const auto result = pending[i].get();
-            if (!result.first && success) {
-                error = "Task '" + configuration.tasks[ready[i]].id + "': " + result.second;
-                success = false;
+            for (const auto index : s.handle_tasks) {
+                s.completed[index] = 1;
+                --remaining;
             }
         }
-        perf::record("barrier_wait", cycle, barrier_start);
-        // All in-flight requests are finished before failure is reported.
-        if (!success) return false;
-        for (const auto index : ready) { completed[index] = true; --remaining; }
-        pending.clear();
     }
     perf::record("manager_tick", cycle, perf_start);
     return true;
@@ -201,6 +274,10 @@ bool manager::reap(std::string& error) {
 bool manager::tick_overlap(std::uint64_t cycle, bool frozen, std::string& error) {
     if (!started) { error = "Task Manager not started"; return false; }
     if (!reap(error)) return false;
+    if (!executor) {
+        try { executor = std::make_unique<task_executor>(workers.size()); }
+        catch (const std::exception& ex) { error = ex.what(); return false; }
+    }
 
     const auto count = configuration.tasks.size();
     std::unordered_map<std::string, std::size_t> ids;
@@ -342,6 +419,7 @@ void manager::terminate() noexcept {
     executor.reset();
     trace.reset(); // flush and join before unloading Project state
     workers.clear();
+    dependency_indices.clear();
     configuration = {};
     started = false;
 }

@@ -45,6 +45,8 @@ private:
     };
     task_configuration configuration;
     std::vector<worker> workers;
+    // Immutable indices resolved at start; avoids string lookup per tick.
+    std::vector<std::vector<std::size_t>> dependency_indices;
     std::unique_ptr<task_executor> executor;
     std::unique_ptr<task_trace_buffer> trace;
     bool started = false;

@@ -1,0 +1,3 @@
+Server started
+Commands: LOAD <project.json>, UNLOAD, SHUTDOWN
+Server stopped

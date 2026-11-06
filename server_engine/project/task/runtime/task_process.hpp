@@ -17,6 +17,12 @@ public:
     bool start(const std::wstring& executable,std::uint32_t timeout_ms,
                const shm_attachment& attachment,std::string& error);
     bool run(std::uint64_t cycle,std::uint32_t calls,std::string& error);
+    // LOCKSTEP: one outstanding request per child, scheduler owns waiting.
+    bool begin_run(std::uint64_t cycle, std::uint32_t calls, std::string& error);
+    bool complete_run(std::string& error);
+    [[nodiscard]] HANDLE completion_handle() const noexcept { return completion_event; }
+    [[nodiscard]] HANDLE process_handle() const noexcept { return child; }
+    [[nodiscard]] std::uint32_t timeout_ms() const noexcept { return timeout; }
     bool stop(std::string& error);
     void terminate() noexcept;
 private:
@@ -30,5 +36,12 @@ private:
     std::uint32_t timeout=5000;
     LONG sequence=0;
     bool initialized=false;
+    bool in_flight=false;
+    LONG in_flight_sequence=0;
+    std::uint64_t in_flight_cycle=0;
+    std::int64_t in_flight_start=0;
+    std::int64_t dispatch_before=0;
+    std::int64_t dispatch_after=0;
+    FILE* dispatch_file=nullptr;
 };
 }

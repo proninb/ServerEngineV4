@@ -58,15 +58,27 @@ int wmain(int argc, wchar_t** argv) {
     manager runtime;
     task_configuration config;
     config.tasks = {make_task("A", a), make_task("B", b, {"A"})};
+    // PERF-49B: A completes all three calls before dependent B starts.
+    config.tasks[0].settings.calls = 3;
+    config.tasks[1].settings.calls = 2;
+    config.tasks[0].settings.cycles = 2;
+    config.tasks[1].settings.cycles = 2;
+    config.tasks[0].settings.starting_from_cycle = 1;
+    config.tasks[1].settings.starting_from_cycle = 1;
     if (!runtime.start(config, std::filesystem::current_path(), 5000, attachment, error)) {
         std::cerr << "start: " << error << '\n'; return 5;
     }
     if (!expect(state->init[0] == 1 && state->init[1] == 1, "INIT + SHM attachment")) return 6;
     if (!runtime.tick(1, false, error)) { std::cerr << "tick: " << error << '\n'; return 7; }
-    if (!expect(state->calls[0] == 1 && state->calls[1] == 1 &&
-                state->last_call[0] < state->last_call[1], "dependency barrier")) return 8;
+    if (!expect(state->calls[0] == 3 && state->calls[1] == 2 &&
+                state->last_call[0] < state->last_call[1], "PERF-49B multi-call dependency barrier")) return 8;
     if (!runtime.tick(2, true, error)) { std::cerr << "freeze: " << error << '\n'; return 9; }
-    if (!expect(state->calls[0] == 1 && state->calls[1] == 1, "freeze skips normal tasks")) return 10;
+    if (!expect(state->calls[0] == 3 && state->calls[1] == 2, "freeze skips normal tasks")) return 10;
+    if (!runtime.tick(3, false, error)) { std::cerr << "tick3: " << error << '\n'; return 16; }
+    if (!expect(state->calls[0] == 6 && state->calls[1] == 4 &&
+                state->last_call[0] < state->last_call[1], "PERF-49B cycle3 DAG")) return 17;
+    if (!runtime.tick(4, false, error)) { std::cerr << "tick4: " << error << '\n'; return 18; }
+    if (!expect(state->calls[0] == 6 && state->calls[1] == 4, "PERF-49B period skip")) return 19;
     if (!runtime.stop(error)) { std::cerr << "stop: " << error << '\n'; return 11; }
     if (!expect(state->done[0] == 1 && state->done[1] == 1, "DONE before SHM release")) return 12;
 
