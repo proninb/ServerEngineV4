@@ -1665,3 +1665,20 @@ if(WIN32)
         add_dependencies(task_no_barrier_validation task_no_barrier_fixture_${task_id})
     endforeach()
 endif()
+
+# TASK-NO-BARRIER-INTEGRATION-01
+if(WIN32)
+    add_executable(task_lifecycle_integration
+        tests/task_lifecycle_integration.cpp
+        server_engine/project/task/runtime/task_manager.cpp
+        server_engine/project/task/runtime/task_process.cpp
+        server_engine/project/task/task_configuration.cpp
+        server_engine/json/json_parser.cpp
+        server_engine/fixed_shared_memory.cpp)
+    target_include_directories(task_lifecycle_integration PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+    add_dependencies(task_lifecycle_integration task_no_barrier_fixture_0 task_no_barrier_fixture_1)
+    add_test(NAME task_lifecycle_integration COMMAND task_lifecycle_integration
+        $<TARGET_FILE:task_no_barrier_fixture_0>
+        $<TARGET_FILE:task_no_barrier_fixture_1>)
+endif()

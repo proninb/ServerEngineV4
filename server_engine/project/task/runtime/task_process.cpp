@@ -8,12 +8,24 @@
 #include <vector>
 namespace cw::server::task_runtime {
 namespace {
-void close_handle(HANDLE& h) noexcept { if(h && h!=INVALID_HANDLE_VALUE) CloseHandle(h); h=nullptr; }
+std::atomic<std::uint64_t> ipc_handles{0};
+std::atomic<std::uint64_t> ipc_views{0};
+void close_handle(HANDLE& h) noexcept {
+    if (h && h != INVALID_HANDLE_VALUE) {
+        CloseHandle(h);
+        ipc_handles.fetch_sub(1, std::memory_order_relaxed);
+    }
+    h = nullptr;
+}
 std::wstring unique_name() {
     static std::atomic<unsigned long> counter{0};
     return L"Local\\SEV4_Task_"+std::to_wstring(GetCurrentProcessId())+L"_"+
         std::to_wstring(GetTickCount64())+L"_"+std::to_wstring(++counter);
 }
+}
+task_ipc_ownership task_ipc_snapshot() noexcept {
+    return {ipc_handles.load(std::memory_order_relaxed),
+            ipc_views.load(std::memory_order_relaxed)};
 }
 process::~process() { terminate(); }
 void process::terminate() noexcept {
@@ -21,7 +33,11 @@ void process::terminate() noexcept {
         if(WaitForSingleObject(child,0)==WAIT_TIMEOUT) TerminateProcess(child,1);
         WaitForSingleObject(child,INFINITE);
     }
-    if(control) { UnmapViewOfFile(control); control=nullptr; }
+    if(control) {
+        UnmapViewOfFile(control);
+        control=nullptr;
+        ipc_views.fetch_sub(1, std::memory_order_relaxed);
+    }
     close_handle(command_event); close_handle(completion_event);
     close_handle(mapping); close_handle(thread); close_handle(child);
     perf_trace.close();
@@ -53,14 +69,18 @@ bool process::start_impl(const std::wstring& executable,std::uint32_t timeout_ms
         }
     }
     mapping=CreateFileMappingW(INVALID_HANDLE_VALUE,nullptr,PAGE_READWRITE,0,sizeof(task_control),name.c_str());
+    if (mapping) ipc_handles.fetch_add(1, std::memory_order_relaxed);
     if(!mapping || GetLastError()==ERROR_ALREADY_EXISTS) { error="CreateFileMappingW failed"; terminate(); return false; }
     control=static_cast<task_control*>(MapViewOfFile(mapping,FILE_MAP_ALL_ACCESS,0,0,sizeof(task_control)));
     if(!control) { error="MapViewOfFile failed"; terminate(); return false; }
+    ipc_views.fetch_add(1, std::memory_order_relaxed);
     new(control) task_control{};
     if(attachment) control->attachment=*attachment;
     const auto cmd_name=name+L"_command", done_name=name+L"_completion";
     command_event=CreateEventW(nullptr,FALSE,FALSE,cmd_name.c_str());
     completion_event=CreateEventW(nullptr,FALSE,FALSE,done_name.c_str());
+    if (command_event) ipc_handles.fetch_add(1, std::memory_order_relaxed);
+    if (completion_event) ipc_handles.fetch_add(1, std::memory_order_relaxed);
     if(!command_event || !completion_event) { error="CreateEventW failed"; terminate(); return false; }
     STARTUPINFOW startup{}; startup.cb=sizeof(startup);
     PROCESS_INFORMATION info{};
@@ -70,6 +90,8 @@ bool process::start_impl(const std::wstring& executable,std::uint32_t timeout_ms
         error="CreateProcessW failed: "+std::to_string(GetLastError()); terminate(); return false;
     }
     child=info.hProcess; thread=info.hThread;
+    if (child) ipc_handles.fetch_add(1, std::memory_order_relaxed);
+    if (thread) ipc_handles.fetch_add(1, std::memory_order_relaxed);
     if(!exchange(message{magic,version,command::init},command::ready,error)) { terminate(); return false; }
     initialized=true; return true;
 }

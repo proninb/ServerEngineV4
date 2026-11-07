@@ -2,6 +2,7 @@
 
 #include "shared_memory_name.hpp"
 
+#include <atomic>
 #include <limits>
 #include <string>
 #include <utility>
@@ -24,6 +25,9 @@
 
 namespace cw::server {
 namespace {
+std::atomic<std::uint64_t> active_handles{0};
+std::atomic<std::uint64_t> active_views{0};
+
 
 [[nodiscard]] bool valid_request(
     std::string_view name,
@@ -135,6 +139,11 @@ validate_mapped_size(
 
 #endif
 
+}
+
+fixed_shared_memory_ownership fixed_shared_memory_snapshot() noexcept {
+    return {active_handles.load(std::memory_order_relaxed),
+            active_views.load(std::memory_order_relaxed)};
 }
 
 fixed_shared_memory::~fixed_shared_memory() {
@@ -278,6 +287,8 @@ void fixed_shared_memory::reset() noexcept {
     }
 #endif
 
+    if (address_value != nullptr) active_views.fetch_sub(1, std::memory_order_relaxed);
+    if (native_handle != 0) active_handles.fetch_sub(1, std::memory_order_relaxed);
     native_handle = 0;
     address_value = nullptr;
     length = 0;
@@ -402,6 +413,8 @@ fixed_shared_memory::create(
 
     length = size;
     native_name.assign(name);
+    active_handles.fetch_add(1, std::memory_order_relaxed);
+    active_views.fetch_add(1, std::memory_order_relaxed);
 
     return fixed_shared_memory_result::
         success;
@@ -517,6 +530,8 @@ fixed_shared_memory::create(
 
     owns_name = true;
 
+    active_handles.fetch_add(1, std::memory_order_relaxed);
+    active_views.fetch_add(1, std::memory_order_relaxed);
     return fixed_shared_memory_result::
         success;
 #endif
@@ -628,6 +643,8 @@ fixed_shared_memory::open(
 
     length = size;
     native_name.assign(name);
+    active_handles.fetch_add(1, std::memory_order_relaxed);
+    active_views.fetch_add(1, std::memory_order_relaxed);
 
     return fixed_shared_memory_result::
         success;
@@ -737,6 +754,8 @@ fixed_shared_memory::open(
 
     owns_name = false;
 
+    active_handles.fetch_add(1, std::memory_order_relaxed);
+    active_views.fetch_add(1, std::memory_order_relaxed);
     return fixed_shared_memory_result::
         success;
 #endif

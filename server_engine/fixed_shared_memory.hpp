@@ -15,6 +15,13 @@
 
 namespace cw::server {
 
+// Per-process diagnostic: tracks successfully owned FIXED_DIRECT mappings.
+struct fixed_shared_memory_ownership {
+    std::uint64_t handles;
+    std::uint64_t views;
+};
+[[nodiscard]] fixed_shared_memory_ownership fixed_shared_memory_snapshot() noexcept;
+
 enum class fixed_shared_memory_result : std::uint8_t {
     success,
     invalid_argument,

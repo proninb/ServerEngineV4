@@ -50,6 +50,7 @@ public:
     bool tick_overlap(std::uint64_t cycle, bool frozen, std::string& error);
     bool reap(std::string& error);
     void drain() noexcept;
+    bool quiesce(std::string& error);
     bool stop(std::string& error);
     void terminate() noexcept;
     [[nodiscard]] bool active() const noexcept { return started; }

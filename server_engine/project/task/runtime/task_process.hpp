@@ -7,6 +7,11 @@
 #include <string>
 namespace cw::server::task_runtime {
 struct task_control;
+struct task_ipc_ownership {
+    std::uint64_t handles;
+    std::uint64_t views;
+};
+[[nodiscard]] task_ipc_ownership task_ipc_snapshot() noexcept;
 class process final {
 public:
     process()=default;

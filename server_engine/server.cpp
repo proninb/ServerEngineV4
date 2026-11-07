@@ -16,6 +16,8 @@
 #include <Windows.h>
 
 #include "project/task/runtime/task_perf_probe.hpp"
+#include "fixed_shared_memory.hpp"
+#include "project/task/runtime/task_process.hpp"
 #if defined(CW_UNLOAD_HEAP_OPTIMIZATION)
 #include "unload_heap_optimization.hpp"
 #endif
@@ -2483,6 +2485,20 @@ server_status server::freeze_project(
         return server_status::runtime_state_invalid;
     }
 
+    // The scheduler mutex prevents new ticks while outstanding NO_BARRIER
+    // requests finish. Do not acknowledge FREEZE while SHM writers remain.
+    if (std::getenv("TASK_PERF52_NO_BARRIER") &&
+        std::strcmp(std::getenv("TASK_PERF52_NO_BARRIER"), "1") == 0) {
+        std::string task_error;
+        if (!task_manager.quiesce(task_error)) {
+            task_runtime_failed = true;
+            task_manager.terminate();
+            diagnostics.emit(diagnostic(diagnostics::runtime_state_invalid, operation)
+                .detail("Task FREEZE drain failed: " + task_error).build());
+            set_project_state(project_state::freeze);
+            return server_status::project_runtime_failed;
+        }
+    }
     set_project_state(project_state::freeze);
 
     return server_status::success;
@@ -2505,19 +2521,21 @@ server_status server::unload(
         return server_status::project_not_loaded;
     }
 
-    if (!project_state_can_unload(
-            project_state_value)) {
-
+    // FAULT-17-FIX2: An explicit UNLOAD may recover a RUN Project only when
+    // Task runtime has failed. Never release SHM while the scheduler can tick.
+    const bool emergency_unload =
+        project_state_value == project_state::run && task_runtime_failed;
+    if (!project_state_can_unload(project_state_value) && !emergency_unload) {
         diagnostics.emit(
-            diagnostic(
-                diagnostics::runtime_state_invalid,
-                operation)
-                .detail("UNLOAD requires LOADED or FREEZE")
+            diagnostic(diagnostics::runtime_state_invalid, operation)
+                .detail("UNLOAD requires LOADED or FREEZE (or failed Task runtime)")
                 .build());
-
         return server_status::runtime_state_invalid;
     }
 
+    // scheduler_mutex is held above when the scheduler thread is enabled.
+    // Disarm dispatch before stopping Task processes or unmapping Project SHM.
+    if (emergency_unload) set_project_state(project_state::freeze);
     std::string task_error;
     const bool stopped = !task_manager.active() || task_manager.stop(task_error);
     task_runtime_failed = false;
@@ -2529,6 +2547,30 @@ server_status server::unload(
     }
     context.project.reset();
     set_project_state(project_state::unloaded);
+    if (const char* path = std::getenv("TASK_UNLOAD_OWNERSHIP_11_LOG")) {
+        const auto fixed = fixed_shared_memory_snapshot();
+        const auto ipc = task_runtime::task_ipc_snapshot();
+        FILE* file = nullptr;
+        if (fopen_s(&file, path, "ab") == 0 && file) {
+            std::fprintf(file, "%llu,%llu,%llu,%llu\n",
+                static_cast<unsigned long long>(fixed.handles),
+                static_cast<unsigned long long>(fixed.views),
+                static_cast<unsigned long long>(ipc.handles),
+                static_cast<unsigned long long>(ipc.views));
+            std::fclose(file);
+        }
+    }
+    if (std::getenv("TASK_UNLOAD_OWNERSHIP_10")) {
+        const auto ownership = fixed_shared_memory_snapshot();
+        DWORD handles = 0;
+        const BOOL handle_ok = GetProcessHandleCount(GetCurrentProcess(), &handles);
+        std::fprintf(stderr,
+            "TASK_UNLOAD_OWNERSHIP_10 fixed_handles=%llu fixed_views=%llu process_handles=%lu process_handles_valid=%d\n",
+            static_cast<unsigned long long>(ownership.handles),
+            static_cast<unsigned long long>(ownership.views),
+            static_cast<unsigned long>(handles), handle_ok ? 1 : 0);
+        std::fflush(stderr);
+    }
 
 #if defined(CW_UNLOAD_HEAP_OPTIMIZATION)
     optimize_heap_after_unload(operation, diagnostics);

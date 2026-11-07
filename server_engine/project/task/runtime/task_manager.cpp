@@ -142,6 +142,7 @@ bool manager::start(task_configuration value,
 // One request per Task process; no SHM protocol changes.
 bool manager::tick_no_barrier(std::uint64_t cycle, bool frozen, std::string& error) {
     if (!started) { error = "Task Manager not started"; return false; }
+    if (frozen) return true; // V1: NO_BARRIER never writes SHM in FREEZE.
     for (const auto& task : configuration.tasks) {
         if (task.enabled && !task.dependencies.empty()) {
             error = "PERF52_NO_BARRIER requires independent Tasks (DAG is not supported in this diagnostic mode)";
@@ -655,6 +656,35 @@ void manager::drain() noexcept {
             worker.busy = false;
         }
     }
+}
+
+bool manager::quiesce(std::string& error) {
+    if (!started) return true;
+    std::unique_lock<std::mutex> lock(completion_mutex);
+    // This is a temporary dispatch gate, not a process shutdown.
+    completion_stopping = true;
+    const auto all_done = [this] {
+        return std::none_of(completion_busy.begin(), completion_busy.end(),
+            [](unsigned char busy) { return busy != 0; });
+    };
+    ULONGLONG latest = GetTickCount64();
+    for (std::size_t i = 0; i < completion_busy.size(); ++i)
+        if (completion_busy[i]) latest = (std::max)(latest, completion_deadline[i]);
+    const auto now = GetTickCount64();
+    const auto budget = latest > now ? latest - now : 0;
+    const auto limit = std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(budget + 100);
+    if (completion_thread.joinable()) {
+        while (!all_done() && completion_error.empty()) {
+            if (completion_cv.wait_until(lock, limit) == std::cv_status::timeout) break;
+        }
+    }
+    if (!completion_error.empty()) error = completion_error;
+    else if (!all_done()) error = "NO_BARRIER FREEZE drain timeout";
+    // Do not reopen dispatch if outstanding work remains or a failure occurred.
+    if (!error.empty()) return false;
+    completion_stopping = false;
+    return true;
 }
 
 bool manager::stop(std::string& error) {
