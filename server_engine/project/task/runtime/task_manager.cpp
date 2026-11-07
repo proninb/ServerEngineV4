@@ -10,6 +10,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
+#include <thread>
+#include <condition_variable>
+#include <atomic>
 
 namespace cw::server::task_runtime {
 manager::~manager() { terminate(); }
@@ -55,6 +58,19 @@ bool manager::start(task_configuration value,
         return false;
     } catch (...) {
         error = "Task runtime initialization failed: unknown exception";
+        terminate();
+        return false;
+    }
+    completion_diagnostics.assign(workers.size(), {});
+    completion_busy.assign(workers.size(), 0);
+    completion_deadline.assign(workers.size(), 0);
+    completion_cycle.assign(workers.size(), 0);
+    completion_error.clear();
+    completion_stop = false;
+    completion_stopping = false;
+    completion_wake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!completion_wake) {
+        error = "NO_BARRIER wake event creation failed";
         terminate();
         return false;
     }
@@ -104,11 +120,256 @@ bool manager::start(task_configuration value,
         terminate();
         return false;
     }
+    completion_diagnostics.assign(workers.size(), {});
+    completion_busy.assign(workers.size(), 0);
+    completion_deadline.assign(workers.size(), 0);
+    completion_cycle.assign(workers.size(), 0);
+    completion_error.clear();
+    completion_stop = false;
+    completion_stopping = false;
+    completion_wake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!completion_wake) {
+        error = "NO_BARRIER wake event creation failed";
+        terminate();
+        return false;
+    }
     started = true;
     return true;
 }
 
+
+// PERF52_NO_BARRIER: completion handling is owned by a dedicated server thread.
+// One request per Task process; no SHM protocol changes.
+bool manager::tick_no_barrier(std::uint64_t cycle, bool frozen, std::string& error) {
+    if (!started) { error = "Task Manager not started"; return false; }
+    for (const auto& task : configuration.tasks) {
+        if (task.enabled && !task.dependencies.empty()) {
+            error = "PERF52_NO_BARRIER requires independent Tasks (DAG is not supported in this diagnostic mode)";
+            return false;
+        }
+    }
+    if (!completion_thread.joinable()) {
+        try {
+            completion_thread = std::thread([this] { completion_loop(); });
+        } catch (const std::exception& ex) {
+            error = std::string("Completion thread startup failed: ") + ex.what();
+            return false;
+        }
+    }
+    LARGE_INTEGER lock_begin{}, lock_end{}, qpc_frequency{};
+    QueryPerformanceFrequency(&qpc_frequency);
+    QueryPerformanceCounter(&lock_begin);
+    std::lock_guard<std::mutex> guard(completion_mutex);
+    QueryPerformanceCounter(&lock_end);
+    const auto lock_wait_us = static_cast<std::uint64_t>(
+        (lock_end.QuadPart - lock_begin.QuadPart) * 1000000 / qpc_frequency.QuadPart);
+    for (auto& d : completion_diagnostics)
+        d.max_tick_lock_wait_us = (std::max)(d.max_tick_lock_wait_us, lock_wait_us);
+    if (completion_stopping) { error = "Task Manager is stopping"; return false; }
+    if (!completion_error.empty()) { error = completion_error; return false; }
+    LARGE_INTEGER dispatch_begin{}, dispatch_end{};
+    QueryPerformanceCounter(&dispatch_begin);
+    bool dispatched_any = false;
+    for (std::size_t i = 0; i < configuration.tasks.size(); ++i) {
+        const auto& task = configuration.tasks[i];
+        if (!task.enabled || !task_is_scheduled(task.settings, cycle, frozen)) continue;
+        ++completion_diagnostics[i].scheduled;
+        // FIX-06: The completion thread may not have been scheduled yet.
+        // Under completion_mutex, consume an already-signalled reply before
+        // treating this Task as busy. Only one thread can consume the event.
+        if (completion_busy[i]) {
+            auto& child = *workers[i].child;
+            const DWORD ready = WaitForSingleObject(child.completion_handle(), 0);
+            if (ready == WAIT_OBJECT_0) {
+                std::string local;
+                const bool ok = child.complete_run(local);
+                trace->record("NO_BARRIER", completion_cycle[i], task.id,
+                              ok ? "completed_on_tick" : "failed_on_tick");
+                completion_busy[i] = 0;
+                if (ok) {
+                    ++completion_diagnostics[i].completed;
+                    ++completion_diagnostics[i].reaped_on_tick;
+                } else {
+                    ++completion_diagnostics[i].failed;
+                    if (completion_error.empty())
+                        completion_error = "Task '" + task.id + "': " + local;
+                }
+                completion_cv.notify_all();
+            } else if (ready == WAIT_FAILED) {
+                completion_error = "Task '" + task.id +
+                    "': completion probe failed (Win32 " +
+                    std::to_string(GetLastError()) + ")";
+            }
+            if (!completion_error.empty()) { error = completion_error; return false; }
+        }
+        if (completion_busy[i]) {
+            ++completion_diagnostics[i].skipped_busy;
+            if (!completion_diagnostics[i].first_skipped_cycle) {
+                completion_diagnostics[i].first_skipped_cycle = cycle;
+                LARGE_INTEGER stamp{};
+                QueryPerformanceCounter(&stamp);
+                completion_diagnostics[i].first_skipped_qpc = static_cast<std::uint64_t>(stamp.QuadPart);
+            }
+            trace->record("NO_BARRIER", cycle, task.id, "skipped_busy");
+            continue;
+        }
+        std::string local;
+        if (!workers[i].child->begin_run(cycle, task.settings.calls, local)) {
+            error = "Task '" + task.id + "': " + local;
+            return false;
+        }
+        completion_busy[i] = 1;
+        ++completion_diagnostics[i].dispatched;
+        dispatched_any = true;
+        completion_deadline[i] = GetTickCount64() + workers[i].child->timeout_ms();
+        completion_cycle[i] = cycle;
+        trace->record("NO_BARRIER", cycle, task.id, "dispatched");
+    }
+    QueryPerformanceCounter(&dispatch_end);
+    const auto dispatch_us = static_cast<std::uint64_t>(
+        (dispatch_end.QuadPart - dispatch_begin.QuadPart) * 1000000 / qpc_frequency.QuadPart);
+    for (auto& d : completion_diagnostics)
+        d.max_dispatch_us = (std::max)(d.max_dispatch_us, dispatch_us);
+    if (dispatched_any) SetEvent(completion_wake);
+    return true;
+}
+
+void manager::completion_loop() noexcept {
+    // Consume every ready reply before waiting. The wake event is last, so it
+    // cannot starve a completion when both are signalled.
+    std::size_t offset = 0;
+    for (;;) {
+        HANDLE handles[MAXIMUM_WAIT_OBJECTS]{};
+        std::size_t indices[31]{};
+        DWORD count = 0;
+        DWORD wait_ms = INFINITE;
+        {
+            std::lock_guard<std::mutex> guard(completion_mutex);
+            if (completion_stop) return;
+            const auto now = GetTickCount64();
+            const auto total = completion_busy.size();
+            std::size_t active = 0;
+            for (const auto busy : completion_busy) active += busy ? 1 : 0;
+
+            // A completed reply may already be signalled when the tick thread
+            // releases the mutex. Drain all such replies in one pass.
+            for (std::size_t i = 0; i < total; ++i) {
+                if (!completion_busy[i]) continue;
+                auto& child = *workers[i].child;
+                if (WaitForSingleObject(child.completion_handle(), 0) == WAIT_OBJECT_0) {
+                    std::string local;
+                    const bool ok = child.complete_run(local);
+                    trace->record("NO_BARRIER", completion_cycle[i], configuration.tasks[i].id,
+                                  ok ? "completed" : "failed");
+                    completion_busy[i] = 0;
+                    if (ok) ++completion_diagnostics[i].completed;
+                    else ++completion_diagnostics[i].failed;
+                    if (!ok && completion_error.empty())
+                        completion_error = "Task '" + configuration.tasks[i].id + "': " + local;
+                } else if (WaitForSingleObject(child.process_handle(), 0) == WAIT_OBJECT_0) {
+                    completion_busy[i] = 0;
+                    ++completion_diagnostics[i].failed;
+                    if (completion_error.empty())
+                        completion_error = "Task '" + configuration.tasks[i].id + "' exited before reply";
+                } else if (now >= completion_deadline[i]) {
+                    completion_busy[i] = 0;
+                    ++completion_diagnostics[i].failed;
+                    if (completion_error.empty())
+                        completion_error = "Task '" + configuration.tasks[i].id + "' timed out";
+                }
+            }
+            completion_cv.notify_all();
+            if (!completion_error.empty()) return;
+
+            // Build a bounded wait set. Completion handles precede the wake
+            // event; process-exit handles are paired with each completion.
+            if (total) {
+                const auto start = offset % total;
+                for (std::size_t n = 0; n < total && count < 62; ++n) {
+                    const auto i = (start + n) % total;
+                    if (!completion_busy[i]) continue;
+                    indices[count / 2] = i;
+                    handles[count++] = workers[i].child->completion_handle();
+                    handles[count++] = workers[i].child->process_handle();
+                    const auto remaining = completion_deadline[i] > now ?
+                        completion_deadline[i] - now : 0;
+                    const auto timeout = static_cast<DWORD>(
+                        (std::min<ULONGLONG>)(remaining, 0xFFFFFFFEull));
+                    wait_ms = (std::min)(wait_ms, timeout);
+                }
+                offset = (start + 31) % total;
+                if (active > 31) wait_ms = (std::min)(wait_ms, DWORD{1});
+            }
+        }
+        handles[count++] = completion_wake;
+        const DWORD result = WaitForMultipleObjects(count, handles, FALSE, wait_ms);
+        // Completion events are auto-reset. WaitForMultipleObjects consumes the
+        // signal, so complete the corresponding request here, not in a later poll.
+        if (result >= WAIT_OBJECT_0 && result < WAIT_OBJECT_0 + count - 1) {
+            const DWORD slot = result - WAIT_OBJECT_0;
+            const std::size_t task_index = indices[slot / 2];
+            std::lock_guard<std::mutex> guard(completion_mutex);
+            if (completion_busy[task_index]) {
+                if ((slot % 2) == 0) {
+                    std::string local;
+                    const bool ok = workers[task_index].child->complete_run(local);
+                    trace->record("NO_BARRIER", completion_cycle[task_index],
+                        configuration.tasks[task_index].id, ok ? "completed" : "failed");
+                    completion_busy[task_index] = 0;
+                    if (ok) ++completion_diagnostics[task_index].completed;
+                    else ++completion_diagnostics[task_index].failed;
+                    if (!ok && completion_error.empty())
+                        completion_error = "Task '" + configuration.tasks[task_index].id + "': " + local;
+                } else {
+                    completion_busy[task_index] = 0;
+                    ++completion_diagnostics[task_index].failed;
+                    if (completion_error.empty())
+                        completion_error = "Task '" + configuration.tasks[task_index].id +
+                            "' exited before reply";
+                }
+                completion_cv.notify_all();
+            }
+            continue;
+        }
+        // WAIT_TIMEOUT is normal: recheck completions and deadlines.
+        if (result == WAIT_TIMEOUT) continue;
+        if (result == WAIT_FAILED || result < WAIT_OBJECT_0 ||
+            result >= WAIT_OBJECT_0 + count) {
+            std::lock_guard<std::mutex> guard(completion_mutex);
+            if (completion_error.empty())
+                completion_error = "NO_BARRIER completion wait failed (Win32 " +
+                    std::to_string(GetLastError()) + ")";
+            completion_cv.notify_all();
+            return;
+        }
+        // Do not complete a reply using stale indices: the next pass obtains
+        // the mutex and drains the current state, including any new dispatch.
+        // A timeout also triggers the next pass to check all deadlines.
+    }
+}
+
+std::vector<manager::no_barrier_diagnostics> manager::no_barrier_snapshot() {
+    std::lock_guard<std::mutex> guard(completion_mutex);
+    return completion_diagnostics;
+}
+
+void manager::stop_completion() noexcept {
+    {
+        std::lock_guard<std::mutex> guard(completion_mutex);
+        completion_stop = true;
+    }
+    if (completion_wake) SetEvent(completion_wake);
+    if (completion_thread.joinable()) completion_thread.join();
+    if (completion_wake) {
+        CloseHandle(completion_wake);
+        completion_wake = nullptr;
+    }
+}
+
 bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
+    if (std::getenv("TASK_PERF52_NO_BARRIER") &&
+        std::string(std::getenv("TASK_PERF52_NO_BARRIER")) == "1")
+        return tick_no_barrier(cycle, frozen, error);
     const auto perf_start = perf::clock::now();
     if (!started) { error = "Task Manager not started"; return false; }
     const auto count = configuration.tasks.size();
@@ -397,6 +658,35 @@ void manager::drain() noexcept {
 }
 
 bool manager::stop(std::string& error) {
+    // Prevent new NO_BARRIER dispatches before waiting for outstanding replies.
+    // The completion thread must remain running until all replies are consumed.
+    {
+        std::unique_lock<std::mutex> lock(completion_mutex);
+        completion_stopping = true;
+        const auto all_done = [this] {
+            return !completion_error.empty() ||
+                std::none_of(completion_busy.begin(), completion_busy.end(),
+                    [](unsigned char busy) { return busy != 0; });
+        };
+        ULONGLONG latest_deadline = GetTickCount64();
+        for (std::size_t i = 0; i < completion_busy.size(); ++i)
+            if (completion_busy[i])
+                latest_deadline = (std::max)(latest_deadline, completion_deadline[i]);
+        // Bound shutdown even if a child never acknowledges its last request.
+        const auto now = GetTickCount64();
+        const auto wait_ms = latest_deadline > now ? latest_deadline - now : 0;
+        const auto limit = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(wait_ms + 100);
+        while (!all_done() && completion_cv.wait_until(lock, limit) !=
+                                  std::cv_status::timeout) {}
+        if (!completion_error.empty()) error = completion_error;
+        else if (!all_done()) error = "NO_BARRIER drain timeout";
+    }
+    if (!error.empty()) {
+        terminate();
+        return false;
+    }
+    stop_completion();
     drain();
     bool success = true;
     for (auto it = configuration.execution_order.rbegin();
@@ -414,6 +704,7 @@ bool manager::stop(std::string& error) {
 }
 
 void manager::terminate() noexcept {
+    stop_completion();
     drain();
     for (auto& worker : workers) if (worker.child) worker.child->terminate();
     executor.reset();
@@ -421,6 +712,13 @@ void manager::terminate() noexcept {
     workers.clear();
     dependency_indices.clear();
     configuration = {};
+    completion_diagnostics.clear();
+    completion_busy.clear();
+    completion_deadline.clear();
+    completion_cycle.clear();
+    completion_error.clear();
+    completion_stop = false;
+    completion_stopping = false;
     started = false;
 }
 }

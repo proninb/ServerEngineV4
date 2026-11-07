@@ -1583,3 +1583,85 @@ if(WIN32)
     endforeach()
     target_compile_definitions(task_server_e2e_fixture_2 PRIVATE TASK_FORCE_FAIL=1)
 endif()
+
+# TASK-PERF-52-TEST-01
+if(WIN32)
+    foreach(task_id IN ITEMS 0 1)
+        add_executable(task_perf52_fixture_${task_id} tests/task_perf52_fixture.cpp)
+        target_link_libraries(task_perf52_fixture_${task_id} PRIVATE SimTask)
+        target_compile_definitions(task_perf52_fixture_${task_id} PRIVATE TASK_ID=${task_id})
+    endforeach()
+    add_executable(task_perf52_tests
+        tests/task_perf52_tests.cpp
+        server_engine/project/task/runtime/task_manager.cpp
+        server_engine/project/task/runtime/task_process.cpp
+        server_engine/project/task/task_configuration.cpp
+        server_engine/json/json_parser.cpp
+        server_engine/fixed_shared_memory.cpp)
+    target_include_directories(task_perf52_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+    add_dependencies(task_perf52_tests task_perf52_fixture_0 task_perf52_fixture_1)
+    add_test(NAME task_perf52_runtime
+        COMMAND $<TARGET_FILE:task_perf52_tests>
+                $<TARGET_FILE:task_perf52_fixture_0>
+                $<TARGET_FILE:task_perf52_fixture_1>)
+    set_tests_properties(task_perf52_runtime PROPERTIES TIMEOUT 30)
+endif()
+
+# TASK-PERF-52-AB-02
+if(WIN32)
+    add_executable(task_perf52_benchmark
+        tests/task_perf52_benchmark.cpp
+        server_engine/project/task/runtime/task_manager.cpp
+        server_engine/project/task/runtime/task_process.cpp
+        server_engine/project/task/task_configuration.cpp
+        server_engine/json/json_parser.cpp
+        server_engine/fixed_shared_memory.cpp)
+    target_include_directories(task_perf52_benchmark PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+    add_dependencies(task_perf52_benchmark task_perf52_fixture_0 task_perf52_fixture_1)
+endif()
+
+# TASK-PERF-53-AB-01
+if(WIN32)
+    add_executable(task_perf53_benchmark
+        tests/task_perf53_benchmark.cpp
+        server_engine/project/task/runtime/task_manager.cpp
+        server_engine/project/task/runtime/task_process.cpp
+        server_engine/project/task/task_configuration.cpp
+        server_engine/json/json_parser.cpp
+        server_engine/fixed_shared_memory.cpp)
+    target_include_directories(task_perf53_benchmark PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+    add_dependencies(task_perf53_benchmark task_perf52_fixture_0 task_perf52_fixture_1)
+endif()
+
+# TASK-NO-BARRIER-VALIDATION-01
+if(WIN32)
+    foreach(task_id IN ITEMS 0 1)
+        add_executable(task_no_barrier_fixture_${task_id} tests/task_no_barrier_fixture.cpp)
+        target_link_libraries(task_no_barrier_fixture_${task_id} PRIVATE SimTask)
+        target_compile_definitions(task_no_barrier_fixture_${task_id} PRIVATE TASK_ID=${task_id})
+    endforeach()
+    add_executable(task_no_barrier_validation
+        tests/task_no_barrier_validation.cpp
+        server_engine/project/task/runtime/task_manager.cpp
+        server_engine/project/task/runtime/task_process.cpp
+        server_engine/project/task/task_configuration.cpp
+        server_engine/json/json_parser.cpp
+        server_engine/fixed_shared_memory.cpp)
+    target_include_directories(task_no_barrier_validation PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+    add_dependencies(task_no_barrier_validation task_no_barrier_fixture_0 task_no_barrier_fixture_1)
+endif()
+
+
+# TASK-NO-BARRIER-SCALE-01: additional independent task fixtures
+if(WIN32)
+    foreach(task_id RANGE 2 15)
+        add_executable(task_no_barrier_fixture_${task_id} tests/task_no_barrier_fixture.cpp)
+        target_link_libraries(task_no_barrier_fixture_${task_id} PRIVATE SimTask)
+        target_compile_definitions(task_no_barrier_fixture_${task_id} PRIVATE TASK_ID=${task_id})
+        add_dependencies(task_no_barrier_validation task_no_barrier_fixture_${task_id})
+    endforeach()
+endif()
