@@ -24,6 +24,8 @@ bool server_policy::is_demo_mutation(
     case server_request_kind::delete_ic:
     case server_request_kind::run:
     case server_request_kind::freeze:
+    case server_request_kind::kill_task:
+    case server_request_kind::start_task:
         return true;
 
     case server_request_kind::load:

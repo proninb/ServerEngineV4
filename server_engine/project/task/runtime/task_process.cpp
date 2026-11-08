@@ -31,7 +31,7 @@ process::~process() { terminate(); }
 void process::terminate() noexcept {
     if(child) {
         if(WaitForSingleObject(child,0)==WAIT_TIMEOUT) TerminateProcess(child,1);
-        WaitForSingleObject(child,INFINITE);
+        WaitForSingleObject(child, 1000);
     }
     if(control) {
         UnmapViewOfFile(control);
@@ -180,12 +180,66 @@ bool process::run(std::uint64_t cycle,std::uint32_t calls,std::string& error) {
     }
     return true;
 }
-bool process::stop(std::string& error) {
-    if(!initialized) { error="Task not initialized"; return false; }
-    const bool ok=exchange(message{magic,version,command::stop},command::stopped,error);
-    if(ok && WaitForSingleObject(child,timeout)!=WAIT_OBJECT_0) {
-        error="Task did not exit after STOP"; terminate(); return false;
+stop_result process::stop_checked(std::string& error) {
+    error.clear();
+    if (!child) {
+        error = "Task process handle missing";
+        return stop_result::failed;
     }
-    terminate(); return ok;
+    const DWORD initial = WaitForSingleObject(child, 0);
+    if (initial == WAIT_OBJECT_0) {
+        // Already exited: no further STOP is possible.
+        return stop_result::recovered;
+    }
+    if (initial == WAIT_FAILED) {
+        error = "Task process wait failed: " + std::to_string(GetLastError());
+        return stop_result::failed;
+    }
+    std::string stop_error;
+    bool acknowledged = false;
+    if (initialized && !in_flight) {
+        acknowledged = exchange(message{magic, version, command::stop}, command::stopped, stop_error);
+    } else {
+        stop_error = "Task was not ready for STOP";
+    }
+    if (acknowledged) {
+        const DWORD waited = WaitForSingleObject(child, timeout);
+        if (waited == WAIT_OBJECT_0) return stop_result::graceful;
+        stop_error = waited == WAIT_TIMEOUT ? "Task did not exit after STOP" :
+            "Task process wait failed after STOP";
+    }
+    // A STOP timeout is recoverable only if process exit is confirmed.
+    const DWORD before_kill = WaitForSingleObject(child, 0);
+    if (before_kill == WAIT_OBJECT_0) {
+        error = stop_error;
+        return stop_result::recovered;
+    }
+    if (before_kill == WAIT_FAILED) {
+        error = "Task process wait failed before termination: " + std::to_string(GetLastError());
+        return stop_result::failed;
+    }
+    if (!TerminateProcess(child, 1)) {
+        const DWORD win32 = GetLastError();
+        if (WaitForSingleObject(child, 0) != WAIT_OBJECT_0) {
+            error = "TerminateProcess failed: " + std::to_string(win32);
+            return stop_result::failed;
+        }
+    }
+    const DWORD reaped = WaitForSingleObject(child, 1000);
+    if (reaped != WAIT_OBJECT_0) {
+        error = reaped == WAIT_TIMEOUT ? "Task still alive after TerminateProcess" :
+            "Task process exit wait failed: " + std::to_string(GetLastError());
+        return stop_result::failed;
+    }
+    error = stop_error;
+    return stop_result::recovered;
 }
+
+
+bool process::stop(std::string& error) {
+    const auto result = stop_checked(error);
+    terminate();
+    return result != stop_result::failed;
+}
+
 }

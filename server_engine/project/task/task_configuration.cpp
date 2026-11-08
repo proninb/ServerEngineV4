@@ -22,6 +22,12 @@ bool task_is_scheduled(const task_settings& settings,
 bool validate_task_configuration(task_configuration& configuration,
     std::string& error) {
     error.clear();
+    if (configuration.timing.period_ms != 0 &&
+        configuration.timing.period_ms != 1 &&
+        configuration.timing.period_ms != 2) {
+        error = "Task timing.period_ms must be 1 or 2";
+        return false;
+    }
     configuration.execution_order.clear();
     std::unordered_map<std::string, std::size_t> ids;
     for (std::size_t i = 0; i < configuration.tasks.size(); ++i) {
@@ -75,7 +81,7 @@ bool validate_task_configuration(task_configuration& configuration,
 }
 
 namespace {
-enum class kind { root, tasks, task, dependencies, settings };
+enum class kind { root, timing, diagnostics, deadline, time_drift, tasks, task, dependencies, settings };
 struct frame {
     kind type;
     std::unordered_set<std::string> keys;
@@ -103,7 +109,19 @@ public:
             return;
         }
         auto& parent = stack.back();
-        if (parent.type == kind::tasks) {
+        if (parent.type == kind::root && parent.awaiting && parent.pending == "timing") {
+            parent.awaiting = false;
+            stack.push_back({kind::timing});
+        } else if (parent.type == kind::timing && parent.awaiting &&
+                   parent.pending == "diagnostics") {
+            parent.awaiting = false;
+            stack.push_back({kind::diagnostics});
+        } else if (parent.type == kind::diagnostics && parent.awaiting &&
+                   (parent.pending == "deadline" || parent.pending == "time_drift")) {
+            const auto type = parent.pending == "deadline" ? kind::deadline : kind::time_drift;
+            parent.awaiting = false;
+            stack.push_back({type});
+        } else if (parent.type == kind::tasks) {
             output.tasks.emplace_back();
             stack.push_back({kind::task});
         } else if (parent.type == kind::task &&
@@ -166,7 +184,15 @@ public:
         if (!f.keys.insert(name).second)
             return fail("Duplicate JSON key: " + name);
         const bool known = f.type == kind::root ?
-            (name == "version" || name == "tasks") :
+            (name == "version" || name == "tasks" || name == "timing") :
+            f.type == kind::timing ?
+            (name == "mode" || name == "period_ms" || name == "diagnostics") :
+            f.type == kind::diagnostics ?
+            (name == "enabled" || name == "deadline" || name == "time_drift") :
+            f.type == kind::deadline ?
+            (name == "enabled" || name == "warn_over_ms" || name == "stop_over_ms") :
+            f.type == kind::time_drift ?
+            (name == "enabled" || name == "warn_ahead_ms" || name == "warn_behind_ms") :
             f.type == kind::task ?
             (name == "id" || name == "executable" ||
              name == "dependencies" || name == "settings" ||
@@ -192,11 +218,44 @@ public:
         f.awaiting = false;
         const auto& name = f.pending;
         if (f.type == kind::root) {
-            if (name != "version") return fail("tasks must be an array");
+            if (name != "version") return fail("Expected timing object or tasks array");
             std::uint32_t version = 0;
             if (!value.get(version) || version != 1)
                 return fail("Unsupported Tasks.json version");
             f.version = true;
+        } else if (f.type == kind::timing) {
+            if (name == "mode") {
+                std::string mode;
+                if (!value.get(mode)) return fail("timing.mode must be a string");
+                if (mode == "NORMAL") output.timing.mode = task_timing_mode::normal;
+                else if (mode == "REAL_TIME") output.timing.mode = task_timing_mode::real_time;
+                else return fail("Unsupported timing.mode");
+            } else if (name == "period_ms") {
+                if (!value.get(output.timing.period_ms) ||
+                    (output.timing.period_ms != 1 && output.timing.period_ms != 2))
+                    return fail("timing.period_ms must be 1 or 2");
+            } else return fail("Expected timing.diagnostics object");
+        } else if (f.type == kind::diagnostics) {
+            if (name != "enabled" || !value.get(output.timing.diagnostics.enabled))
+                return fail("Invalid diagnostics.enabled");
+        } else if (f.type == kind::deadline) {
+            auto& d = output.timing.diagnostics.deadline;
+            if (name == "enabled") {
+                if (!value.get(d.enabled)) return fail("Invalid deadline.enabled");
+            } else if (name == "warn_over_ms") {
+                if (!milliseconds_to_ns(value, d.warn_over_ns)) return fail("Invalid warn_over_ms");
+            } else if (name == "stop_over_ms") {
+                if (!milliseconds_to_ns(value, d.stop_over_ns)) return fail("Invalid stop_over_ms");
+            }
+        } else if (f.type == kind::time_drift) {
+            auto& d = output.timing.diagnostics;
+            if (name == "enabled") {
+                if (!value.get(d.time_drift_enabled)) return fail("Invalid time_drift.enabled");
+            } else if (name == "warn_ahead_ms") {
+                if (!milliseconds_to_ns(value, d.warn_ahead_ns)) return fail("Invalid warn_ahead_ms");
+            } else if (name == "warn_behind_ms") {
+                if (!milliseconds_to_ns(value, d.warn_behind_ns)) return fail("Invalid warn_behind_ms");
+            }
         } else if (f.type == kind::task) {
             auto& task = output.tasks.back();
             if (name == "id") {
@@ -234,6 +293,13 @@ public:
         } else {
             fail("Unexpected scalar in array");
         }
+    }
+    static bool milliseconds_to_ns(json_value_view value, std::int64_t& target) {
+        double milliseconds = 0;
+        if (!value.get(milliseconds) || milliseconds < 0 || milliseconds > 86400000)
+            return false;
+        target = static_cast<std::int64_t>(milliseconds * 1000000.0 + 0.5);
+        return true;
     }
     void fail(std::string message) { if (error.empty()) error = std::move(message); }
     task_configuration& output;

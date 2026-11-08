@@ -5,6 +5,7 @@
 #pragma once
 #include "../task_configuration.hpp"
 #include "task_process.hpp"
+#include "task_runtime_shm.hpp"
 #include "task_trace_buffer.hpp"
 #include "task_executor.hpp"
 #include <cstdint>
@@ -17,6 +18,8 @@
 #include <mutex>
 #include <thread>
 #include <condition_variable>
+#include <atomic>
+#include <optional>
 
 namespace cw::server::task_runtime {
 class manager final {
@@ -46,6 +49,17 @@ public:
         std::uint64_t max_dispatch_us = 0;
     };
     [[nodiscard]] std::vector<no_barrier_diagnostics> no_barrier_snapshot();
+    void set_system_table(runtime_shm* value) noexcept { system_table = value; }
+    // KILL is preemptive for one child only. Caller commits after the current
+    // scheduler barrier. A killed dependency never blocks an active successor.
+    bool request_kill(const std::string& id, std::size_t& index, std::string& error);
+    void finish_kill(std::size_t index) noexcept;
+    // Caller holds Server scheduler_mutex. TASKINIT executes at this boundary.
+    bool restart_one(const std::string& id, std::size_t& index, std::string& error);
+    [[nodiscard]] std::size_t active_count() const noexcept;
+    [[nodiscard]] bool take_manual_kill() noexcept {
+        return manual_kill.exchange(false, std::memory_order_acq_rel);
+    }
     bool tick(std::uint64_t cycle, bool frozen, std::string& error);
     bool tick_overlap(std::uint64_t cycle, bool frozen, std::string& error);
     bool reap(std::string& error);
@@ -60,6 +74,13 @@ private:
         std::shared_future<std::pair<bool, std::string>> pending;
         bool busy = false;
     };
+    runtime_shm* system_table = nullptr; // non-owning; Server owns mapping
+    mutable std::mutex supervisor_mutex;
+    std::unique_ptr<std::atomic_bool[]> kill_requested;
+    std::atomic_bool manual_kill{false};
+    std::filesystem::path project_directory;
+    std::optional<shm_attachment> saved_attachment;
+    std::uint32_t task_timeout_ms = 5000;
     task_configuration configuration;
     std::vector<worker> workers;
     // Immutable indices resolved at start; avoids string lookup per tick.

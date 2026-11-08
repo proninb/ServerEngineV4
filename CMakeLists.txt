@@ -1682,3 +1682,82 @@ if(WIN32)
         $<TARGET_FILE:task_no_barrier_fixture_0>
         $<TARGET_FILE:task_no_barrier_fixture_1>)
 endif()
+
+# TASK-TIMING-SHM-01: system table and C++20 ABI tests
+if(WIN32)
+    add_executable(task_runtime_shm_tests tests/task_runtime_shm_tests.cpp)
+    target_include_directories(task_runtime_shm_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+    target_compile_features(task_runtime_shm_tests PRIVATE cxx_std_20)
+    add_test(NAME task_runtime_shm COMMAND $<TARGET_FILE:task_runtime_shm_tests>)
+    set_tests_properties(task_runtime_shm PROPERTIES TIMEOUT 30)
+endif()
+
+
+# TASK-TIMING-E2E-02: full Server + Task + SHM diagnostics validation
+if(WIN32)
+    foreach(fixture IN ITEMS 0 1)
+        add_executable(task_timing_fixture_${fixture} tests/task_timing_fixture.cpp)
+        target_link_libraries(task_timing_fixture_${fixture} PRIVATE SimTask)
+        target_compile_definitions(task_timing_fixture_${fixture} PRIVATE TASK_ID=${fixture})
+        target_compile_features(task_timing_fixture_${fixture} PRIVATE cxx_std_20)
+    endforeach()
+    add_executable(task_timing_fixture_slow tests/task_timing_fixture.cpp)
+    target_link_libraries(task_timing_fixture_slow PRIVATE SimTask)
+    target_compile_definitions(task_timing_fixture_slow PRIVATE TASK_ID=1 TASK_DELAY_US=4000)
+    target_compile_features(task_timing_fixture_slow PRIVATE cxx_std_20)
+
+    add_executable(task_timing_shm_probe tests/task_timing_shm_probe.cpp)
+    target_include_directories(task_timing_shm_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+    target_compile_features(task_timing_shm_probe PRIVATE cxx_std_20)
+endif()
+
+
+# TASK-TIMING-SOAK-04: bounded hung Task process termination test
+if(WIN32)
+    add_executable(task_timing_hang_fixture tests/task_timing_hang_fixture.cpp)
+    target_link_libraries(task_timing_hang_fixture PRIVATE SimTask)
+    target_compile_features(task_timing_hang_fixture PRIVATE cxx_std_20)
+
+    add_executable(task_timing_terminate_hung_test
+        tests/task_timing_terminate_hung_test.cpp
+        server_engine/project/task/runtime/task_process.cpp)
+    target_include_directories(task_timing_terminate_hung_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine/project/task/runtime)
+    target_compile_features(task_timing_terminate_hung_test PRIVATE cxx_std_20)
+    add_dependencies(task_timing_terminate_hung_test task_timing_hang_fixture)
+    add_test(NAME task_timing_terminate_hung
+        COMMAND $<TARGET_FILE:task_timing_terminate_hung_test>
+                $<TARGET_FILE:task_timing_hang_fixture>)
+    set_tests_properties(task_timing_terminate_hung PROPERTIES TIMEOUT 15)
+endif()
+
+# TASK-PER-TASK-CONTROL-05: per-Task kill/restart regression (Windows only).
+if(WIN32)
+    foreach(task_id IN ITEMS 0 1)
+        add_executable(task_individual_fixture_${task_id} tests/task_individual_fixture.cpp)
+        target_link_libraries(task_individual_fixture_${task_id} PRIVATE SimTask)
+        target_compile_definitions(task_individual_fixture_${task_id} PRIVATE TASK_ID=${task_id})
+    endforeach()
+    add_executable(task_individual_control_tests
+        tests/task_individual_control_tests.cpp
+        server_engine/project/task/runtime/task_manager.cpp
+        server_engine/project/task/runtime/task_process.cpp
+        server_engine/project/task/task_configuration.cpp
+        server_engine/json/json_parser.cpp
+        server_engine/fixed_shared_memory.cpp)
+    target_include_directories(task_individual_control_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+    add_dependencies(task_individual_control_tests task_individual_fixture_0 task_individual_fixture_1)
+    add_test(NAME task_individual_control
+        COMMAND $<TARGET_FILE:task_individual_control_tests>
+            $<TARGET_FILE:task_individual_fixture_0>
+            $<TARGET_FILE:task_individual_fixture_1>)
+    set_tests_properties(task_individual_control PROPERTIES TIMEOUT 30)
+endif()
+
+# TASK-PER-TASK-TCP-E2E-06: dedicated hung SimTask for TCP validation.
+if(WIN32)
+    add_executable(task_individual_tcp_hang_fixture
+        tests/task_individual_tcp_hang_fixture.cpp)
+    target_link_libraries(task_individual_tcp_hang_fixture PRIVATE SimTask)
+endif()

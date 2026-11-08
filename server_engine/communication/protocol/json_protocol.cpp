@@ -479,6 +479,8 @@ void append_integer(
         return "RUN";
     case project_state::freeze:
         return "FREEZE";
+    case project_state::stopped:
+        return "STOP";
     case project_state::resetting_ic:
         return "RESETTING_IC";
     case project_state::snapping_ic:
@@ -1092,6 +1094,12 @@ json_decode_result decode_json_request(
             } else if (command == "FREEZE") {
                 request.kind =
                     server_request_kind::freeze;
+            } else if (command == "KILL_TASK") {
+                request.kind =
+                    server_request_kind::kill_task;
+            } else if (command == "START_TASK") {
+                request.kind =
+                    server_request_kind::start_task;
             } else if (command == "SHUTDOWN") {
                 request.kind =
                     server_request_kind::shutdown;
@@ -1120,6 +1128,16 @@ json_decode_result decode_json_request(
                 request.path =
                     std::move(
                         handler.path_value);
+                break;
+
+            case server_request_kind::kill_task:
+            case server_request_kind::start_task:
+                if (!only(handler.seen, name_bit) ||
+                    (handler.seen & name_bit) == 0 ||
+                    handler.name_value.empty()) {
+                    return { json_protocol_error::invalid_schema };
+                }
+                request.name = std::move(handler.name_value);
                 break;
 
             case server_request_kind::snap_ic:

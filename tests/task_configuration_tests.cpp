@@ -63,6 +63,29 @@ int main() {
 
     CHECK(!validate_task_configuration(configuration, error));
 
+    // TASK-TIMING-SHM-01: NORMAL/REAL_TIME and independent deadline settings.
+    const char* timing = R"({"version":1,"timing":{"mode":"REAL_TIME","period_ms":1,
+      "diagnostics":{"enabled":true,"deadline":{"enabled":true,
+      "warn_over_ms":0.2,"stop_over_ms":1.0},"time_drift":{
+      "enabled":true,"warn_ahead_ms":50,"warn_behind_ms":50}}},"tasks":[]})";
+    CHECK(parse_task_configuration(timing, configuration, error));
+    CHECK(configuration.timing.mode == task_timing_mode::real_time);
+    CHECK(configuration.timing.period_ms == 1);
+    CHECK(configuration.timing.diagnostics.deadline.stop_over_ns == 1000000);
+    CHECK(configuration.timing.diagnostics.deadline.warn_over_ns == 200000);
+    CHECK(configuration.timing.diagnostics.warn_behind_ns == 50000000);
+
+    const char* normal = R"({"version":1,"tasks":[]})";
+    CHECK(parse_task_configuration(normal, configuration, error));
+    CHECK(configuration.timing.mode == task_timing_mode::normal);
+    CHECK(configuration.timing.diagnostics.deadline.stop_over_ns == -1);
+
+    const char* bad_mode = R"({"version":1,"timing":{"mode":"HARD_REAL_TIME"},"tasks":[]})";
+    CHECK(!parse_task_configuration(bad_mode, configuration, error));
+    const char* bad_threshold = R"({"version":1,"timing":{"diagnostics":{
+      "deadline":{"stop_over_ms":-1}}},"tasks":[]})";
+    CHECK(!parse_task_configuration(bad_threshold, configuration, error));
+
     return 0;
 }
 

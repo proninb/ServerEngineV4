@@ -18,13 +18,15 @@ enum class project_state : std::uint8_t {
     freeze = 3,
     resetting_ic = 4,
     snapping_ic = 5,
+    stopped = 6, // append: do not renumber persisted/public state values
 };
 
 [[nodiscard]] constexpr bool project_state_can_run(
     project_state state) noexcept {
 
     return state == project_state::loaded ||
-        state == project_state::freeze;
+        state == project_state::freeze ||
+        state == project_state::stopped;
 }
 
 [[nodiscard]] constexpr bool project_state_can_freeze(
@@ -37,14 +39,16 @@ enum class project_state : std::uint8_t {
     project_state state) noexcept {
 
     return state == project_state::loaded ||
-        state == project_state::freeze;
+        state == project_state::freeze ||
+        state == project_state::stopped;
 }
 
 [[nodiscard]] constexpr bool project_state_can_ic(
     project_state state) noexcept {
 
     return state == project_state::loaded ||
-        state == project_state::freeze;
+        state == project_state::freeze ||
+        state == project_state::stopped;
 }
 
 struct server_state_snapshot final {

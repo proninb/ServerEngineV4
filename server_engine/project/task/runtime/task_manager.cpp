@@ -24,6 +24,9 @@ bool manager::start(task_configuration value,
     terminate();
     if (!validate_task_configuration(value, error)) return false;
     configuration = std::move(value);
+    this->project_directory = project_directory;
+    saved_attachment = attachment;
+    task_timeout_ms = timeout_ms;
     dependency_indices.clear();
     dependency_indices.resize(configuration.tasks.size());
     std::unordered_map<std::string, std::size_t> dependency_ids;
@@ -37,6 +40,9 @@ bool manager::start(task_configuration value,
             indices.push_back(dependency_ids.at(name));
     }
     workers.resize(configuration.tasks.size());
+    kill_requested = std::make_unique<std::atomic_bool[]>(configuration.tasks.size());
+    for (std::size_t i = 0; i < configuration.tasks.size(); ++i)
+        kill_requested[i].store(false, std::memory_order_relaxed);
     for (const auto index : configuration.execution_order) {
         const auto& task = configuration.tasks[index];
         if (!task.enabled) continue;
@@ -82,8 +88,11 @@ bool manager::start(task_configuration value,
                     const std::filesystem::path& project_directory,
                     std::uint32_t timeout_ms, std::string& error) {
     terminate();
+    saved_attachment.reset();
     if (!validate_task_configuration(value, error)) return false;
     configuration = std::move(value);
+    this->project_directory = project_directory;
+    task_timeout_ms = timeout_ms;
     dependency_indices.clear();
     dependency_indices.resize(configuration.tasks.size());
     std::unordered_map<std::string, std::size_t> dependency_ids;
@@ -97,6 +106,9 @@ bool manager::start(task_configuration value,
             indices.push_back(dependency_ids.at(name));
     }
     workers.resize(configuration.tasks.size());
+    kill_requested = std::make_unique<std::atomic_bool[]>(configuration.tasks.size());
+    for (std::size_t i = 0; i < configuration.tasks.size(); ++i)
+        kill_requested[i].store(false, std::memory_order_relaxed);
     for (const auto index : configuration.execution_order) {
         const auto& task = configuration.tasks[index];
         if (!task.enabled) continue;
@@ -368,7 +380,8 @@ void manager::stop_completion() noexcept {
 }
 
 bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
-    if (std::getenv("TASK_PERF52_NO_BARRIER") &&
+    // The system table requires a complete barrier for consistent Task snapshots.
+    if (!system_table && std::getenv("TASK_PERF52_NO_BARRIER") &&
         std::string(std::getenv("TASK_PERF52_NO_BARRIER")) == "1")
         return tick_no_barrier(cycle, frozen, error);
     const auto perf_start = perf::clock::now();
@@ -382,6 +395,7 @@ bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
         std::vector<std::size_t> handle_tasks;
         std::vector<ULONGLONG> deadlines;
         std::vector<unsigned char> done;
+        std::vector<std::chrono::steady_clock::time_point> task_start;
         std::vector<HANDLE> waiting;
         std::vector<std::size_t> mapping;
     };
@@ -397,14 +411,18 @@ bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
     s.handle_tasks.reserve(31);
     s.deadlines.assign(count, 0);
     s.done.reserve(31);
+    s.task_start.resize(count);
     s.waiting.reserve(62);
     s.mapping.reserve(31);
     std::size_t remaining = 0;
     for (std::size_t i = 0; i < count; ++i) {
         const auto& task = configuration.tasks[i];
-        s.scheduled[i] = task.enabled && task_is_scheduled(task.settings, cycle, frozen);
+        s.scheduled[i] = task.enabled && workers[i].child != nullptr &&
+            !kill_requested[i].load(std::memory_order_acquire) &&
+            task_is_scheduled(task.settings, cycle, frozen);
         if (s.scheduled[i]) {
             ++remaining;
+            if (system_table) system_table->task_scheduled(i, cycle);
             trace->record("LOCKSTEP", cycle, task.id, "scheduled");
         }
     }
@@ -414,18 +432,19 @@ bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
         s.ready.clear();
         for (const auto index : configuration.execution_order) {
             if (!s.scheduled[index] || s.completed[index]) continue;
+            if (kill_requested[index].load(std::memory_order_acquire)) {
+                s.completed[index] = 1;
+                --remaining;
+                continue;
+            }
             bool blocked = false;
-            for (const auto& name : configuration.tasks[index].dependencies) {
-                // PERF-47 keeps configuration compatibility; compile this lookup
-                // into indices in a separate, independently measured change.
-                const auto it = std::find_if(configuration.tasks.begin(), configuration.tasks.end(),
-                    [&](const auto& t) { return t.id == name; });
-                if (it == configuration.tasks.end()) { error = "Unknown Task dependency"; return false; }
-                const auto dep = static_cast<std::size_t>(it - configuration.tasks.begin());
+            // Dependency indices were compiled at start; no string lookup per tick.
+            for (const auto dep : dependency_indices[index]) {
                 if (s.scheduled[dep] && !s.completed[dep]) { blocked = true; break; }
             }
             if (!blocked) s.ready.push_back(index);
         }
+        if (remaining == 0) break;
         if (s.ready.empty()) { error = "Task dependency scheduling stalled"; return false; }
         // Windows WaitForMultipleObjects has a 64-handle limit. Reserve two
         // handles per Task (completion + process exit); bounded batches of 31.
@@ -436,10 +455,21 @@ bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
             bool dispatched_ok = true;
             for (std::size_t j = offset; j < last; ++j) {
                 const auto index = s.ready[j];
+                if (kill_requested[index].load(std::memory_order_acquire)) {
+                    if (!s.completed[index]) { s.completed[index] = 1; --remaining; }
+                    continue;
+                }
                 auto& child = *workers[index].child;
                 trace->record("LOCKSTEP", cycle, configuration.tasks[index].id, "dispatched");
                 std::string local;
+                s.task_start[index] = std::chrono::steady_clock::now();
+                if (system_table) system_table->task_started(index);
                 if (!child.begin_run(cycle, configuration.tasks[index].settings.calls, local)) {
+                    if (kill_requested[index].load(std::memory_order_acquire)) {
+                        if (!s.completed[index]) { s.completed[index] = 1; --remaining; }
+                        continue;
+                    }
+                    if (system_table) system_table->task_failed(index, cycle, 1);
                     error = "Task '" + configuration.tasks[index].id + "': " + local;
                     dispatched_ok = false;
                     break;
@@ -484,6 +514,12 @@ bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
                 }
                 const auto k = s.mapping[position / 2];
                 const auto index = s.handle_tasks[k];
+                if (kill_requested[index].load(std::memory_order_acquire)) {
+                    // Expected child exit: dependent Tasks keep running with last SHM values.
+                    s.done[k] = 1;
+                    --outstanding;
+                    continue;
+                }
                 if (position % 2) {
                     if (dispatched_ok) error = "Task '" + configuration.tasks[index].id + "' exited before reply";
                     dispatched_ok = false;
@@ -491,11 +527,19 @@ bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
                 }
                 std::string local;
                 const bool ok = workers[index].child->complete_run(local);
+                const bool canceled = kill_requested[index].load(std::memory_order_acquire);
+                if (system_table && !canceled) {
+                    const auto duration = static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now() - s.task_start[index]).count());
+                    if (ok) system_table->task_completed(index, cycle, duration);
+                    else system_table->task_failed(index, cycle, 2);
+                }
                 trace->record("LOCKSTEP", cycle, configuration.tasks[index].id,
                     ok ? "completed" : "failed");
                 s.done[k] = 1;
                 --outstanding;
-                if (!ok && dispatched_ok) {
+                if (!ok && dispatched_ok && !canceled) {
                     error = "Task '" + configuration.tasks[index].id + "': " + local;
                     dispatched_ok = false;
                 }
@@ -508,8 +552,10 @@ bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
                 return false;
             }
             for (const auto index : s.handle_tasks) {
-                s.completed[index] = 1;
-                --remaining;
+                if (!s.completed[index]) {
+                    s.completed[index] = 1;
+                    --remaining;
+                }
             }
         }
     }
@@ -688,27 +734,23 @@ bool manager::quiesce(std::string& error) {
 }
 
 bool manager::stop(std::string& error) {
-    // Prevent new NO_BARRIER dispatches before waiting for outstanding replies.
-    // The completion thread must remain running until all replies are consumed.
+    // Close dispatch before stopping children; no new TaskMain calls.
     {
         std::unique_lock<std::mutex> lock(completion_mutex);
         completion_stopping = true;
         const auto all_done = [this] {
-            return !completion_error.empty() ||
-                std::none_of(completion_busy.begin(), completion_busy.end(),
-                    [](unsigned char busy) { return busy != 0; });
+            return std::none_of(completion_busy.begin(), completion_busy.end(),
+                [](unsigned char busy) { return busy != 0; });
         };
-        ULONGLONG latest_deadline = GetTickCount64();
+        ULONGLONG latest = GetTickCount64();
         for (std::size_t i = 0; i < completion_busy.size(); ++i)
-            if (completion_busy[i])
-                latest_deadline = (std::max)(latest_deadline, completion_deadline[i]);
-        // Bound shutdown even if a child never acknowledges its last request.
+            if (completion_busy[i]) latest = (std::max)(latest, completion_deadline[i]);
         const auto now = GetTickCount64();
-        const auto wait_ms = latest_deadline > now ? latest_deadline - now : 0;
+        const auto budget = latest > now ? latest - now : 0;
         const auto limit = std::chrono::steady_clock::now() +
-            std::chrono::milliseconds(wait_ms + 100);
-        while (!all_done() && completion_cv.wait_until(lock, limit) !=
-                                  std::cv_status::timeout) {}
+            std::chrono::milliseconds(budget + 100);
+        while (!all_done() && completion_error.empty() &&
+               completion_cv.wait_until(lock, limit) != std::cv_status::timeout) {}
         if (!completion_error.empty()) error = completion_error;
         else if (!all_done()) error = "NO_BARRIER drain timeout";
     }
@@ -724,19 +766,115 @@ bool manager::stop(std::string& error) {
         auto& child = workers[*it].child;
         if (!child) continue;
         std::string local;
-        if (!child->stop(local) && success) {
-            error = "Task '" + configuration.tasks[*it].id + "': " + local;
+        const auto result = child->stop_checked(local);
+        if (result == stop_result::recovered) {
+            // Warning only: forced termination was confirmed.
+            std::fprintf(stderr, "Task '%s': STOP recovered (%s)\n",
+                configuration.tasks[*it].id.c_str(), local.c_str());
+        } else if (result == stop_result::failed) {
+            if (success) error = "Task '" + configuration.tasks[*it].id + "': " + local;
             success = false;
         }
     }
     terminate();
+    if (success) error.clear();
     return success;
+}
+
+
+// Control commands run on the Server control thread. request_kill() must run
+// BEFORE taking scheduler_mutex so a hung TASKMAIN can be preempted.
+bool manager::request_kill(const std::string& id, std::size_t& index, std::string& error) {
+    std::lock_guard<std::mutex> lock(supervisor_mutex);
+    error.clear();
+    if (!started || !kill_requested) {
+        error = "Task runtime is not active";
+        return false;
+    }
+    const auto it = std::find_if(configuration.tasks.begin(), configuration.tasks.end(),
+        [&](const auto& item) { return item.id == id; });
+    if (it == configuration.tasks.end()) { error = "Unknown Task: " + id; return false; }
+    index = static_cast<std::size_t>(it - configuration.tasks.begin());
+    auto& child = workers[index].child;
+    if (!child || kill_requested[index].load(std::memory_order_acquire)) {
+        error = "Task is already stopped: " + id;
+        return false;
+    }
+    // Only the selected child is killed. Its handle stays valid until
+    // finish_kill() after the current LOCKSTEP has observed the exit.
+    kill_requested[index].store(true, std::memory_order_release);
+    const HANDLE handle = child->process_handle();
+    if (WaitForSingleObject(handle, 0) == WAIT_TIMEOUT &&
+        !TerminateProcess(handle, 1) &&
+        WaitForSingleObject(handle, 0) != WAIT_OBJECT_0) {
+        kill_requested[index].store(false, std::memory_order_release);
+        error = "TerminateProcess failed for Task: " + id;
+        return false;
+    }
+    manual_kill.store(true, std::memory_order_release);
+    return true;
+}
+
+void manager::finish_kill(std::size_t index) noexcept {
+    std::lock_guard<std::mutex> lock(supervisor_mutex);
+    if (!started || index >= workers.size() || !kill_requested) return;
+    auto& child = workers[index].child;
+    if (child) { child->terminate(); child.reset(); }
+    if (system_table) system_table->task_killed(index);
+}
+
+bool manager::restart_one(const std::string& id, std::size_t& index, std::string& error) {
+    error.clear();
+    if (!started || !kill_requested) {
+        error = "Task runtime is not active; use RUN to initialize it";
+        return false;
+    }
+    const auto it = std::find_if(configuration.tasks.begin(), configuration.tasks.end(),
+        [&](const auto& item) { return item.id == id; });
+    if (it == configuration.tasks.end()) { error = "Unknown Task: " + id; return false; }
+    index = static_cast<std::size_t>(it - configuration.tasks.begin());
+    if (!it->enabled) { error = "Task disabled in Tasks.json: " + id; return false; }
+    if (workers[index].child ||
+        !kill_requested[index].load(std::memory_order_acquire)) {
+        error = "Task is already running: " + id;
+        return false;
+    }
+    auto executable = std::filesystem::path(it->executable);
+    if (executable.is_relative()) executable = project_directory / executable;
+    auto replacement = std::make_unique<process>();
+    bool ok = saved_attachment ?
+        replacement->start(executable.lexically_normal().wstring(), task_timeout_ms,
+            *saved_attachment, error) :
+        replacement->start(executable.lexically_normal().wstring(), task_timeout_ms, error);
+    if (!ok) { error = "Task '" + id + "' TASKINIT failed: " + error; return false; }
+    {
+        std::lock_guard<std::mutex> lock(supervisor_mutex);
+        workers[index].child = std::move(replacement);
+        kill_requested[index].store(false, std::memory_order_release);
+    }
+    if (system_table) system_table->task_restarted(index);
+    return true;
+}
+
+std::size_t manager::active_count() const noexcept {
+    std::lock_guard<std::mutex> lock(supervisor_mutex);
+    if (!started || !kill_requested) return 0;
+    std::size_t count = 0;
+    for (std::size_t i = 0; i < workers.size(); ++i)
+        if (workers[i].child &&
+            !kill_requested[i].load(std::memory_order_acquire)) ++count;
+    return count;
 }
 
 void manager::terminate() noexcept {
     stop_completion();
     drain();
+    std::lock_guard<std::mutex> supervisor_lock(supervisor_mutex);
     for (auto& worker : workers) if (worker.child) worker.child->terminate();
+    kill_requested.reset();
+    manual_kill.store(false, std::memory_order_relaxed);
+    project_directory.clear();
+    saved_attachment.reset();
     executor.reset();
     trace.reset(); // flush and join before unloading Project state
     workers.clear();

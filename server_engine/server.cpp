@@ -379,6 +379,7 @@ public:
     ~scheduler_hr_timer() noexcept { if (handle) CloseHandle(handle); }
     scheduler_hr_timer(const scheduler_hr_timer&) = delete;
     scheduler_hr_timer& operator=(const scheduler_hr_timer&) = delete;
+    bool available() const noexcept { return handle != nullptr; }
     bool wait(HANDLE queue_event, std::chrono::steady_clock::time_point target) const noexcept {
         if (!handle || !queue_event) return false;
         auto remaining = target - std::chrono::steady_clock::now();
@@ -448,8 +449,10 @@ int server::run() {
         }
     }
     const auto scheduler_period = std::chrono::milliseconds(scheduler_period_ms);
-    // Opt-in while THREAD-20 is being validated; legacy scheduling remains the baseline.
-    scheduler_thread_enabled = env_equal("TASK_SCHEDULER_THREAD", "1");
+    scheduler_default_period_us = static_cast<std::uint32_t>(scheduler_period_ms * 1000);
+    // The thread is parked unless the loaded Project selects realtime or
+    // the legacy TASK_SCHEDULER_THREAD opt-in is used.
+    scheduler_thread_enabled = true;
     if (scheduler_thread_enabled) {
         scheduler_exit = false;
         scheduler_thread = std::thread([this, scheduler_period, hr_enabled, hybrid, spin_budget,
@@ -464,19 +467,26 @@ int server::run() {
                 return std::chrono::duration_cast<std::chrono::nanoseconds>(point - deadline_origin).count();
             };
             for (;;) {
+                bool realtime = false;
+                std::chrono::microseconds tick_period{2000};
                 {
                     std::unique_lock<std::mutex> lock(scheduler_mutex);
                     scheduler_cv.wait(lock, [this]() {
-                        return scheduler_exit || (context.project && !task_runtime_failed &&
+                        return scheduler_exit || (scheduler_dedicated_active &&
+                            context.project && !task_runtime_failed &&
                             (project_state_value == project_state::run ||
                              project_state_value == project_state::freeze));
                     });
                     if (scheduler_exit) break;
                     next_tick = next_task_tick;
+                    realtime = scheduler_realtime_active;
+                    tick_period = std::chrono::microseconds(scheduler_project_period_us);
                 }
                 for (;;) {
                     // No control-queue wakeups can disturb this deadline.
-                    if (hr_enabled && stop_event) {
+                    if (realtime) {
+                        // Unpaced: the only wait is the internal Task LOCKSTEP barrier.
+                    } else if (hr_enabled && stop_event && timer.available()) {
                         const auto target = hybrid ? next_tick - spin_budget : next_tick;
                         (void)timer.wait(stop_event, target);
                         if (hybrid) {
@@ -489,12 +499,16 @@ int server::run() {
                         std::this_thread::sleep_until(next_tick);
                     }
                     std::unique_lock<std::mutex> lock(scheduler_mutex);
-                    if (scheduler_exit) break;
+                    if (scheduler_exit || !scheduler_dedicated_active) break;
                     if (!context.project || task_runtime_failed ||
                         (project_state_value != project_state::run &&
                          project_state_value != project_state::freeze)) break;
+                    if (scheduler_resync_requested) {
+                        next_tick = next_task_tick;
+                        scheduler_resync_requested = false;
+                    }
                     const auto actual_wakeup = std::chrono::steady_clock::now();
-                    if (actual_wakeup < next_tick) continue;
+                    if (!realtime && actual_wakeup < next_tick) continue;
                     const auto scheduled_tick = next_tick;
                     const auto perf_tick_start = task_runtime::perf::clock::now();
                     task_runtime::perf::record("cycle_interval", runtime_tick, previous_tick);
@@ -506,7 +520,7 @@ int server::run() {
                     const auto task_dispatch = std::chrono::steady_clock::now();
                     std::string task_error;
                     const char* mode = std::getenv("TASK_SCHEDULER_EXECUTION");
-                    const bool overlap_mode = mode && std::strcmp(mode, "OVERLAP") == 0;
+                    const bool overlap_mode = false; // system table requires strict LOCKSTEP
                     const bool task_tick_ok = !task_manager.active() ||
                         (overlap_mode ? task_manager.tick_overlap(cycle, frozen, task_error) :
                                         task_manager.tick(cycle, frozen, task_error));
@@ -521,16 +535,43 @@ int server::run() {
                     }
                     task_runtime::perf::record("server_tick", runtime_tick, perf_tick_start);
                     const auto cycle_complete = std::chrono::steady_clock::now();
-                    next_tick += scheduler_period;
+                    if (task_tick_ok) {
+                        const auto deadline_origin = realtime ? actual_wakeup : scheduled_tick;
+                        const auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            cycle_complete - actual_wakeup).count();
+                        const auto deadline_delta_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            cycle_complete - deadline_origin - tick_period).count();
+                        const auto jitter_ns = realtime ? std::int64_t{0} :
+                            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                actual_wakeup - scheduled_tick).count();
+                        task_system_table.cycle_completed(cycle,
+                            static_cast<std::uint64_t>(duration_ns), deadline_delta_ns,
+                            jitter_ns, frozen, task_manager.take_manual_kill());
+                        if (task_system_table.stop_pending()) {
+                            // Full LOCKSTEP completed; no Task is running at this boundary.
+                            const auto previous = project_state_value;
+                            task_manager.terminate();
+                            set_project_state(project_state::stopped);
+                            task_system_table.on_stop(static_cast<std::uint32_t>(project_state::stopped));
+                            scheduler_dedicated_active = false;
+                            scheduler_realtime_active = false;
+                            context.communications.publish_server_state(previous, project_state_value);
+                            break;
+                        }
+                    }
                     std::int64_t skipped_periods = 0;
-                    if (next_tick <= cycle_complete) {
-                        const auto missed = (cycle_complete - next_tick) / scheduler_period + 1;
-                        skipped_periods = static_cast<std::int64_t>(missed);
-                        next_tick += scheduler_period * missed;
+                    if (realtime) next_tick = cycle_complete;
+                    else {
+                        next_tick += tick_period;
+                        if (next_tick <= cycle_complete) {
+                            const auto missed = (cycle_complete - next_tick) / tick_period + 1;
+                            skipped_periods = static_cast<std::int64_t>(missed);
+                            next_tick += tick_period * missed;
+                        }
                     }
                     next_task_tick = next_tick;
-                    if (deadline_file) {
-                        const auto budget_end = scheduled_tick + scheduler_period;
+                    if (deadline_file && !realtime) {
+                        const auto budget_end = scheduled_tick + tick_period;
                         const auto lateness = actual_wakeup > scheduled_tick
                             ? actual_wakeup - scheduled_tick : std::chrono::steady_clock::duration::zero();
                         const auto overrun = cycle_complete > budget_end
@@ -557,6 +598,7 @@ int server::run() {
         });
     }
     while (running) {
+        const auto project_period = std::chrono::microseconds(scheduler_project_period_us);
         const auto now =
             std::chrono::system_clock::now();
 
@@ -567,7 +609,7 @@ int server::run() {
 
         communication_control_message message;
 
-        const bool ticking = !scheduler_thread_enabled && context.project && !task_runtime_failed &&
+        const bool ticking = !scheduler_dedicated_active && context.project && !task_runtime_failed &&
             (project_state_value == project_state::run ||
              project_state_value == project_state::freeze);
         // Convert the steady-clock deadline to the queue's system-clock domain.
@@ -630,23 +672,43 @@ int server::run() {
                     }
                     task_runtime::perf::record("server_tick", runtime_tick, perf_tick_start);
                     const auto cycle_complete = std::chrono::steady_clock::now();
+                    if (task_tick_ok) {
+                        const auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            cycle_complete - actual_wakeup).count();
+                        const auto deadline_delta_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            cycle_complete - scheduled_tick - project_period).count();
+                        const auto jitter_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            actual_wakeup - scheduled_tick).count();
+                        task_system_table.cycle_completed(cycle,
+                            static_cast<std::uint64_t>(duration_ns), deadline_delta_ns,
+                            jitter_ns, frozen, task_manager.take_manual_kill());
+                        if (task_system_table.stop_pending()) {
+                            const auto previous = project_state_value;
+                            task_manager.terminate();
+                            set_project_state(project_state::stopped);
+                            task_system_table.on_stop(static_cast<std::uint32_t>(project_state::stopped));
+                            scheduler_dedicated_active = false;
+                            scheduler_realtime_active = false;
+                            context.communications.publish_server_state(previous, project_state_value);
+                        }
+                    }
                     std::int64_t skipped_periods = 0;
                     if (precision_timer.enabled() || hr_enabled) {
                         // Absolute cadence; skip missed deadlines without catch-up bursts.
                         const auto completed = std::chrono::steady_clock::now();
-                        next_task_tick += scheduler_period;
+                        next_task_tick += project_period;
                         if (next_task_tick <= completed) {
                             const auto missed = (completed - next_task_tick) /
-                                scheduler_period + 1;
+                                project_period + 1;
                             skipped_periods = static_cast<std::int64_t>(missed);
-                            next_task_tick += scheduler_period * missed;
+                            next_task_tick += project_period * missed;
                         }
                     } else {
                         next_task_tick = std::chrono::steady_clock::now() +
-                            scheduler_period;
+                            project_period;
                     }
                     if (deadline_file) {
-                        const auto budget_end = scheduled_tick + scheduler_period;
+                        const auto budget_end = scheduled_tick + project_period;
                         const auto lateness = actual_wakeup > scheduled_tick
                             ? actual_wakeup - scheduled_tick
                             : std::chrono::steady_clock::duration::zero();
@@ -769,6 +831,7 @@ void server::set_project_state(
 
     project_state_value =
         state;
+    task_system_table.on_project_state(static_cast<std::uint32_t>(state));
 
     if (context.project) {
         context.project->system().state =
@@ -1000,6 +1063,14 @@ server_response server::execute(
             freeze_project(
                 result.operation,
                 result.diagnostics);
+        break;
+
+    case server_request_kind::kill_task:
+        result.status = kill_task(request.name, result.operation, result.diagnostics);
+        break;
+
+    case server_request_kind::start_task:
+        result.status = start_task(request.name, result.operation, result.diagnostics);
         break;
 
     case server_request_kind::get_object: {
@@ -1404,6 +1475,15 @@ server_status server::load(
     context.project =
         std::move(candidate);
 
+    std::string table_error;
+    if (!task_system_table.create(context.project->tasks(), table_error)) {
+        diagnostics.emit(diagnostic(diagnostics::runtime_state_invalid, operation)
+            .detail("System Task SHM initialization failed: " + table_error).build());
+        context.project.reset();
+        set_project_state(project_state::unloaded);
+        return server_status::project_runtime_failed;
+    }
+    task_manager.set_system_table(&task_system_table);
     set_project_state(project_state::loaded);
 
     return server_status::success;
@@ -1462,6 +1542,15 @@ server_status server::publish(
     context.project =
         std::move(candidate);
 
+    std::string table_error;
+    if (!task_system_table.create(context.project->tasks(), table_error)) {
+        diagnostics.emit(diagnostic(diagnostics::runtime_state_invalid, operation)
+            .detail("System Task SHM initialization failed: " + table_error).build());
+        context.project.reset();
+        set_project_state(project_state::unloaded);
+        return server_status::project_runtime_failed;
+    }
+    task_manager.set_system_table(&task_system_table);
     set_project_state(project_state::loaded);
 
     return server_status::success;
@@ -1520,6 +1609,15 @@ server_status server::build(
     context.project =
         std::move(candidate);
 
+    std::string table_error;
+    if (!task_system_table.create(context.project->tasks(), table_error)) {
+        diagnostics.emit(diagnostic(diagnostics::runtime_state_invalid, operation)
+            .detail("System Task SHM initialization failed: " + table_error).build());
+        context.project.reset();
+        set_project_state(project_state::unloaded);
+        return server_status::project_runtime_failed;
+    }
+    task_manager.set_system_table(&task_system_table);
     set_project_state(project_state::loaded);
 
     return server_status::success;
@@ -1578,6 +1676,15 @@ server_status server::rebuild(
     context.project =
         std::move(candidate);
 
+    std::string table_error;
+    if (!task_system_table.create(context.project->tasks(), table_error)) {
+        diagnostics.emit(diagnostic(diagnostics::runtime_state_invalid, operation)
+            .detail("System Task SHM initialization failed: " + table_error).build());
+        context.project.reset();
+        set_project_state(project_state::unloaded);
+        return server_status::project_runtime_failed;
+    }
+    task_manager.set_system_table(&task_system_table);
     set_project_state(project_state::loaded);
 
     return server_status::success;
@@ -2423,7 +2530,8 @@ server_status server::run_project(
             .detail("Task failure requires UNLOAD").build());
         return server_status::project_runtime_failed;
     }
-    if (project_state_value == project_state::loaded) {
+    if (project_state_value == project_state::loaded ||
+        project_state_value == project_state::stopped) {
         runtime_tick = 0;
         model_cycle = 0;
         const auto& shm = context.project->shm();
@@ -2448,6 +2556,18 @@ server_status server::run_project(
             }
         }
     }
+    const auto& config_timing = context.project->tasks().timing;
+    scheduler_realtime_active = config_timing.mode == task_timing_mode::real_time;
+    scheduler_project_period_us = config_timing.period_ms
+        ? config_timing.period_ms * 1000 : scheduler_default_period_us;
+    task_system_table.set_period_us(scheduler_project_period_us);
+    task_system_table.on_run(project_state_value != project_state::freeze);
+    // Task workloads always use the dedicated scheduler so KILL_TASK can
+    // preempt a hung TASKMAIN. Empty Task configs retain previous behavior.
+    const char* requested_thread = std::getenv("TASK_SCHEDULER_THREAD");
+    scheduler_dedicated_active = !context.project->tasks().tasks.empty() ||
+        scheduler_realtime_active ||
+        (requested_thread && std::strcmp(requested_thread, "1") == 0);
     next_task_tick = std::chrono::steady_clock::now();
     set_project_state(project_state::run);
     if (scheduler_thread_enabled) scheduler_cv.notify_all();
@@ -2500,7 +2620,82 @@ server_status server::freeze_project(
         }
     }
     set_project_state(project_state::freeze);
+    task_system_table.on_pause();
 
+    return server_status::success;
+}
+
+// KILL_TASK is per-process, not a Project STOP command.
+server_status server::kill_task(
+    const std::string& id, operation_id operation,
+    diagnostic_collection& diagnostics) {
+    if (!context.project) {
+        diagnostics.emit(diagnostic(diagnostics::project_not_loaded, operation)
+            .detail("KILL_TASK requires a loaded Project").build());
+        return server_status::project_not_loaded;
+    }
+    // Do not acquire scheduler_mutex or read scheduler-owned state yet:
+    // this control must be able to preempt a hung TASKMAIN.
+    std::size_t index = 0;
+    std::string error;
+    // Preempt BEFORE acquiring scheduler_mutex. Only this Task exits;
+    // the scheduler treats it as a satisfied dependency in this cycle.
+    if (!task_manager.request_kill(id, index, error)) {
+        diagnostics.emit(diagnostic(diagnostics::runtime_state_invalid, operation)
+            .detail(error).build());
+        return server_status::runtime_state_invalid;
+    }
+    std::unique_lock<std::mutex> lock(scheduler_mutex);
+    task_manager.finish_kill(index);
+    if (task_manager.active_count() != 0) {
+        next_task_tick = std::chrono::steady_clock::now();
+        scheduler_resync_requested = true;
+    }
+    if (task_manager.active_count() == 0) {
+        scheduler_dedicated_active = false;
+        task_system_table.on_stop(static_cast<std::uint32_t>(project_state::stopped));
+        set_project_state(project_state::stopped);
+    }
+    return server_status::success;
+}
+
+server_status server::start_task(
+    const std::string& id, operation_id operation,
+    diagnostic_collection& diagnostics) {
+    if (!context.project) {
+        diagnostics.emit(diagnostic(diagnostics::project_not_loaded, operation)
+            .detail("START_TASK requires a loaded Project").build());
+        return server_status::project_not_loaded;
+    }
+    // TASKINIT is serialized at the cycle boundary; other Task processes
+    // remain alive and resume at the next cycle after initialization.
+    std::unique_lock<std::mutex> lock(scheduler_mutex);
+    if (!task_manager.active() ||
+        (project_state_value != project_state::run &&
+         project_state_value != project_state::freeze &&
+         project_state_value != project_state::stopped)) {
+        diagnostics.emit(diagnostic(diagnostics::runtime_state_invalid, operation)
+            .detail("START_TASK requires a running/paused Task Manager").build());
+        return server_status::runtime_state_invalid;
+    }
+    std::string error;
+    std::size_t index = 0;
+    if (!task_manager.restart_one(id, index, error)) {
+        diagnostics.emit(diagnostic(diagnostics::runtime_state_invalid, operation)
+            .detail(error).build());
+        return server_status::runtime_state_invalid;
+    }
+    next_task_tick = std::chrono::steady_clock::now();
+    scheduler_resync_requested = true;
+    if (project_state_value == project_state::stopped) {
+        task_system_table.resume_after_all_killed();
+        scheduler_realtime_active =
+            context.project->tasks().timing.mode == task_timing_mode::real_time;
+        scheduler_dedicated_active = true;
+        next_task_tick = std::chrono::steady_clock::now();
+        set_project_state(project_state::run);
+        scheduler_cv.notify_all();
+    }
     return server_status::success;
 }
 
@@ -2538,15 +2733,23 @@ server_status server::unload(
     if (emergency_unload) set_project_state(project_state::freeze);
     std::string task_error;
     const bool stopped = !task_manager.active() || task_manager.stop(task_error);
+    if (!stopped) {
+        task_runtime_failed = true;
+        diagnostics.emit(diagnostic(diagnostics::runtime_state_invalid, operation)
+            .detail("Task STOP failed; Project SHM retained: " + task_error).build());
+        return server_status::project_runtime_failed;
+    }
     task_runtime_failed = false;
     runtime_tick = 0;
     model_cycle = 0;
-    if (!stopped) {
-        diagnostics.emit(diagnostic(diagnostics::runtime_state_invalid, operation)
-            .detail("Task STOP failed: " + task_error).build());
-    }
+    scheduler_dedicated_active = false;
+    scheduler_realtime_active = false;
+    scheduler_project_period_us = scheduler_default_period_us;
+    task_manager.set_system_table(nullptr);
+    task_system_table.close();
     context.project.reset();
     set_project_state(project_state::unloaded);
+    scheduler_cv.notify_all();
     if (const char* path = std::getenv("TASK_UNLOAD_OWNERSHIP_11_LOG")) {
         const auto fixed = fixed_shared_memory_snapshot();
         const auto ipc = task_runtime::task_ipc_snapshot();
@@ -2587,6 +2790,8 @@ void server::shutdown() noexcept {
     std::string task_error;
     if (task_manager.active()) (void)task_manager.stop(task_error);
     task_manager.terminate();
+    task_manager.set_system_table(nullptr);
+    task_system_table.close();
     context.project.reset();
     set_project_state(project_state::unloaded);
     context.authentication.stop();

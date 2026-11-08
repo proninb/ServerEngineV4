@@ -12,6 +12,7 @@ struct task_ipc_ownership {
     std::uint64_t views;
 };
 [[nodiscard]] task_ipc_ownership task_ipc_snapshot() noexcept;
+enum class stop_result { graceful, recovered, failed };
 class process final {
 public:
     process()=default;
@@ -29,6 +30,7 @@ public:
     [[nodiscard]] HANDLE process_handle() const noexcept { return child; }
     [[nodiscard]] std::uint32_t timeout_ms() const noexcept { return timeout; }
     bool stop(std::string& error);
+    stop_result stop_checked(std::string& error);
     void terminate() noexcept;
 private:
     perf07::trace perf_trace;

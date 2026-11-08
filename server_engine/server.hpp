@@ -15,6 +15,7 @@
 #include "operation.hpp"
 #include "project/ic/ic_catalog.hpp"
 #include "project/task/runtime/task_manager.hpp"
+#include "project/task/runtime/task_runtime_shm.hpp"
 #include "server_context.hpp"
 #include "server_status.hpp"
 
@@ -93,6 +94,14 @@ public:
         operation_id operation,
         diagnostic_collection& diagnostics);
 
+    [[nodiscard]] server_status kill_task(
+        const std::string& id, operation_id operation,
+        diagnostic_collection& diagnostics);
+
+    [[nodiscard]] server_status start_task(
+        const std::string& id, operation_id operation,
+        diagnostic_collection& diagnostics);
+
     void shutdown() noexcept;
 
 private:
@@ -114,12 +123,18 @@ private:
     std::thread scheduler_thread;
     bool scheduler_exit = false;
     bool scheduler_thread_enabled = false;
+    bool scheduler_dedicated_active = false;
+    bool scheduler_realtime_active = false;
+    std::uint32_t scheduler_default_period_us = 2000;
+    std::uint32_t scheduler_project_period_us = 2000;
 
     // Child lifetime ends before resident SHM lifetime.
+    task_runtime::runtime_shm task_system_table;
     task_runtime::manager task_manager;
     std::uint64_t runtime_tick = 0;
     std::uint64_t model_cycle = 0;
     std::chrono::steady_clock::time_point next_task_tick{};
+    bool scheduler_resync_requested = false; // guarded by scheduler_mutex
     bool task_runtime_failed = false;
 
     server_context context;

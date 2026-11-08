@@ -32,6 +32,8 @@ enum class server_request_kind {
     list_ic,
     run,
     freeze,
+    kill_task,
+    start_task,
     shutdown,
 };
 
