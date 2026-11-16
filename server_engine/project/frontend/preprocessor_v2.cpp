@@ -1727,8 +1727,21 @@ server_status semantic_preprocessor_v2::seek_next() noexcept {
     }
 }
 
+std::string_view semantic_preprocessor_v2::current_spelling() const noexcept {
+    return current_valid ? spelling(current_value) : std::string_view{};
+}
+
+std::string_view semantic_preprocessor_v2::spelling(const prepared_token& token) const noexcept {
+    if (!files.content_available(token.file)) return {};
+    const auto text = files.content(token.file);
+    const auto begin = static_cast<std::size_t>(token.source_offset);
+    const auto size = static_cast<std::size_t>(token.source_length);
+    return begin <= text.size() && size <= text.size()-begin ? text.substr(begin,size) : std::string_view{};
+}
+
 server_status semantic_preprocessor_v2::start(
     file_id root) noexcept {
+    semantic_root_value = root;
 
     if (failure != nullptr) {
         *failure = {};

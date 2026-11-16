@@ -13,6 +13,56 @@
 
 namespace cw::server {
 
+// Address links use the existing relocatable endpoint/link representation.
+// Derived-to-base conversion is made explicit in the source endpoint path.
+template<class Types>
+bool qualified_object_compatible(const Types& types, type_ref pointee, type_ref source, bool allow_void = false) noexcept {
+    derived_type_record d;
+    if (types.derived(source, d) && (d.kind == derived_type_kind::lvalue_reference || d.kind == derived_type_kind::rvalue_reference)) source = d.child;
+    bool tc = false, tv = false, sc = false, sv = false;
+    while (types.derived(pointee, d) && (d.kind == derived_type_kind::const_qualified || d.kind == derived_type_kind::volatile_qualified)) {
+        tc |= d.kind == derived_type_kind::const_qualified; tv |= d.kind == derived_type_kind::volatile_qualified; pointee = d.child;
+    }
+    while (types.derived(source, d) && (d.kind == derived_type_kind::const_qualified || d.kind == derived_type_kind::volatile_qualified)) {
+        sc |= d.kind == derived_type_kind::const_qualified; sv |= d.kind == derived_type_kind::volatile_qualified; source = d.child;
+    }
+    return (!sc || tc) && (!sv || tv) && (pointee == source ||
+        (allow_void && pointee.kind() == type_ref_kind::intrinsic && pointee.payload() == static_cast<std::uint32_t>(intrinsic_type::void_type)));
+}
+
+template<class Types>
+bool pointer_address_compatible(const Types& types, type_ref target, type_ref source) noexcept {
+    derived_type_record d;
+    while (types.derived(target, d) && (d.kind == derived_type_kind::const_qualified || d.kind == derived_type_kind::volatile_qualified)) target = d.child;
+    return types.derived(target, d) && d.kind == derived_type_kind::pointer &&
+        qualified_object_compatible(types, d.child, source, true);
+}
+
+// String literal backing is an internal narrow-char array, never a persisted
+// process address. Only a pointer to const char may bind to its first byte.
+template<class Types>
+bool const_char_pointer(const Types& types, type_ref type) noexcept {
+    derived_type_record d;
+    while (types.derived(type, d) && (d.kind == derived_type_kind::const_qualified ||
+            d.kind == derived_type_kind::volatile_qualified)) type = d.child;
+    if (!types.derived(type, d) || d.kind != derived_type_kind::pointer) return false;
+    type = d.child;
+    bool is_const = false;
+    while (types.derived(type, d) && (d.kind == derived_type_kind::const_qualified ||
+            d.kind == derived_type_kind::volatile_qualified)) {
+        is_const |= d.kind == derived_type_kind::const_qualified; type = d.child;
+    }
+    return is_const && type.kind()==type_ref_kind::intrinsic && type.payload()==static_cast<std::uint32_t>(intrinsic_type::char_type);
+}
+
+template<class Types>
+bool literal_pointer_binding_compatible(const Types& types, type_ref target, type_ref source) noexcept {
+    if (!const_char_pointer(types, target)) return false;
+    derived_type_record d;
+    if (!types.derived(source, d) || d.kind != derived_type_kind::bounded_array || !d.payload) return false;
+    return d.child.kind()==type_ref_kind::intrinsic && d.child.payload()==static_cast<std::uint32_t>(intrinsic_type::char_type);
+}
+
 namespace construction_semantics_detail {
 
 [[nodiscard]] constexpr bool integral_intrinsic(
@@ -84,6 +134,10 @@ template <typename TypeView>
         return false;
     }
 
+    if (value.kind == construction_kind::byte_patch)
+        return target.kind() == type_ref_kind::intrinsic &&
+            target.payload() == static_cast<std::uint32_t>(intrinsic_type::char_type);
+
     for (;;) {
         if (target.kind() !=
             type_ref_kind::derived) {
@@ -122,14 +176,17 @@ template <typename TypeView>
         case derived_type_kind::pointer:
             return value.kind ==
                     construction_kind::zero ||
+                (value.kind == construction_kind::object_binding && const_char_pointer(types, target)) ||
                 (construction_semantics_detail::
                      integer_constant(value) &&
                  value.bits() == 0);
 
         case derived_type_kind::bounded_array:
             return derived.payload != 0 &&
-                value.kind ==
-                    construction_kind::zero;
+                (value.kind == construction_kind::zero ||
+                 (value.kind == construction_kind::byte_array && derived.payload == value.operand &&
+                  derived.child.kind() == type_ref_kind::intrinsic &&
+                  derived.child.payload() == static_cast<std::uint32_t>(intrinsic_type::char_type)));
 
         case derived_type_kind::unbounded_array:
             return false;
@@ -142,6 +199,7 @@ template <typename TypeView>
         return false;
     }
 
+    intrinsic_type nominal_storage = intrinsic_type::none;
     if (target.kind() ==
         type_ref_kind::named) {
 
@@ -152,18 +210,19 @@ template <typename TypeView>
             return value.kind == construction_kind::zero ||
                 construction_semantics_detail::integer_constant(value);
         }
-        return value.kind == construction_kind::zero;
+        if (types.type(types.find_type(identity), entry) && entry.kind == graph_type_kind::nominal_scalar)
+            nominal_storage = entry.storage_intrinsic();
+        else return value.kind == construction_kind::zero;
     }
 
     if (target.kind() !=
-        type_ref_kind::intrinsic) {
+        type_ref_kind::intrinsic && nominal_storage == intrinsic_type::none) {
 
         return false;
     }
 
-    const auto intrinsic =
-        static_cast<intrinsic_type>(
-            target.payload());
+    const auto intrinsic = nominal_storage != intrinsic_type::none ? nominal_storage :
+        static_cast<intrinsic_type>(target.payload());
 
     if (intrinsic <=
             intrinsic_type::none ||

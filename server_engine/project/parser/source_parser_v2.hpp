@@ -5,6 +5,7 @@
 #include <memory>
 
 namespace cw::server {
+struct header_template_definitions_v2;
 
 // Owns captured Source descriptors and joins on every exit path. Caller keeps
 // source bytes and lexical backing storage alive and immutable until join.
@@ -24,7 +25,7 @@ private:
     friend server_status parse_source_roots_v2(file_context&, lexical_generation&,
         std::size_t, const preprocessor_configuration&, string_table&,
         identity_space&, graph&, source_map&, parser_failure*,
-        std::vector<parser_warning>*, semantic_parse_telemetry*, source_preparation_v2*) noexcept;
+        std::vector<parser_warning>*, semantic_parse_telemetry*, source_preparation_v2*, header_template_definitions_v2*) noexcept;
 };
 
 // Source Parser V2 consumes the type domain already in G.  It NEVER resets G,
@@ -42,6 +43,7 @@ private:
     parser_failure* failure = nullptr,
     std::vector<parser_warning>* warnings = nullptr,
     semantic_parse_telemetry* telemetry = nullptr,
-    source_preparation_v2* preparation = nullptr) noexcept;
+    source_preparation_v2* preparation = nullptr,
+    header_template_definitions_v2* templates = nullptr) noexcept;
 
 }

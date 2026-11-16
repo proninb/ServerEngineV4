@@ -2584,7 +2584,7 @@ void test_header_v2_differential_01(test_state& tests) {
         {"real-constructor-ops", "struct R { double X; R() : X(0.0) { X = -3.5; } };", true},
         {"real-nested-constructor", "struct Leaf { double X; }; struct R { Leaf L; R() { L.X = -2.5e-3; } };", true},
         {"real-positive-unary", "struct R { double X = +1.5; };", true},
-        {"real-invalid-suffix", "struct R { double X = 0.0f; };", false},
+        {"real-invalid-suffix", "struct R { double X = 0.0ff; };", false},
         {"real-invalid-overflow", "struct R { double X = 1e9999; };", false},
         // HEADER-V2-NESTED-CONSTRUCTOR-10: OLD validates nested constructor
         // paths against the completed Type domain; G stores path-keyed defaults.
@@ -2758,6 +2758,13 @@ void test_header_v2_differential_01(test_state& tests) {
         const bool old_ok = succeeded(old_status);
         const bool v2_ok = succeeded(v2_status);
         if (!tests.expect(old_ok == f.success, context + "/old oracle expectation")) continue;
+        const auto fixture_id = std::string_view{f.id};
+        if (fixture_id == "operator-no-body" || fixture_id == "destructor-body" || fixture_id == "method-body") {
+            tests.expect(v2_ok, context + "/V2 accepts opaque function body");
+            tests.expect(v2_graph.member_count() == 0,
+                context + "/function body contributes no instance fields");
+            continue;
+        }
         if (!tests.expect(v2_ok == old_ok, context + "/outcome")) {
             std::cerr << context << " old-kind=" << static_cast<int>(old_failure.kind)
                       << " v2-kind=" << static_cast<int>(v2_failure.kind)
@@ -2832,6 +2839,10 @@ void test_header_v2_differential_01(test_state& tests) {
 }
 
 #include "header_v2_differential_02.inc"
+#include "header_support_matrix_20261111.inc"
+#include "header_literals_static_regressions.inc"
+#include "header_template_regressions.inc"
+#include "scalar_type_names_regressions.inc"
 
 
 // HEADER-MULTI-BASE-01: only existing restricted syntax, now multiple bases.
@@ -5140,6 +5151,111 @@ void test_nested_constructor_defaults(test_state& tests) {
     }
 }
 
+void test_inherited_constructor_defaults(test_state& tests) {
+    const struct { const char* text; bool valid; } cases[] = {
+        {"enum Kind { NONE, BOOL }; struct A { unsigned char type = 0; }; struct B : A { B(){ type=NONE; type=BOOL; } };", true},
+        {"struct A { int type=2; }; struct B : A {}; struct C : B { C(){type=7;} };", true},
+        {"struct A { int type=2; }; struct B : A { B(){type=7;} int type; };", true},
+        {"struct A { protected: int type; }; struct B : A { B(){type=7;} };", true},
+        {"struct A { private: int type; }; struct B : A { B(){type=7;} };", false},
+        {"struct A { int type; }; struct B : A {}; struct C : A {}; struct D : B,C { D(){type=7;} };", false},
+        {"struct A { int type; }; struct B { int type; }; struct C : A,B { C(){type=7;} };", false},
+        {"struct A { int type; }; struct B : A { B():type(7){} };", false},
+        {"struct A { int type; }; struct B : A { B():type(7){type=8;} };", false},
+        {"struct A { int type; }; struct B : A { B(){missing=7;} };", false},
+        {"struct A { int type; }; struct B : A { B(){type=\"bad\";} };", false},
+        {"struct A { float x; A():x(0.f){} };", true},
+        {"struct A { double x=0.1f; float y=1.e2F; double z=-0.f; };", true},
+        {"struct A { float x=1.e100f; };", false},
+        {"struct A { float x=1.0ff; };", false},
+        {"struct A { float x=1f; };", false},
+        {"struct A { A& operator++(); A& operator++(int); A& operator--(); A& operator--(int); };", true},
+        {"struct A { A& operator++(double); };", false},
+        {"struct A { A& operator++(int,int); };", false},
+        {"struct A { A& operator++(int unused); };", true},
+        {"struct A { int x; A():x(7){} A(const int*); A(int, double); };", true},
+        {"struct A { A(const A&); A(A&&) noexcept = default; A(int) = delete; A(void){} };", true},
+        {"struct A { int x; A(int v):x(v){ x=99; if(v){x=100;} } A():x(7){} };", true},
+        {"struct A { A(int (*f)(int), int values[2]); A(double v=1.0) noexcept(true); };", true},
+        {"struct A { A(int,); };", false},
+        {"struct A { A(,int); };", false},
+        {"struct A { A(int; };", false},
+        {"struct A { A(int v):x(v]{} };", false},
+        {"struct A { A(int v){ if(v){ } };", false},
+        {"struct A { A(){} A(void){} };", false},
+        {"struct A { A(int) = 0; };", false},
+        {"struct A { A(void* p); };", true},
+        {"struct A { A(void,int); };", false},
+        {"struct A { int x=7; int f(){x=99; if(x){return x;} return 0;} int y=8; };", true},
+        {"struct A { int* values; int& operator[](int i){return values[i];} };", true},
+        {"struct A { virtual ~A(){} virtual int f(){return 1;} operator bool() const {return true;} };", true},
+        {"struct A { int f(){ const char* text=\"}])\"; /* } */ return 1; } };", true},
+        {"struct A { int f(){return (1];} };", false},
+        {"struct A { int f(){return 1; };", false},
+        {"struct A { virtual int f()=0 {} };", false},
+        {"struct A { int f()=delete {} };", false},
+    };
+    for (const auto& item : cases) {
+        const temporary_source source{"inherited_constructor_defaults", item.text};
+        file_context files;
+        lexical_generation lexical;
+        file_id root;
+        if (!prepare_root(tests, source.path(), files, lexical, root)) return;
+        preprocessor_configuration configuration;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        configuration.root_directory = source.path().parent_path();
+        const std::array<file_id, 1> roots{root};
+        prepared_include_closure_v2 closure;
+        prepared_include_failure_v2 preparation_failure;
+        if (!tests.expect(succeeded(prepare_header_include_closure_v2(
+            files, roots, configuration, closure, &preparation_failure)),
+            "prepare inherited constructor fixture")) return;
+        preprocessor_v2_failure preprocessing_failure;
+        semantic_preprocessor_v2 input{files, closure.view(), configuration, strings, &preprocessing_failure};
+        if (!tests.expect(succeeded(input.start(root)), "start inherited constructor fixture")) return;
+        parser_v2_failure failure;
+        header_parser_v2 parser{input, identities, G, &failure};
+        if (!tests.expect(succeeded(sources.reset(files.size())) && succeeded(sources.begin_root(root)),
+            "start inherited constructor provenance")) return;
+        parser.set_provenance(&sources);
+        const auto status = parser.parse();
+        tests.expect(succeeded(status) == item.valid, item.text);
+        if (succeeded(status) != item.valid) std::cerr << failure.detail << '\n';
+        if (succeeded(status) && std::string_view{item.text}.starts_with("struct A { int x=7; int f()")) {
+            const auto handle = G.find_type(identities.find(identities.root(), strings.find("A"), identity_kind::type));
+            const auto* x = G.construction(handle, G.find_member(handle, strings.find("x")));
+            const auto* y = G.construction(handle, G.find_member(handle, strings.find("y")));
+            tests.expect(G.member_count() == 2 && x && y && x->bits() == 7 && y->bits() == 8 &&
+                G.constructor_defaults.entries().empty(), "opaque method body leaves field layout and defaults unchanged");
+        }
+        if (succeeded(status) && std::string_view{item.text}.starts_with("struct A { int x; A(int v)")) {
+            const auto handle = G.find_type(identities.find(identities.root(), strings.find("A"), identity_kind::type));
+            const auto* x = G.construction(handle, G.find_member(handle, strings.find("x")));
+            tests.expect(x && x->bits() == 7 && G.constructor_defaults.entries().empty(),
+                "parameterized constructor body supplies no automatic object defaults");
+        }
+        if (succeeded(status) && std::string_view{item.text}.starts_with("struct A { double x=0.1f")) {
+            const auto handle = G.find_type(identities.find(identities.root(), strings.find("A"), identity_kind::type));
+            const auto* x = G.construction(handle, G.find_member(handle, strings.find("x")));
+            const auto* z = G.construction(handle, G.find_member(handle, strings.find("z")));
+            tests.expect(x && x->kind == construction_kind::real &&
+                std::bit_cast<double>(x->bits()) == static_cast<double>(0.1f),
+                "float suffix rounds to float before canonical double promotion");
+            tests.expect(z && z->bits() == (std::uint64_t{1} << 63),
+                "float suffix preserves negative zero");
+        }
+        if (item.valid && std::string_view{item.text}.starts_with("enum Kind")) {
+            const auto entries = G.constructor_defaults.entries();
+            tests.expect(entries.size() == 1 && entries[0].value.bits() == 1 &&
+                entries[0].path == strings.find("type"),
+                "inherited enum constant assignment retains the final value");
+        }
+    }
+}
+
 void test_constructor_aggregate_defaults(test_state& tests) {
     for (const auto init : {"{.name = \"hello\", .value = 42, .scale = 1.5}",
         "{\"hello\", 42, 1.5}", "{.value = 42, .name = \"hello\"}", "{\"hello\", .value = 42}"}) {
@@ -5897,15 +6013,52 @@ void test_source_string_assignment(test_state& tests) {
             const auto entries = G.initialization_entries();
             const std::string expected = std::string_view{literal} == "\"0.0.3\"" ? "0.0.3" :
                 std::string_view{literal} == "\"\"" ? "" : std::string_view{literal} == "\"ab\" \"cd\"" ? "abcd" : "A\nBC";
-            tests.expect(entries.size() == 8 && G.link_entries().size() == 1, "inherited string and whole-object binding normalize");
+            tests.expect(entries.size() == 1 && G.link_entries().size() == 1, "inherited string and whole-object binding normalize");
             for (const auto& entry : entries) {
-                const auto steps = G.endpoint_path_steps(entry.target.member.path());
-                const auto index = steps.back().value;
-                tests.expect(entry.value.bits() == (index < expected.size() ? static_cast<unsigned char>(expected[index]) : 0),
-                    "Source string bytes and terminator are preserved");
+                tests.expect(entry.value.kind == construction_kind::byte_array && entry.value.high == 0 &&
+                    entry.value.operand == 8 && strings.spelling(entry.value.low) == expected,
+                    "Source string stores one literal and an implicit zero tail");
             }
         }
     }
+    }
+}
+
+void test_packed_source_char_overwrites(test_state& tests) {
+    for (const bool frontend_v2 : {false, true}) {
+        const temporary_source header{"packed_char_header", "struct T { char text[19]; char partial[9]; };"};
+        const temporary_source source{"packed_char_source",
+            "T a; a.text[7]=33; a.text=\"abcdefghijklmnopq\"; a.text[8]=35; "
+            "a.text=\"xy\"; a.text[18]=90; a.partial[7]=65; a.partial[8]=66;"};
+        file_context files; lexical_generation lexical; file_id h, f;
+        (void)files.resolve(header.path(), file_kind::header, h);
+        (void)files.resolve(source.path(), file_kind::source, f);
+        const std::array roots{h, f};
+        if (!prepare_all_roots(tests, files, lexical, roots)) return;
+        string_table strings; identity_space identities{strings}; graph G; source_map sources;
+        preprocessor_configuration configuration; parser_failure failure;
+        if (!tests.expect(succeeded(parse_semantic_project(files, lexical, roots.size(), configuration,
+            strings, identities, G, sources, &failure, nullptr, nullptr, frontend_v2)),
+            "parse packed char scalar/string overwrites in both parsers")) return;
+        tests.expect(G.initialization_count() == 2, "19-byte string and sparse 9-byte array occupy two whole-array records");
+        for (const auto& entry : G.initialization_entries()) {
+            const auto member = entry.target.member.direct_member().value();
+            const auto data = strings.spelling(entry.value.low);
+            const auto mask = strings.spelling(entry.value.high);
+            const auto extent = member == 0 ? 19u : 9u;
+            tests.expect(entry.value.kind == construction_kind::byte_array && entry.value.operand == extent,
+                "canonical char writes use one whole-array value");
+            for (unsigned index = 0; index < extent; ++index) {
+                const bool written = entry.value.high == 0 || (index / 8 < mask.size() &&
+                    (static_cast<unsigned char>(mask[index / 8]) & (1u << (index % 8))));
+                if (member == 0) {
+                    const unsigned expected = index == 0 ? 'x' : index == 1 ? 'y' : index == 18 ? 'Z' : 0;
+                    tests.expect(written && (index < data.size() ? static_cast<unsigned char>(data[index]) : 0) == expected,
+                        "whole string overwrite clears earlier scalar and long-string tail");
+                } else tests.expect(written == (index == 7 || index == 8),
+                    "sparse char assignments preserve untouched constructor bytes");
+            }
+        }
     }
 }
 
@@ -5934,13 +6087,11 @@ void test_source_string_scratch_lifetime(test_state& tests) {
             strings, identities, G, sources, &failure, &warnings, nullptr, frontend_v2);
         if (!tests.expect(succeeded(status), "alternating Source string lengths and path depths")) return;
         tests.expect(warnings.size() == 2, "scratch reuse preserves overwrite warning count");
-        tests.expect(G.initialization_entries().size() == 136, "scratch outputs own all final string values");
+        tests.expect(G.initialization_entries().size() == 2, "scratch outputs own all final string values");
         for (const auto& entry : G.initialization_entries()) {
-            const auto path = G.endpoint_path_steps(entry.target.member.path());
-            const auto index = path.back().value;
-            const auto expected = path.size() == 2 && index < 2 ? (index == 0 ? 'C' : 'D') : 0;
-            tests.expect(entry.value.bits() == static_cast<std::uint64_t>(expected),
-                "cleared scratch leaves no prior bytes or nested path components in G");
+            tests.expect(entry.value.kind == construction_kind::byte_array && entry.value.high == 0 &&
+                strings.spelling(entry.value.low) == (entry.value.operand == 8 ? "CD" : ""),
+                "scratch reuse leaves no stale literal bytes or path components");
         }
     }
 }
@@ -7633,6 +7784,144 @@ void test_semantic_type_diagnostics(
 }
 
 
+void test_source_base_reference_bindings(test_state& tests) {
+    const struct { const char* source; bool valid; } cases[] = {
+        {"Derived d; Derived& input; input=d; Holder h; h.ref=input; h.ref.value=17; Base& alias; alias=d; alias.value=19;", true},
+        {"Base d; const Base& ref; ref=d;", true},
+        {"const Base d; Base& ref; ref=d;", false},
+        {"Ambiguous d; Holder h; h.ref=d;", false},
+        {"Private d; Holder h; h.ref=d;", false},
+        {"Prefix d; Holder h; h.ref=d;", false},
+        {"Base d; Derived& ref; ref=d;", false},
+        {"Derived d; Holder h; h.ref=d; int values[2]; int* p; p=values; *p=5;", true},
+    };
+    for (const auto& item : cases) {
+        const temporary_source header{"source_base_reference_header",
+            "struct Prefix { int pad=123; }; struct Base { int value=7; }; struct Mid : Base {}; struct Derived : Prefix, Mid {}; "
+            "struct Left : Base {}; struct Right : Base {}; struct Ambiguous : Left, Right {}; class Private : private Base {}; struct Holder { Base& ref; };"};
+        const temporary_source source{"source_base_reference_source", item.source};
+        file_context files;
+        lexical_generation lexical;
+        std::array<file_id, 2> roots;
+        if (!tests.expect(succeeded(files.resolve(header.path(), file_kind::header, roots[0])) &&
+            succeeded(files.resolve(source.path(), file_kind::source, roots[1])), "resolve base-reference fixture")) return;
+        if (!prepare_all_roots(tests, files, lexical, roots)) return;
+        preprocessor_configuration configuration;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        parser_failure failure;
+        const auto status = parse_semantic_project(files, lexical, roots.size(), configuration,
+            strings, identities, G, sources, &failure, nullptr, nullptr, true);
+        tests.expect(succeeded(status) == item.valid, "derived-to-base Source reference binding validation");
+        if (succeeded(status) != item.valid) std::cerr << item.source << " : " << failure.detail << '\n';
+        if (succeeded(status) && std::string_view{item.source}.starts_with("Derived d; Derived&")) {
+            bool found = false;
+            for (const auto& link : G.link_entries()) {
+                if (!link.source.member.is_path()) continue;
+                const auto steps = G.endpoint_path_steps(link.source.member.path());
+                if (steps.size() == 3 && steps[0].kind == endpoint_path_step_kind::dereference &&
+                    steps[1].kind == endpoint_path_step_kind::base && steps[1].value == 1 &&
+                    steps[2].kind == endpoint_path_step_kind::base) found = true;
+            }
+            tests.expect(found, "base reference source preserves dereference and both base offsets");
+        }
+    }
+}
+
+void test_source_pointer_addresses(test_state& tests) {
+    const struct { const char* source; bool valid; } cases[] = {
+        {"Derived d; Link link; link.From=&d; link.value=&d.value; *link.value=17; link.typed=&d; link.typed->value=23; (*link.typed).value=29; int* top=&d.value; int* copy; copy=top; int** pp=&copy; **pp=31; int& alias; alias=*top;", true},
+        {"Derived d; Link link; link.value=&d;", false},
+        {"Derived d; d.value=&d.value;", false},
+        {"Derived d; *d.value=1;", false},
+        {"const int x=1; int* p; p=&x;", false},
+        {"const int x=1; const int* p; p=&x;", true},
+        {"const int x=1; const int* p; p=&x; *p=2;", false},
+        {"Ambiguous d; Link link; link.From=&d;", false},
+        {"Private d; Link link; link.From=&d;", false},
+        {"Derived d; void* p=&d;", true},
+        {"int x; int* const p=&x; *p=3;", true},
+        {"int x; int* const p=&x; p=&x;", false},
+        {"int x; int* p; p=nullptr; p=&x;", false},
+        {"int x; int* p; p=&x; p=nullptr;", false},
+    };
+    for (const auto& item : cases) {
+        const temporary_source header{"source_pointer_addresses_header",
+            "struct SimObject {}; struct Prefix { int pad=123; }; struct Leaf : SimObject { int value=7; }; struct Derived : Prefix, Leaf {}; "
+            "struct Left : Leaf {}; struct Right : Leaf {}; struct Ambiguous : Left, Right {}; class Private : private Leaf {}; "
+            "struct Link { SimObject* From; int* value; Leaf* typed; };"};
+        const temporary_source source{"source_pointer_addresses_source", item.source};
+        file_context files;
+        lexical_generation lexical;
+        std::array<file_id, 2> roots;
+        if (!tests.expect(succeeded(files.resolve(header.path(), file_kind::header, roots[0])) &&
+            succeeded(files.resolve(source.path(), file_kind::source, roots[1])), "resolve pointer-address fixture")) return;
+        if (!prepare_all_roots(tests, files, lexical, roots)) return;
+        preprocessor_configuration configuration;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        parser_failure failure;
+        const auto status = parse_semantic_project(files, lexical, roots.size(), configuration,
+            strings, identities, G, sources, &failure, nullptr, nullptr, true);
+        tests.expect(succeeded(status) == item.valid, "Source address, dereference and pointer conversion validation");
+        if (succeeded(status) != item.valid) std::cerr << item.source << " : " << failure.detail << '\n';
+    }
+}
+
+void test_source_array_reference_indices(test_state& tests) {
+    for (const bool frontend_v2 : {false, true}) {
+        for (const auto target : {"a.view[1][2].value", "a.view[2][0].value", "a.view[0][3].value", "a.ptr[0].value"}) {
+            const bool valid = std::string_view{target} == "a.view[1][2].value";
+            const temporary_source header{"array_reference_indices_header",
+                "struct Leaf { int value; }; struct Base { Leaf data[2][3]; Leaf (&view)[2][3]; Leaf* ptr; int& sink; Base():view(data){} }; struct Root : Base {};"};
+            const temporary_source source{"array_reference_indices_source", std::string{"Root a; Root b; "} + target +
+                "=7; a.sink=b.view[1][0].value;"};
+            file_context files;
+            lexical_generation lexical;
+            std::array<file_id, 2> roots;
+            if (!tests.expect(succeeded(files.resolve(header.path(), file_kind::header, roots[0])) &&
+                succeeded(files.resolve(source.path(), file_kind::source, roots[1])), "resolve array reference fixture")) return;
+            if (!prepare_all_roots(tests, files, lexical, roots)) return;
+            preprocessor_configuration configuration;
+            string_table strings;
+            identity_space identities{strings};
+            graph G;
+            source_map sources;
+            parser_failure failure;
+            const auto status = parse_semantic_project(files, lexical, roots.size(), configuration,
+                strings, identities, G, sources, &failure, nullptr, nullptr, frontend_v2);
+            tests.expect(succeeded(status) == valid, "array-reference index bounds and pointer rejection");
+            if (succeeded(status) != valid) std::cerr << "array ref backend=" << frontend_v2 << " target=" << target << " detail=" << failure.detail << '\n';
+            if (!valid || !succeeded(status)) continue;
+            tests.expect(G.initialization_count() == 1 && G.link_count() == 1,
+                "array references support assignment destinations and Source operands");
+            const auto steps = G.endpoint_path_steps(G.initialization_entries()[0].target.member.path());
+            tests.expect(steps.size() == 6 && steps[0].kind == endpoint_path_step_kind::base &&
+                steps[2].kind == endpoint_path_step_kind::dereference &&
+                steps[3].kind == endpoint_path_step_kind::array_index && steps[3].value == 1 &&
+                steps[4].kind == endpoint_path_step_kind::array_index && steps[4].value == 2,
+                "reference-to-multidimensional-array path dereferences before indexing");
+            source_endpoint_resolver resolver{G};
+            const std::array<source_bound_selector, 4> selectors{{
+                {source_selector_kind::member, strings.find("view"), 0},
+                {source_selector_kind::index, {}, 1}, {source_selector_kind::index, {}, 2},
+                {source_selector_kind::member, strings.find("value"), 0}}};
+            source_endpoint_result resolved;
+            source_endpoint_resolver::failure error;
+            std::size_t failed = 0;
+            const auto who = identities.find(identities.root(), strings.find("a"), identity_kind::object);
+            tests.expect(succeeded(resolver.resolve({who, selectors}, resolved, error, failed)) &&
+                resolved.endpoint.path.size() == steps.size() &&
+                std::equal(steps.begin(), steps.end(), resolved.endpoint.path.begin()),
+                "read-only and Source parser array-reference paths agree");
+        }
+    }
+}
+
 void test_source_v2_assignment_dispatch(test_state& tests) {
     const temporary_source header{"source_dispatch_header",
         "struct Signal { int value; }; struct Array {}; namespace Space {}"};
@@ -7707,7 +7996,7 @@ void test_source_v2_cross_root_endpoints(test_state& tests) {
         return;
     }
     tests.expect(G.object_count() == 5 && G.link_count() == 2 &&
-            G.initialization_count() == 22,
+            G.initialization_count() == 14,
         "cross-root endpoints preserve separate object targets and string-array writes");
     const auto identity = [&](const char* name, identity_kind kind) {
         return identities.find(identities.root(), strings.find(name), kind);
@@ -8032,7 +8321,7 @@ void test_source_v2_construction_window(test_state& tests) {
     const auto object_a = identities.find(identities.root(), strings.find("a"), identity_kind::object);
     const auto member = G.find_member(type, strings.find("value"));
     object_initialization_record value;
-    tests.expect(G.object_count() == 4 && G.link_count() == 1 && G.initialization_count() == 7 &&
+    tests.expect(G.object_count() == 4 && G.link_count() == 1 && G.initialization_count() == 4 &&
             G.initialization({object_a, endpoint_ref{member}}, value) && value.value.bits() == 130,
         "window boundaries preserve last-write-wins, strings, declarations and namespace commits");
     tests.expect(warnings.size() == 259 &&
@@ -8451,7 +8740,9 @@ static void test_opt08_validate_canonical(test_state& tests) {
 #include "header_v2_semantic_contract_cases.hpp"
 }
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 3 && std::string_view{argv[1]} == "--header-support-matrix")
+        return cw::server::run_header_support_matrix(std::filesystem::absolute(argv[2]));
 #ifdef CW_PUBLISH_NO_SHA256_AB
     const auto* hash_reference=std::getenv("CW_PUBLISH_SHA256_REFERENCE");
     cw::server::detail::publish_hash_reference=hash_reference&&std::string_view{hash_reference}=="1";
@@ -8522,6 +8813,9 @@ int main() {
 
         test_header_semantic_space(tests);
         test_source_v2_assignment_dispatch(tests);
+        test_source_array_reference_indices(tests);
+        test_source_pointer_addresses(tests);
+        test_source_base_reference_bindings(tests);
         test_source_v2_cross_root_endpoints(tests);
         test_source_v2_owned_endpoint_paths(tests);
         test_source_v2_construction_window(tests);
@@ -8537,9 +8831,13 @@ int main() {
 
         test_header_static_constructor_binding(
             tests);
+        test_header_literals_static(tests);
+    test_header_templates(tests);
+    test_scalar_type_names(tests);
 
         test_record_scratch_isolation(tests);
         test_nested_constructor_defaults(tests);
+        test_inherited_constructor_defaults(tests);
         test_constructor_array_defaults(tests);
         test_constructor_aggregate_defaults(tests);
 
@@ -8547,6 +8845,7 @@ int main() {
             tests);
 
         test_source_string_assignment(tests);
+        test_packed_source_char_overwrites(tests);
         test_source_string_scratch_lifetime(tests);
         test_source_value_initialization(
             tests);

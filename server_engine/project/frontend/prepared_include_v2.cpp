@@ -197,14 +197,21 @@ struct physical_token_v2 final {
     // HEADER-V2-REAL-LITERAL-11: OLD recognizes decimal real pp-numbers
     // containing '.', 'e' or 'E'. Decode once in physical preparation, never
     // parse source text inside Header semantic execution. from_chars must
-    // consume the whole token; suffixes, hex and overflow stay unsupported.
+    // consume the whole numeric token. An f/F suffix selects float rounding
+    // before promotion to the canonical double representation.
     if (spelling.find_first_of(".eE") != std::string_view::npos) {
+        const bool single = spelling.back() == 'f' || spelling.back() == 'F';
+        if (single) spelling.remove_suffix(1);
         double value = 0;
-        const auto parsed = std::from_chars(
-            spelling.data(), spelling.data() + spelling.size(), value);
-        if (parsed.ec != std::errc{} ||
-            parsed.ptr != spelling.data() + spelling.size()) {
-            return {};
+        if (single) {
+            float rounded = 0;
+            const auto parsed = std::from_chars(spelling.data(), spelling.data() + spelling.size(), rounded);
+            if (parsed.ec != std::errc{} || parsed.ptr != spelling.data() + spelling.size()) return {};
+            value = rounded;
+        } else {
+            const auto parsed = std::from_chars(
+                spelling.data(), spelling.data() + spelling.size(), value);
+            if (parsed.ec != std::errc{} || parsed.ptr != spelling.data() + spelling.size()) return {};
         }
         return {
             std::bit_cast<std::uint64_t>(value),

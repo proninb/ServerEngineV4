@@ -1122,7 +1122,7 @@ private:
                     mode);
 
             case derived_type_kind::pointer:
-                return zero_pointer_construction(construction)
+                return (zero_pointer_construction(construction) || construction.kind==construction_kind::object_binding)
                     ? shm_type_area_result::success
                     : shm_type_area_result::invalid_input;
 
@@ -1320,6 +1320,11 @@ private:
 
             case derived_type_kind::pointer:
                 if (!zero_pointer_construction(construction)) {
+                    if (construction.kind==construction_kind::object_binding) {
+                        object_handle object;
+                        const auto status=resolve_object(identity_ref::from_raw(construction.operand),object);
+                        return status==shm_type_area_result::success ? append_object_reference(target,object.value()) : status;
+                    }
                     return shm_type_area_result::invalid_input;
                 }
 

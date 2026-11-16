@@ -4613,7 +4613,7 @@ bool graph_delta::resolve_endpoint_path(
         switch (step.kind) {
         case endpoint_path_step_kind::dereference:
             if (step.value != 0 || !derived(current_type, derived_value) ||
-                (derived_value.kind != derived_type_kind::lvalue_reference && derived_value.kind != derived_type_kind::rvalue_reference)) { return false; }
+                (derived_value.kind != derived_type_kind::lvalue_reference && derived_value.kind != derived_type_kind::rvalue_reference && derived_value.kind != derived_type_kind::pointer)) { return false; }
             current_type = derived_value.child;
             break;
         case endpoint_path_step_kind::base: {
@@ -5558,6 +5558,14 @@ bool graph_delta::scalar_initialization_target(
                 intrinsic_type::void_type;
     }
 
+    if (type_value.kind() == type_ref_kind::named) {
+        type_entry entry;
+        const auto identity_value = identity_ref::from_raw((static_cast<std::uint32_t>(identity_kind::type) << identity_ref::kind_shift) | type_value.payload());
+        return type(find_type(identity_value), entry) && entry.kind == graph_type_kind::nominal_scalar;
+    }
+    if (derived(type_value, derived_value) && derived_value.kind == derived_type_kind::bounded_array)
+        return derived_value.payload != 0 && derived_value.child.kind() == type_ref_kind::intrinsic &&
+            derived_value.child.payload() == static_cast<std::uint32_t>(intrinsic_type::char_type);
     return type_value.kind() ==
             type_ref_kind::derived &&
         derived(
@@ -5571,6 +5579,8 @@ bool graph_delta::scalar_initialization_target(
 bool graph_delta::reference_binding_compatible(
     type_ref target,
     type_ref source) const noexcept {
+
+    if (pointer_address_compatible(*this, target, source)) return true;
 
     derived_type_record target_type;
 
@@ -5598,8 +5608,7 @@ bool graph_delta::reference_binding_compatible(
         source = source_type.child;
     }
 
-    return target_type.child ==
-        source;
+    return qualified_object_compatible(*this, target_type.child, source);
 }
 
 bool graph_delta::endpoint_type(
@@ -6238,6 +6247,11 @@ server_status graph_delta::add_initialization(
             ++live_initialization_count_value;
         }
 
+        if (patch->live && value.kind == construction_kind::byte_patch &&
+            patch->value.value.kind == construction_kind::byte_patch) {
+            replaced = (patch->value.value.operand & value.operand) != 0;
+            value = merge_byte_patch(patch->value.value, value);
+        }
         patch->value = {
             target,
             value,
@@ -6256,6 +6270,10 @@ server_status graph_delta::add_initialization(
         baseline->initialization(
             target,
             baseline_value);
+
+    if (baseline_present && value.kind == construction_kind::byte_patch &&
+        baseline_value.value.kind == construction_kind::byte_patch)
+        value = merge_byte_patch(baseline_value.value, value);
 
     const auto prepared =
         ensure_initialization_target_index_capacity(

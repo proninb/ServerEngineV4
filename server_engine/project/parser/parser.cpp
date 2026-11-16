@@ -1,8 +1,10 @@
+#include "char_array_value.hpp"
 #include "parser.hpp"
 #ifdef CW_CANONICALIZER_TRACE
 #include "../../../experiments/canonicalizer-01/capture.hpp"
 #endif
 #include "header_parser_v2.hpp"
+#include "scalar_type_names.hpp"
 #ifdef CW_HEADER_MODEL_V2
 #include "header_model_v2.hpp"
 #ifdef CW_HEADER_MODEL_EFFECTIVE_V2
@@ -1692,7 +1694,14 @@ private:
             }
         }
 
-        if (builtin_start(current.kind) ||
+        const auto convenience = at(token_kind::identifier)
+            ? scalar_type_name(strings.get(current.identifier)) : intrinsic_type::none;
+        if (convenience != intrinsic_type::none && !find_type_identity(scope,current.identifier)) {
+            output=G.intrinsic(convenience);
+            const auto status=advance();
+            if (!succeeded(status)) return status;
+        }
+        else if (builtin_start(current.kind) ||
             (at(token_kind::identifier) && strings.get(current.identifier) == "__int64")) {
             intrinsic_type intrinsic;
             const auto parsed =
@@ -4786,6 +4795,14 @@ private:
                 strip_cv(
                     indexed_type);
 
+                type_ref indexed_referent;
+                if (reference_referent(indexed_type, indexed_referent)) {
+                    try { endpoint_steps.push_back({0, endpoint_path_step_kind::dereference, {}}); }
+                    catch (...) { return server_status::io_error; }
+                    indexed_type = indexed_referent;
+                    strip_cv(indexed_type);
+                }
+
                 derived_type_record array;
 
                 if (!G.derived(
@@ -5192,11 +5209,36 @@ private:
     }
 
     [[nodiscard]] server_status commit_source_initialization(
-        object_endpoint target, type_ref type, construction_value value, bool& replaced) noexcept {
+        object_endpoint& target, type_ref type, construction_value value, bool& replaced) noexcept {
         parser_stage_timer timer{telemetry != nullptr ? &telemetry->source_initialization_commit_ns : nullptr};
+        bool packed = false, overwritten = false;
+        if (char_scalar_value(type, value) && !endpoint_steps.empty() &&
+            endpoint_steps.back().kind == endpoint_path_step_kind::array_index) {
+            object_entry object;
+            if (!read_object(G.find_object(target.object), object)) return server_status::project_configuration_invalid;
+            const auto index = endpoint_steps.back().value;
+            endpoint_steps.pop_back();
+            endpoint_path_handle path; type_ref array_type;
+            auto status = G.intern_endpoint_path(object.type, endpoint_steps, path, &array_type);
+            if (!succeeded(status)) return status;
+            type = array_type;
+            target.member = endpoint_steps.size() == 1 && endpoint_steps.front().kind == endpoint_path_step_kind::member
+                ? endpoint_ref::from_raw(static_cast<std::uint32_t>(endpoint_steps.front().value))
+                : endpoint_ref::from_path(path);
+            derived_type_record array;
+            if (!G.derived(type, array) || array.kind != derived_type_kind::bounded_array)
+                return server_status::project_configuration_invalid;
+            status = edit_char_array(G, strings, target, array.payload, index,
+                static_cast<unsigned char>(value.bits()), value, overwritten);
+            if (!succeeded(status)) return status;
+            packed = true;
+        }
+        server_status status;
         if constexpr (std::is_same_v<Graph, graph>)
-            return G.add_resolved_initialization(target, type, value, replaced);
-        else return G.add_initialization(target, value, replaced);
+            status = G.add_resolved_initialization(target, type, value, replaced);
+        else status = G.add_initialization(target, value, replaced);
+        if (packed) replaced = overwritten;
+        return status;
     }
 
     [[nodiscard]] server_status commit_source_link(
@@ -5240,34 +5282,16 @@ private:
         if (!succeeded(status)) { return status; }
         status = expect(token_kind::semicolon, "Expected ';' after string assignment");
         if (!succeeded(status)) { return status; }
-        object_entry object;
-        if (!read_object(G.find_object(target.endpoint.object), object)) {
-            return fail(parser_failure_kind::semantic, "String assignment object is invalid");
-        }
-        // Normalize to scalar paths, reusing persisted initialization and BUILD provenance.
-        try { endpoint_steps.push_back({0, endpoint_path_step_kind::array_index, {}}); }
-        catch (...) { return server_status::io_error; }
+        construction_value value;
+        status = char_array_value(strings,
+            std::string_view{reinterpret_cast<const char*>(bytes.data()), bytes.size()}, {}, array.payload, value);
+        if (!succeeded(status)) return status;
+        auto destination = target.endpoint;
         bool any_replaced = false;
-        for (std::uint64_t i = 0; i < array.payload; ++i) {
-            endpoint_steps.back().value = i;
-            endpoint_path_handle path;
-            if constexpr (std::is_same_v<Graph, graph>) {
-                status = G.intern_resolved_endpoint_path(object.type, endpoint_steps, array.child, path);
-            }
-            else {
-                status = G.intern_endpoint_path(object.type, endpoint_steps, path);
-            }
-            if (!succeeded(status)) { return status; }
-            const object_endpoint element{target.endpoint.object, endpoint_ref::from_path(path)};
-            const auto value = construction_value::constant(construction_kind::unsigned_integer,
-                i < bytes.size() ? bytes[static_cast<std::size_t>(i)] : 0);
-            bool replaced = false;
-            status = commit_source_initialization(element, array.child, value, replaced);
-            if (!succeeded(status)) { return status; }
-            any_replaced |= replaced;
-            status = record_source_initialization(element);
-            if (!succeeded(status)) { return status; }
-        }
+        status = commit_source_initialization(destination, target.type, value, any_replaced);
+        if (!succeeded(status)) return status;
+        status = record_source_initialization(destination);
+        if (!succeeded(status)) return status;
         status = record_source_data(statement_file, source_data_ref::object(target.endpoint.object));
         if (!succeeded(status)) { return status; }
         if (any_replaced) {
@@ -5853,6 +5877,7 @@ server_status parse_semantic_project(
     }
 
     semantic_input_telemetry input_telemetry;
+    header_template_definitions_v2 template_definitions;
     input_telemetry.detailed_source =
         telemetry != nullptr &&
         telemetry->detailed_source;
@@ -5900,6 +5925,7 @@ server_status parse_semantic_project(
             status = input.start(root);
             if (succeeded(status)) {
                 header_parser_v2 parser{input, identities, G, &header_failure};
+                parser.set_template_definitions(template_definitions);
                 parser.set_provenance(&sources);
 #if defined(CW_HEADER_MODEL_V2) && !defined(CW_HEADER_MODEL_EFFECTIVE_V2)
                 parser.set_header_model(header_models.root(root_ordinal));
@@ -6028,7 +6054,7 @@ server_status parse_semantic_project(
     if (publish_frontend_v2) {
         const auto result = parse_source_roots_v2(
             files, lexical, frontend_root_count, configuration,
-            strings, identities, G, sources, failure, warnings, telemetry, &source_preparation);
+            strings, identities, G, sources, failure, warnings, telemetry, &source_preparation, &template_definitions);
         if (!succeeded(result)) return result;
 
         // SOURCE-V2-PERF-02-PRESERVE-INPUT-COUNTERS:

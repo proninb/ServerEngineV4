@@ -2162,7 +2162,7 @@ runtime_query_result get_runtime_value(
     if (type.kind() == type_ref_kind::named) {
         type_entry entry;
         if (project.type(project.type_location(type), entry) &&
-            entry.kind == graph_type_kind::enumeration) intrinsic = entry.enum_underlying();
+            entry.scalar_named()) intrinsic = entry.storage_intrinsic();
     }
     if (intrinsic == intrinsic_type::none) return runtime_query_result::unsupported_type;
 

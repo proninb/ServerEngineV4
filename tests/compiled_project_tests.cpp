@@ -127,6 +127,345 @@ compiled_project_image_result build_test_compiled_image(
 void write_u32(std::byte* target, std::uint32_t value) noexcept;
 void rewrite_header_crc(std::vector<std::byte>& image) noexcept;
 
+void test_nominal_scalar_persistence(test_state& tests) {
+    compiled_fixture f;
+    const auto identity = [&](const char* text) {
+        string_id name; identity_ref id;
+        (void)f.strings.intern(text, name);
+        (void)f.identities.resolve(f.identities.root(), name, identity_kind::type, id);
+        return id;
+    };
+    type_handle first, second, ordinary;
+    if (!tests.expect(succeeded(f.G.define_intrinsic_alias(identity("PLC_INT"), intrinsic_type::signed_short, first, true)) &&
+        succeeded(f.G.define_intrinsic_alias(identity("OTHER_INT"), intrinsic_type::signed_short, second, true)) &&
+        succeeded(f.G.define_intrinsic_alias(identity("SHORT_ALIAS"), intrinsic_type::signed_short, ordinary)),
+        "define distinct nominal scalars alongside legacy typedef")) return;
+    tests.expect(f.G.named(first)!=f.G.named(second) && f.G.named(first)!=f.G.intrinsic(intrinsic_type::signed_short),
+        "nominal scalar has an independent semantic type_ref");
+    (void)f.sources.finalize(f.files.size(), f.identities, f.G);
+    compiled_test_image image;
+    if (!tests.expect(build_test_compiled_image(f,image)==compiled_project_image_result::success,
+        "encode nominal scalar metadata")) return;
+    compiled_project_view view;
+    if (!tests.expect(view.bind(image.bytes)==compiled_project_image_result::success && view.format_version()==compiled_project_format_version &&
+        view.verify_contents()==compiled_project_image_result::success,"audit nominal scalar current format")) return;
+    type_entry entry;
+    tests.expect(view.type(first,entry) && entry.kind==graph_type_kind::nominal_scalar &&
+        entry.storage_intrinsic()==intrinsic_type::signed_short,"persist nominal storage without folding identity");
+    for (const auto version : {25u,26u}) {
+        auto invalid_image=image.bytes;
+        write_u32(invalid_image.data()+8,version);rewrite_header_crc(invalid_image);
+        compiled_project_view invalid;
+        const auto status=invalid.bind(invalid_image);
+        tests.expect(status==compiled_project_image_result::invalid_image ||
+            (status==compiled_project_image_result::success && invalid.verify_contents()==compiled_project_image_result::invalid_image),
+            "reject nominal types disguised as an older compiled format");
+    }
+}
+
+// A link target can be reached through a constructor-bound record reference.
+// Its path cannot be evaluated until object defaults have been constructed.
+void test_runtime_v2_constructor_alias_target(test_state& tests) {
+    compiled_fixture f;
+    const auto identity = [&](const char* text, identity_kind kind) {
+        string_id name; (void)f.strings.intern(text, name);
+        identity_ref id; (void)f.identities.resolve(f.identities.root(), name, kind, id); return id;
+    };
+    const auto name = [&](const char* text) {
+        string_id value; (void)f.strings.intern(text, value); return value;
+    };
+    const auto integer = f.G.intrinsic(intrinsic_type::signed_int);
+    type_ref int_ref, leaf_ref;
+    (void)f.G.derive(integer, derived_type_kind::lvalue_reference, 0, int_ref);
+    type_handle leaf, holder;
+    (void)f.G.declare_record(identity("AliasLeaf", identity_kind::type), graph_record_kind::struct_type, leaf);
+    const std::array<member_record, 2> leaf_members{{{name("value"), integer}, {name("input"), int_ref}}};
+    const std::array<construction_value, 2> leaf_defaults{{{}, construction_value::member_binding(1)}};
+    (void)f.G.define_record(leaf, graph_record_kind::struct_type, leaf_members, leaf_defaults);
+    (void)f.G.derive(f.G.named(leaf), derived_type_kind::lvalue_reference, 0, leaf_ref);
+    (void)f.G.declare_record(identity("AliasHolder", identity_kind::type), graph_record_kind::struct_type, holder);
+    const std::array<member_record, 2> holder_members{{{name("leaf"), f.G.named(leaf)}, {name("alias"), leaf_ref}}};
+    const std::array<construction_value, 2> holder_defaults{{{}, construction_value::member_binding(1)}};
+    (void)f.G.define_record(holder, graph_record_kind::struct_type, holder_members, holder_defaults);
+    const auto source_id = identity("source", identity_kind::object);
+    const auto target_id = identity("target", identity_kind::object);
+    object_handle source, target;
+    (void)f.G.add_object(source_id, integer, source);
+    (void)f.G.add_object(target_id, f.G.named(holder), target);
+    endpoint_path_handle source_path, target_path;
+    const std::array<endpoint_path_step, 3> steps{{
+        {1, endpoint_path_step_kind::member, {}},
+        {0, endpoint_path_step_kind::dereference, {}},
+        {1, endpoint_path_step_kind::member, {}}}};
+    link_handle link;
+    if (!tests.expect(succeeded(f.G.intern_endpoint_path(integer, {}, source_path)) &&
+        succeeded(f.G.intern_endpoint_path(f.G.named(holder), steps, target_path)) &&
+        succeeded(f.G.add_link({source_id, endpoint_ref::from_path(source_path)},
+            {target_id, endpoint_ref::from_path(target_path)}, link)) &&
+        succeeded(f.sources.finalize(f.files.size(), f.identities, f.G)),
+        "prepare constructor alias link target")) return;
+    compiled_test_image image;
+    compiled_project_view view;
+    if (!tests.expect(build_test_compiled_image(f, image) == compiled_project_image_result::success &&
+        view.bind(image.bytes) == compiled_project_image_result::success,
+        "persist constructor alias link target")) return;
+#if defined(_WIN32)
+    const server_abi_configuration abi{abi_target::windows_x64, 8};
+#else
+    const server_abi_configuration abi{abi_target::posix_x64, 8};
+#endif
+    shm_layout layout;
+    shm_runtime_v2 model;
+    if (!tests.expect(prepare_shm_layout(view, abi, layout) == shm_layout_result::success &&
+        prepare_shm_runtime_v2(view, abi, layout, model) == shm_runtime_v2_result::success,
+        "prepare constructor alias physical runtime")) return;
+    std::vector<std::byte> bytes(static_cast<std::size_t>(layout.size()), std::byte{});
+    if (!tests.expect(materialize_shm_runtime_v2_canonical(model, abi, layout, bytes) == shm_runtime_v2_result::success &&
+        mark_shm_runtime_v2_links(model, abi, layout, bytes) == shm_runtime_v2_result::success &&
+        materialize_shm_runtime_v2_objects(model, abi, layout, bytes) == shm_runtime_v2_result::success &&
+        materialize_shm_runtime_v2_links(model, abi, layout, bytes) == shm_runtime_v2_result::success,
+        "defer alias target marking until constructor defaults exist")) return;
+    shm_offset source_at = 0, target_at = 0;
+    type_entry leaf_entry, holder_entry;
+    shm_record_offset leaf_at = 0, input_at = 0;
+    if (!tests.expect(layout.object_offset(source, source_at) && layout.object_offset(target, target_at) &&
+        view.type(leaf, leaf_entry) && view.type(holder, holder_entry) &&
+        layout.member_offset(holder_entry.members.begin, leaf_at) &&
+        layout.member_offset(leaf_entry.members.begin + 1, input_at), "locate constructed alias target")) return;
+    std::uintptr_t actual = 0;
+    std::memcpy(&actual, bytes.data() + target_at + leaf_at + input_at, sizeof actual);
+    tests.expect(actual == reinterpret_cast<std::uintptr_t>(bytes.data()) + source_at,
+        "alias target binding replaces its constructor reference default");
+}
+
+void test_packed_char_persistence_and_bounds(test_state& tests) {
+    compiled_fixture f;
+    string_id name; identity_ref id;
+    (void)f.strings.intern("packed_chars", name);
+    (void)f.identities.resolve(f.identities.root(), name, identity_kind::object, id);
+    const auto character = f.G.intrinsic(intrinsic_type::char_type);
+    type_ref array; (void)f.G.derive(character, derived_type_kind::bounded_array, 9, array);
+    object_handle object; (void)f.G.add_object(id, array, object);
+    endpoint_path_handle first, last;
+    const std::array<endpoint_path_step, 1> first_steps{{{0, endpoint_path_step_kind::array_index, {}}}};
+    const std::array<endpoint_path_step, 1> last_steps{{{8, endpoint_path_step_kind::array_index, {}}}};
+    (void)f.G.intern_endpoint_path(array, first_steps, first);
+    (void)f.G.intern_endpoint_path(array, last_steps, last);
+    auto patch = construction_value::constant(construction_kind::byte_patch, 'A' | (std::uint64_t{'Z'} << 56));
+    patch.operand = 129;
+    bool replaced = false;
+    if (!tests.expect(succeeded(f.G.add_initialization({id, endpoint_ref::from_path(first)}, patch, replaced)),
+        "Graph accepts masked char-array initialization")) return;
+    patch = construction_value::constant(construction_kind::byte_patch, 'B'); patch.operand = 1;
+    (void)f.G.add_initialization({id, endpoint_ref::from_path(last)}, patch, replaced);
+    (void)f.sources.finalize(f.files.size(), f.identities, f.G);
+    compiled_test_image image; compiled_project_view view;
+    if (!tests.expect(build_test_compiled_image(f, image) == compiled_project_image_result::success &&
+        view.bind(image.bytes) == compiled_project_image_result::success && view.format_version() == compiled_project_format_version &&
+        view.verify_contents() == compiled_project_image_result::success,
+        "packed char records select the current format and survive persistence audit")) return;
+#if defined(_WIN32)
+    const server_abi_configuration abi{abi_target::windows_x64, 8};
+#else
+    const server_abi_configuration abi{abi_target::posix_x64, 8};
+#endif
+    runtime_layout fixed; shm_layout layout; shm_runtime_v2 model;
+    if (!tests.expect(prepare_runtime_layout(view, abi, fixed) == runtime_layout_result::success &&
+        prepare_shm_layout(view, abi, layout) == shm_layout_result::success &&
+        prepare_shm_runtime_v2(view, abi, layout, model) == shm_runtime_v2_result::success,
+        "prepare packed char initialization in both materializers")) return;
+    std::vector<std::byte> bytes(static_cast<std::size_t>(layout.size()), std::byte{});
+    std::vector<std::byte> fixed_bytes(static_cast<std::size_t>(fixed.size()), std::byte{});
+    if (!tests.expect(materialize_fixed_direct(view, fixed, abi, fixed_bytes) == fixed_direct_materialization_result::success &&
+        materialize_shm_runtime_v2_canonical(model, abi, layout, bytes) == shm_runtime_v2_result::success &&
+        mark_shm_runtime_v2_links(model, abi, layout, bytes) == shm_runtime_v2_result::success &&
+        materialize_shm_runtime_v2_objects(model, abi, layout, bytes) == shm_runtime_v2_result::success &&
+        materialize_shm_runtime_v2_links(model, abi, layout, bytes) == shm_runtime_v2_result::success &&
+        materialize_shm_runtime_v2_initializations(model, abi, layout, bytes) == shm_runtime_v2_result::success,
+        "materialize masked and final partial char blocks")) return;
+    shm_offset where = 0; (void)layout.object_offset(object, where);
+    const std::array<std::byte, 9> expected{{std::byte{'A'}, {}, {}, {}, {}, {}, {}, std::byte{'Z'}, std::byte{'B'}}};
+    tests.expect(std::memcmp(bytes.data() + where, expected.data(), expected.size()) == 0,
+        "packed byte masks preserve unassigned bytes and final array boundary");
+    auto corrupt = image.bytes;
+    std::uint64_t offset = 0;
+    std::memcpy(&offset, corrupt.data() + compiled_project_header_size + 30 * compiled_project_directory_entry_size + 8, 8);
+    // Second record addresses element 8 of char[9]; a second mask bit would overrun it.
+    const std::uint32_t invalid_mask = 3;
+    std::memcpy(corrupt.data() + offset + 24 + 16, &invalid_mask, 4);
+    compiled_project_view invalid;
+    tests.expect(invalid.bind(corrupt) == compiled_project_image_result::success &&
+        invalid.verify_contents() == compiled_project_image_result::invalid_image,
+        "reject persisted packed writes extending beyond their char array");
+}
+
+void test_whole_char_array_persistence(test_state& tests) {
+    compiled_fixture f;
+    string_id name, literal, invalid_mask;
+    (void)f.strings.intern("whole_chars", name);
+    (void)f.strings.intern(std::string_view{"a\0b", 3}, literal);
+    std::string mask(513, 0); mask.back() = 2;
+    (void)f.strings.intern(mask, invalid_mask);
+    identity_ref id; (void)f.identities.resolve(f.identities.root(), name, identity_kind::object, id);
+    const auto character = f.G.intrinsic(intrinsic_type::char_type);
+    type_ref array; (void)f.G.derive(character, derived_type_kind::bounded_array, 4097, array);
+    object_handle object; (void)f.G.add_object(id, array, object);
+    endpoint_path_handle path; (void)f.G.intern_endpoint_path(array, {}, path);
+    const construction_value value{literal.value(), 0, 4097, construction_kind::byte_array};
+    bool replaced = false;
+    if (!tests.expect(succeeded(f.G.add_initialization({id, endpoint_ref::from_path(path)}, value, replaced)) &&
+        f.G.initialization_count() == 1, "4097-byte array uses one literal/zero-tail initialization")) return;
+    (void)f.sources.finalize(f.files.size(), f.identities, f.G);
+    compiled_test_image image; compiled_project_view view;
+    if (!tests.expect(build_test_compiled_image(f, image) == compiled_project_image_result::success &&
+        view.bind(image.bytes) == compiled_project_image_result::success &&
+        view.verify_contents() == compiled_project_image_result::success,
+        "persist binary literal with embedded NUL and a long implicit zero tail")) return;
+#if defined(_WIN32)
+    const server_abi_configuration abi{abi_target::windows_x64, 8};
+#else
+    const server_abi_configuration abi{abi_target::posix_x64, 8};
+#endif
+    shm_layout layout; shm_runtime_v2 model; runtime_layout fixed;
+    if (!tests.expect(prepare_shm_layout(view, abi, layout) == shm_layout_result::success &&
+        prepare_shm_runtime_v2(view, abi, layout, model) == shm_runtime_v2_result::success &&
+        prepare_runtime_layout(view, abi, fixed) == runtime_layout_result::success,
+        "prepare whole-array initialization in both materializers")) return;
+    shm_runtime_v2_physical_counts counts;
+    tests.expect(model.physical_counts(counts) && counts.initializations == 1 && counts.initialization_bytes == 3,
+        "runtime stores literal bytes only; no zero tail in its payload pool");
+    compiled_project_runtime_type_counts types{};
+    runtime_project_layout scanned, reused;
+    tests.expect(prepare_runtime_project_layout(view, types, scanned) == runtime_project_image_result::success &&
+        prepare_runtime_project_layout(view, types, reused, &model) == runtime_project_image_result::success &&
+        scanned.size() == reused.size(), "independent and reused-plan payload sizing agree for whole strings");
+    std::vector<std::byte> bytes(static_cast<std::size_t>(layout.size()), std::byte{});
+    std::vector<std::byte> fixed_bytes(static_cast<std::size_t>(fixed.size()), std::byte{});
+    if (!tests.expect(materialize_fixed_direct(view, fixed, abi, fixed_bytes) == fixed_direct_materialization_result::success &&
+        materialize_shm_runtime_v2_canonical(model, abi, layout, bytes) == shm_runtime_v2_result::success &&
+        mark_shm_runtime_v2_links(model, abi, layout, bytes) == shm_runtime_v2_result::success &&
+        materialize_shm_runtime_v2_objects(model, abi, layout, bytes) == shm_runtime_v2_result::success &&
+        materialize_shm_runtime_v2_links(model, abi, layout, bytes) == shm_runtime_v2_result::success,
+        "construct whole-array runtime before applying its string initialization")) return;
+    shm_offset where = 0; (void)layout.object_offset(object, where);
+    std::fill_n(bytes.data() + where, 4097, std::byte{0x55});
+    if (!tests.expect(materialize_shm_runtime_v2_initializations(model, abi, layout, bytes) == shm_runtime_v2_result::success,
+        "whole-array store clears poisoned destination with one zero tail")) return;
+    std::vector<std::byte> expected(4097); expected[0] = std::byte{'a'}; expected[2] = std::byte{'b'};
+    runtime_binding_index bindings; (void)fixed.release_bindings(bindings);
+    runtime_offset fixed_where = 0; (void)bindings.object_offset(object, fixed_where);
+    tests.expect(std::memcmp(bytes.data() + where, expected.data(), expected.size()) == 0 &&
+        std::memcmp(fixed_bytes.data() + fixed_where, expected.data(), expected.size()) == 0,
+        "both materializers preserve embedded NUL and clear every tail byte");
+    shm_type_batch type_area;
+    compiled_project_runtime_type_counts type_counts{};
+    if (!tests.expect(prepare_shm_type_batch_inline64(view, abi, layout, type_area) == shm_type_batch_result::success,
+        "prepare persisted whole-array Type APIs")) return;
+    shm_type_batch_compiled_counts(type_area, type_counts);
+    runtime_project_layout persisted_size;
+    if (!tests.expect(prepare_runtime_project_layout(view, type_counts, persisted_size, &model) == runtime_project_image_result::success,
+        "size persisted whole-array runtime payload")) return;
+    std::vector<std::byte> runtime_image(persisted_size.size());
+    if (!tests.expect(encode_runtime_project_image(persisted_size, runtime_image) == runtime_project_image_result::success &&
+        encode_shm_layout_columns(layout, abi, runtime_image) == shm_layout_result::success &&
+        encode_shm_type_batch_physical_columns(type_area, runtime_image) == shm_type_batch_result::success &&
+        encode_shm_runtime_v2_physical_columns(model, layout, runtime_image) == shm_runtime_v2_result::success,
+        "serialize whole-array descriptors and immutable literal pool")) return;
+    runtime_project_view runtime_view; shm_layout persisted_layout; shm_runtime_v2 persisted_model;
+    if (!tests.expect(runtime_view.bind(runtime_image) == runtime_project_image_result::success &&
+        runtime_view.section(compiled_project_section::runtime_initialization_bytes).size() == 3,
+        "persisted literal pool contains three bytes and no zero tail")) return;
+    attach_shm_layout_columns(runtime_view, persisted_layout);
+    std::fill(bytes.begin(), bytes.end(), std::byte{});
+    if (!tests.expect(prepare_shm_runtime_v2_persisted(runtime_view, abi, persisted_layout, persisted_model) == shm_runtime_v2_result::success &&
+        materialize_shm_runtime_v2_canonical(persisted_model, abi, persisted_layout, bytes) == shm_runtime_v2_result::success &&
+        mark_shm_runtime_v2_links(persisted_model, abi, persisted_layout, bytes) == shm_runtime_v2_result::success &&
+        materialize_shm_runtime_v2_objects(persisted_model, abi, persisted_layout, bytes) == shm_runtime_v2_result::success &&
+        materialize_shm_runtime_v2_links(persisted_model, abi, persisted_layout, bytes) == shm_runtime_v2_result::success &&
+        materialize_shm_runtime_v2_initializations(persisted_model, abi, persisted_layout, bytes) == shm_runtime_v2_result::success &&
+        std::memcmp(bytes.data() + where, expected.data(), expected.size()) == 0,
+        "LOAD executes persisted whole-array descriptor and zero tail")) return;
+    const auto record = runtime_project_mutable_section(runtime_image, compiled_project_section::initialization_runtime);
+    const std::uint32_t oversized_literal = UINT32_MAX;
+    std::memcpy(record.data() + 12, &oversized_literal, 4);
+    tests.expect(materialize_shm_runtime_v2_initializations(persisted_model, abi, persisted_layout, bytes) == shm_runtime_v2_result::invalid_input,
+        "reject corrupted persisted literal length before reading its payload");
+    auto corrupt = image.bytes;
+    std::uint64_t offset = 0;
+    std::memcpy(&offset, corrupt.data() + compiled_project_header_size + 30 * compiled_project_directory_entry_size + 8, 8);
+    const auto bad_id = invalid_mask.value();
+    std::memcpy(corrupt.data() + offset + 12, &bad_id, 4);
+    compiled_project_view invalid;
+    tests.expect(invalid.bind(corrupt) == compiled_project_image_result::success &&
+        invalid.verify_contents() == compiled_project_image_result::invalid_image,
+        "reject whole-array bitmap bits outside the final char-array bound");
+}
+
+void test_pointer_address_persistence_runtime(test_state& tests) {
+    compiled_fixture f;
+    const auto identity = [&](const char* text) {
+        string_id name; (void)f.strings.intern(text, name);
+        identity_ref id; (void)f.identities.resolve(f.identities.root(), name, identity_kind::object, id); return id;
+    };
+    const auto integer = f.G.intrinsic(intrinsic_type::signed_int);
+    type_ref pointer, double_pointer;
+    (void)f.G.derive(integer, derived_type_kind::pointer, 0, pointer);
+    (void)f.G.derive(pointer, derived_type_kind::pointer, 0, double_pointer);
+    const auto value_id = identity("value"), pointer_id = identity("pointer"), double_id = identity("double_pointer");
+    object_handle value, first, second;
+    (void)f.G.add_object(value_id, integer, value);
+    (void)f.G.add_object(pointer_id, pointer, first);
+    (void)f.G.add_object(double_id, double_pointer, second);
+    endpoint_path_handle value_path, pointer_path, double_path, indirect_path;
+    (void)f.G.intern_endpoint_path(integer, {}, value_path);
+    (void)f.G.intern_endpoint_path(pointer, {}, pointer_path);
+    (void)f.G.intern_endpoint_path(double_pointer, {}, double_path);
+    const std::array<endpoint_path_step, 2> dereferences{{
+        {0, endpoint_path_step_kind::dereference, {}}, {0, endpoint_path_step_kind::dereference, {}}}};
+    link_handle link;
+    if (!tests.expect(succeeded(f.G.add_link({value_id, endpoint_ref::from_path(value_path)},
+        {pointer_id, endpoint_ref::from_path(pointer_path)}, link)) &&
+        succeeded(f.G.add_link({pointer_id, endpoint_ref::from_path(pointer_path)},
+        {double_id, endpoint_ref::from_path(double_path)}, link)) &&
+        succeeded(f.G.intern_endpoint_path(double_pointer, dereferences, indirect_path)),
+        "Graph validates typed pointer address links and double dereference")) return;
+    bool replaced = false;
+    (void)f.G.add_initialization({double_id, endpoint_ref::from_path(indirect_path)},
+        construction_value::constant(construction_kind::unsigned_integer, 19), replaced);
+    (void)f.sources.finalize(f.files.size(), f.identities, f.G);
+    compiled_test_image image;
+    compiled_project_view view;
+    if (!tests.expect(build_test_compiled_image(f, image) == compiled_project_image_result::success &&
+        view.bind(image.bytes) == compiled_project_image_result::success &&
+        view.verify_contents() == compiled_project_image_result::success,
+        "persist and audit pointer links and pointer dereference paths")) return;
+#if defined(_WIN32)
+    const server_abi_configuration abi{abi_target::windows_x64, 8};
+#else
+    const server_abi_configuration abi{abi_target::posix_x64, 8};
+#endif
+    runtime_layout layout;
+    if (!tests.expect(prepare_runtime_layout(view, abi, layout) == runtime_layout_result::success,
+        "prepare pointer address layout")) return;
+    std::vector<std::byte> runtime(static_cast<std::size_t>(layout.size()), std::byte{0});
+    if (!tests.expect(materialize_fixed_direct(view, layout, abi, runtime) == fixed_direct_materialization_result::success,
+        "Fixed Direct materializes pointer links before indirect initializations")) return;
+    runtime_binding_index bindings;
+    (void)layout.release_bindings(bindings);
+    runtime_offset value_offset, pointer_offset, double_offset;
+    if (!tests.expect(bindings.object_offset(view.find_object(value_id), value_offset) &&
+        bindings.object_offset(view.find_object(pointer_id), pointer_offset) &&
+        bindings.object_offset(view.find_object(double_id), double_offset), "locate persisted pointer objects")) return;
+    std::uintptr_t first_address = 0, second_address = 0;
+    int actual = 0;
+    std::memcpy(&first_address, runtime.data() + pointer_offset, sizeof(first_address));
+    std::memcpy(&second_address, runtime.data() + double_offset, sizeof(second_address));
+    std::memcpy(&actual, runtime.data() + value_offset, sizeof(actual));
+    tests.expect(actual == 19 && first_address == reinterpret_cast<std::uintptr_t>(runtime.data() + value_offset) &&
+        second_address == reinterpret_cast<std::uintptr_t>(runtime.data() + pointer_offset),
+        "Fixed Direct pointers store actual target addresses including pointer-to-pointer");
+}
+
 void test_enum_persistence_runtime(test_state& tests) {
     compiled_fixture f;
     const auto name = [&](const char* text) { string_id id; (void)f.strings.intern(text, id); return id; };
@@ -298,6 +637,11 @@ void test_nested_defaults_persistence(test_state& tests) {
             succeeded(f.G.define_record(derived_owner, graph_record_kind::struct_type, {}, {}, bases)),
             "SHM-MULTI-BASE-REF-02 define four-base DerivedOwner")) return;
     const auto derived_object = identity("derived", identity_kind::object);
+    tests.expect(succeeded(f.G.constructor_defaults.add({derived_id, name("p.value"),
+        construction_value::constant(construction_kind::unsigned_integer, 99)})) &&
+        succeeded(f.G.constructor_defaults.add({derived_id, name("local_value"),
+        construction_value::constant(construction_kind::unsigned_integer, 22)})),
+        "inherited constructor overrides include nested and direct fields");
     (void)f.G.add_object(derived_object, f.G.named(derived_owner), instance);
     const auto scalar_id = identity("scalar", identity_kind::object);
     const auto integer = f.G.intrinsic(intrinsic_type::signed_int);
@@ -373,10 +717,10 @@ void test_nested_defaults_persistence(test_state& tests) {
     if (!tests.expect(build_test_compiled_image(f, image) == compiled_project_image_result::success &&
         view.bind(image.bytes) == compiled_project_image_result::success &&
         view.verify_contents() == compiled_project_image_result::success &&
-        view.constructor_default_count() == 4, "persist and audit nested defaults")) return;
+        view.constructor_default_count() == 6, "persist and audit nested defaults")) return;
     graph_delta delta;
     tests.expect(succeeded(delta.bind_baseline(view)) &&
-        delta.constructor_defaults.entries().size() == 4,
+        delta.constructor_defaults.entries().size() == 6,
         "BUILD retains unchanged nested defaults from baseline");
     type_entry alias_entry;
     tests.expect(view.type(view.find_type(byte_id), alias_entry) &&
@@ -386,7 +730,7 @@ void test_nested_defaults_persistence(test_state& tests) {
         delta.type(byte_alias, alias_entry) && alias_entry.alias_intrinsic() == intrinsic_type::signed_char,
         "BUILD redefines typedef after invalidation");
     tests.expect(succeeded(delta.clear_definition(delta.find_type(owner_id))) &&
-        delta.constructor_defaults.entries().empty(),
+        delta.constructor_defaults.entries().size() == 2,
         "BUILD clears nested defaults when reparsing their owner");
 #if defined(_WIN32)
     const server_abi_configuration abi{abi_target::windows_x64, 8};
@@ -407,6 +751,10 @@ void test_nested_defaults_persistence(test_state& tests) {
     tests.expect(get_runtime_value(view, bindings, runtime, "derived.ref", bound) == runtime_query_result::success &&
         bound.bits == 73, "persisted whole-object link resolves through inherited reference");
     runtime_value local_value{}, local_referent{};
+    runtime_value inherited_override{};
+    tests.expect(get_runtime_value(view, bindings, runtime, "derived.p.value", inherited_override) ==
+        runtime_query_result::success && inherited_override.bits == 99,
+        "derived constructor overrides base default at a nonzero base offset");
     tests.expect(
         get_runtime_value(view, bindings, runtime, "derived.local_value", local_value) == runtime_query_result::success &&
         get_runtime_value(view, bindings, runtime, "derived.local_ref", local_referent) == runtime_query_result::success &&
@@ -721,7 +1069,7 @@ void test_nested_defaults_persistence(test_state& tests) {
     tests.expect(
         inherited_link_address == reinterpret_cast<std::uintptr_t>(v2_runtime.data() + scalar_where) &&
         self_reference_address == reinterpret_cast<std::uintptr_t>(v2_runtime.data() + local_value_slot) &&
-        native_local_value == 31 && native_inherited_default == 42 &&
+        native_local_value == 31 && native_inherited_default == 99 &&
         std::memcmp(v2_runtime.data() + inherited_text_slot,
                     expected_text, sizeof(expected_text)) == 0,
         "SHM-MULTI-BASE-REF-02 native links/refs/defaults/initializations in later bases");
@@ -13422,6 +13770,11 @@ int main() {
 
         test_nested_defaults_persistence(tests);
         test_enum_persistence_runtime(tests);
+        test_runtime_v2_constructor_alias_target(tests);
+        test_packed_char_persistence_and_bounds(tests);
+        test_whole_char_array_persistence(tests);
+        test_pointer_address_persistence_runtime(tests);
+        test_nominal_scalar_persistence(tests);
         test_class_abi_persistence(
             tests);
 

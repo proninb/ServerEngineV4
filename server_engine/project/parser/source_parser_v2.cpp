@@ -1,3 +1,4 @@
+#include "char_array_value.hpp"
 #ifdef CW_RESOLVED_G_01
 #include "../../../experiments/resolved-g-01/capture.hpp"
 #endif
@@ -9,6 +10,8 @@
  * Writes to the SAME G / source map: no intermediate facts / AST / projection.
  */
 #include "source_parser_v2.hpp"
+#include "header_parser_v2.hpp"
+#include "scalar_type_names.hpp"
 #if defined(CW_SOURCE_TARGET_CONTEXT_AB) || defined(CW_SOURCE_TARGET_CONTEXT_AUDIT)
 #include "source_target_context_policy.hpp"
 #endif
@@ -349,8 +352,9 @@ public:
         identity_space& ids, graph& g, source_map& sm,
         parser_failure* err, std::vector<parser_warning>* warns,
         semantic_parse_telemetry* t,
-        const source_predecode_batch* decoded = nullptr) noexcept
-        : files(f), input(f, l, c, s, t ? &input_profile : nullptr),
+        const source_predecode_batch* decoded = nullptr,
+        header_template_definitions_v2* definitions = nullptr) noexcept
+        : files(f), template_configuration(c), templates(definitions), input(f, l, c, s, t ? &input_profile : nullptr),
           strings(s), identities(ids), G(g), sources(sm), failure(err),
           warnings(warns), telemetry(t), prepared(decoded),
           endpoint_resolver(g, t ? &t->source_member_lookups : nullptr) {
@@ -588,8 +592,34 @@ private:
     static constexpr std::size_t construction_window_capacity = 1;
 #endif
 
+    [[nodiscard]] server_status pack_char_assignment(endpoint& target, construction_value& value,
+        bool& packed, bool& overwritten) noexcept {
+        packed = false;
+        if (!char_scalar_value(target.type, value) || target.path.empty() ||
+            target.path.back().kind != endpoint_path_step_kind::array_index) return server_status::success;
+        const auto index = target.path.back().value;
+        target.path.pop_back();
+        endpoint_path_handle path; type_ref array_type;
+        auto status = G.intern_endpoint_path(target.object_type, target.path, path, &array_type);
+        if (!succeeded(status)) return status;
+        derived_type_record array;
+        if (!G.derived(array_type, array) || array.kind != derived_type_kind::bounded_array)
+            return server_status::project_configuration_invalid;
+        target.type = array_type;
+        status = canonicalize_endpoint(target);
+        if (!succeeded(status)) return status;
+        status = edit_char_array(G, strings, target.ref, array.payload, index,
+            static_cast<unsigned char>(value.bits()), value, overwritten);
+        packed = succeeded(status);
+        return status;
+    }
+
     [[nodiscard]] server_status commit_queued(queued_construction& op) noexcept {
-        auto status = canonicalize_endpoint(op.target);
+        bool packed = false, overwritten = false;
+        auto status = op.opcode == construction_opcode::initialization
+            ? pack_char_assignment(op.target, op.value, packed, overwritten) : server_status::success;
+        if (!succeeded(status)) return status;
+        status = canonicalize_endpoint(op.target);
         if (!succeeded(status)) return status;
         const bool binding = op.opcode == construction_opcode::reference_binding;
         if (binding) {
@@ -617,6 +647,7 @@ private:
             if (telemetry) ++telemetry->source_link_statements;
             return replaced ? warn_rebound(op.target) : server_status::success;
         }
+        if (packed) replaced = overwritten;
         status = sources.add_initialization(op.target.ref);
         if (!succeeded(status)) return status;
         status = sources.add(op.target.unit.file, source_data_ref::object(op.target.unit.who));
@@ -664,6 +695,14 @@ private:
             !construction.target.object ||
             construction.producer.who != construction.target.object)
             return server_status::project_configuration_invalid;
+        derived_type_record pointer;
+        if (G.derived(strip_cv(G, construction.target_type), pointer) && pointer.kind == derived_type_kind::pointer) {
+            object_initialization_record previous;
+            if ((construction.opcode == construction_opcode::reference_binding && G.initialization(construction.target, previous)) ||
+                (construction.opcode == construction_opcode::initialization && G.link_at_target(construction.target)))
+                return fail(parser_failure_kind::unsupported,
+                    "Switching a Source pointer between a literal and an address binding is not supported");
+        }
         if (construction.opcode == construction_opcode::reference_binding)
             return G.rebind_resolved_link(
                 construction.source, construction.target, link, replaced);
@@ -904,14 +943,30 @@ private:
 
     [[nodiscard]] server_status named_type(identity_ref scope_id,
         type_ref& result) noexcept {
+        try {
+        std::vector<prepared_token> template_tokens;
+        const bool capture_template = templates && !templates->records.empty();
+        const auto capture = [&]() {
+            prepared_token token{current.file, current.kind, current.source_offset,
+                current.source_length, current.identifier, {}};
+            if (token.kind == token_kind::pp_number) {
+                const auto text = spelling();
+                const auto parsed = std::from_chars(text.data(), text.data()+text.size(), token.number.bits);
+                if (parsed.ec == std::errc{} && parsed.ptr == text.data()+text.size())
+                    token.number.kind = prepared_number_kind_v2::unsigned_integer;
+            }
+            template_tokens.push_back(token);
+        };
         // Single or qualified name resolved only from the committed Header G.
         if (!at(token_kind::identifier))
             return fail(parser_failure_kind::syntax, "Expected Header-defined type");
         auto type_id = find_visible(scope_id, current.identifier, identity_kind::type);
         auto namespace_id = find_visible(scope_id, current.identifier, identity_kind::namespace_scope);
+        if (capture_template) capture();
         auto status = advance();
         if (!succeeded(status)) return status;
         while (at(token_kind::scope)) {
+            if (capture_template) capture();
             status = advance();
             if (!succeeded(status)) return status;
             if (!at(token_kind::identifier))
@@ -922,8 +977,40 @@ private:
                 return fail(parser_failure_kind::semantic, "Qualified namespace is not defined");
             type_id = identities.find(parent, current.identifier, identity_kind::type);
             namespace_id = identities.find(parent, current.identifier, identity_kind::namespace_scope);
+            if (capture_template) capture();
             status = advance();
             if (!succeeded(status)) return status;
+        }
+        if (at(token_kind::less)) {
+            if (!capture_template)
+                return fail(parser_failure_kind::semantic, "No Header template definition is available");
+            int depth = 0;
+            do {
+                if (at(token_kind::less)) ++depth;
+                if (at(token_kind::greater)) --depth;
+                if (at(token_kind::shift_right)) depth -= 2;
+                if (depth < 0 || current.kind == token_kind::invalid ||
+                    template_tokens.size() >= 100000)
+                    return fail(parser_failure_kind::syntax, "Invalid Source template argument list");
+                capture();
+                status = advance();
+                if (!succeeded(status)) return status;
+            } while (depth);
+            semantic_preprocessor_v2 prepared_input{files, {}, template_configuration, strings};
+            parser_v2_failure template_failure;
+            header_parser_v2 parser{prepared_input, identities, G, &template_failure};
+            parser.set_template_definitions(*templates);
+            parser.set_provenance(&sources);
+            status = parser.parse_prepared_type(template_tokens, scope_id, result);
+            if (!succeeded(status)) {
+                if (failure) *failure = {template_failure.kind == parser_v2_failure_kind::unsupported ?
+                    parser_failure_kind::unsupported : parser_failure_kind::semantic,
+                    template_failure.file, template_failure.source, template_failure.detail};
+                return status;
+            }
+            type_handle specialized;
+            if (!G.named(result, specialized)) return fail(parser_failure_kind::semantic, "Invalid Source template specialization");
+            return dependency(G.identity(specialized));
         }
         const auto handle = G.find_type(type_id);
         if (!type_id || !handle)
@@ -942,6 +1029,7 @@ private:
             : G.named(type_id);
         return result ? server_status::success :
             fail(parser_failure_kind::semantic, "Invalid Header type reference");
+        } catch (...) { return server_status::io_error; }
     }
 
     // Same restricted C++ intrinsic spellings as the existing Header/OLD Parser.
@@ -968,14 +1056,28 @@ private:
         }
     }
 
-    [[nodiscard]] bool intrinsic_start() const noexcept {
+    [[nodiscard]] bool intrinsic_start(identity_ref scope_id) const noexcept {
         return builtin_start(current.kind) ||
             (at(token_kind::identifier) &&
-             strings.get(current.identifier) == "__int64");
+             (strings.get(current.identifier) == "__int64" ||
+              ((scalar_type_name(strings.get(current.identifier)) != intrinsic_type::none || strings.get(current.identifier)=="std") &&
+               !find_visible(scope_id,current.identifier,identity_kind::type) &&
+               (strings.get(current.identifier)!="std" || !find_visible(scope_id,current.identifier,identity_kind::namespace_scope)))));
     }
 
     [[nodiscard]] server_status parse_intrinsic(intrinsic_type& output) noexcept {
         output = intrinsic_type::none;
+        if (at(token_kind::identifier)) {
+            bool standard = strings.get(current.identifier)=="std";
+            if (standard) {
+                auto status=advance(); if (!succeeded(status)) return status;
+                status=expect(token_kind::scope,"Expected '::' after std"); if (!succeeded(status)) return status;
+                status=advance(); if (!succeeded(status)) return status;
+            }
+            output=at(token_kind::identifier) ? scalar_type_name(strings.get(current.identifier),standard) : intrinsic_type::none;
+            if (output!=intrinsic_type::none) return advance();
+            if (standard) return fail(parser_failure_kind::unsupported,"Unsupported std scalar type name");
+        }
         bool is_signed = false;
         bool is_unsigned = false;
         bool is_short = false;
@@ -1093,13 +1195,10 @@ private:
         auto status = qualifiers();
         if (!succeeded(status)) return status;
 
-        if (intrinsic_start()) {
+        if (intrinsic_start(scope_id)) {
             intrinsic_type value = intrinsic_type::none;
             status = parse_intrinsic(value);
             if (!succeeded(status)) return status;
-            if (value == intrinsic_type::void_type)
-                return fail(parser_failure_kind::semantic,
-                    "Source objects cannot have void type");
             output = G.intrinsic(value);
         }
         else if (at(token_kind::identifier)) {
@@ -1223,6 +1322,26 @@ private:
         auto status = parse_type(scope_id, type);
         if (!succeeded(status)) return status;
 
+        while (at(token_kind::star)) {
+            type_ref pointer;
+            status = G.derive_resolved(type, derived_type_kind::pointer, 0, pointer);
+            if (!succeeded(status)) return status;
+            type = pointer;
+            status = advance(); if (!succeeded(status)) return status;
+            while (at(token_kind::kw_const) || at(token_kind::kw_volatile)) {
+                type_ref qualified;
+                status = G.derive_resolved(type, at(token_kind::kw_const) ? derived_type_kind::const_qualified :
+                    derived_type_kind::volatile_qualified, 0, qualified);
+                if (!succeeded(status)) return status;
+                type = qualified;
+                status = advance(); if (!succeeded(status)) return status;
+            }
+        }
+        const auto object_storage = strip_cv(G, type);
+        if (object_storage.kind() == type_ref_kind::intrinsic &&
+            object_storage.payload() == static_cast<std::uint32_t>(intrinsic_type::void_type))
+            return fail(parser_failure_kind::semantic, "Source objects cannot have void type");
+
         // A Source reference is an object with a reference type in the SAME G.
         // It may be bound by a later statement: bool& R; R = S[21][0];
         // Header already resolved all involved type definitions.
@@ -1299,6 +1418,19 @@ private:
             return fail(parser_failure_kind::unsupported,
                 "Extern Source object cannot have an initializer");
         construction_value init{};
+        endpoint address_initializer;
+        bool has_address_initializer = false;
+        const auto initializer = [&]() -> server_status {
+            if (at(token_kind::ampersand)) {
+                auto result = advance(); if (!succeeded(result)) return result;
+                result = read_endpoint(scope_id, address_initializer);
+                if (!succeeded(result)) return result;
+                result = convert_address(type, address_initializer);
+                has_address_initializer = succeeded(result);
+                return result;
+            }
+            return scalar(init, scope_id);
+        };
         std::uint32_t flags = 0;
         token_kind close = token_kind::invalid;
         if (at(token_kind::assign)) {
@@ -1307,17 +1439,17 @@ private:
             if (at(token_kind::l_brace)) { close = token_kind::r_brace;
                 status = advance(); if (!succeeded(status)) return status; }
             if (!at(token_kind::r_brace)) {
-                status = scalar(init, scope_id);
+                status = initializer();
                 if (!succeeded(status)) return status;
-                flags = graph_object_non_default_initializer;
+                if (!has_address_initializer) flags = graph_object_non_default_initializer;
             }
         }
         else if (at(token_kind::l_brace)) {
             close = token_kind::r_brace;
             status = advance(); if (!succeeded(status)) return status;
             if (!at(token_kind::r_brace)) {
-                status = scalar(init, scope_id); if (!succeeded(status)) return status;
-                flags = graph_object_non_default_initializer;
+                status = initializer(); if (!succeeded(status)) return status;
+                if (!has_address_initializer) flags = graph_object_non_default_initializer;
             }
         }
         if (close != token_kind::invalid) {
@@ -1388,6 +1520,15 @@ private:
             name.value(), id.value(), type.value(), 0, 0, 0, 0, is_extern ? 1u : 0u,
             declaration_location.offset, declaration_location.length});
 #endif
+        if (has_address_initializer) {
+            assignment_target.reset();
+            assignment_target.unit = {object_file, id};
+            assignment_target.type = assignment_target.object_type = type;
+            assignment_target.location = declaration_location;
+            assignment_source = std::move(address_initializer);
+            status = queue_construction(construction_opcode::reference_binding);
+            if (!succeeded(status)) return status;
+        }
         return advance();
     }
 
@@ -1529,8 +1670,7 @@ private:
                     "Source endpoint too deep");
             if (model_tokens[i].kind == token_kind::l_bracket) {
                 derived_type_record derived;
-                if (!G.derived(strip_cv(G, output.type), derived) ||
-                    derived.kind != derived_type_kind::bounded_array)
+                if (!endpoint_resolver.array_type(output.type, derived))
                     return fail(parser_failure_kind::semantic,
                         "Index requires bounded array");
                 const auto text = model_spelling(i + 1);
@@ -1542,8 +1682,14 @@ private:
                     index_value >= derived.payload)
                     return fail(parser_failure_kind::semantic,
                         "Array index out of range");
-                try { path.push_back({index_value,
-                    endpoint_path_step_kind::array_index, {}}); }
+                type_ref referent;
+                const bool dereference = reference_referent(output.type, referent);
+                if (path.size() + (dereference ? 2 : 1) > 128)
+                    return fail(parser_failure_kind::unsupported, "Source endpoint too deep");
+                try {
+                    if (dereference) path.push_back({0, endpoint_path_step_kind::dereference, {}});
+                    path.push_back({index_value, endpoint_path_step_kind::array_index, {}});
+                }
                 catch (...) { return server_status::io_error; }
                 output.type = derived.child;
                 i += 3;
@@ -1718,12 +1864,18 @@ private:
         } else {
             if (!construction_compatible(G, target.type, scalar_value))
                 return server_status::success;
+            bool packed = false, overwritten = false;
+            status = pack_char_assignment(target, scalar_value, packed, overwritten);
+            if (!succeeded(status)) return status;
+            status = canonicalize_endpoint(target);
+            if (!succeeded(status)) return status;
             const source_construction c{target.unit, target.ref, {},
                 target.type, scalar_value, construction_opcode::initialization};
             link_handle link;
             bool replaced = false;
             status = commit_construction(c, replaced, link);
             if (!succeeded(status)) return status;
+            if (packed) replaced = overwritten;
             status = sources.add_initialization(target.ref);
             if (!succeeded(status)) return status;
             status = sources.add(target.unit.file, source_data_ref::object(target.unit.who));
@@ -1742,14 +1894,53 @@ private:
 
     // SOURCE-V2-FAST-BIND-01: scope() already resolved the target WHO.
     // Source operands still resolve from scope_id; no semantic lookup is skipped.
+    [[nodiscard]] server_status dereference_pointer(endpoint& output) noexcept {
+        derived_type_record type;
+        auto selected = strip_cv(G, output.type);
+        try {
+            if (G.derived(selected, type) && (type.kind == derived_type_kind::lvalue_reference || type.kind == derived_type_kind::rvalue_reference)) {
+                output.path.push_back({0, endpoint_path_step_kind::dereference, {}});
+                selected = strip_cv(G, type.child);
+            }
+            if (!G.derived(selected, type) || type.kind != derived_type_kind::pointer)
+                return fail(parser_failure_kind::semantic, "Dereference requires a pointer");
+            if (output.path.size() >= 128) return fail(parser_failure_kind::unsupported, "Source endpoint too deep");
+            output.path.push_back({0, endpoint_path_step_kind::dereference, {}});
+        } catch (...) { return server_status::io_error; }
+        output.type = type.child;
+        return server_status::success;
+    }
+
     [[nodiscard]] server_status read_endpoint(identity_ref scope_id,
+        endpoint& output, identity_ref prebound_object = {}, unsigned depth = 0) noexcept {
+        if (depth >= 128) return fail(parser_failure_kind::unsupported, "Source endpoint too deep");
+        unsigned stars = 0;
+        while (at(token_kind::star)) {
+            if (++stars >= 128) return fail(parser_failure_kind::unsupported, "Source endpoint too deep");
+            const auto status = advance(); if (!succeeded(status)) return status;
+        }
+        server_status status;
+        if (at(token_kind::l_paren)) {
+            status = advance(); if (!succeeded(status)) return status;
+            status = read_endpoint(scope_id, output, {}, depth + 1);
+            if (!succeeded(status)) return status;
+            status = expect(token_kind::r_paren, "Expected ')' after Source endpoint");
+            if (!succeeded(status)) return status;
+            status = advance(); if (!succeeded(status)) return status;
+            status = read_endpoint_suffix(output);
+        } else status = read_endpoint_primary(scope_id, output, prebound_object);
+        if (!succeeded(status)) return status;
+        while (stars--) { status = dereference_pointer(output); if (!succeeded(status)) return status; }
+        return server_status::success;
+    }
+
+    [[nodiscard]] server_status read_endpoint_primary(identity_ref scope_id,
         endpoint& output, identity_ref prebound_object = {}) noexcept {
         if (!at(token_kind::identifier))
             return fail(parser_failure_kind::syntax, "Expected Source object identifier");
         const auto id = prebound_object ? prebound_object
             : find_visible(scope_id, current.identifier, identity_kind::object);
         output.reset();
-        auto& steps = output.path;
         source_endpoint_resolver::failure resolver_error;
 #ifdef CW_SOURCE_TARGET_CONTEXT_AUDIT
         if (prebound_object) ++detail::target_context_counts.target_endpoints;
@@ -1782,7 +1973,14 @@ private:
         if (!succeeded(status)) return status;
         status = advance();
         if (!succeeded(status)) return status;
-        while (at(token_kind::dot) || at(token_kind::l_bracket)) {
+        return read_endpoint_suffix(output);
+    }
+
+    [[nodiscard]] server_status read_endpoint_suffix(endpoint& output) noexcept {
+        auto& steps = output.path;
+        source_endpoint_resolver::failure resolver_error;
+        auto status = server_status::success;
+        while (at(token_kind::dot) || at(token_kind::l_bracket) || at(token_kind::arrow)) {
             if (steps.size() >= 128)
                 return fail(parser_failure_kind::unsupported, "Source endpoint too deep");
             if (at(token_kind::l_bracket)) {
@@ -1804,6 +2002,10 @@ private:
                 if (!succeeded(status)) return status;
                 status = advance(); if (!succeeded(status)) return status;
                 continue;
+            }
+            if (at(token_kind::arrow)) {
+                status = dereference_pointer(output);
+                if (!succeeded(status)) return status;
             }
             type_handle record;
             status = endpoint_resolver.prepare_member(output, record, resolver_error);
@@ -1987,111 +2189,18 @@ private:
         if (!succeeded(status)) return status;
         status = expect(token_kind::semicolon, "Expected ';' after string");
         if (!succeeded(status)) return status;
-        std::vector<endpoint_path_step> local_path_steps;
-#ifdef CW_SOURCE_STRING_SCRATCH_AB
-        auto& path_steps = detail::source_string_scratch_reuse ? string_paths_scratch : local_path_steps;
-        path_steps.clear();
-#else
-        auto& path_steps = local_path_steps;
-#endif
-        try {
-#ifdef CW_SOURCE_STRING_SCRATCH_AUDIT
-            auto old_capacity = path_steps.capacity();
-#endif
-            path_steps = target.path;
-#ifdef CW_SOURCE_STRING_SCRATCH_AUDIT
-            detail::audit_string_growth(old_capacity, path_steps,
-                detail::string_paths_growths, detail::string_paths_requested);
-            old_capacity = path_steps.capacity();
-#endif
-            path_steps.push_back({0, endpoint_path_step_kind::array_index, {}});
-#ifdef CW_SOURCE_STRING_SCRATCH_AUDIT
-            detail::audit_string_growth(old_capacity, path_steps,
-                detail::string_paths_growths, detail::string_paths_requested);
-#endif
-        } catch (...) { return server_status::io_error; }
-#ifdef CW_SOURCE_V2_STRING_PATH_REUSE_01
-        std::vector<endpoint_path_handle>* cached_elements = nullptr;
-        if (array.payload <= string_path_max_bound) {
-            try {
-                const string_path_view lookup{target.object_type, target.type,
-                    std::span<const endpoint_path_step>{target.path}};
-                auto found = string_path_cache.find(lookup);
-                if (found != string_path_cache.end()) {
-                    cached_elements = &found->second;
-                } else if (string_path_cache.size() < string_path_max_prefixes) {
-                    string_path_key key;
-                    key.root = target.object_type;
-                    key.array = target.type;
-                    key.prefix.assign(target.path.begin(), target.path.end());
-                    std::vector<endpoint_path_handle> handles(
-                        static_cast<std::size_t>(array.payload));
-                    auto inserted = string_path_cache.try_emplace(
-                        std::move(key), std::move(handles));
-                    cached_elements = &inserted.first->second;
-                }
-            } catch (...) {
-                // Cache allocation failure: original Graph path remains valid.
-                cached_elements = nullptr;
-            }
-        }
-#endif
-        bool any_replaced = false;
-#ifdef CW_SOURCE_STRING_BATCH_V2
-        string_initializations.clear();
-        try { string_initializations.reserve(static_cast<std::size_t>(array.payload)); }
-        catch (...) { return server_status::io_error; }
-#endif
-        for (std::uint64_t i = 0; i < array.payload; ++i) {
-            path_steps.back().value = i;
-            endpoint_path_handle path;
-#ifdef CW_SOURCE_V2_STRING_PATH_REUSE_01
-            const auto slot = static_cast<std::size_t>(i);
-            if (cached_elements && (*cached_elements)[slot]) {
-                path = (*cached_elements)[slot];
-            } else {
-                status = G.intern_resolved_endpoint_path(target.object_type,
-                    path_steps, array.child, path);
-                if (!succeeded(status)) return status;
-                if (cached_elements) (*cached_elements)[slot] = path;
-            }
-#else
-            status = G.intern_resolved_endpoint_path(target.object_type,
-                path_steps, array.child, path);
-            if (!succeeded(status)) return status;
-#endif
-            const object_endpoint element{target.unit.who, endpoint_ref::from_path(path)};
-            const auto value = construction_value::constant(construction_kind::unsigned_integer,
-                i < bytes.size() ? bytes[static_cast<std::size_t>(i)] : 0);
-#ifdef CW_SOURCE_STRING_BATCH_V2
-            string_initializations.push_back({element, value});
-#else
-            const source_construction construction{
-                target.unit, element, {}, array.child, value,
-                construction_opcode::initialization};
-            bool replaced = false;
-            link_handle ignored_link;
-            status = commit_construction(construction, replaced, ignored_link);
-            if (!succeeded(status)) return status;
-            any_replaced |= replaced;
-            status = sources.add_initialization(element);
-            if (!succeeded(status)) return status;
-#endif
-        }
-#ifdef CW_SOURCE_STRING_BATCH_V2
-        status = G.add_resolved_initializations(array.child, string_initializations, any_replaced);
+        endpoint destination = target;
+        status = canonicalize_endpoint(destination);
         if (!succeeded(status)) return status;
-        for (const auto& entry : string_initializations) {
-#ifdef CW_SOURCE_LOCALITY_AUDIT
-            (void)source_locality01::capture.add({'W', 0, target.unit.file.value(), 0, 0,
-                entry.target.object.value(), target.object_type.value(), array.child.value(),
-                0, 0, entry.target.member.value(), 3,
-                target.location.offset, target.location.length});
-#endif
-            status = sources.add_initialization(entry.target);
-            if (!succeeded(status)) return status;
-        }
-#endif
+        construction_value value;
+        status = char_array_value(strings,
+            std::string_view{reinterpret_cast<const char*>(bytes.data()), bytes.size()}, {}, array.payload, value);
+        if (!succeeded(status)) return status;
+        bool any_replaced = false;
+        status = G.add_resolved_initialization(destination.ref, target.type, value, any_replaced);
+        if (!succeeded(status)) return status;
+        status = sources.add_initialization(destination.ref);
+        if (!succeeded(status)) return status;
         status = sources.add(target.unit.file, source_data_ref::object(target.unit.who));
         if (!succeeded(status)) return status;
         if (any_replaced) { status = warn_replaced(target);
@@ -2103,6 +2212,44 @@ private:
         return advance();
     }
 
+    [[nodiscard]] server_status convert_address(type_ref pointer, endpoint& source) noexcept {
+        type_ref referent;
+        if (reference_referent(source.type, referent)) {
+            try { source.path.push_back({0, endpoint_path_step_kind::dereference, {}}); }
+            catch (...) { return server_status::io_error; }
+            source.type = referent;
+        }
+        if (pointer_address_compatible(G, pointer, source.type)) return server_status::success;
+        derived_type_record target;
+        if (!G.derived(strip_cv(G, pointer), target) || target.kind != derived_type_kind::pointer)
+            return fail(parser_failure_kind::semantic, "Address assignment requires a pointer target");
+        type_handle from, to;
+        // Const removal is never an implicit pointer conversion.
+        if (source.type != strip_cv(G, source.type) || !G.named(source.type, from) ||
+            !G.named(strip_cv(G, target.child), to))
+            return fail(parser_failure_kind::semantic, "Pointer address types differ");
+        std::vector<endpoint_path_step> path, selected;
+        unsigned matches = 0;
+        const auto search = [&](auto&& self, type_handle record, bool accessible, unsigned depth) -> void {
+            if (depth >= 128 || matches > 1) return;
+            if (record == to) { ++matches; if (accessible) selected = path; else selected.clear(); return; }
+            const auto bases = G.bases(record);
+            for (std::size_t i = 0; i < bases.size(); ++i) {
+                path.push_back({i, endpoint_path_step_kind::base, {}});
+                self(self, G.find_type(bases[i].type), accessible && bases[i].access == graph_member_access::public_access, depth + 1);
+                path.pop_back();
+            }
+        };
+        try { search(search, from, true, 0); }
+        catch (...) { return server_status::io_error; }
+        if (matches != 1 || selected.empty() || source.path.size() + selected.size() > 128)
+            return fail(parser_failure_kind::semantic, "Pointer base conversion is absent, inaccessible or ambiguous");
+        try { source.path.insert(source.path.end(), selected.begin(), selected.end()); }
+        catch (...) { return server_status::io_error; }
+        source.type = G.named(to);
+        return server_status::success;
+    }
+
     [[nodiscard]] server_status assignment(identity_ref scope_id,
         source_unit unit) noexcept {
 #ifdef CW_SOURCE_LOCALITY_AUDIT
@@ -2111,6 +2258,9 @@ private:
         auto& target = assignment_target;
         auto status = read_endpoint(scope_id, target, unit.who);
         if (!succeeded(status)) return status;
+        derived_type_record target_qualifier;
+        if (G.derived(target.type, target_qualifier) && target_qualifier.kind == derived_type_kind::const_qualified)
+            return fail(parser_failure_kind::semantic, "Source assignment cannot modify a const object");
 #ifdef CW_SOURCE_LOCALITY_AUDIT
         source_locality01::capture.file(target.unit.file.value(), files.path(target.unit.file));
         const auto locality_index = source_locality01::capture.add({'A', 0, target.unit.file.value(),
@@ -2120,7 +2270,39 @@ private:
         status = expect(token_kind::assign, "Expected '=' after Source target");
         if (!succeeded(status)) return status;
         status = advance(); if (!succeeded(status)) return status;
+        if (at(token_kind::ampersand)) {
+            status = advance(); if (!succeeded(status)) return status;
+            status = read_endpoint(scope_id, assignment_source);
+            if (!succeeded(status)) return status;
+            status = convert_address(target.type, assignment_source);
+            if (!succeeded(status)) return status;
+            status = expect(token_kind::semicolon, "Expected ';' after pointer address assignment");
+            if (!succeeded(status)) return status;
+            status = queue_construction(construction_opcode::reference_binding);
+            if (!succeeded(status)) return status;
+            return advance();
+        }
         type_ref referent;
+        derived_type_record target_pointer;
+        if (G.derived(target.type, target_pointer) && target_pointer.kind == derived_type_kind::pointer &&
+            (at(token_kind::identifier) || at(token_kind::star) || at(token_kind::l_paren))) {
+            status = read_endpoint(scope_id, assignment_source);
+            if (!succeeded(status)) return status;
+            derived_type_record array;
+            if (endpoint_resolver.array_type(assignment_source.type, array)) {
+                source_endpoint_resolver::failure error;
+                status = endpoint_resolver.append_index(assignment_source, array, 0, error);
+                if (!succeeded(status)) return endpoint_status(status, error);
+            } else status = dereference_pointer(assignment_source);
+            if (!succeeded(status)) return status;
+            status = convert_address(target.type, assignment_source);
+            if (!succeeded(status)) return status;
+            status = expect(token_kind::semicolon, "Expected ';' after pointer assignment");
+            if (!succeeded(status)) return status;
+            status = queue_construction(construction_opcode::reference_binding);
+            if (!succeeded(status)) return status;
+            return advance();
+        }
         if (reference_referent(target.type, referent)) {
             auto& source = assignment_source;
             status = read_endpoint(scope_id, source);
@@ -2128,7 +2310,15 @@ private:
             type_ref source_type = source.type;
             type_ref inner;
             if (reference_referent(source_type, inner)) source_type = inner;
-            if (referent != source_type) {
+            if (!qualified_object_compatible(G, referent, source_type)) {
+                type_ref pointer;
+                status = G.derive_resolved(referent, derived_type_kind::pointer, 0, pointer);
+                if (!succeeded(status)) return status;
+                status = convert_address(pointer, source);
+                if (!succeeded(status)) return status;
+                source_type = source.type;
+            }
+            if (!qualified_object_compatible(G, referent, source_type)) {
                 // PARSER-V2-SOURCE-05-TYPE-DIAG: report canonical G type
                 // expressions without weakening reference-binding semantics.
                 char target_type_text[160];
@@ -2224,6 +2414,11 @@ private:
                 if (!succeeded(status)) return status;
                 continue;
             }
+            if (at(token_kind::star) || at(token_kind::l_paren)) {
+                const auto status = assignment(scope_id, {});
+                if (!succeeded(status)) return status;
+                continue;
+            }
 #ifdef CW_SOURCE_MODEL_DIRECT_V2
             if (model_stream && model_opcode == source_model_opcode::assignment &&
                 model_cursor != 0 && model_cursor <= model_operations.size()) {
@@ -2277,7 +2472,7 @@ private:
                     if (!succeeded(status)) return status;
                     continue;
                 }
-                if (!intrinsic_start() &&
+                if (!intrinsic_start(scope_id) &&
                     !find_visible(scope_id, current.identifier, identity_kind::type) &&
                     !find_visible(scope_id, current.identifier,
                         identity_kind::namespace_scope))
@@ -2296,6 +2491,8 @@ private:
     }
 
     file_context& files;
+    const preprocessor_configuration& template_configuration;
+    header_template_definitions_v2* templates = nullptr;
     // Must outlive input: semantic_input holds a non-owning telemetry pointer.
     semantic_input_telemetry input_profile{};
     semantic_input input;
@@ -2408,7 +2605,8 @@ server_status parse_source_roots_v2(
     string_table& strings, identity_space& identities,
     graph& G, source_map& sources, parser_failure* failure,
     std::vector<parser_warning>* warnings,
-    semantic_parse_telemetry* telemetry, source_preparation_v2* preparation) noexcept {
+    semantic_parse_telemetry* telemetry, source_preparation_v2* preparation,
+    header_template_definitions_v2* templates) noexcept {
 #ifdef CW_RESOLVED_G_01
     if (!resolved_g01::begin(G)) return server_status::project_artifact_invalid;
 #endif
@@ -2471,7 +2669,7 @@ server_status parse_source_roots_v2(
     source_parser_v2 parser{files, lexical, configuration, strings,
         identities, G, sources, failure, warnings,
         telemetry && !telemetry->phase_only ? telemetry : nullptr,
-        decoded.ready() ? &decoded : nullptr};
+        decoded.ready() ? &decoded : nullptr, templates};
     // Canonical one-pass Source binding: one G, direct commitments.
     // Undeclared forward references fail when encountered.
     for (std::size_t i = 0; i < frontend_root_count; ++i) {

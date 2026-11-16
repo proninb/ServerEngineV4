@@ -957,6 +957,13 @@ private:
                 if (!zero_pointer_construction(
                         construction)) {
 
+                    if (construction.kind==construction_kind::object_binding) {
+                        const auto object=project.object_location(identity_ref::from_raw(construction.operand));
+                        shm_offset source=0;
+                        if (!object || !layout.object_offset(object,source)) return shm_materialization_result::invalid_input;
+                        return write_reference(target,native_address(address(source)));
+                    }
+
                     return shm_materialization_result::
                         invalid_input;
                 }

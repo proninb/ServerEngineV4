@@ -65,7 +65,7 @@ void clear_runtime_image(std::span<std::byte> output) noexcept {
     const auto first = static_cast<std::uint32_t>(
         compiled_project_section::runtime_abi_header);
     const auto last = static_cast<std::uint32_t>(
-        compiled_project_section::runtime_type_object_patches);
+        compiled_project_section::runtime_initialization_bytes);
 
     return raw >= first && raw <= last
         ? static_cast<std::size_t>(raw - first)
@@ -132,6 +132,8 @@ void write_u64(std::byte* target, std::uint64_t value) noexcept {
     compiled_project_section kind) noexcept {
 
     switch (kind) {
+    case compiled_project_section::runtime_initialization_bytes:
+        return 1;
     case compiled_project_section::runtime_abi_header:
         return 64;
     case compiled_project_section::type_abi:
@@ -185,6 +187,7 @@ void write_u64(std::byte* target, std::uint64_t value) noexcept {
 struct execution_counts final {
     std::uint64_t endpoint_programs = 0;
     std::uint64_t dereferences = 0;
+    std::uint64_t initialization_bytes = 0;
 };
 
 [[nodiscard]] bool count_endpoint(
@@ -263,6 +266,10 @@ struct execution_counts final {
         if (!project.initialization_at(index, value) ||
             !count_endpoint(project, value.target, counts))
             return false;
+        if (value.value.kind == construction_kind::byte_array) {
+            const auto bytes = project.string(value.value.low).size() + project.string(value.value.high).size();
+            if (!add_u64(counts.initialization_bytes, bytes, counts.initialization_bytes)) return false;
+        }
     }
 
     return true;
@@ -407,6 +414,7 @@ prepare_runtime_project_layout(
             return runtime_project_image_result::invalid_state;
         execution.endpoint_programs = counts.endpoint_programs;
         execution.dereferences = counts.dereferences;
+        execution.initialization_bytes = counts.initialization_bytes;
     }
     else if (!prepare_execution_counts(project, execution)) {
         return runtime_project_image_result::invalid_state;
@@ -453,6 +461,7 @@ prepare_runtime_project_layout(
             {compiled_project_section::runtime_type_canonical_groups, 12, type_counts.canonical_groups},
             {compiled_project_section::runtime_type_canonical_group_offsets, 8, type_counts.canonical_group_offsets},
             {compiled_project_section::runtime_type_object_patches, 12, type_counts.object_patches},
+            {compiled_project_section::runtime_initialization_bytes, 1, execution.initialization_bytes},
         }};
 
     auto prepared = layout;

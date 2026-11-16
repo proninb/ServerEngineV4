@@ -137,6 +137,9 @@ public:
     [[nodiscard]] bool finished() const noexcept {
         return started && !current_valid && frame_depth == 0;
     }
+    [[nodiscard]] file_id semantic_root() const noexcept { return semantic_root_value; }
+    [[nodiscard]] std::string_view current_spelling() const noexcept;
+    [[nodiscard]] std::string_view spelling(const prepared_token& token) const noexcept;
 
     [[nodiscard]] const prepared_token* current() const noexcept {
         return current_valid ? &current_value : nullptr;
@@ -282,6 +285,7 @@ private:
         std::size_t occurrence) noexcept;
 
     file_context& files;
+    file_id semantic_root_value{};
     prepared_include_view_v2 prepared;
     const preprocessor_configuration& configuration;
     string_table& strings;

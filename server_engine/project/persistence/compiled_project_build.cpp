@@ -1084,6 +1084,7 @@ encode_build_compiled_project_image(
                 member_name_index);
 
     bool has_enums = false;
+    bool has_nominal_scalars = false;
     std::uint32_t dense_type_cursor = 0;
     std::uint32_t dense_base_cursor = 0;
     std::uint32_t dense_member_cursor = 0;
@@ -1143,6 +1144,7 @@ encode_build_compiled_project_image(
         }
 
         has_enums |= value.kind == graph_type_kind::enumeration;
+        has_nominal_scalars |= value.kind == graph_type_kind::nominal_scalar;
         auto* type_record =
             type_values +
             static_cast<std::size_t>(
@@ -2862,9 +2864,16 @@ encode_build_compiled_project_image(
         build_image_magic.data(),
         build_image_magic.size());
 
+    bool has_byte_patches = false;
+    const auto* initialization_bytes = section_data(compiled_project_section::object_initializations);
+    for (std::size_t i = 0; i < G.initialization_count(); ++i) {
+        if (build_read_u32(initialization_bytes + i * 24 + 20) ==
+            static_cast<std::uint32_t>(construction_kind::byte_patch) ||
+            build_read_u32(initialization_bytes + i * 24 + 20) == static_cast<std::uint32_t>(construction_kind::byte_array)) { has_byte_patches = true; break; }
+    }
     build_write_u32(
         base + 8,
-        has_enums ? compiled_project_format_version : 25u);
+        has_nominal_scalars || has_byte_patches ? compiled_project_format_version : has_enums ? 26u : 25u);
 
     build_write_u32(
         base + 12,

@@ -670,7 +670,7 @@ private:
                     mode);
 
             case derived_type_kind::pointer:
-                return zero_pointer_construction(construction)
+                return (zero_pointer_construction(construction) || construction.kind==construction_kind::object_binding)
                     ? shm_sparse_result::success
                     : shm_sparse_result::invalid_input;
 
@@ -776,6 +776,12 @@ private:
 
             case derived_type_kind::pointer:
                 if (!zero_pointer_construction(construction)) {
+                    if (construction.kind==construction_kind::object_binding) {
+                        const auto object=project.object_location(identity_ref::from_raw(construction.operand));
+                        shm_offset source=0;
+                        if (!object || !layout.object_offset(object,source)) return shm_sparse_result::invalid_input;
+                        return append_reference_absolute(target,source);
+                    }
                     return shm_sparse_result::invalid_input;
                 }
 

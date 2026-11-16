@@ -20,6 +20,12 @@ enum class construction_kind : std::uint32_t {
     member_binding,
     object_binding,
     unsupported,
+    // Up to eight adjacent narrow-char array elements. operand is a byte mask;
+    // unset bytes retain constructor/default storage.
+    byte_patch,
+    // Whole bounded char array: low=data string_id, high=optional write-mask
+    // string_id (zero means full array), operand=destination extent.
+    byte_array,
 };
 
 struct construction_value final {
@@ -96,6 +102,15 @@ static_assert(std::is_standard_layout_v<construction_value>);
     construction_value value) noexcept {
 
     switch (value.kind) {
+    case construction_kind::byte_array:
+        return value.operand != 0;
+    case construction_kind::byte_patch: {
+        if (value.operand == 0 || value.operand > 255) return false;
+        std::uint64_t mask = 0;
+        for (unsigned i = 0; i < 8; ++i)
+            if (value.operand & (1u << i)) mask |= std::uint64_t{255} << (8 * i);
+        return (value.bits() & ~mask) == 0;
+    }
     case construction_kind::zero:
     case construction_kind::unsupported:
         return value.bits() == 0 &&
@@ -113,6 +128,20 @@ static_assert(std::is_standard_layout_v<construction_value>);
     }
 
     return false;
+}
+
+// Merge disjoint/overlapping byte assignments without changing last-write wins.
+[[nodiscard]] inline constexpr construction_value merge_byte_patch(
+    construction_value previous, construction_value next) noexcept {
+    if (previous.kind != construction_kind::byte_patch || next.kind != construction_kind::byte_patch)
+        return next;
+    std::uint64_t mask = 0;
+    for (unsigned i = 0; i < 8; ++i)
+        if (next.operand & (1u << i)) mask |= std::uint64_t{255} << (8 * i);
+    auto result = construction_value::constant(construction_kind::byte_patch,
+        (previous.bits() & ~mask) | next.bits());
+    result.operand = previous.operand | next.operand;
+    return result;
 }
 
 }

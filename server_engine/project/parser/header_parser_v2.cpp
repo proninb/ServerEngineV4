@@ -1,18 +1,27 @@
 #include "enum_constants.hpp"
 #include "header_parser_v2.hpp"
+#include "scalar_type_names.hpp"
 
 #include "../graph/construction_semantics.hpp"
+#include "../graph/constructor_member_lookup.hpp"
 
 #include <limits>
 #ifdef CW_HEADER_V2_SEMANTIC_PROFILE
 #include <chrono>
 #endif
 #include <algorithm>
+#include <charconv>
 #include <string>
 #include <utility>
 
 namespace cw::server {
 namespace {
+
+construction_value narrow_character_default(std::uint8_t byte) noexcept {
+    if (byte < 128) return construction_value::constant(construction_kind::unsigned_integer, byte);
+    return construction_value::constant(construction_kind::signed_integer,
+        static_cast<std::uint64_t>(static_cast<std::int64_t>(byte)-256));
+}
 
 // Header intrinsic grammar: the same token family as OLD parse_intrinsic().
 [[nodiscard]] constexpr bool header_v2_builtin_start(token_kind kind) noexcept {
@@ -121,16 +130,26 @@ server_status header_parser_v2::record_contribution(file_id file, source_data_re
 
 const prepared_token*
 header_parser_v2::current() const noexcept {
+    if (has_split_greater) return &split_greater;
+    if (!template_replays.empty()) {
+        const auto& replay = template_replays.back();
+        return replay.cursor < replay.tokens.size() ? &replay.tokens[replay.cursor] : nullptr;
+    }
     return input.current();
 }
 
 bool header_parser_v2::at(
     token_kind kind) const noexcept {
 
-    return input.at(kind);
+    const auto* token = current();
+    return token && token->kind == kind;
 }
 
 server_status header_parser_v2::consume() noexcept {
+    if (has_split_greater) {
+        has_split_greater = false;
+        return server_status::success;
+    }
 #ifdef CW_HEADER_V2_SEMANTIC_PROFILE
     header_v2_detail_probe perf06_probe(
         profile,
@@ -138,6 +157,10 @@ server_status header_parser_v2::consume() noexcept {
         &header_parser_v2_profile::advance_samples,
         &header_parser_v2_profile::advance_sample_ms);
 #endif
+    if (!template_replays.empty()) {
+        ++template_replays.back().cursor;
+        return server_status::success;
+    }
     return input.advance();
 }
 
@@ -347,7 +370,7 @@ server_status header_parser_v2::resolve_named_type(
 
         if (entry == nullptr ||
             entry->kind != graph_type_kind::record &&
-            entry->kind != graph_type_kind::enumeration) {
+            entry->kind != graph_type_kind::enumeration && entry->kind != graph_type_kind::nominal_scalar) {
 
             return fail(
                 parser_v2_failure_kind::semantic,
@@ -630,7 +653,8 @@ server_status header_parser_v2::parse_intrinsic(
     }
 
     // MSVC spelling is an identifier by lexical contract.
-    if (input.contextual_identifier("__int64")) {
+    if (current() && current()->kind == token_kind::identifier &&
+        input.semantic_strings().get(current()->identifier) == "__int64") {
         if (is_short || long_count != 0) {
             return fail(parser_v2_failure_kind::syntax,
                 "__int64 cannot use short/long modifiers");
@@ -743,8 +767,50 @@ server_status header_parser_v2::parse_type(
     }
 
     const auto* first = current();
+    if (first && first->kind == token_kind::identifier && !template_replays.empty()) {
+        for (const auto& parameter : template_replays.back().types) {
+            if (first->identifier != parameter.first) continue;
+            output = parameter.second;
+            const auto advanced = consume();
+            if (!succeeded(advanced)) return advanced;
+            return parse_type_tail(output, const_qualified, volatile_qualified);
+        }
+    }
+    if (first && first->kind == token_kind::identifier &&
+        (scalar_type_name(input.semantic_strings().get(first->identifier)) != intrinsic_type::none ||
+         input.semantic_strings().get(first->identifier)=="std") && !find_type_identity(scope, first->identifier)) {
+        auto intrinsic = scalar_type_name(input.semantic_strings().get(first->identifier));
+        if (intrinsic != intrinsic_type::none) {
+            output.type = G.intrinsic(intrinsic);
+            const auto status = consume();
+            return succeeded(status) ? parse_type_tail(output, const_qualified, volatile_qualified) : status;
+        }
+        identity_ref visible_namespace;
+        if (input.semantic_strings().get(first->identifier) == "std") {
+            for (auto search=scope; search;) {
+                visible_namespace=identities.find(search,first->identifier,identity_kind::namespace_scope);
+                if (visible_namespace || search==identities.root()) break;
+                identity_record parent;
+                if (!identities.record(search,parent)) break;
+                search=parent.parent;
+            }
+        }
+        if (input.semantic_strings().get(first->identifier) == "std" && !visible_namespace) {
+            auto status = consume();
+            if (!succeeded(status)) return status;
+            status = expect(token_kind::scope,"Expected '::' after std");
+            if (!succeeded(status)) return status;
+            intrinsic = at(token_kind::identifier) ? scalar_type_name(input.semantic_strings().get(current()->identifier),true) : intrinsic_type::none;
+            if (intrinsic == intrinsic_type::none)
+                return fail(parser_v2_failure_kind::unsupported,"Unsupported std scalar type name");
+            output.type = G.intrinsic(intrinsic);
+            status = consume();
+            return succeeded(status) ? parse_type_tail(output, const_qualified, volatile_qualified) : status;
+        }
+    }
     if ((first != nullptr && header_v2_builtin_start(first->kind)) ||
-        input.contextual_identifier("__int64")) {
+        (first && first->kind == token_kind::identifier &&
+         input.semantic_strings().get(first->identifier) == "__int64")) {
         intrinsic_type intrinsic = intrinsic_type::none;
         server_status status;
         {
@@ -827,7 +893,9 @@ server_status header_parser_v2::parse_type(
                 &header_parser_v2_profile::named_resolution_samples,
                 &header_parser_v2_profile::named_resolution_sample_ms);
         #endif
-            resolved = resolve_named_type(identity, output);
+            resolved = at(token_kind::less)
+                ? instantiate_template(identity, output, scope)
+                : resolve_named_type(identity, output);
         }
 
         if (!succeeded(resolved)) {
@@ -1006,22 +1074,10 @@ server_status header_parser_v2::parse_array_suffix(
             return status;
         }
 
-        const auto* bound =
-            current();
-
-        if (bound == nullptr ||
-            bound->kind !=
-                token_kind::pp_number ||
-            bound->number.kind !=
-                prepared_number_kind_v2::
-                    unsigned_integer) {
-
-            return fail(
-                parser_v2_failure_kind::unsupported,
-                "Header Parser V2 array bound requires a positive decimal integer literal");
-        }
-
-        if (bound->number.bits == 0) {
+        std::int64_t bound = 0;
+        status = parse_integer_expression(bound);
+        if (!succeeded(status)) return status;
+        if (bound <= 0) {
             return fail(
                 parser_v2_failure_kind::semantic,
                 "Header Parser V2 array bound must be greater than zero");
@@ -1029,17 +1085,10 @@ server_status header_parser_v2::parse_array_suffix(
 
         try {
             bounds.push_back(
-                bound->number.bits);
+                static_cast<std::uint64_t>(bound));
         }
         catch (...) {
             return server_status::io_error;
-        }
-
-        status =
-            consume();
-
-        if (!succeeded(status)) {
-            return status;
         }
 
         status =
@@ -1103,6 +1152,14 @@ server_status header_parser_v2::parse_scalar_constant(
 
     output = {};
     if (at(token_kind::identifier)) return parse_enum_constant(output);
+    if (at(token_kind::l_paren)) {
+        std::int64_t value = 0;
+        const auto status = parse_integer_expression(value);
+        if (!succeeded(status)) return status;
+        output = construction_value::constant(value < 0 ? construction_kind::signed_integer :
+            construction_kind::unsigned_integer, static_cast<std::uint64_t>(value));
+        return status;
+    }
 
     bool negative = false;
 
@@ -1174,7 +1231,20 @@ server_status header_parser_v2::parse_scalar_constant(
                 unsigned_integer,
             magnitude);
 
-    return consume();
+    auto status = consume();
+    if (!succeeded(status)) return status;
+    if (at(token_kind::plus) || at(token_kind::minus) || at(token_kind::star) ||
+        at(token_kind::slash) || at(token_kind::percent)) {
+        const auto signed_limit = static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)());
+        if (magnitude > signed_limit + (negative ? 1u : 0u))
+            return fail(parser_v2_failure_kind::semantic, "Integer initializer exceeds signed expression range");
+        auto value = static_cast<std::int64_t>(output.bits());
+        status = parse_integer_expression_tail(value, 0, 0);
+        if (!succeeded(status)) return status;
+        output = construction_value::constant(value < 0 ? construction_kind::signed_integer :
+            construction_kind::unsigned_integer, static_cast<std::uint64_t>(value));
+    }
+    return status;
 }
 
 // HEADER-V2-REFERENCE-08: Header-local reference operands are resolved as
@@ -1232,10 +1302,161 @@ server_status header_parser_v2::parse_construction_operand(
     return parse_scalar_constant(output.value);
 }
 
+server_status header_parser_v2::internal_static_scope(identity_ref scope, identity_ref& output) noexcept {
+    try {
+        auto& strings=input.semantic_strings();
+        if (!internal_static_scope_name) {
+            const auto text = "<static-root:" + std::to_string(input.semantic_root().value()) + ">";
+            const auto status = strings.intern(text, internal_static_scope_name);
+            if (!succeeded(status)) return status;
+        }
+        return identities.resolve(scope, internal_static_scope_name, identity_kind::namespace_scope, output);
+    } catch (...) { return server_status::io_error; }
+}
+
+identity_ref header_parser_v2::find_static_object(identity_ref scope, string_id name) noexcept {
+    if (!internal_static_scope_name) return {};
+    for (auto search=scope; search;) {
+        const auto internal = identities.find(search, internal_static_scope_name, identity_kind::namespace_scope);
+        if (internal) {
+            const auto identity=identities.find(internal, name, identity_kind::object);
+            const auto object = G.find_object(identity);
+            const auto* entry = G.find(object);
+            if (entry && entry->internal_static()) return identity;
+        }
+        identity_record parent;
+        if (!identities.record(search, parent)) break;
+        search = parent.parent;
+    }
+    return {};
+}
+
+server_status header_parser_v2::initialize_char_array(identity_ref object, type_ref array,
+    std::span<const std::uint8_t> bytes) noexcept {
+    derived_type_record shape;
+    if (!G.derived(array, shape) || shape.kind != derived_type_kind::bounded_array || bytes.size()>shape.payload)
+        return server_status::project_configuration_invalid;
+    for (std::size_t i=0; i<bytes.size(); ++i) {
+        if (!bytes[i]) continue; // backing is zero-initialized, including NUL and padding
+        const endpoint_path_step step{static_cast<std::uint64_t>(i), endpoint_path_step_kind::array_index, {}};
+        endpoint_path_handle path;
+        auto status = G.intern_resolved_endpoint_path(array, std::span{&step,1}, shape.child, path);
+        if (!succeeded(status)) return status;
+        bool replaced=false;
+        status = G.add_resolved_initialization({object, endpoint_ref::from_path(path)}, shape.child,
+            narrow_character_default(bytes[i]), replaced);
+        if (!succeeded(status)) return status;
+    }
+    return server_status::success;
+}
+
+server_status header_parser_v2::parse_string_initializer(type_ref target,
+    constructor_operation& output, std::vector<std::uint8_t>& bytes) noexcept {
+    try {
+        auto& strings=input.semantic_strings();
+        derived_type_record array;
+        intrinsic_type intrinsic;
+        const bool is_array = G.derived(target, array) && array.kind==derived_type_kind::bounded_array &&
+            G.intrinsic(array.child, intrinsic) && intrinsic==intrinsic_type::char_type;
+        const bool is_pointer = const_char_pointer(G, target);
+        if (!is_array && !is_pointer) return fail(parser_v2_failure_kind::semantic,
+            "String initializer requires a bounded char array or pointer to const char");
+        bytes.clear();
+        while (at(token_kind::string_literal)) {
+            const auto text = input.spelling(*current());
+            if (text.size()<2 || text.front()!='"' || text.back()!='"')
+                return fail(parser_v2_failure_kind::unsupported, "Only ordinary narrow string literals are supported");
+            for (std::size_t i=1; i+1<text.size(); ++i) {
+                unsigned value=static_cast<unsigned char>(text[i]);
+                if (text[i]=='\\') {
+                    if (++i+1>=text.size()) return fail(parser_v2_failure_kind::syntax,"Incomplete string escape");
+                    switch (text[i]) {
+                    case 'n': value=10; break; case 'r': value=13; break; case 't': value=9; break;
+                    case 'a': value=7; break; case 'b': value=8; break; case 'f': value=12; break; case 'v': value=11; break;
+                    case '\\': value='\\'; break; case '"': value='"'; break; case '\'': value='\''; break; case '?': value='?'; break;
+                    default: {
+                        const bool hex=text[i]=='x';
+                        const auto start=hex?i+1:i;
+                        auto end=start;
+                        while (end+1<text.size() && (hex ?
+                            ((text[end]>='0'&&text[end]<='9')||(text[end]>='a'&&text[end]<='f')||(text[end]>='A'&&text[end]<='F')) :
+                            (end<start+3&&text[end]>='0'&&text[end]<='7'))) ++end;
+                        if (start==end) return fail(parser_v2_failure_kind::unsupported,"Unsupported string escape");
+                        unsigned code=0;
+                        const auto parsed=std::from_chars(text.data()+start,text.data()+end,code,hex?16:8);
+                        if (parsed.ec!=std::errc{} || code>255) return fail(parser_v2_failure_kind::semantic,"String escape exceeds narrow character range");
+                        value=code; i=end-1; break;
+                    }
+                    }
+                }
+                bytes.push_back(static_cast<std::uint8_t>(value));
+                if (is_array && bytes.size()>=array.payload)
+                    return fail(parser_v2_failure_kind::semantic,"String initializer including NUL exceeds char array bound");
+            }
+            const auto status=consume(); if (!succeeded(status)) return status;
+        }
+        bytes.push_back(0);
+        if (is_array) { output.value={}; return server_status::success; }
+        // Canonical project-owned literal backing: no parser/process pointer in G.
+        string_id content, scope_name, object_name;
+        auto status=strings.intern(std::string_view{reinterpret_cast<const char*>(bytes.data()),bytes.size()},content);
+        if (!succeeded(status)) return status;
+        status=strings.intern("<string-literals>",scope_name); if (!succeeded(status)) return status;
+        status=strings.intern("<literal:"+std::to_string(content.value())+">",object_name); if (!succeeded(status)) return status;
+        identity_ref scope, object_id;
+        status=identities.resolve(identities.root(),scope_name,identity_kind::namespace_scope,scope); if (!succeeded(status)) return status;
+        status=identities.resolve(scope,object_name,identity_kind::object,object_id); if (!succeeded(status)) return status;
+        if (!G.find_object(object_id)) {
+            type_ref storage;
+            status=G.derive_resolved(G.intrinsic(intrinsic_type::char_type),derived_type_kind::bounded_array,bytes.size(),storage);
+            if (!succeeded(status)) return status;
+            object_handle object;
+            status=G.add_resolved_object(object_id,storage,object,graph_object_internal_static); if (!succeeded(status)) return status;
+            status=initialize_char_array(object_id,storage,bytes); if (!succeeded(status)) return status;
+        }
+        output.value=construction_value::object_binding(object_id.value());
+        if (provenance) {
+            status=record_contribution(output.file,source_data_ref::object(object_id)); if (!succeeded(status)) return status;
+            status=record_dependency(object_id); if (!succeeded(status)) return status;
+        }
+        return server_status::success;
+    } catch (...) { return server_status::io_error; }
+}
+
+server_status header_parser_v2::parse_static_object(identity_ref scope) noexcept {
+    auto status=consume(); if (!succeeded(status)) return status;
+    resolved_type type;
+    status=parse_type(scope,type); if (!succeeded(status)) return status;
+    const auto* token=current();
+    if (!token || token->kind!=token_kind::identifier || !token->identifier)
+        return fail(parser_v2_failure_kind::syntax,"Expected Header static object name");
+    const auto name=token->identifier; const auto file=token->file;
+    status=consume(); if (!succeeded(status)) return status;
+    status=parse_array_suffix(type); if (!succeeded(status)) return status;
+    if (!type.complete && !type.indirect) return fail(parser_v2_failure_kind::semantic,"Header static object requires a complete type");
+    constructor_operation initial; std::vector<std::uint8_t> bytes; bool explicit_value=false;
+    status=parse_member_initializer(type.type,initial,&bytes,&explicit_value); if (!succeeded(status)) return status;
+    if (initial.reference_name || initial.value.kind==construction_kind::object_binding)
+        return fail(parser_v2_failure_kind::unsupported,"Header static object initializer requires a scalar constant or zero initialization");
+    if (!at(token_kind::semicolon)) return fail(parser_v2_failure_kind::syntax,"Expected ';' after Header static object");
+    identity_ref internal, identity;
+    status=internal_static_scope(scope,internal); if (!succeeded(status)) return status;
+    status=identities.resolve(internal,name,identity_kind::object,identity); if (!succeeded(status)) return status;
+    object_handle object;
+    status=G.add_resolved_object(identity,type.type,object,graph_object_internal_static |
+        (explicit_value?graph_object_non_default_initializer:0),initial.value);
+    if (!succeeded(status)) return fail(parser_v2_failure_kind::semantic,"Conflicting Header static object declaration");
+    if (!bytes.empty()) { status=initialize_char_array(identity,type.type,bytes); if (!succeeded(status)) return status; }
+    if (provenance) { status=record_contribution(file,source_data_ref::object(identity)); if (!succeeded(status)) return status; }
+    return consume();
+}
+
 server_status header_parser_v2::parse_member_initializer(
-    type_ref target, constructor_operation& output) noexcept {
+    type_ref target, constructor_operation& output,
+    std::vector<std::uint8_t>* string_bytes, bool* explicit_value) noexcept {
 
     output = {};
+    if (explicit_value) *explicit_value = false;
     if (!at(token_kind::assign) && !at(token_kind::l_brace)) {
         return server_status::success;
     }
@@ -1258,7 +1479,10 @@ server_status header_parser_v2::parse_member_initializer(
         auto status = consume();
         if (!succeeded(status)) return status;
         if (!at(token_kind::r_brace)) {
-            status = parse_construction_operand(output, reference_target);
+            if (explicit_value) *explicit_value = true;
+            status = at(token_kind::string_literal) && string_bytes
+                ? parse_string_initializer(target, output, *string_bytes)
+                : parse_construction_operand(output, reference_target);
             if (!succeeded(status)) return status;
         }
         status = expect(token_kind::r_brace,
@@ -1266,7 +1490,10 @@ server_status header_parser_v2::parse_member_initializer(
         if (!succeeded(status)) return status;
     }
     else {
-        const auto status = parse_construction_operand(output, reference_target);
+        if (explicit_value) *explicit_value = true;
+        const auto status = at(token_kind::string_literal) && string_bytes
+            ? parse_string_initializer(target, output, *string_bytes)
+            : parse_construction_operand(output, reference_target);
         if (!succeeded(status)) return status;
     }
 
@@ -1326,7 +1553,7 @@ server_status header_parser_v2::apply_record_operand(
             ++it->second;
             references.waiting.emplace(input_value.reference_name.value(),
                 waiting_reference{target, it->second,
-                    input_value.reference_file, input_value.reference_source});
+                    input_value.reference_file, input_value.reference_source, input_value.reference_name});
             construction[target] = {};
             return server_status::success;
         }
@@ -1474,6 +1701,11 @@ server_status header_parser_v2::parse_member_declarator(
     const auto member_name =
         name->identifier;
 
+    if (!template_replays.empty())
+        for (const auto& parameter : template_replays.back().types)
+            if (parameter.first == member_name)
+                return fail(parser_v2_failure_kind::semantic, "Member declaration shadows a template parameter");
+
     const auto member_file =
         name->file;
 
@@ -1567,6 +1799,7 @@ server_status header_parser_v2::parse_member_declarator(
     const bool has_initializer =
         at(token_kind::assign) || at(token_kind::l_brace);
     constructor_operation initial;
+    std::vector<std::uint8_t> string_bytes;
 
     {
     #ifdef CW_HEADER_V2_SEMANTIC_PROFILE
@@ -1576,7 +1809,7 @@ server_status header_parser_v2::parse_member_declarator(
             &header_parser_v2_profile::member_initializer_samples,
             &header_parser_v2_profile::member_initializer_sample_ms);
     #endif
-        status = parse_member_initializer(type.type, initial);
+        status = parse_member_initializer(type.type, initial, &string_bytes);
     }
 
     if (!succeeded(status)) {
@@ -1629,6 +1862,18 @@ server_status header_parser_v2::parse_member_declarator(
     }
 
     const auto pending_it = pending.find(member_name.value());
+    derived_type_record string_array;
+    if (!string_bytes.empty() && G.derived(type.type, string_array) &&
+        string_array.kind == derived_type_kind::bounded_array) {
+        for (std::size_t i=0; i<string_bytes.size(); ++i) {
+            nested_operation operation;
+            operation.root = member_name; operation.file = initial.file; operation.source = initial.source;
+            operation.value = narrow_character_default(string_bytes[i]);
+            try { operation.path.push_back({{}, i}); } catch (...) { return server_status::io_error; }
+            status = append_nested_operation(std::move(operation), members, names, nested);
+            if (!succeeded(status)) return status;
+        }
+    }
     if (pending_it != pending.end()) {
         status = apply_record_operand(index, pending_it->second,
             members, construction, names, references);
@@ -1811,9 +2056,32 @@ server_status header_parser_v2::parse_member(
         declares_virtual);
 }
 
-// HEADER-V2-METHOD-02: preserve OLD declaration-only method semantics.
-// Ordinary method parameters are opaque balanced tokens (as in OLD); no
-// method-body execution, Graph data members or Runtime method ABI is added.
+// Opaque function definitions contribute no executable code or instance data.
+// Validate delimiters while preserving comments/literals as indivisible tokens.
+server_status header_parser_v2::parse_balanced_tokens() noexcept {
+    std::vector<token_kind> closing;
+    do {
+        const auto kind = current() ? current()->kind : token_kind::invalid;
+        if (kind == token_kind::l_paren || kind == token_kind::l_bracket || kind == token_kind::l_brace) {
+            if (closing.size() >= parser_v2_scope_depth_limit)
+                return fail(parser_v2_failure_kind::unsupported, "Function delimiter nesting exceeds supported depth");
+            try {
+                closing.push_back(kind == token_kind::l_paren ? token_kind::r_paren :
+                    kind == token_kind::l_bracket ? token_kind::r_bracket : token_kind::r_brace);
+            } catch (...) { return server_status::io_error; }
+        } else if (kind == token_kind::r_paren || kind == token_kind::r_bracket || kind == token_kind::r_brace) {
+            if (closing.empty() || closing.back() != kind)
+                return fail(parser_v2_failure_kind::syntax, "Mismatched function delimiter");
+            closing.pop_back();
+        } else if (input.finished() || kind == token_kind::invalid)
+            return fail(parser_v2_failure_kind::syntax, "Function declaration or body is not closed");
+        const auto status = consume();
+        if (!succeeded(status)) return status;
+    } while (!closing.empty());
+    return server_status::success;
+}
+
+// Ordinary method parameters and bodies are opaque; no Runtime method ABI.
 server_status header_parser_v2::parse_method_tail(
     bool virtual_prefix,
     bool base_polymorphic,
@@ -1821,7 +2089,8 @@ server_status header_parser_v2::parse_method_tail(
     bool conversion,
     bool assignment_operator,
     bool subscript_operator,
-    bool binary_operator) noexcept {
+    bool binary_operator,
+    bool increment_operator) noexcept {
 
     if (!at(token_kind::l_paren)) {
         return fail(parser_v2_failure_kind::syntax,
@@ -1834,6 +2103,8 @@ server_status header_parser_v2::parse_method_tail(
     bool conversion_void = false;
     std::size_t parameter_tokens = 0;
     bool sole_void = false;
+    bool postfix_parameter = false;
+    bool postfix_name = false;
     for (;;) {
         if (input.finished() || current() == nullptr) {
             return fail(parser_v2_failure_kind::syntax,
@@ -1848,6 +2119,13 @@ server_status header_parser_v2::parse_method_tail(
             }
             sole_void = parameter_tokens == 0 && at(token_kind::kw_void);
             ++parameter_tokens;
+        }
+        if (increment_operator && depth == 1 && !at(token_kind::r_paren)) {
+            if (!postfix_parameter && at(token_kind::kw_int)) postfix_parameter = true;
+            else if (postfix_parameter && !postfix_name && at(token_kind::identifier)) postfix_name = true;
+            else
+                return fail(parser_v2_failure_kind::syntax,
+                    "Increment/decrement operator requires no parameter or a single int parameter");
         }
         if (conversion && depth != 0 && !at(token_kind::r_paren)) {
             if (!conversion_void && at(token_kind::kw_void)) {
@@ -1941,7 +2219,9 @@ server_status header_parser_v2::parse_method_tail(
     }
 
     bool pure = false;
+    bool special_declaration = false;
     if (at(token_kind::assign)) {
+        special_declaration = true;
         auto consumed = consume();
         if (!succeeded(consumed)) return consumed;
         const auto* token = current();
@@ -1969,9 +2249,13 @@ server_status header_parser_v2::parse_method_tail(
     if (virtual_prefix || override_seen || final_seen || pure) {
         declares_virtual = true;
     }
+    if (at(token_kind::l_brace)) {
+        if (special_declaration)
+            return fail(parser_v2_failure_kind::syntax, "Special method declaration must end with ';'");
+        return parse_balanced_tokens();
+    }
     if (!at(token_kind::semicolon)) {
-        return fail(parser_v2_failure_kind::unsupported,
-            "CXX-CLASS-ABI-V1 stores method declarations only; method bodies are not implemented");
+        return fail(parser_v2_failure_kind::unsupported, "Expected method body or ';'");
     }
     return consume();
 }
@@ -2006,6 +2290,12 @@ server_status header_parser_v2::parse_named_operator(
     bool assignment_operator = false;
     bool subscript_operator = false;
     bool binary_operator = false;
+    if (at(token_kind::plus_plus) || at(token_kind::minus_minus)) {
+        status = consume();
+        if (!succeeded(status)) return status;
+        return parse_method_tail(virtual_prefix, base_polymorphic,
+            declares_virtual, false, false, false, false, true);
+    }
     if (at(token_kind::assign)) {
         assignment_operator = true;
     }
@@ -2132,7 +2422,7 @@ server_status header_parser_v2::apply_nested_operation(
     type_handle enum_handle;
     const auto* enum_entry = G.named(type, enum_handle) ? G.find(enum_handle) : nullptr;
     if ((type.kind() != type_ref_kind::intrinsic &&
-         !(enum_entry && enum_entry->kind == graph_type_kind::enumeration)) ||
+         !(enum_entry && (enum_entry->kind == graph_type_kind::enumeration || enum_entry->kind == graph_type_kind::nominal_scalar))) ||
         !normalize_enum_constant(G, type, normalized) ||
         !construction_compatible(G, type, normalized)) {
         return fail_at(parser_v2_failure_kind::unsupported,
@@ -2220,6 +2510,7 @@ server_status header_parser_v2::resolve_waiting_nested(
 
 server_status header_parser_v2::parse_constructor(
     string_id record_name,
+    bool& default_constructor_seen,
     std::span<const member_record> members,
     const record_member_name_set& names,
     std::vector<construction_value>& construction,
@@ -2246,10 +2537,39 @@ server_status header_parser_v2::parse_constructor(
         return status;
     }
 
-    if (!at(token_kind::r_paren)) {
-        return fail(
-            parser_v2_failure_kind::unsupported,
-            "Header Parser V2 managed constructors must have no parameters");
+    // Parameterized overloads are parsed as opaque declarations/definitions,
+    // just like methods. They never supply automatic object defaults.
+    const auto balanced = [&]() { return parse_balanced_tokens(); };
+    bool parameterized = !at(token_kind::r_paren);
+    bool parameter_token = false;
+    if (at(token_kind::kw_void)) {
+        status = consume();
+        if (!succeeded(status)) return status;
+        if (at(token_kind::comma))
+            return fail(parser_v2_failure_kind::syntax, "void must be the only constructor parameter");
+        parameterized = !at(token_kind::r_paren);
+        parameter_token = parameterized;
+    }
+    while (!at(token_kind::r_paren)) {
+        if (input.finished() || at(token_kind::semicolon) || at(token_kind::r_brace) || at(token_kind::r_bracket))
+            return fail(parser_v2_failure_kind::syntax, "Constructor parameter list is not closed");
+        if (at(token_kind::comma)) {
+            if (!parameter_token) return fail(parser_v2_failure_kind::syntax, "Expected constructor parameter");
+            parameter_token = false;
+            status = consume();
+        } else {
+            parameter_token = true;
+            status = (at(token_kind::l_paren) || at(token_kind::l_bracket) || at(token_kind::l_brace))
+                ? balanced() : consume();
+        }
+        if (!succeeded(status)) return status;
+    }
+    if (parameterized && !parameter_token)
+        return fail(parser_v2_failure_kind::syntax, "Expected constructor parameter after comma");
+    if (!parameterized) {
+        if (default_constructor_seen)
+            return fail(parser_v2_failure_kind::semantic, "Header Parser V2 supports one managed default constructor per record");
+        default_constructor_seen = true;
     }
 
     status =
@@ -2266,6 +2586,49 @@ server_status header_parser_v2::parse_constructor(
         if (!succeeded(status)) {
             return status;
         }
+        if (at(token_kind::l_paren)) {
+            status = balanced();
+            if (!succeeded(status)) return status;
+        }
+    }
+
+    if (parameterized) {
+        if (at(token_kind::semicolon)) return consume();
+        if (at(token_kind::assign)) {
+            status = consume();
+            if (!succeeded(status)) return status;
+            if (!at(token_kind::kw_default) && !at(token_kind::kw_delete))
+                return fail(parser_v2_failure_kind::syntax, "Constructor declaration requires '= default' or '= delete'");
+            status = consume();
+            if (!succeeded(status)) return status;
+            return expect(token_kind::semicolon, "Expected ';' after constructor declaration");
+        }
+        if (at(token_kind::colon)) {
+            status = consume();
+            if (!succeeded(status)) return status;
+            for (;;) {
+                if (!at(token_kind::identifier))
+                    return fail(parser_v2_failure_kind::syntax, "Expected constructor initializer name");
+                status = consume();
+                if (!succeeded(status)) return status;
+                while (at(token_kind::scope)) {
+                    status = consume();
+                    if (!succeeded(status)) return status;
+                    status = expect(token_kind::identifier, "Expected qualified constructor initializer name");
+                    if (!succeeded(status)) return status;
+                }
+                if (!at(token_kind::l_paren) && !at(token_kind::l_brace))
+                    return fail(parser_v2_failure_kind::syntax, "Expected constructor initializer arguments");
+                status = balanced();
+                if (!succeeded(status)) return status;
+                if (!at(token_kind::comma)) break;
+                status = consume();
+                if (!succeeded(status)) return status;
+            }
+        }
+        if (!at(token_kind::l_brace))
+            return fail(parser_v2_failure_kind::syntax, "Expected constructor body or declaration terminator");
+        return balanced();
     }
 
     if (at(token_kind::semicolon)) {
@@ -2305,7 +2668,11 @@ server_status header_parser_v2::parse_constructor(
                 names, references);
         }
         try {
-            pending.insert_or_assign(target.value(), value);
+            auto deferred = value;
+            deferred.target_name = target;
+            const auto previous = pending.find(target.value());
+            if (previous != pending.end()) deferred.member_initializer |= previous->second.member_initializer;
+            pending.insert_or_assign(target.value(), deferred);
             return server_status::success;
         }
         catch (...) { return server_status::io_error; }
@@ -2373,6 +2740,7 @@ server_status header_parser_v2::parse_constructor(
             constructor_operation value;
             value.file = target_file;
             value.source = target_source;
+            value.member_initializer = true;
 
             if (!at(close)) {
                 status = parse_construction_operand(value, true);
@@ -2503,6 +2871,8 @@ server_status header_parser_v2::parse_constructor(
         value.file = target_file;
         value.source = target_source;
 
+        value.body_assignment = true;
+
         status = path.empty()
             ? parse_construction_operand(value, true)
             : parse_scalar_constant(value.value);
@@ -2606,6 +2976,9 @@ server_status header_parser_v2::parse_record(
             "Header Parser V2 record identity could not be resolved");
     }
 
+    for (const auto& definition : templates->records)
+        if (definition.identity == identity)
+            return fail(parser_v2_failure_kind::semantic, "Concrete record conflicts with a template name");
     const auto previous_scope = constant_scope;
     struct restore { identity_ref& slot; identity_ref value; ~restore() { slot = value; } } restore_scope{constant_scope, previous_scope};
     constant_scope = identity;
@@ -2935,18 +3308,10 @@ server_status header_parser_v2::parse_record(
                     return fail(parser_v2_failure_kind::syntax,
                         "Constructor cannot be virtual");
                 }
-                if (constructor_seen) {
-                    return fail(
-                        parser_v2_failure_kind::semantic,
-                        "Header Parser V2 supports one managed default constructor per record");
-                }
-
-                constructor_seen =
-                    true;
-
                 status =
                     parse_constructor(
                         record_name,
+                        constructor_seen,
                         members,
                         names,
                         construction,
@@ -3058,9 +3423,9 @@ server_status header_parser_v2::parse_record(
         return status;
     }
 
-    // All forward declarations must be satisfied by the end of this record.
-    // No second pass over constructor operations or member initializations.
-    if (!pending.empty()) {
+    // Forward direct-field declarations have now consumed their operands.
+    // Records with bases resolve remaining inherited targets after definition.
+    if (!pending.empty() && bases.empty()) {
         auto earliest = pending.begin();
         for (auto it = pending.begin(); it != pending.end(); ++it) {
             if (it->second.source.offset < earliest->second.source.offset) {
@@ -3086,6 +3451,26 @@ server_status header_parser_v2::parse_record(
             earliest->file, earliest->source);
     }
 
+    // Class member lookup wins even for fields declared later. Resolve only
+    // remaining names against this semantic root's Header static storage.
+    for (auto it=references.waiting.begin(); it!=references.waiting.end();) {
+        const auto waiting=it->second;
+        const auto revision=references.generations.find(waiting.target);
+        if (revision!=references.generations.end() && revision->second!=waiting.generation) {
+            it=references.waiting.erase(it); continue;
+        }
+        const auto object=find_static_object(identity,waiting.name);
+        const auto* entry=G.find(G.find_object(object));
+        if (!entry) { ++it; continue; }
+        derived_type_record target_reference;
+        if (waiting.target>=members.size() || !G.derived(members[waiting.target].type,target_reference) ||
+            (target_reference.kind!=derived_type_kind::lvalue_reference && target_reference.kind!=derived_type_kind::rvalue_reference) ||
+            target_reference.child!=entry->type)
+            return fail_at(parser_v2_failure_kind::semantic,"Header static reference binding type mismatch",waiting.file,waiting.source);
+        construction[waiting.target]=construction_value::object_binding(object.value());
+        if (provenance) { status=record_dependency(object); if (!succeeded(status)) return status; }
+        it=references.waiting.erase(it);
+    }
     if (!references.waiting.empty()) {
         // Only unresolved forward names are checked. No second field or
         // constructor-operation traversal, and no token replay.
@@ -3131,6 +3516,34 @@ server_status header_parser_v2::parse_record(
         return fail(
             parser_v2_failure_kind::semantic,
             "Header Parser V2 record definition conflicts with G");
+    }
+
+    // Direct fields (including declarations after the constructor) have already
+    // consumed their pending operands. Remaining body targets may be inherited.
+    if (!pending.empty()) for (const auto& item : pending) {
+        const auto& operation = item.second;
+        constructor_member_lookup target;
+        if (!operation.body_assignment || operation.member_initializer || operation.reference_name ||
+            !find_constructor_member(G, handle, operation.target_name, target) ||
+            !target.accessible) {
+            return fail_at(parser_v2_failure_kind::semantic,
+                "Header Parser V2 constructor target is not an accessible unambiguous inherited field",
+                operation.file, operation.source);
+        }
+        auto value = operation.value;
+        type_handle scalar;
+        const auto* entry = G.named(target.member.type, scalar) ? G.find(scalar) : nullptr;
+        if ((target.member.type.kind() != type_ref_kind::intrinsic &&
+             !(entry && (entry->kind == graph_type_kind::enumeration || entry->kind == graph_type_kind::nominal_scalar))) ||
+            !normalize_enum_constant(G, target.member.type, value) ||
+            !construction_compatible(G, target.member.type, value) ||
+            value.kind > construction_kind::real) {
+            return fail_at(parser_v2_failure_kind::unsupported,
+                "Inherited constructor assignment requires a scalar constant",
+                operation.file, operation.source);
+        }
+        status = G.constructor_defaults.add({identity, operation.target_name, value});
+        if (!succeeded(status)) return status;
     }
 
     if (provenance != nullptr) {
@@ -3518,6 +3931,21 @@ server_status header_parser_v2::parse_scope(
             if (!succeeded(status)) return status;
             continue;
         }
+        if (at(token_kind::kw_template)) {
+            const auto status = parse_template(scope);
+            if (!succeeded(status)) return status;
+            continue;
+        }
+        if (at(token_kind::kw_using)) {
+            const auto status = parse_using(scope);
+            if (!succeeded(status)) return status;
+            continue;
+        }
+        if (at(token_kind::kw_static)) {
+            const auto status = parse_static_object(scope);
+            if (!succeeded(status)) return status;
+            continue;
+        }
         // HEADER-V2-TYPEDEF-07: Header-scope alias declaration.
         if (at(token_kind::kw_typedef)) {
             const auto status = parse_typedef(scope);
@@ -3564,6 +3992,8 @@ server_status header_parser_v2::parse_scope(
             "Header Parser V2 expected closing '}'")
         : server_status::success;
 }
+
+#include "header_templates_v2.inc"
 
 server_status header_parser_v2::parse() noexcept {
 

@@ -1,3 +1,5 @@
+#include "../graph/construction_semantics.hpp"
+#include "../persistence/byte_patch.hpp"
 #include "shm_runtime_v2.hpp"
 
 #include "../abi/abi_layout.hpp"
@@ -203,6 +205,7 @@ public:
             std::move(
                 initializations.
                     initializations);
+        output.initialization_bytes = std::move(initializations.initialization_bytes);
 
         output.live_link_count_value =
             links.live_link_count_value;
@@ -263,6 +266,7 @@ private:
     void reset_execution() noexcept {
         output.links.clear();
         output.initializations.clear();
+        output.initialization_bytes.clear();
         output.endpoint_dereferences.clear();
         output.live_link_count_value = 0;
         output.link_dereference_count_value = 0;
@@ -351,7 +355,7 @@ private:
             const auto target =
                 compile_endpoint(
                     link.target,
-                    plan.target);
+                    plan.target, nullptr, true);
 
             if (target !=
                     shm_runtime_v2_result::
@@ -463,6 +467,8 @@ private:
                     : target;
             }
 
+            if (!valid_byte_patch_target(project, initialization.target, initialization.value))
+                return shm_runtime_v2_result::invalid_input;
             const auto encoded =
                 encode_initialization(
                     target_type,
@@ -554,11 +560,12 @@ private:
 
     [[nodiscard]] bool reference_referent(
         type_ref type,
-        type_ref& output_type) const noexcept {
+        type_ref& output_type, bool pointer = false) const noexcept {
 
         output_type = {};
 
         derived_type_record derived;
+        if (pointer) strip_cv(type);
 
         if (!project.derived(
                 type,
@@ -568,7 +575,8 @@ private:
                      lvalue_reference &&
              derived.kind !=
                  derived_type_kind::
-                     rvalue_reference)) {
+                     rvalue_reference &&
+             !(pointer && derived.kind == derived_type_kind::pointer))) {
 
             return false;
         }
@@ -842,7 +850,7 @@ private:
     compile_endpoint(
         object_endpoint endpoint,
         shm_runtime_v2::endpoint_program& program,
-        type_ref* resolved_type = nullptr) {
+        type_ref* resolved_type = nullptr, bool pointer_target = false) {
 
         program = {};
 
@@ -986,7 +994,7 @@ private:
                     if (step.value != 0 ||
                         !reference_referent(
                             current_type,
-                            referent)) {
+                            referent, true)) {
 
                         return shm_runtime_v2_result::
                             invalid_input;
@@ -1033,7 +1041,7 @@ private:
         program.final_reference =
             reference_referent(
                 current_type,
-                ignored);
+                ignored, pointer_target);
 
         if (resolved_type != nullptr) {
             *resolved_type =
@@ -1281,7 +1289,41 @@ private:
         type_ref type,
         construction_value construction,
         shm_runtime_v2::
-            initialization_plan& plan) const noexcept {
+            initialization_plan& plan) noexcept {
+
+        if (construction.kind == construction_kind::byte_array) {
+            if (!construction_compatible(project, type, construction) || !valid_byte_array_value(project, construction))
+                return shm_runtime_v2_result::invalid_input;
+            const auto data = project.string(construction.low);
+            const auto mask = project.string(construction.high);
+            const auto count = output.initialization_bytes.size();
+            if (count + data.size() + mask.size() > (std::numeric_limits<std::uint32_t>::max)())
+                return shm_runtime_v2_result::overflow;
+            const char_array_store store{static_cast<std::uint32_t>(count), static_cast<std::uint32_t>(data.size()),
+                construction.operand, static_cast<std::uint32_t>(mask.size())};
+            try {
+                for (const auto bytes : {data, mask}) {
+                    if (!bytes.empty()) output.initialization_bytes.insert(output.initialization_bytes.end(),
+                        reinterpret_cast<const std::byte*>(bytes.data()), reinterpret_cast<const std::byte*>(bytes.data() + bytes.size()));
+                }
+            } catch (...) { return shm_runtime_v2_result::failed; }
+            std::memcpy(plan.value.data(), &store, sizeof store);
+            plan.size = 0;
+            plan.reserved[0] = 255;
+            return shm_runtime_v2_result::success;
+        }
+
+        if (construction.kind == construction_kind::byte_patch) {
+            if (!valid_construction(construction) || type.kind() != type_ref_kind::intrinsic ||
+                type.payload() != static_cast<std::uint32_t>(intrinsic_type::char_type))
+                return shm_runtime_v2_result::invalid_input;
+            plan.value = {};
+            const auto bits = construction.bits();
+            std::memcpy(plan.value.data(), &bits, sizeof bits);
+            plan.size = static_cast<std::uint8_t>(std::bit_width(construction.operand));
+            plan.reserved[0] = static_cast<std::uint8_t>(construction.operand);
+            return shm_runtime_v2_result::success;
+        }
 
         derived_type_record derived;
 
@@ -1319,7 +1361,7 @@ private:
         if (type.kind() == type_ref_kind::named) {
             type_entry entry;
             if (project.type(project.type_location(type), entry) &&
-                entry.kind == graph_type_kind::enumeration) storage_type = entry.storage_intrinsic();
+                entry.scalar_named()) storage_type = entry.storage_intrinsic();
         }
         if (storage_type != intrinsic_type::none) {
             switch (storage_type) {
@@ -1836,10 +1878,9 @@ bool shm_runtime_v2::initialization_program_at(
     const auto& physical =
         persisted_initializations[index];
 
-    if (physical.size == 0 ||
-        physical.size >
-            physical.value.size() ||
-        physical.reserved[0] != 0 ||
+    if ((physical.size == 0 ? physical.reserved[0] != 255 :
+        (physical.size > physical.value.size() ||
+         (physical.reserved[0] != 0 && (physical.size > 8 || (physical.reserved[0] >> physical.size) != 0)))) ||
         physical.reserved[1] != 0 ||
         physical.reserved[2] != 0) {
         return false;
@@ -1849,6 +1890,7 @@ bool shm_runtime_v2::initialization_program_at(
         physical.value;
     value.size =
         physical.size;
+    value.reserved[0] = physical.reserved[0];
     value.target.final_reference =
         false;
 
@@ -1922,6 +1964,7 @@ bool shm_runtime_v2::physical_counts(shm_runtime_v2_physical_counts& output) con
     output.link_slots = links.size();
     output.initializations = initializations.size();
     output.dereferences = endpoint_dereferences.size();
+    output.initialization_bytes = initialization_bytes.size();
     for (const auto& link : links) {
         if (!link.live) continue;
         output.endpoint_programs += link.source.dereference_count != 0;
@@ -2064,6 +2107,10 @@ shm_runtime_v2_result encode_shm_runtime_v2_physical_columns(
                     compiled_image,
                     kind);
         };
+
+    const auto byte_destination = section(compiled_project_section::runtime_initialization_bytes);
+    if (byte_destination.size() != runtime.initialization_bytes.size()) return shm_runtime_v2_result::invalid_input;
+    if (!byte_destination.empty()) std::memcpy(byte_destination.data(), runtime.initialization_bytes.data(), byte_destination.size());
 
     std::span<shm_runtime_v2_execution_header>
         header;
@@ -2244,9 +2291,7 @@ shm_runtime_v2_result encode_shm_runtime_v2_physical_columns(
             initializations[index];
 
         if (source.target.final_reference ||
-            source.size == 0 ||
-            source.size >
-                source.value.size() ||
+            (source.size == 0 ? source.reserved[0] != 255 : source.size > source.value.size()) ||
             !encode_endpoint(
                 source.target,
                 target.target,
@@ -2260,6 +2305,7 @@ shm_runtime_v2_result encode_shm_runtime_v2_physical_columns(
             source.value;
         target.size =
             source.size;
+        target.reserved[0] = source.reserved[0];
     }
 
     if (program_cursor !=
@@ -2310,6 +2356,8 @@ attach_shm_runtime_v2_physical_columns(
                 project.section(
                     compiled_project_section::
                         runtime_execution_header));
+
+    output.persisted_initialization_bytes = project.section(compiled_project_section::runtime_initialization_bytes);
 
     output.persisted_links =
         records.template operator()<
@@ -2391,7 +2439,7 @@ public:
               initialization_telemetry) {
     }
 
-    [[nodiscard]] shm_runtime_v2_result mark() noexcept {
+    [[nodiscard]] shm_runtime_v2_result mark(bool deferred = false) noexcept {
 
         const auto valid =
             validate();
@@ -2405,6 +2453,9 @@ public:
         publish_shape();
 
         if (runtime.persisted_physical_value) {
+            if (deferred) {
+                return mark_persisted_complex_targets();
+            }
             for (std::size_t index = 0;
                  index < runtime.persisted_links.size();
                  ++index) {
@@ -2414,7 +2465,7 @@ public:
 
                 if ((link.flags &
                         shm_runtime_v2_physical_link_live) ==
-                    0) {
+                    0 || link.target_program != 0) {
                     continue;
                 }
 
@@ -2526,7 +2577,8 @@ public:
             auto& plan =
                 runtime.links[index];
 
-            if (!plan.live) {
+            if (!plan.live ||
+                (plan.target.dereference_count != 0) != deferred) {
                 continue;
             }
 
@@ -2544,7 +2596,7 @@ public:
             const auto located =
                 endpoint_position(
                     plan.target,
-                    false,
+                    deferred,
                     target_slot);
 
             if (located !=
@@ -2559,7 +2611,7 @@ public:
             if (!read_reference(
                     target_slot,
                     stored) ||
-                stored != 0) {
+                (stored != 0 && (!deferred || !runtime_address(stored)))) {
 
                 return shm_runtime_v2_result::
                     invalid_input;
@@ -2777,7 +2829,7 @@ public:
             const auto located =
                 endpoint_position(
                     target,
-                    false,
+                    true,
                     target_slot);
 
             if (located !=
@@ -2789,13 +2841,14 @@ public:
 
             std::uint64_t stored = 0;
 
-            if (!read_reference(
-                    target_slot,
-                    stored) ||
-                stored != 0) {
-
-                return shm_runtime_v2_result::
-                    invalid_input;
+            if (!read_reference(target_slot, stored)) {
+                return shm_runtime_v2_result::invalid_input;
+            }
+            if (stored != 0 && !runtime_address(stored)) {
+                std::uint32_t pending = 0;
+                return decode_pending(stored, pending)
+                    ? shm_runtime_v2_result::conflicting_link_target
+                    : shm_runtime_v2_result::invalid_input;
             }
 
             const auto raw =
@@ -2852,6 +2905,13 @@ public:
         }
 
         publish_shape();
+
+        // Constructor reference defaults must exist before locating targets
+        // through aliases. Direct targets were protected before construction.
+        const auto deferred = mark(true);
+        if (deferred != shm_runtime_v2_result::success) {
+            return deferred;
+        }
 
         if (runtime.persisted_physical_value) {
             for (std::size_t index = 0;
@@ -2913,6 +2973,39 @@ public:
             success;
     }
 
+    [[nodiscard]] shm_runtime_v2_result write_initialization(shm_offset target,
+        const std::array<std::byte, 16>& value, unsigned size, unsigned mask) noexcept {
+        if (size == 0 && mask == 255) {
+            char_array_store store;
+            std::memcpy(&store, value.data(), sizeof store);
+            const std::span<const std::byte> bytes = runtime.persisted_physical_value
+                ? runtime.persisted_initialization_bytes : std::span<const std::byte>{runtime.initialization_bytes};
+            const auto count = std::uint64_t{store.length} + store.mask_length;
+            if (!store.extent || store.length > store.extent || target > shm.size() || store.extent > shm.size() - target ||
+                store.offset > bytes.size() || count > bytes.size() - store.offset ||
+                store.mask_length > (std::uint64_t{store.extent} + 7) / 8)
+                return shm_runtime_v2_result::invalid_input;
+            const auto* data = bytes.empty() ? "" : reinterpret_cast<const char*>(bytes.data() + store.offset);
+            if (store.mask_length && store.extent % 8 && store.mask_length == (std::uint64_t{store.extent} + 7) / 8 &&
+                (static_cast<unsigned char>(data[store.length + store.mask_length - 1]) >> (store.extent % 8)))
+                return shm_runtime_v2_result::invalid_input;
+            return apply_char_array(shm.subspan(static_cast<std::size_t>(target), store.extent),
+                {data, store.length}, {data + store.length, store.mask_length})
+                ? shm_runtime_v2_result::success : shm_runtime_v2_result::invalid_input;
+        }
+        if (!size || size > value.size() || target > shm.size() || size > shm.size() - target ||
+            (mask && (size > 8 || (mask >> size) != 0)))
+            return shm_runtime_v2_result::invalid_input;
+        auto* destination = shm.data() + static_cast<std::size_t>(target);
+        if (!mask || mask == ((1u << size) - 1)) {
+            std::memcpy(destination, value.data(), size);
+        } else {
+            for (unsigned i = 0; i < size; ++i)
+                if (mask & (1u << i)) destination[i] = value[i];
+        }
+        return shm_runtime_v2_result::success;
+    }
+
     [[nodiscard]] shm_runtime_v2_result
     materialize_initializations() noexcept {
 
@@ -2951,12 +3044,9 @@ public:
                         index];
 
                 if (initialization.target_program == 0) {
-                    std::memcpy(
-                        shm.data() +
-                            static_cast<std::size_t>(
-                                initialization.target),
-                        initialization.value.data(),
-                        initialization.size);
+                    const auto written = write_initialization(initialization.target,
+                        initialization.value, initialization.size, initialization.reserved[0]);
+                    if (written != shm_runtime_v2_result::success) return written;
 
                     if (initialization_telemetry !=
                         nullptr) {
@@ -2994,12 +3084,9 @@ public:
                     return located;
                 }
 
-                std::memcpy(
-                    shm.data() +
-                        static_cast<std::size_t>(
-                            target),
-                    decoded.value.data(),
-                    decoded.size);
+                const auto written = write_initialization(target,
+                    decoded.value, decoded.size, decoded.reserved[0]);
+                if (written != shm_runtime_v2_result::success) return written;
 
                 if (initialization_telemetry !=
                     nullptr) {
@@ -3016,9 +3103,8 @@ public:
         for (const auto& initialization :
              runtime.initializations) {
 
-            if (initialization.size == 0 ||
-                initialization.size >
-                    initialization.value.size() ||
+            if ((initialization.size == 0 ? initialization.reserved[0] != 255 :
+                initialization.size > initialization.value.size()) ||
                 initialization.target.
                     final_reference) {
 
@@ -3052,12 +3138,9 @@ public:
                     : located;
             }
 
-            std::memcpy(
-                shm.data() +
-                    static_cast<std::size_t>(
-                        target),
-                initialization.value.data(),
-                initialization.size);
+            const auto written = write_initialization(target,
+                initialization.value, initialization.size, initialization.reserved[0]);
+            if (written != shm_runtime_v2_result::success) return written;
 
             if (initialization_telemetry !=
                 nullptr) {

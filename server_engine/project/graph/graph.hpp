@@ -212,6 +212,7 @@ enum class graph_type_kind : std::uint8_t {
     record = 1,
     intrinsic_alias = 2,
     enumeration = 3,
+    nominal_scalar = 4,
 };
 
 enum class graph_record_kind : std::uint8_t {
@@ -291,7 +292,8 @@ struct type_entry final {
     }
 
     [[nodiscard]] constexpr bool scalar_named() const noexcept {
-        return kind == graph_type_kind::intrinsic_alias || kind == graph_type_kind::enumeration;
+        return kind == graph_type_kind::intrinsic_alias || kind == graph_type_kind::enumeration ||
+            kind == graph_type_kind::nominal_scalar;
     }
 
     [[nodiscard]] constexpr bool valid_kind() const noexcept {
@@ -303,9 +305,9 @@ struct type_entry final {
                 enum_underlying() >= intrinsic_type::bool_type &&
                 enum_underlying() <= intrinsic_type::unsigned_long_long;
         return kind == graph_type_kind::record ? (flags & ~(graph_type_defined | graph_type_polymorphic)) == 0 :
-            kind == graph_type_kind::intrinsic_alias && defined() && (flags & 0x00feu) == 0 &&
+            (kind == graph_type_kind::intrinsic_alias || kind == graph_type_kind::nominal_scalar) && defined() && (flags & 0x00feu) == 0 &&
             members.count == 0 && bases.count == 0 &&
-            alias_intrinsic() >= intrinsic_type::bool_type && alias_intrinsic() <= intrinsic_type::long_double_type;
+            storage_intrinsic() >= intrinsic_type::bool_type && storage_intrinsic() <= intrinsic_type::long_double_type;
     }
 };
 
@@ -433,7 +435,8 @@ public:
         return true;
     }
 
-    [[nodiscard]] server_status define_intrinsic_alias(identity_ref identity, intrinsic_type intrinsic, type_handle& output) noexcept;
+    // nominal=true retains a distinct scalar identity; false preserves typedef folding.
+    [[nodiscard]] server_status define_intrinsic_alias(identity_ref identity, intrinsic_type intrinsic, type_handle& output, bool nominal = false) noexcept;
 
     [[nodiscard]] server_status declare_record(
         identity_ref identity,

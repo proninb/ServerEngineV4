@@ -4,6 +4,7 @@
 #include "shm_type_batch.hpp"
 
 #include "../abi/abi_layout.hpp"
+#include "../graph/constructor_member_lookup.hpp"
 #include "../persistence/compiled_project.hpp"
 #include "../persistence/runtime_project.hpp"
 
@@ -1209,10 +1210,18 @@ private:
                     project.find_string(
                         field);
 
-                const auto local =
-                    project.find_member(
-                        record,
-                        name);
+                constructor_member_lookup resolved;
+                if (!name || !find_constructor_member(project, record, name, resolved))
+                    return shm_type_batch_result::invalid_input;
+                for (std::size_t base_index = 0; base_index < resolved.depth; ++base_index) {
+                    shm_record_offset base_offset = 0;
+                    if (!layout.base_offset(resolved.bases[base_index], base_offset) ||
+                        destination > root_layout.size || base_offset > root_layout.size - destination)
+                        return shm_type_batch_result::invalid_input;
+                    destination += base_offset;
+                }
+                record = resolved.owner;
+                const auto local = resolved.local;
 
                 type_entry type;
                 member_record member;
@@ -1256,7 +1265,7 @@ private:
             if (target_type.kind() == type_ref_kind::named) {
                 type_entry scalar;
                 if (project.type(project.type_location(target_type), scalar) &&
-                    scalar.kind == graph_type_kind::enumeration) storage_type = scalar.storage_intrinsic();
+                    scalar.scalar_named()) storage_type = scalar.storage_intrinsic();
             }
             if (storage_type == intrinsic_type::none ||
                 destination >=
@@ -2020,7 +2029,7 @@ private:
                     mode);
 
             case derived_type_kind::pointer:
-                return zero_pointer_construction(construction)
+                return (zero_pointer_construction(construction) || construction.kind==construction_kind::object_binding)
                     ? shm_type_batch_result::success
                     : shm_type_batch_result::invalid_input;
 
@@ -2218,6 +2227,11 @@ private:
 
             case derived_type_kind::pointer:
                 if (!zero_pointer_construction(construction)) {
+                    if (construction.kind==construction_kind::object_binding) {
+                        object_handle object;
+                        const auto status=resolve_object(identity_ref::from_raw(construction.operand),object);
+                        return status==shm_type_batch_result::success ? append_object_reference(target,object.value()) : status;
+                    }
                     return shm_type_batch_result::invalid_input;
                 }
 

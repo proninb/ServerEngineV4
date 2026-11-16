@@ -1,6 +1,8 @@
+#include "byte_patch.hpp"
 #include "../graph/enum_semantics.hpp"
 #include "compiled_project.hpp"
 #include "../graph/construction_semantics.hpp"
+#include "../graph/constructor_member_lookup.hpp"
 #include "../../filesystem_path.hpp"
 #include "crc64_ecma.hpp"
 
@@ -873,7 +875,7 @@ compiled_project_view::bind(
             invalid_image;
     }
 
-    if ((read_u32(image.data() + 8) != 25 &&
+    if ((read_u32(image.data() + 8) != 25 && read_u32(image.data() + 8) != 26 &&
          read_u32(image.data() + 8) != compiled_project_format_version) ||
         read_u32(
             image.data() + 12) !=
@@ -3438,7 +3440,7 @@ bool compiled_project_view::constructor_default_at(
         output.path.value() <= string_count() && valid_construction(output.value) &&
         output.value.kind <= construction_kind::real)) { return false; }
     const auto spelling = string(output.path);
-    if (spelling.find_first_of(".[") == std::string_view::npos) { return false; }
+    if (spelling.empty()) { return false; }
     constructor_path_reader path{spelling};
     type_ref target;
     auto owner = find_type(output.owner);
@@ -3454,17 +3456,14 @@ bool compiled_project_view::constructor_default_at(
         } else {
             const auto name = find_string(field);
             if (!name || (target && !named(target, owner))) { return false; }
-            const auto local = find_member(owner, name);
-            type_entry type;
-            member_record member;
-            if (!local || !this->type(owner, type) ||
-                !member_at(type.members.begin + local.value(), member)) { return false; }
-            target = member.type;
+            constructor_member_lookup resolved;
+            if (!find_constructor_member(*this, owner, name, resolved)) { return false; }
+            target = resolved.member.type;
         }
     }
     type_entry scalar;
     const bool enum_target = target.kind() == type_ref_kind::named &&
-        type(type_location(target), scalar) && scalar.kind == graph_type_kind::enumeration;
+        type(type_location(target), scalar) && (scalar.kind == graph_type_kind::enumeration || scalar.kind == graph_type_kind::nominal_scalar);
     return (target.kind() == type_ref_kind::intrinsic || enum_target) &&
         construction_compatible(*this, target, output.value);
 }
@@ -3536,7 +3535,8 @@ bool compiled_project_view::initialization_at(
             read_u32(
                 record + 20));
 
-    if (!valid_construction(value)) {
+    if (!valid_construction(value) || (value.kind == construction_kind::byte_patch && format_version() < 29) ||
+        (value.kind == construction_kind::byte_array && format_version() < 30)) {
         return false;
     }
 
@@ -4006,6 +4006,8 @@ compiled_project_view::verify_contents() const noexcept {
             type_ref target,
             type_ref source) noexcept {
 
+            if (pointer_address_compatible(*this, target, source)) return true;
+
             derived_type_record target_type;
 
             if (!derived(
@@ -4032,8 +4034,7 @@ compiled_project_view::verify_contents() const noexcept {
                 source = source_type.child;
             }
 
-            return target_type.child ==
-                source;
+            return qualified_object_compatible(*this, target_type.child, source);
         };
 
     // Strings are dense in V4. Numeric string_id slots are therefore preserved
@@ -4379,6 +4380,7 @@ compiled_project_view::verify_contents() const noexcept {
                 type_value) ||
             !type_value.valid_kind() ||
             (type_value.kind == graph_type_kind::enumeration && read_u32(bytes.data() + 8) < 26) ||
+            (type_value.kind == graph_type_kind::nominal_scalar && read_u32(bytes.data() + 8) < 28) ||
             !valid_record_kind(
                 type_value.record_kind) ||
             (type_value.flags &
@@ -4615,9 +4617,7 @@ compiled_project_view::verify_contents() const noexcept {
                         member_from_raw(
                             construction_value_value.operand - 1),
                         bound) ||
-                    !reference_binding_compatible(
-                        member_record_value.type,
-                        bound.type)) {
+                    !reference_binding_compatible(member_record_value.type, bound.type)) {
 
                     return compiled_project_image_result::
                         invalid_image;
@@ -4645,9 +4645,8 @@ compiled_project_view::verify_contents() const noexcept {
                         bound_handle,
                         bound) ||
                     !bound.internal_static() ||
-                    !reference_binding_compatible(
-                        member_record_value.type,
-                        bound.type)) {
+                    (!reference_binding_compatible(member_record_value.type, bound.type) &&
+                     !literal_pointer_binding_compatible(*this, member_record_value.type, bound.type))) {
 
                     return compiled_project_image_result::
                         invalid_image;
@@ -5138,7 +5137,7 @@ compiled_project_view::verify_contents() const noexcept {
 
                 if (step.kind == endpoint_path_step_kind::dereference) {
                     if (step.value != 0 || !derived(current_type, derived_value) ||
-                        (derived_value.kind != derived_type_kind::lvalue_reference && derived_value.kind != derived_type_kind::rvalue_reference)) {
+                        (derived_value.kind != derived_type_kind::lvalue_reference && derived_value.kind != derived_type_kind::rvalue_reference && derived_value.kind != derived_type_kind::pointer)) {
                         return compiled_project_image_result::invalid_image;
                     }
                     current_type = derived_value.child;
@@ -5490,8 +5489,11 @@ compiled_project_view::verify_contents() const noexcept {
                 if (type.kind() == type_ref_kind::named) {
                     type_entry entry;
                     return this->type(find_type(identity_ref::make(type.payload(), identity_kind::type)), entry) &&
-                        entry.kind == graph_type_kind::enumeration;
+                        (entry.kind == graph_type_kind::enumeration || entry.kind == graph_type_kind::nominal_scalar);
                 }
+                if (derived(type, derived_value) && derived_value.kind == derived_type_kind::bounded_array)
+                    return derived_value.payload != 0 && derived_value.child.kind() == type_ref_kind::intrinsic &&
+                        derived_value.child.payload() == static_cast<std::uint32_t>(intrinsic_type::char_type);
                 return type.kind() ==
                         type_ref_kind::derived &&
                     derived(
@@ -5521,6 +5523,8 @@ compiled_project_view::verify_contents() const noexcept {
                     *this,
                     target_type,
                     value.value) ||
+                !valid_byte_patch_target(*this, value.target, value.value) ||
+                !valid_byte_array_value(*this, value.value) ||
                 initialization_position(
                     value.target) !=
                     index + 1) {
@@ -7943,7 +7947,11 @@ encode_compiled_project_image(const string_table &strings,
 
     write_u32(
         base + 8,
-        G.enum_types().empty() ? 25u : compiled_project_format_version);
+        std::any_of(G.type_entries().begin(), G.type_entries().end(), [](const type_entry& entry) {
+            return entry.kind == graph_type_kind::nominal_scalar;
+        }) || std::any_of(G.initialization_entries().begin(), G.initialization_entries().end(),
+            [](const object_initialization_record& entry) { return entry.value.kind == construction_kind::byte_patch || entry.value.kind == construction_kind::byte_array; })
+            ? compiled_project_format_version : G.enum_types().empty() ? 25u : 26u);
 
     write_u32(
         base + 12,

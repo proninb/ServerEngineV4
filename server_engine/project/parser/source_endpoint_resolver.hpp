@@ -84,10 +84,21 @@ public:
             error = failure::index_out_of_range;
             return server_status::project_configuration_invalid;
         }
-        try { output.path.push_back({index, endpoint_path_step_kind::array_index, {}}); }
+        derived_type_record reference;
+        const bool dereference = G.derived(without_cv(output.type), reference) &&
+            (reference.kind == derived_type_kind::lvalue_reference || reference.kind == derived_type_kind::rvalue_reference);
+        if (output.path.size() + (dereference ? 2 : 1) > 128) {
+            error = failure::endpoint_depth;
+            return server_status::project_configuration_invalid;
+        }
+        try {
+            if (dereference) output.path.push_back({0, endpoint_path_step_kind::dereference, {}});
+            output.path.push_back({index, endpoint_path_step_kind::array_index, {}});
+        }
         catch (...) { return server_status::io_error; }
 #ifdef CW_SOURCE_TYPE_PREPARE_AUDIT
         ++detail::source_resolver_counts.index_steps;
+        detail::source_resolver_counts.dereference_steps += dereference;
 #endif
         output.type = array.child;
         return server_status::success;
@@ -177,6 +188,11 @@ public:
     }
 
     [[nodiscard]] bool array_type(type_ref type, derived_type_record& array) const noexcept {
+        type = without_cv(type);
+        derived_type_record reference;
+        if (G.derived(type, reference) &&
+            (reference.kind == derived_type_kind::lvalue_reference || reference.kind == derived_type_kind::rvalue_reference))
+            type = reference.child;
         return G.derived(without_cv(type), array) &&
             array.kind == derived_type_kind::bounded_array;
     }

@@ -21,9 +21,9 @@ namespace cw::server {
 
 class shm_runtime_v2;
 
-inline constexpr std::uint32_t runtime_project_format_version = 1;
+inline constexpr std::uint32_t runtime_project_format_version = 3;
 inline constexpr std::size_t runtime_project_header_size = 64;
-inline constexpr std::size_t runtime_project_directory_count = 32;
+inline constexpr std::size_t runtime_project_directory_count = 33;
 inline constexpr std::size_t runtime_project_directory_entry_size = 24;
 
 inline constexpr std::size_t runtime_project_prefix_size =

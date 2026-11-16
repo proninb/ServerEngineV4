@@ -26,7 +26,7 @@ class graph_delta;
 class graph_dense_projection;
 class source_map_overlay_view;
 
-inline constexpr std::uint32_t compiled_project_format_version = 26;
+inline constexpr std::uint32_t compiled_project_format_version = 30;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;
@@ -119,6 +119,7 @@ enum class compiled_project_section : std::uint32_t {
     runtime_type_canonical_groups = 63,
     runtime_type_canonical_group_offsets = 64,
     runtime_type_object_patches = 65,
+    runtime_initialization_bytes = 66,
 };
 
 struct compiled_project_runtime_type_counts final {
@@ -358,6 +359,10 @@ public:
 
     [[nodiscard]] std::string_view string(
         string_id id) const noexcept;
+
+    [[nodiscard]] std::string_view string(std::uint32_t id) const noexcept {
+        return string(string_id{id});
+    }
 
     [[nodiscard]] string_id find_string(
         std::string_view value) const noexcept;

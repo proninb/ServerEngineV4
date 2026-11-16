@@ -1,0 +1,101 @@
+{
+  "configuration_paths": "PASS",
+  "source_sha256": "PASS: output hashes updated; original_sha256 preserved",
+  "headers": 168,
+  "source_nodes": 36212,
+  "publish": "PASS: working artifacts regenerated with whole-string initializations; STATE LOADED",
+  "server": "build/unitprotr-whole-string-bin/ServerEngineV4.exe",
+  "inherited_constructor_assignments": "PASS: frontend, persistence, Fixed Direct, Runtime V2, TCP PUBLISH/LOAD/fresh LOAD",
+  "float_suffix_literals": "PASS: f/F, float rounding, negative zero, overflow rejection",
+  "increment_decrement_declarations": "PASS: prefix/postfix, invalid parameters rejected",
+  "parameterized_constructors": "PASS: declarations and definitions parsed without execution; frontend regression tests pass",
+  "method_bodies": "PASS: methods, operators, destructors parsed without execution; frontend regression tests pass",
+  "header_parsing": "PASS: all UnitProTr headers",
+  "array_reference_indices": "PASS: both Source parsers, model path, read-only resolver, bounds, TCP PUBLISH/LOAD/fresh LOAD",
+  "pointer_addresses": "PASS: Source V2, typed address links, Fixed Direct, actual native addresses, TCP PUBLISH/LOAD/fresh LOAD",
+  "simlink_endpoint_types": "void* From/To: exported metadata includes addresses of whole arrays",
+  "base_reference_bindings": "PASS: public unambiguous base paths, qualifier validation, TCP PUBLISH/LOAD/fresh LOAD",
+  "array_pointer_decay": "PASS: array endpoint decays to its first element; real server value=23",
+  "source_hidden_annotations": {
+    "status": "REMOVED",
+    "removed_hidden": 1753151,
+    "changed_files": 32613
+  },
+  "export_refresh": "2026-11-15: 36035 changed Source files synchronized; 167 original headers plus SDK umbrella; composition unchanged",
+  "gest_array_mismatch": "RESOLVED: current export uses U_ARRAY_COPY_INT, SRC[1..4] -> DEST[0..3]; real PUBLISH/LOAD pass",
+  "string_literal_export": "RESOLVED: current original uses VAL=\"{\" and LEN=1; 2809 Source files synchronized",
+  "source_parse": "PASS: all Source files parsed; no duplicate object error",
+  "duplicate_source_objects": "RESOLVED: current export uses unique suffixes _158059 and _158180; 34749 Source files synchronized",
+  "array_lengths": "PASS: original export now declares int LEN; importer preserves it; actual value 500",
+  "compiled_serialization": "PASS: compiled.bin and runtime.bin saved",
+  "constructor_alias_targets": "PASS: compiled_project tests and TCP PUBLISH/LOAD/fresh LOAD; marking deferred until object construction",
+  "full_load": "PASS: fresh process startup LOAD and UNLOAD/LOAD; STATE LOADED",
+  "diagnostic": "docs/UNITPROTR_ALIAS_TARGET_CONFLICT.md",
+  "previous_len_failure": {
+    "expression": "FWM__FWM3_DIO32.DIO_Data.LEN=500;",
+    "runtime_prepare": {
+      "layout": "PASS",
+      "type_plan": "PASS",
+      "runtime_plan": "invalid_input",
+      "initialization_index": 790603,
+      "target_intrinsic": "unsigned_char",
+      "value": 500
+    },
+    "generic_error": "Cannot prepare compiled.bin direct-encoding layout"
+  },
+  "runtime_prepare": {
+    "layout": "PASS",
+    "type_plan": "PASS",
+    "runtime_plan": "PASS"
+  },
+  "alias_target_conflict": "RESOLVED in original export using U_VARIABLE_BOOL intermediate outputs",
+  "verified_values": {
+    "FWM__FWM3_DIO32.DIO_Data.LEN": 500,
+    "FWM__FWM1_FWF.PMP_Data.Active.VAL": 0,
+    "FWM__FWM1_FWF_PMP.Data.Active.VAL": 0,
+    "FWM__FWM_SYS_MNGRA_PLC___NocVer__2_GEST_497.SRC_START_INDEX": 1,
+    "FWM__FWM_SYS_MNGRA_PLC___NocVer__2_GEST_497.DEST_END_INDEX": 3
+  },
+  "running_configuration": "build/unitprotr-whole-string-working-run/server.json",
+  "plc_execution": "Not tested; project data loaded",
+  "historical_tcp_diagnostics": {
+    "warning_count": 25897,
+    "estimated_json_bytes": 3098265,
+    "frame_limit_bytes": 1048576
+  },
+  "previous_eight_byte_initializations": {
+    "status": "PASS",
+    "records_before": 191863650,
+    "records_after": 32348014,
+    "compiled_bytes": 3852965376,
+    "runtime_bytes": 2286644544,
+    "publish_seconds": 51.733,
+    "load_seconds": [
+      1.807,
+      1.798,
+      1.803
+    ],
+    "full_native_shm_equal_to_baseline": true,
+    "compiled_format": 29,
+    "runtime_format": 2,
+    "report": "docs/COMPACT_CHAR_INITIALIZATIONS.md"
+  },
+  "whole_string_initializations": {
+    "status": "PASS",
+    "records_before": 32348014,
+    "records_after": 12259964,
+    "compiled_bytes": 3088998656,
+    "runtime_bytes": 1659952362,
+    "runtime_literal_pool_bytes": 16130410,
+    "publish_seconds": 44.569,
+    "load_seconds": [
+      1.615,
+      1.592,
+      1.594
+    ],
+    "full_native_shm_equal_to_baseline": true,
+    "compiled_format": 30,
+    "runtime_format": 3,
+    "report": "docs/WHOLE_STRING_INITIALIZATIONS.md"
+  }
+}

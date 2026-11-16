@@ -103,6 +103,9 @@ struct shm_runtime_v2_physical_initialization final {
     std::uint32_t target_program = 0;
 
     std::uint8_t size = 0;
+    // For size>0, reserved[0] is an optional eight-bit byte-write mask.
+    // size==0/reserved[0]==255 encodes char_array_store in value, referring
+    // to runtime_initialization_bytes. Remaining reserved bytes stay zero.
     std::uint8_t reserved[3]{};
 };
 
@@ -114,6 +117,7 @@ struct shm_runtime_v2_physical_counts final {
     std::size_t initializations = 0;
     std::uint64_t endpoint_programs = 0;
     std::uint64_t dereferences = 0;
+    std::uint64_t initialization_bytes = 0;
 };
 
 class shm_runtime_v2 final {
@@ -192,7 +196,7 @@ public:
             initializations.size() *
                 sizeof(initialization_plan) +
             endpoint_dereferences.size() *
-                sizeof(shm_offset);
+                sizeof(shm_offset) + initialization_bytes.size();
     }
 
 private:
@@ -236,6 +240,7 @@ private:
         std::array<std::byte, 16> value{};
 
         std::uint8_t size = 0;
+        // Same byte mask / whole-array descriptor tag as the persisted record.
         std::uint8_t reserved[7]{};
     };
 
@@ -249,6 +254,8 @@ private:
 
     // Source statements produce a dense final initialization list.
     std::vector<initialization_plan> initializations;
+    std::vector<std::byte> initialization_bytes;
+    std::span<const std::byte> persisted_initialization_bytes;
 
     // Shared physical endpoint bytecode for links and initializations.
     std::vector<shm_offset> endpoint_dereferences;
@@ -490,8 +497,10 @@ materialize_shm_runtime_v2_canonical(
     std::span<std::byte> shm,
     shm_runtime_v2_execute_telemetry* telemetry = nullptr) noexcept;
 
-// Static-link pass 1. Target reference slots are marked before object
+// Static-link pass 1. Direct target reference slots are marked before object
 // construction. Object reference writes recognize/preserve these markers.
+// Targets containing dereferences are deferred to link materialization, after
+// constructor reference defaults exist.
 [[nodiscard]] shm_runtime_v2_result
 mark_shm_runtime_v2_links(
     shm_runtime_v2& runtime,
@@ -514,8 +523,8 @@ mark_shm_runtime_v2_persisted_direct_target_range(
     shm_offset target_end,
     shm_runtime_v2_link_telemetry* telemetry = nullptr) noexcept;
 
-// Dereference-bearing persisted targets remain serial after the direct-target
-// barrier because their final physical target is data-dependent.
+// Dereference-bearing persisted targets are marked serially after object
+// construction because their final physical target depends on reference defaults.
 [[nodiscard]] shm_runtime_v2_result
 mark_shm_runtime_v2_persisted_complex_targets(
     shm_runtime_v2& runtime,

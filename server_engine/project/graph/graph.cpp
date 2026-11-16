@@ -381,14 +381,14 @@ server_status graph::define_enum(identity_ref identity, intrinsic_type underlyin
     return server_status::success;
 }
 
-server_status graph::define_intrinsic_alias(identity_ref identity, intrinsic_type intrinsic_value, type_handle& output) noexcept {
+server_status graph::define_intrinsic_alias(identity_ref identity, intrinsic_type intrinsic_value, type_handle& output, bool nominal) noexcept {
     if (intrinsic_value < intrinsic_type::bool_type || intrinsic_value > intrinsic_type::long_double_type) {
         return server_status::project_configuration_invalid;
     }
     output = find_type(identity);
     if (output) {
         const auto* entry = find(output);
-        return entry && entry->kind == graph_type_kind::intrinsic_alias && entry->alias_intrinsic() == intrinsic_value
+        return entry && entry->kind == (nominal ? graph_type_kind::nominal_scalar : graph_type_kind::intrinsic_alias) && entry->storage_intrinsic() == intrinsic_value
             ? server_status::success : server_status::project_configuration_invalid;
     }
     auto status = declare_record(identity, graph_record_kind::struct_type, output);
@@ -396,7 +396,7 @@ server_status graph::define_intrinsic_alias(identity_ref identity, intrinsic_typ
     status = define_record(output, graph_record_kind::struct_type, {});
     if (!succeeded(status)) { return status; }
     auto& entry = types[output.value() - 1];
-    entry.kind = graph_type_kind::intrinsic_alias;
+    entry.kind = nominal ? graph_type_kind::nominal_scalar : graph_type_kind::intrinsic_alias;
     entry.flags = graph_type_defined | (static_cast<std::uint16_t>(intrinsic_value) << 8);
     return server_status::success;
 }
@@ -671,9 +671,8 @@ server_status graph::define_record(
                 !object_handle_value ||
                 object == nullptr ||
                 !object->internal_static() ||
-                !reference_binding_compatible(
-                    definition[index].type,
-                    object->type)) {
+                (!reference_binding_compatible(definition[index].type, object->type) &&
+                 !literal_pointer_binding_compatible(*this, definition[index].type, object->type))) {
 
                 return server_status::project_configuration_invalid;
             }
@@ -2647,7 +2646,7 @@ bool graph::resolve_endpoint_path(
         switch (step.kind) {
         case endpoint_path_step_kind::dereference:
             if (step.value != 0 || !derived(current_type, derived_value) ||
-                (derived_value.kind != derived_type_kind::lvalue_reference && derived_value.kind != derived_type_kind::rvalue_reference)) { return false; }
+                (derived_value.kind != derived_type_kind::lvalue_reference && derived_value.kind != derived_type_kind::rvalue_reference && derived_value.kind != derived_type_kind::pointer)) { return false; }
             current_type = derived_value.child;
             break;
         case endpoint_path_step_kind::base: {
@@ -3409,6 +3408,8 @@ bool graph::reference_binding_compatible(
     type_ref target,
     type_ref source) const noexcept {
 
+    if (pointer_address_compatible(*this, target, source)) return true;
+
     derived_type_record target_type;
 
     if (!derived(
@@ -3435,8 +3436,7 @@ bool graph::reference_binding_compatible(
         source = source_type.child;
     }
 
-    return target_type.child ==
-        source;
+    return qualified_object_compatible(*this, target_type.child, source);
 }
 
 bool graph::scalar_initialization_target(
@@ -3486,8 +3486,11 @@ bool graph::scalar_initialization_target(
 
     if (type.kind() == type_ref_kind::named) {
         const auto* entry = find(find_type(identity_ref::make(type.payload(), identity_kind::type)));
-        return entry && entry->kind == graph_type_kind::enumeration;
+        return entry && (entry->kind == graph_type_kind::enumeration || entry->kind == graph_type_kind::nominal_scalar);
     }
+    if (derived(type, derived_value) && derived_value.kind == derived_type_kind::bounded_array)
+        return derived_value.payload != 0 && derived_value.child.kind() == type_ref_kind::intrinsic &&
+            derived_value.child.payload() == static_cast<std::uint32_t>(intrinsic_type::char_type);
     return type.kind() ==
             type_ref_kind::derived &&
         derived(
@@ -3656,7 +3659,8 @@ server_status graph::apply_resolved_initialization(
         if (!succeeded(status)) return status;
         output.slot = existing - 1;
         output.existed = true;
-        if (accept) object_initializations[existing - 1].value = value;
+        if (accept) object_initializations[existing - 1].value =
+            merge_byte_patch(object_initializations[existing - 1].value, value);
         output.applied = accept;
         return server_status::success;
     }
@@ -3754,8 +3758,10 @@ server_status graph::upsert_initialization(
                 project_artifact_invalid;
         }
 
-        current.value = value;
-        replaced = true;
+        replaced = current.value.kind != construction_kind::byte_patch ||
+            value.kind != construction_kind::byte_patch ||
+            (current.value.operand & value.operand) != 0;
+        current.value = merge_byte_patch(current.value, value);
 
         return server_status::success;
     }

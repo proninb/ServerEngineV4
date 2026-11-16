@@ -24,6 +24,7 @@
 #include <limits>
 #include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -187,6 +188,9 @@ runtime_v2_failure_detail(
     case shm_runtime_v2_result::invalid_input:
         return "Compiled Runtime V2 construction data is not materializable";
 
+    case shm_runtime_v2_result::conflicting_link_target:
+        return "Multiple static links bind the same physical reference field through different aliases";
+
     case shm_runtime_v2_result::unsupported_type:
         return "Runtime V2 contains a type not supported by FIXED_DIRECT materialization";
 
@@ -201,6 +205,14 @@ runtime_v2_failure_detail(
     }
 
     return "SHM Runtime V2 operation failed";
+}
+
+[[nodiscard]] std::string runtime_v2_failure_detail(
+    shm_runtime_v2_result result, std::string_view phase) {
+    std::string detail{phase};
+    detail += ": ";
+    detail += runtime_v2_failure_detail(result);
+    return detail;
 }
 
 [[nodiscard]] constexpr std::string_view
@@ -419,27 +431,6 @@ runtime_mark_links_parallel(
                 combined,
                 value);
         }
-
-        shm_runtime_v2_link_telemetry
-            complex{};
-
-        const auto complex_result =
-            mark_shm_runtime_v2_persisted_complex_targets(
-                runtime,
-                abi,
-                layout,
-                shm,
-                &complex);
-
-        if (complex_result !=
-            shm_runtime_v2_result::success) {
-
-            return complex_result;
-        }
-
-        add_runtime_link_mark_telemetry(
-            combined,
-            complex);
 
         combined.links_prepared =
             runtime.link_count();
@@ -1091,7 +1082,7 @@ server_status create_resident_project(
                 .file(project_path)
                 .detail(
                     runtime_v2_failure_detail(
-                        prepared_runtime))
+                        prepared_runtime, "persisted runtime preparation"))
                 .build());
 
         return prepared_runtime ==
@@ -1252,7 +1243,7 @@ server_status create_resident_project(
                 .file(project_path)
                 .detail(
                     runtime_v2_failure_detail(
-                        canonical))
+                        canonical, "canonical materialization"))
                 .build());
 
         return canonical ==
@@ -1306,7 +1297,7 @@ server_status create_resident_project(
                 .file(project_path)
                 .detail(
                     runtime_v2_failure_detail(
-                        links_marked))
+                        links_marked, "link target marking"))
                 .build());
 
         return links_marked ==
@@ -1396,7 +1387,7 @@ server_status create_resident_project(
                 .file(project_path)
                 .detail(
                     runtime_v2_failure_detail(
-                        objects))
+                        objects, "object materialization"))
                 .build());
 
         return objects ==
@@ -1446,7 +1437,7 @@ server_status create_resident_project(
                 .file(project_path)
                 .detail(
                     runtime_v2_failure_detail(
-                        links))
+                        links, "link resolution"))
                 .build());
 
         return links ==
@@ -1496,7 +1487,7 @@ server_status create_resident_project(
                 .file(project_path)
                 .detail(
                     runtime_v2_failure_detail(
-                        initializations))
+                        initializations, "initialization application"))
                 .build());
 
         return initializations ==

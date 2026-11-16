@@ -34,6 +34,7 @@ enum class shm_type_batch_result : std::uint8_t {
     incompatible_abi,
     overflow,
     failed,
+    conflicting_link_target,
 };
 
 struct shm_type_batch_program_column_profile final {

@@ -1,0 +1,43 @@
+{
+  "version": 9,
+  "settings": {
+    "abi": {
+      "target": "windows-x64",
+      "pack": 8
+    },
+    "shm": {
+      "mode": "fixed_direct",
+      "name": "CW.ServerEngineV4.UnitProTr",
+      "fixed_base_address": "0x0000010000000000"
+    },
+    "files": {
+      "manifest": "project.manifest",
+      "source_save": "source.bin",
+      "database": "database.bin",
+      "compiled": "compiled.bin"
+    }
+  },
+  "server_identity": {
+    "mode": "none"
+  },
+  "authentication": {
+    "mode": "none"
+  },
+  "communication": {
+    "endpoints": [
+      {
+        "name": "console",
+        "transport": "console"
+      }
+    ]
+  },
+  "project": {
+    "path": "project.json",
+    "startup": "publish"
+  },
+  "logging": {
+    "level": "info",
+    "console": true,
+    "file": "logs/server.log"
+  }
+}

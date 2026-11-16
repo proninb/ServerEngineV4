@@ -8,6 +8,7 @@
 
 #include "../frontend/preprocessor_v2.hpp"
 #include "header_record_index.hpp"
+#include "header_template_definitions_v2.hpp"
 #ifdef CW_HEADER_MODEL_V2
 #include "header_model_v2.hpp"
 #ifdef CW_HEADER_MODEL_EFFECTIVE_V2
@@ -24,6 +25,8 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <string>
+#include <utility>
 #include <vector>
 #include <unordered_map>
 
@@ -115,6 +118,11 @@ public:
         const header_parser_v2&) = delete;
 
     [[nodiscard]] server_status parse() noexcept;
+    void set_template_definitions(header_template_definitions_v2& definitions) noexcept {
+        templates = &definitions;
+    }
+    [[nodiscard]] server_status parse_prepared_type(std::span<const prepared_token> tokens,
+        identity_ref scope, type_ref& output) noexcept;
 #ifdef CW_HEADER_MODEL_EFFECTIVE_V2
     void set_effective_model(const header_effective_model_v2* value) noexcept {
         effective_model = value;
@@ -151,6 +159,28 @@ private:
         bool indirect = false;
         bool is_reference = false;
     };
+
+    // Deferred prepared tokens only; each specialization is published directly
+    // into the existing G by the ordinary record parser.
+    using template_parameter = header_template_parameter_v2;
+    using record_template = header_template_definition_v2;
+    struct template_replay {
+        std::vector<prepared_token> tokens;
+        std::vector<std::pair<string_id, resolved_type>> types;
+        std::size_t cursor = 0;
+    };
+    header_template_definitions_v2 local_templates;
+    header_template_definitions_v2* templates = &local_templates;
+    std::vector<template_replay> template_replays;
+    prepared_token split_greater{};
+    bool has_split_greater = false;
+    [[nodiscard]] server_status parse_template(identity_ref scope) noexcept;
+    [[nodiscard]] server_status instantiate_template(identity_ref& identity, resolved_type& output, identity_ref argument_scope) noexcept;
+    [[nodiscard]] server_status parse_using(identity_ref scope) noexcept;
+    [[nodiscard]] server_status expect_template_close() noexcept;
+    [[nodiscard]] server_status parse_integer_expression(std::int64_t& output, int minimum = 0, unsigned depth = 0) noexcept;
+    [[nodiscard]] server_status parse_integer_expression_tail(std::int64_t& output, int minimum, unsigned depth) noexcept;
+    [[nodiscard]] bool template_type_key(type_ref type, std::string& output, unsigned depth = 0) const;
 
     // Record-local duplicate detector. Tiny records stay as a contiguous scan;
     // larger records promote once to an ephemeral open-addressed name set.
@@ -189,6 +219,9 @@ private:
     // HEADER-V2-REFERENCE-08: a name is stored only until its member is
     // available; G always receives the resolved one-based member operand.
     struct constructor_operation final {
+        bool body_assignment = false;
+        bool member_initializer = false;
+        string_id target_name{};
         construction_value value{};
         file_id file{};
         source_range source{};
@@ -202,6 +235,7 @@ private:
         std::uint64_t generation = 0;
         file_id file{};
         source_range source{};
+        string_id name{};
     };
 
     struct record_reference_state final {
@@ -322,7 +356,16 @@ private:
 
     [[nodiscard]] server_status parse_member_initializer(
         type_ref target,
-        constructor_operation& output) noexcept;
+        constructor_operation& output, std::vector<std::uint8_t>* string_bytes = nullptr,
+        bool* explicit_value = nullptr) noexcept;
+    [[nodiscard]] server_status parse_string_initializer(type_ref target,
+        constructor_operation& output, std::vector<std::uint8_t>& bytes) noexcept;
+    [[nodiscard]] server_status parse_static_object(identity_ref scope) noexcept;
+    [[nodiscard]] server_status internal_static_scope(identity_ref scope, identity_ref& output) noexcept;
+    [[nodiscard]] identity_ref find_static_object(identity_ref scope, string_id name) noexcept;
+    [[nodiscard]] server_status initialize_char_array(identity_ref object, type_ref array,
+        std::span<const std::uint8_t> bytes) noexcept;
+    string_id internal_static_scope_name{};
 
     [[nodiscard]] server_status apply_record_operand(
         std::size_t target,
@@ -369,6 +412,8 @@ private:
         bool base_polymorphic,
         bool& declares_virtual) noexcept;
 
+    [[nodiscard]] server_status parse_balanced_tokens() noexcept;
+
     [[nodiscard]] server_status parse_method_tail(
         bool virtual_prefix,
         bool base_polymorphic,
@@ -376,7 +421,8 @@ private:
         bool conversion = false,
         bool assignment_operator = false,
         bool subscript_operator = false,
-        bool binary_operator = false) noexcept;
+        bool binary_operator = false,
+        bool increment_operator = false) noexcept;
 
     // OLD-compatible declaration-only named operators. No Graph methods.
     [[nodiscard]] server_status parse_named_operator(
@@ -414,6 +460,7 @@ private:
 
     [[nodiscard]] server_status parse_constructor(
         string_id record_name,
+        bool& default_constructor_seen,
         std::span<const member_record> members,
         const record_member_name_set& names,
         std::vector<construction_value>& construction,

@@ -1,4 +1,7 @@
+#include "../graph/construction_semantics.hpp"
+#include "../persistence/byte_patch.hpp"
 #include "fixed_direct_materializer.hpp"
+#include "../graph/constructor_member_lookup.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -609,11 +612,13 @@ private:
 
     [[nodiscard]] bool reference_referent(
         type_ref type,
-        type_ref& output) const noexcept {
+        type_ref& output, bool pointer = false) const noexcept {
 
         output = {};
 
         derived_type_record derived;
+        if (pointer) while (project.derived(type, derived) &&
+            (derived.kind == derived_type_kind::const_qualified || derived.kind == derived_type_kind::volatile_qualified)) type = derived.child;
 
         if (!project.derived(
                 type,
@@ -621,7 +626,8 @@ private:
             (derived.kind !=
                  derived_type_kind::lvalue_reference &&
              derived.kind !=
-                 derived_type_kind::rvalue_reference)) {
+                 derived_type_kind::rvalue_reference &&
+             !(pointer && derived.kind == derived_type_kind::pointer))) {
 
             return false;
         }
@@ -1875,6 +1881,11 @@ private:
                     return fixed_direct_materialization_result::
                         invalid_input;
                 }
+
+                std::uint64_t stored = 0;
+                std::uint32_t pending = 0;
+                if (read_reference_slot(target, stored) && decode_pending_link(stored, pending))
+                    return fixed_direct_materialization_result::success;
 
                 store_target_word(
                     target,
@@ -3173,10 +3184,22 @@ private:
                         project.find_string(
                             field);
 
-                    const auto local =
-                        project.find_member(
-                            record,
-                            name);
+                    constructor_member_lookup resolved;
+                    if (!name || !find_constructor_member(project, record, name, resolved)) {
+                        constructor_fields.resize(old_count);
+                        return fixed_direct_materialization_result::invalid_input;
+                    }
+                    for (std::size_t base_index = 0; base_index < resolved.depth; ++base_index) {
+                        record_offset base_offset = 0;
+                        if (!layout.base_offset(resolved.bases[base_index], base_offset) ||
+                            destination > root_layout.size || base_offset > root_layout.size - destination) {
+                            constructor_fields.resize(old_count);
+                            return fixed_direct_materialization_result::invalid_input;
+                        }
+                        destination += base_offset;
+                    }
+                    record = resolved.owner;
+                    const auto local = resolved.local;
 
                     type_entry type;
                     member_record member;
@@ -6528,7 +6551,7 @@ private:
         object_endpoint endpoint,
         reference_state& next,
         bool& has_next,
-        std::uint64_t& output) noexcept {
+        std::uint64_t& output, bool pointer_target = false) noexcept {
 
         next = {};
         has_next = false;
@@ -6617,8 +6640,17 @@ private:
             if (step.kind == endpoint_path_step_kind::dereference) {
                 type_ref referent;
                 std::uint64_t pointer = 0;
-                if (step.value != 0 || !reference_referent(current_type, referent) ||
-                    !read_reference_slot(current_address, pointer) || pointer < target_base_address ||
+                if (step.value != 0 || !reference_referent(current_type, referent, true) ||
+                    !read_reference_slot(current_address, pointer)) {
+                    return fixed_direct_materialization_result::invalid_input;
+                }
+                std::uint32_t pending = 0;
+                if (decode_pending_link(pointer, pending)) {
+                    const auto status = resolve_reference_member(final_record, final_record_base,
+                        object_handle_value, final_local, current_address, pointer);
+                    if (status != fixed_direct_materialization_result::success) return status;
+                }
+                if (pointer < target_base_address ||
                     pointer - target_base_address >= runtime.size()) {
                     return fixed_direct_materialization_result::invalid_input;
                 }
@@ -6792,7 +6824,7 @@ private:
 
         if (reference_referent(
                 current_type,
-                referent)) {
+                referent, pointer_target)) {
 
             if ((!final_record || final_record_base == nullptr) && path.steps.count != 0) {
 
@@ -6844,7 +6876,7 @@ private:
         object_endpoint endpoint,
         reference_state& next,
         bool& has_next,
-        std::uint64_t& output) noexcept {
+        std::uint64_t& output, bool pointer_target = false) noexcept {
 
         next = {};
         has_next = false;
@@ -6972,7 +7004,7 @@ private:
         const auto reference =
             reference_referent(
                 member.type,
-                referent);
+                referent, pointer_target);
 
         const auto observed =
             require_endpoint_plan(
@@ -8397,6 +8429,28 @@ private:
                     invalid_input;
             }
 
+            if (initialization.value.kind == construction_kind::byte_array) {
+                if (!construction_compatible(project, target_type, initialization.value) ||
+                    !valid_byte_array_value(project, initialization.value) ||
+                    initialization.value.operand > runtime.size() - offset ||
+                    !apply_char_array(runtime.subspan(static_cast<std::size_t>(offset), initialization.value.operand),
+                        project.string(initialization.value.low), project.string(initialization.value.high)))
+                    return fixed_direct_materialization_result::invalid_input;
+                continue;
+            }
+            if (initialization.value.kind == construction_kind::byte_patch) {
+                if (!valid_byte_patch_target(project, initialization.target, initialization.value))
+                    return fixed_direct_materialization_result::invalid_input;
+                const auto bits = initialization.value.bits();
+                for (unsigned i = 0; i < 8; ++i) {
+                    if (initialization.value.operand & (1u << i)) {
+                        if (offset + i >= runtime.size()) return fixed_direct_materialization_result::invalid_input;
+                        target[i] = static_cast<std::byte>(bits >> (8 * i));
+                    }
+                }
+                continue;
+            }
+
             const auto materialized =
                 normal_value(
                     target_type,
@@ -8449,12 +8503,12 @@ private:
                     link.target,
                     target,
                     target_is_reference,
-                    target_value)
+                    target_value, true)
                 : direct_endpoint_reference_or_value(
                     link.target,
                     target,
                     target_is_reference,
-                    target_value);
+                    target_value, true);
 
             if (target_resolved !=
                     fixed_direct_materialization_result::
