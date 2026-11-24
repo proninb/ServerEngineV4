@@ -183,6 +183,7 @@ enum class endpoint_path_step_kind : std::uint8_t {
     array_index = 2,
     base = 3,
     dereference = 4,
+    bit_index = 5,
 };
 
 struct endpoint_path_step final {
@@ -260,7 +261,34 @@ inline constexpr std::uint16_t graph_enum_body = 0x0010u;
 
 inline constexpr std::uint16_t graph_type_flag_mask =
     graph_type_defined |
-    graph_type_polymorphic | graph_enum_scoped | graph_enum_fixed | graph_enum_body | 0xff00u;
+    graph_type_polymorphic | graph_enum_scoped | graph_enum_fixed | graph_enum_body | 0xffe0u;
+
+struct bit_rule final {
+    identity_ref result_alias{};
+    std::uint8_t bit_count = 0;
+
+    friend constexpr bool operator==(bit_rule, bit_rule) noexcept = default;
+};
+
+[[nodiscard]] constexpr unsigned bit_storage_width(intrinsic_type type) noexcept {
+    switch (type) {
+    case intrinsic_type::char_type:
+    case intrinsic_type::signed_char:
+    case intrinsic_type::unsigned_char:
+    case intrinsic_type::char8_type: return 8;
+    case intrinsic_type::signed_short:
+    case intrinsic_type::unsigned_short:
+    case intrinsic_type::char16_type: return 16;
+    case intrinsic_type::signed_int:
+    case intrinsic_type::unsigned_int:
+    case intrinsic_type::signed_long:
+    case intrinsic_type::unsigned_long:
+    case intrinsic_type::char32_type: return 32;
+    case intrinsic_type::signed_long_long:
+    case intrinsic_type::unsigned_long_long: return 64;
+    default: return 0;
+    }
+}
 
 struct type_entry final {
     graph_range members;
@@ -276,7 +304,7 @@ struct type_entry final {
     }
 
     [[nodiscard]] constexpr bool polymorphic() const noexcept {
-        return (flags & graph_type_polymorphic) != 0;
+        return kind == graph_type_kind::record && (flags & graph_type_polymorphic) != 0;
     }
 
     [[nodiscard]] constexpr intrinsic_type storage_intrinsic() const noexcept {
@@ -296,16 +324,33 @@ struct type_entry final {
             kind == graph_type_kind::nominal_scalar;
     }
 
+    // A nominal scalar has no members. For a bit rule its unused member
+    // cursor stores the result alias identity (zero denotes intrinsic bool).
+    [[nodiscard]] constexpr bit_rule bits() const noexcept {
+        if (kind != graph_type_kind::nominal_scalar || !(flags & 0x00feu)) return {};
+        return {identity_ref::from_raw(members.begin), static_cast<std::uint8_t>((flags & 0x00feu) >> 1)};
+    }
+
+    // A record stores the one-based local member index in its otherwise unused flags.
+    [[nodiscard]] constexpr std::uint16_t index_member_slot() const noexcept {
+        return kind == graph_type_kind::record ? static_cast<std::uint16_t>(flags >> 2) : 0;
+    }
+
     [[nodiscard]] constexpr bool valid_kind() const noexcept {
         if (kind == graph_type_kind::enumeration)
-            return defined() && !polymorphic() && bases.count == 0 &&
+            return defined() && !(flags & graph_type_polymorphic) && bases.count == 0 &&
                 record_kind == graph_record_kind::struct_type &&
                 ((flags & graph_enum_body) || ((flags & graph_enum_fixed) && members.count == 0)) &&
                 (!(flags & graph_enum_scoped) || (flags & graph_enum_fixed)) &&
                 enum_underlying() >= intrinsic_type::bool_type &&
                 enum_underlying() <= intrinsic_type::unsigned_long_long;
-        return kind == graph_type_kind::record ? (flags & ~(graph_type_defined | graph_type_polymorphic)) == 0 :
-            (kind == graph_type_kind::intrinsic_alias || kind == graph_type_kind::nominal_scalar) && defined() && (flags & 0x00feu) == 0 &&
+        return kind == graph_type_kind::record ?
+            (index_member_slot() == 0 || (defined() && record_kind != graph_record_kind::union_type &&
+                index_member_slot() <= members.count)) :
+            (kind == graph_type_kind::intrinsic_alias || kind == graph_type_kind::nominal_scalar) && defined() &&
+            (kind == graph_type_kind::nominal_scalar
+                ? bits().bit_count <= bit_storage_width(storage_intrinsic())
+                : (flags & 0x00feu) == 0) &&
             members.count == 0 && bases.count == 0 &&
             storage_intrinsic() >= intrinsic_type::bool_type && storage_intrinsic() <= intrinsic_type::long_double_type;
     }
@@ -436,7 +481,7 @@ public:
     }
 
     // nominal=true retains a distinct scalar identity; false preserves typedef folding.
-    [[nodiscard]] server_status define_intrinsic_alias(identity_ref identity, intrinsic_type intrinsic, type_handle& output, bool nominal = false) noexcept;
+    [[nodiscard]] server_status define_intrinsic_alias(identity_ref identity, intrinsic_type intrinsic, type_handle& output, bool nominal = false, bit_rule bits = {}) noexcept;
 
     [[nodiscard]] server_status declare_record(
         identity_ref identity,
@@ -459,7 +504,7 @@ public:
         std::span<const member_record> definition,
         std::span<const construction_value> construction = {},
         std::span<const base_record> bases = {},
-        bool declares_virtual = false) noexcept;
+        bool declares_virtual = false, std::uint16_t index_member_slot = 0) noexcept;
 
     [[nodiscard]] server_status add_object(
         identity_ref identity,
@@ -909,8 +954,11 @@ private:
         type_ref type) const noexcept;
 
     [[nodiscard]] server_status upsert_initialization(
-        object_endpoint target, construction_value value,
+        object_endpoint target, type_ref target_type, construction_value value,
         bool& replaced, bool capacity_prepared) noexcept;
+
+    void move_overlapping_initialization_to_end(
+        std::uint32_t position, type_ref target_type) noexcept;
 
     [[nodiscard]] bool endpoint_type(
         object_endpoint endpoint,

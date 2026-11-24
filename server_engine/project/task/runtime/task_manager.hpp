@@ -52,8 +52,9 @@ public:
     void set_system_table(runtime_shm* value) noexcept { system_table = value; }
     // KILL is preemptive for one child only. Caller commits after the current
     // scheduler barrier. A killed dependency never blocks an active successor.
+    // Individual controls are rejected in diagnostic NO_BARRIER lifetimes.
     bool request_kill(const std::string& id, std::size_t& index, std::string& error);
-    void finish_kill(std::size_t index) noexcept;
+    bool finish_kill(std::size_t index) noexcept;
     // Caller holds Server scheduler_mutex. TASKINIT executes at this boundary.
     bool restart_one(const std::string& id, std::size_t& index, std::string& error);
     [[nodiscard]] std::size_t active_count() const noexcept;
@@ -66,8 +67,10 @@ public:
     void drain() noexcept;
     bool quiesce(std::string& error);
     bool stop(std::string& error);
-    void terminate() noexcept;
-    [[nodiscard]] bool active() const noexcept { return started; }
+    // False retains worker/IPC ownership; callers must not release Project SHM.
+    bool terminate() noexcept;
+    // Failed cleanup still owns children even if scheduling cannot resume.
+    [[nodiscard]] bool active() const noexcept { return started || cleanup_pending; }
 private:
     struct worker {
         std::unique_ptr<process> child;
@@ -102,5 +105,8 @@ private:
     bool completion_stopping = false;
     bool completion_stop = false;
     bool started = false;
+    bool cleanup_pending = false;
+    // Diagnostic execution mode is fixed for this manager lifetime.
+    bool no_barrier_mode = false;
 };
 }

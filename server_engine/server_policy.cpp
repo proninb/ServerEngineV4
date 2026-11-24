@@ -20,6 +20,7 @@ bool server_policy::is_demo_mutation(
     case server_request_kind::publish:
     case server_request_kind::build:
     case server_request_kind::rebuild:
+    case server_request_kind::set_value:
     case server_request_kind::reset_ic:
     case server_request_kind::delete_ic:
     case server_request_kind::run:

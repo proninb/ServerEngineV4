@@ -1,3 +1,6 @@
+#include "source_token_binding_policy.hpp"
+#include "../construction/source_index_audit.hpp"
+#include "../construction/publish_source_profile.hpp"
 #include "char_array_value.hpp"
 #ifdef CW_RESOLVED_G_01
 #include "../../../experiments/resolved-g-01/capture.hpp"
@@ -440,6 +443,9 @@ public:
     // counters; benchmark counters continue to describe one canonical replay.
     // One Source replay only. No deferred binding and no second Graph.
     [[nodiscard]] server_status parse(file_id root) noexcept {
+        CW_SOURCE_PROFILE_ROOT(root.value());
+        CW_INDEX_ROOT();
+        clear_visible_binding();
 #if defined(CW_SOURCE_TARGET_CONTEXT_AB) || defined(CW_SOURCE_TARGET_CONTEXT_V2)
         target_context = {};
 #endif
@@ -459,6 +465,7 @@ public:
         buffered = {};
         has_buffered = false;
         steps.clear();
+        const auto first_object = G.object_count();
         auto status = sources.begin_root(root);
         if (!succeeded(status)) return status;
 #ifdef CW_SOURCE_MODEL_DIRECT_V2
@@ -493,6 +500,11 @@ public:
         const auto committed = flush_constructions();
         if (!succeeded(committed)) return committed;
         if (!succeeded(status)) return status;
+        if (templates != nullptr) {
+            status = apply_header_relative_bindings(templates->relative_bindings, strings,
+                G, sources, first_object, failure);
+            if (!succeeded(status)) return status;
+        }
         const auto ended = sources.end_root();
 #ifdef CW_SOURCE_LOCALITY_AUDIT
         if (succeeded(ended)) (void)source_locality01::capture.add({'E', 0, root.value()});
@@ -518,6 +530,23 @@ public:
     }
 
 private:
+#ifdef CW_SOURCE_INDEX_AUDIT
+    // Diagnostic shadow cache measures repetition, never services a lookup.
+    // Results belong only to the current lexical token. Never retained across
+    // advance(), roots, namespace creation or template instantiation.
+    struct visible_token_binding {
+        identity_ref scope{};
+        string_id name{};
+        std::array<identity_ref, 3> result{};
+        unsigned known = 0;
+    };
+    mutable visible_token_binding visible_binding;
+#endif
+    void clear_visible_binding() noexcept {
+#ifdef CW_SOURCE_INDEX_AUDIT
+        visible_binding.known = 0;
+#endif
+    }
 #if defined(CW_SOURCE_TARGET_CONTEXT_AB) || defined(CW_SOURCE_TARGET_CONTEXT_V2)
     struct current_target_context final {
         file_id file{};
@@ -790,6 +819,7 @@ private:
     // ranges. No parser `advance()` calls for the skipped operands.
     [[nodiscard]] server_status model_finish_operation(
         const source_model_operation& op) noexcept {
+    CW_SOURCE_PROFILE(tokens);
         const auto end = static_cast<std::size_t>(op.token_begin) + op.token_count;
         if (end > model_tokens.size() || end < model_token_cursor)
             return server_status::project_configuration_invalid;
@@ -806,6 +836,8 @@ private:
 #endif
 
     [[nodiscard]] server_status advance() noexcept {
+    CW_SOURCE_PROFILE(tokens);
+        clear_visible_binding();
         current = {};
         if (has_buffered) {
             current = buffered;
@@ -822,6 +854,7 @@ private:
     }
 
     [[nodiscard]] server_status peek_kind(token_kind& kind) noexcept {
+    CW_SOURCE_PROFILE(tokens);
         if (!has_buffered) {
             buffered = {};
 #ifdef CW_SOURCE_MODEL_DIRECT_V2
@@ -862,13 +895,43 @@ private:
 
     [[nodiscard]] identity_ref find_visible(identity_ref scope, string_id name,
         identity_kind kind) const noexcept {
+    CW_SOURCE_PROFILE(symbols_types);
+        CW_INDEX_TIMER(visible);
+        CW_INDEX_COUNT(visible_requests);
+#ifdef CW_SOURCE_INDEX_AUDIT
+        const unsigned lane = kind == identity_kind::object ? 0u
+            : kind == identity_kind::type ? 1u : 2u;
+        const bool cacheable = at(token_kind::identifier) && current.identifier == name &&
+            (kind == identity_kind::object || kind == identity_kind::type || kind == identity_kind::namespace_scope);
+        const unsigned bit = 1u << lane;
+        if (cacheable) {
+            CW_INDEX_COUNT(cacheable_requests);
+            if (visible_binding.scope != scope || visible_binding.name != name) {
+                visible_binding.scope = scope;
+                visible_binding.name = name;
+                visible_binding.known = 0;
+            }
+            if (visible_binding.known & bit) {
+                if (visible_binding.result[lane]) { CW_INDEX_COUNT(repeated_positive); }
+                else { CW_INDEX_COUNT(repeated_negative); }
+            }
+        }
+#endif
+        identity_ref result;
         for (auto parent = scope; parent;) {
-            if (const auto id = identities.find(parent, name, kind)) return id;
+            CW_INDEX_COUNT(scope_steps);
+            if (const auto id = identities.find(parent, name, kind)) { result = id; break; }
             identity_record value;
             if (!identities.record(parent, value)) break;
             parent = value.parent;
         }
-        return {};
+#ifdef CW_SOURCE_INDEX_AUDIT
+        if (cacheable) {
+            visible_binding.result[lane] = result;
+            visible_binding.known |= bit;
+        }
+#endif
+        return result;
     }
 
     [[nodiscard]] server_status dependency(identity_ref id) noexcept {
@@ -909,6 +972,7 @@ private:
             return fail(parser_failure_kind::syntax, "Expected namespace name");
         for (;;) {
             identity_ref child;
+            clear_visible_binding();
             status = identities.resolve(scope_id, current.identifier,
                 identity_kind::namespace_scope, child);
             if (!succeeded(status)) return status;
@@ -941,8 +1005,38 @@ private:
         return advance();
     }
 
+    // Keep the large Header parser/preprocessor frame off ordinary Source
+    // declarations, including under whole-program optimization.
+    [[nodiscard]]
+#if defined(_MSC_VER)
+    __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+    __attribute__((noinline))
+#endif
+    server_status instantiate_template_type(std::span<const prepared_token> template_tokens,
+        identity_ref scope_id, type_ref& result) noexcept {
+        try {
+            semantic_preprocessor_v2 prepared_input{files, {}, template_configuration, strings};
+            parser_v2_failure template_failure;
+            header_parser_v2 parser{prepared_input, identities, G, &template_failure};
+            parser.set_template_definitions(*templates);
+            parser.set_provenance(&sources);
+            clear_visible_binding();
+            const auto status = parser.parse_prepared_type(template_tokens, scope_id, result);
+            if (!succeeded(status)) {
+                if (failure) *failure = {template_failure.kind == parser_v2_failure_kind::unsupported ?
+                    parser_failure_kind::unsupported : parser_failure_kind::semantic,
+                    template_failure.file, template_failure.source, template_failure.detail};
+                return status;
+            }
+            type_handle specialized;
+            if (!G.named(result, specialized)) return fail(parser_failure_kind::semantic, "Invalid Source template specialization");
+            return dependency(G.identity(specialized));
+        } catch (...) { return server_status::io_error; }
+    }
+
     [[nodiscard]] server_status named_type(identity_ref scope_id,
-        type_ref& result) noexcept {
+        type_ref& result, identity_ref dispatch_type = {}) noexcept {
         try {
         std::vector<prepared_token> template_tokens;
         const bool capture_template = templates && !templates->records.empty();
@@ -960,7 +1054,12 @@ private:
         // Single or qualified name resolved only from the committed Header G.
         if (!at(token_kind::identifier))
             return fail(parser_failure_kind::syntax, "Expected Header-defined type");
-        auto type_id = find_visible(scope_id, current.identifier, identity_kind::type);
+        // Positive binding supplied for this very token by scope dispatch.
+        // Namespace lookup remains independent (qualified-name precedence).
+        const bool reuse = dispatch_type && detail::token_binding_enabled();
+        if (reuse) { CW_INDEX_COUNT(reused); }
+        auto type_id = reuse ? dispatch_type
+            : find_visible(scope_id, current.identifier, identity_kind::type);
         auto namespace_id = find_visible(scope_id, current.identifier, identity_kind::namespace_scope);
         if (capture_template) capture();
         auto status = advance();
@@ -996,21 +1095,14 @@ private:
                 status = advance();
                 if (!succeeded(status)) return status;
             } while (depth);
-            semantic_preprocessor_v2 prepared_input{files, {}, template_configuration, strings};
-            parser_v2_failure template_failure;
-            header_parser_v2 parser{prepared_input, identities, G, &template_failure};
-            parser.set_template_definitions(*templates);
-            parser.set_provenance(&sources);
-            status = parser.parse_prepared_type(template_tokens, scope_id, result);
-            if (!succeeded(status)) {
-                if (failure) *failure = {template_failure.kind == parser_v2_failure_kind::unsupported ?
-                    parser_failure_kind::unsupported : parser_failure_kind::semantic,
-                    template_failure.file, template_failure.source, template_failure.detail};
-                return status;
+            return instantiate_template_type(template_tokens, scope_id, result);
+        }
+        if (templates && type_id) {
+            const auto alias = templates->array_aliases.find(type_id.value());
+            if (alias != templates->array_aliases.end()) {
+                result = alias->second;
+                return server_status::success;
             }
-            type_handle specialized;
-            if (!G.named(result, specialized)) return fail(parser_failure_kind::semantic, "Invalid Source template specialization");
-            return dependency(G.identity(specialized));
         }
         const auto handle = G.find_type(type_id);
         if (!type_id || !handle)
@@ -1179,7 +1271,8 @@ private:
     }
 
     [[nodiscard]] server_status parse_type(identity_ref scope_id,
-        type_ref& output) noexcept {
+        type_ref& output, identity_ref dispatch_type = {}) noexcept {
+    CW_SOURCE_PROFILE(symbols_types);
         output = {};
         bool is_const = false;
         bool is_volatile = false;
@@ -1202,7 +1295,7 @@ private:
             output = G.intrinsic(value);
         }
         else if (at(token_kind::identifier)) {
-            status = named_type(scope_id, output);
+            status = named_type(scope_id, output, dispatch_type);
             if (!succeeded(status)) return status;
         }
         else return fail(parser_failure_kind::unsupported,
@@ -1309,7 +1402,7 @@ private:
     }
 
     [[nodiscard]] server_status object(identity_ref scope_id,
-        bool is_extern = false) noexcept {
+        bool is_extern = false, identity_ref dispatch_type = {}) noexcept {
 #if defined(CW_SOURCE_TARGET_CONTEXT_AB) || defined(CW_SOURCE_TARGET_CONTEXT_V2)
         target_context = {};
 #endif
@@ -1319,7 +1412,7 @@ private:
         const source_range declaration_location{
             current.source_offset, current.source_length};
         type_ref type;
-        auto status = parse_type(scope_id, type);
+        auto status = parse_type(scope_id, type, dispatch_type);
         if (!succeeded(status)) return status;
 
         while (at(token_kind::star)) {
@@ -1462,6 +1555,7 @@ private:
         if (flags && (!normalize_enum_constant(G, type, init) || !construction_compatible(G, type, init)))
             return fail(parser_failure_kind::semantic, "Object initializer type mismatch");
         identity_ref id;
+        clear_visible_binding();
         status = identities.resolve(scope_id, name, identity_kind::object, id);
         if (!succeeded(status)) return status;
         object_handle result;
@@ -1670,16 +1764,22 @@ private:
                     "Source endpoint too deep");
             if (model_tokens[i].kind == token_kind::l_bracket) {
                 derived_type_record derived;
-                if (!endpoint_resolver.array_type(output.type, derived))
-                    return fail(parser_failure_kind::semantic,
-                        "Index requires bounded array");
+                source_typed_endpoint selected;
+                selected.type = output.type;
+                source_endpoint_resolver::failure error;
+                status = endpoint_resolver.prepare_index(selected, derived, error);
+                if (!succeeded(status)) return endpoint_status(status, error);
+                try { path.insert(path.end(), selected.path.begin(), selected.path.end()); }
+                catch (...) { return server_status::io_error; }
+                output.type = selected.type;
                 const auto text = model_spelling(i + 1);
-                std::uint64_t index_value = 0;
+                std::int64_t logical_index = 0;
+                std::uint64_t index_value;
                 const auto parsed = std::from_chars(
-                    text.data(), text.data() + text.size(), index_value);
+                    text.data(), text.data() + text.size(), logical_index);
                 if (parsed.ec != std::errc{} ||
                     parsed.ptr != text.data() + text.size() ||
-                    index_value >= derived.payload)
+                    !array_offset(logical_index, array_origin(derived.reserved), derived.payload, index_value))
                     return fail(parser_failure_kind::semantic,
                         "Array index out of range");
                 type_ref referent;
@@ -1816,6 +1916,7 @@ private:
         return true;
     }
 
+
     [[nodiscard]] server_status model_validate_assignment(
         identity_ref scope_id, const source_model_operation& op,
         bool& consumed) noexcept {
@@ -1913,6 +2014,7 @@ private:
 
     [[nodiscard]] server_status read_endpoint(identity_ref scope_id,
         endpoint& output, identity_ref prebound_object = {}, unsigned depth = 0) noexcept {
+    CW_SOURCE_PROFILE(endpoints);
         if (depth >= 128) return fail(parser_failure_kind::unsupported, "Source endpoint too deep");
         unsigned stars = 0;
         while (at(token_kind::star)) {
@@ -1980,22 +2082,59 @@ private:
         auto& steps = output.path;
         source_endpoint_resolver::failure resolver_error;
         auto status = server_status::success;
-        while (at(token_kind::dot) || at(token_kind::l_bracket) || at(token_kind::arrow)) {
+        while (at(token_kind::dot) || at(token_kind::l_bracket) || at(token_kind::arrow) ||
+            (at(token_kind::pp_number) && spelling().starts_with('.'))) {
             if (steps.size() >= 128)
                 return fail(parser_failure_kind::unsupported, "Source endpoint too deep");
+            if (at(token_kind::pp_number)) {
+                const auto text = spelling().substr(1);
+                std::uint64_t index = 0;
+                const auto parsed = std::from_chars(text.data(), text.data() + text.size(), index);
+                if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
+                    return fail(parser_failure_kind::syntax, "Bit index requires a decimal integer");
+                type_ref referent;
+                if (reference_referent(output.type, referent)) {
+                    if (steps.size() >= 127)
+                        return fail(parser_failure_kind::unsupported, "Source endpoint too deep");
+                    try { steps.push_back({0, endpoint_path_step_kind::dereference, {}}); }
+                    catch (...) { return server_status::io_error; }
+                    output.type = referent;
+                }
+                const auto scalar = strip_cv(G, output.type);
+                if (scalar != output.type) {
+                    derived_type_record qualifier;
+                    for (auto type = output.type; type != scalar && G.derived(type, qualifier); type = qualifier.child)
+                        if (qualifier.kind == derived_type_kind::const_qualified)
+                            return fail(parser_failure_kind::semantic, "Source assignment cannot modify a const bit");
+                }
+                type_handle owner;
+                const auto* entry = G.named(scalar, owner) ? G.find(owner) : nullptr;
+                const auto rule = entry ? entry->bits() : bit_rule{};
+                if (!rule.bit_count || index >= rule.bit_count)
+                    return fail(parser_failure_kind::semantic, "Bit index exceeds the alias cw::bits range");
+                status = dependency(G.identity(owner));
+                if (!succeeded(status)) return status;
+                output.type = rule.result_alias ? G.named(G.find_type(rule.result_alias)) : G.intrinsic(intrinsic_type::bool_type);
+                try { steps.push_back({index, endpoint_path_step_kind::bit_index, {}}); }
+                catch (...) { return server_status::io_error; }
+                output.location = {current.source_offset, current.source_length};
+                return advance();
+            }
             if (at(token_kind::l_bracket)) {
                 derived_type_record d;
-                if (!endpoint_resolver.array_type(output.type, d))
-                    return fail(parser_failure_kind::semantic, "Index requires bounded array");
+                status = endpoint_resolver.prepare_index(output, d, resolver_error);
+                if (!succeeded(status)) return endpoint_status(status, resolver_error);
                 status = advance(); if (!succeeded(status)) return status;
+                const bool negative = at(token_kind::minus);
+                if (negative) { status = advance(); if (!succeeded(status)) return status; }
                 if (!at(token_kind::pp_number))
                     return fail(parser_failure_kind::syntax, "Array index requires decimal integer");
                 const auto text = spelling();
-                std::uint64_t value = 0;
+                std::int64_t value = 0;
                 const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
                 if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
                     return fail(parser_failure_kind::semantic, "Array index out of range");
-                status = endpoint_resolver.append_index(output, d, value, resolver_error);
+                status = endpoint_resolver.append_index(output, d, negative ? -value : value, resolver_error);
                 if (!succeeded(status)) return endpoint_status(status, resolver_error);
                 status = advance(); if (!succeeded(status)) return status;
                 status = expect(token_kind::r_bracket, "Expected ']'");
@@ -2053,6 +2192,7 @@ private:
     // read_endpoint leaves semantic WHO/type and local steps; it does not
     // create a global endpoint path or commit an initialization/link.
     [[nodiscard]] server_status canonicalize_endpoint(endpoint& output) noexcept {
+    CW_SOURCE_PROFILE(endpoints);
         const auto& steps = output.path;
         if (steps.size() == 1 && steps.front().kind == endpoint_path_step_kind::member) {
             output.ref = {output.unit.who, endpoint_ref::from_raw(
@@ -2213,6 +2353,8 @@ private:
     }
 
     [[nodiscard]] server_status convert_address(type_ref pointer, endpoint& source) noexcept {
+        if (!source.path.empty() && source.path.back().kind == endpoint_path_step_kind::bit_index)
+            return fail(parser_failure_kind::semantic, "A bit endpoint has no C++ address");
         type_ref referent;
         if (reference_referent(source.type, referent)) {
             try { source.path.push_back({0, endpoint_path_step_kind::dereference, {}}); }
@@ -2307,6 +2449,9 @@ private:
             auto& source = assignment_source;
             status = read_endpoint(scope_id, source);
             if (!succeeded(status)) return status;
+            if (!source.path.empty() && source.path.back().kind == endpoint_path_step_kind::bit_index &&
+                !target.path.empty())
+                return fail(parser_failure_kind::semantic, "Bit aliases must be standalone Source references");
             type_ref source_type = source.type;
             type_ref inner;
             if (reference_referent(source_type, inner)) source_type = inner;
@@ -2431,6 +2576,7 @@ private:
                 if (consumed) continue;
             }
 #endif
+            identity_ref dispatch_type;
             if (at(token_kind::identifier)) {
                 // Syntax-model shape 'object .member', 'object[index]' or
                 // 'object = literal' cannot be an ordinary Source declarator.
@@ -2459,11 +2605,11 @@ private:
                     if (next != token_kind::dot &&
                         next != token_kind::l_bracket &&
                         next != token_kind::assign &&
-                        (find_visible(scope_id, current.identifier,
-                            identity_kind::type) ||
+                        ((dispatch_type = find_visible(scope_id, current.identifier,
+                            identity_kind::type)) ||
                          find_visible(scope_id, current.identifier,
                             identity_kind::namespace_scope))) {
-                        status = object(scope_id);
+                        status = object(scope_id, false, dispatch_type);
                         if (!succeeded(status)) return status;
                         continue;
                     }
@@ -2473,7 +2619,7 @@ private:
                     continue;
                 }
                 if (!intrinsic_start(scope_id) &&
-                    !find_visible(scope_id, current.identifier, identity_kind::type) &&
+                    !(dispatch_type = find_visible(scope_id, current.identifier, identity_kind::type)) &&
                     !find_visible(scope_id, current.identifier,
                         identity_kind::namespace_scope))
                     return fail(parser_failure_kind::semantic,
@@ -2481,7 +2627,7 @@ private:
             }
             if (at(token_kind::identifier) || at(token_kind::kw_const) ||
                 at(token_kind::kw_volatile) || builtin_start(current.kind)) {
-                const auto status = object(scope_id);
+                const auto status = object(scope_id, false, dispatch_type);
                 if (!succeeded(status)) return status;
                 continue;
             }

@@ -90,8 +90,16 @@ server_status load_project(
 
     compiled_project_view compiled;
 
-    compiled.attach(
-        mapping.bytes());
+    // External artifacts require structural binding before any section access.
+    // attach() is reserved for images already validated by their producer.
+    if (compiled.bind(mapping.bytes()) != compiled_project_image_result::success) {
+        diagnostics.emit(
+            diagnostic(diagnostics::project_compiled_invalid, operation)
+                .file(layout.compiled)
+                .detail("compiled.bin failed structural binding")
+                .build());
+        return server_status::project_artifact_invalid;
+    }
 
     read_only_file_mapping runtime_mapping;
     const auto runtime_opened = runtime_mapping.open(layout.runtime);

@@ -22,6 +22,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
+#include <memory>
 #include <thread>
 #include <chrono>
 #include <filesystem>
@@ -31,6 +32,7 @@ namespace cw::server {
 
 class server final {
 public:
+    void enable_operation_diagnostics(bool enabled = true) noexcept { operation_diagnostics_enabled = enabled; }
     [[nodiscard]] server_status start(
         const std::filesystem::path& configuration_path,
         diagnostic_collection& diagnostics);
@@ -130,6 +132,7 @@ private:
 
     // Child lifetime ends before resident SHM lifetime.
     task_runtime::runtime_shm task_system_table;
+    std::shared_ptr<void> task_variable_catalog;
     task_runtime::manager task_manager;
     std::uint64_t runtime_tick = 0;
     std::uint64_t model_cycle = 0;
@@ -141,6 +144,7 @@ private:
     project_state project_state_value = project_state::unloaded;
     std::uint64_t next_operation_value = 1;
     bool running = false;
+    bool operation_diagnostics_enabled = false;
 };
 
 }

@@ -7,6 +7,19 @@
 
 namespace cw::server {
 
+// The path projects a bit from a scalar already located by the caller.
+inline bool valid_bit_index(const compiled_project_view& project, type_ref type,
+    std::uint64_t index) noexcept {
+    derived_type_record derived;
+    while (project.derived(type, derived) &&
+        (derived.kind == derived_type_kind::const_qualified || derived.kind == derived_type_kind::volatile_qualified))
+        type = derived.child;
+    type_handle owner;
+    type_entry entry;
+    return project.named(type, owner) && project.type(owner, entry) &&
+        index < entry.bits().bit_count;
+}
+
 struct char_array_store final {
     std::uint32_t offset = 0;
     std::uint32_t length = 0;

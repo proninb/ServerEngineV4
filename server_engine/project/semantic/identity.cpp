@@ -1,3 +1,5 @@
+#include "../construction/source_index_audit.hpp"
+#include "../construction/publish_source_profile.hpp"
 #include "identity.hpp"
 #ifdef CW_CANONICALIZER_TRACE
 #include "../../../experiments/canonicalizer-01/capture.hpp"
@@ -301,6 +303,7 @@ identity_ref identity_space::find_key(
          probe < index.size();
          ++probe) {
 
+        CW_INDEX_COUNT(identity_probes);
         const auto& slot =
             index[position];
 
@@ -331,6 +334,8 @@ identity_ref identity_space::find(
     identity_ref parent,
     string_id name,
     identity_kind kind) const noexcept {
+    CW_INDEX_TIMER(identity_find);
+    CW_SOURCE_PROFILE(symbols_types);
 #ifdef CW_CANONICALIZER_TRACE
     const auto lookup = [&]() noexcept -> identity_ref {
 #endif
@@ -406,6 +411,7 @@ void identity_space::insert_index(
 
 server_status identity_space::ensure_index_capacity(
     std::size_t additional) noexcept {
+    CW_SOURCE_PROFILE(indexes);
 
     if (additional >
         (std::numeric_limits<std::size_t>::max)() -
@@ -424,6 +430,7 @@ server_status identity_space::ensure_index_capacity(
         return server_status::success;
     }
 
+    CW_INDEX_TIMER(identity_rehash);
     const auto capacity =
         next_index_capacity(
             required);
@@ -480,6 +487,7 @@ server_status identity_space::resolve(
     string_id name,
     identity_kind kind,
     identity_ref& output) noexcept {
+    CW_SOURCE_PROFILE(symbols_types);
 #ifdef CW_CANONICALIZER_TRACE
     canonicalizer01::exit_capture trace{[&]() noexcept {
         canonicalizer01::identity_event(this, false, parent.value(), name.value(),

@@ -75,6 +75,7 @@ inline constexpr std::array diagnostic_descriptors{
     diagnostics::project_lexical_error,
     diagnostics::project_configuration_depth_exceeded,
     diagnostics::project_preprocessing_error,
+    diagnostics::project_duplicate_alias,
     diagnostics::project_rebuild_cleanup_failed,
     diagnostics::project_publish_cleanup_failed,
     diagnostics::project_semantic_error,

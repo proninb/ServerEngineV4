@@ -12,6 +12,7 @@
 #endif
 #endif
 #include "source_parser_v2.hpp"
+#include "source_endpoint_resolver.hpp"
 #include "../frontend/prepared_include_v2.hpp"
 #include "../frontend/preprocessor_v2.hpp"
 #include "header_semantic_space.hpp"
@@ -5735,6 +5736,189 @@ static_assert(
 
 }
 
+server_status apply_header_relative_bindings(
+    std::span<const header_relative_binding_v2> bindings, const string_table& strings,
+    graph& G, source_map& sources, std::size_t first_object, parser_failure* failure) noexcept {
+    if (bindings.empty()) return server_status::success;
+    try {
+        struct resolved_binding {
+            const header_relative_binding_v2* source;
+            identity_ref static_referent{};
+            source_typed_endpoint target, referent;
+        };
+        std::unordered_multimap<std::uint32_t, resolved_binding> by_type;
+        source_endpoint_resolver resolver{G};
+        const auto decode = [&](string_id path, type_ref owner, source_typed_endpoint& endpoint) {
+            endpoint.type = endpoint.object_type = owner;
+            constructor_path_reader reader{strings.get(path)};
+            source_endpoint_resolver::failure error;
+            while (!reader.remaining.empty()) {
+                std::string_view field;
+                std::uint64_t index;
+                if (endpoint.path.size() >= 128 || !reader.next(field, index, true))
+                    return server_status::project_configuration_invalid;
+                if (field.empty()) {
+                    derived_type_record array;
+                    auto status = resolver.prepare_index(endpoint, array, error);
+                    if (!succeeded(status)) return status;
+                    status = resolver.append_index(endpoint, array, index, error);
+                    if (!succeeded(status)) return status;
+                } else {
+                    type_handle record, declaring;
+                    auto status = resolver.prepare_member(endpoint, record, error);
+                    if (!succeeded(status)) return status;
+                    status = resolver.append_member(endpoint, record, strings.find(field), declaring, error);
+                    if (!succeeded(status)) return status;
+                }
+            }
+            return server_status::success;
+        };
+        const auto fail_binding = [&](const header_relative_binding_v2& binding, std::string_view message) {
+            if (failure) *failure = {parser_failure_kind::semantic, binding.file, binding.source, message};
+            return server_status::project_configuration_invalid;
+        };
+        for (const auto& binding : bindings) {
+            const auto owner = G.named(G.find_type(binding.owner));
+            if (!owner) return fail_binding(binding, "Aggregate reference owner type was not defined");
+            resolved_binding resolved{&binding};
+            auto status = decode(binding.target, owner, resolved.target);
+            if (!succeeded(status))
+                return fail_binding(binding, "Invalid target path in Header aggregate reference");
+            status = decode(binding.referent, owner, resolved.referent);
+            if (!succeeded(status)) {
+                const auto* object = G.find(G.find_object(binding.static_referent));
+                if (!object)
+                    return fail_binding(binding, "Unknown referent in Header aggregate reference");
+                resolved.static_referent = binding.static_referent;
+                resolved.referent.path.clear();
+                resolved.referent.type = resolved.referent.object_type = object->type;
+            }
+            derived_type_record target, source;
+            if (!G.derived(resolved.target.type, target) ||
+                (binding.address ? target.kind != derived_type_kind::pointer :
+                    (target.kind != derived_type_kind::lvalue_reference &&
+                     target.kind != derived_type_kind::rvalue_reference)))
+                return fail_binding(binding, "Header binding requires a reference or an explicit pointer target");
+            auto source_type = resolved.referent.type;
+            if (G.derived(source_type, source) &&
+                (source.kind == derived_type_kind::lvalue_reference ||
+                 source.kind == derived_type_kind::rvalue_reference)) source_type = source.child;
+            if (binding.address ? !pointer_address_compatible(G, resolved.target.type, source_type) :
+                    !qualified_object_compatible(G, target.child, source_type))
+                return fail_binding(binding, "Header aggregate reference types differ");
+            by_type.emplace(owner.value(), std::move(resolved));
+        }
+
+        std::unordered_map<std::uint32_t, bool> relevant;
+        const auto contains = [&](auto&& self, type_ref type) -> bool {
+            if (const auto cached = relevant.find(type.value()); cached != relevant.end()) return cached->second;
+            relevant.emplace(type.value(), false);
+            bool result = by_type.contains(type.value());
+            derived_type_record derived;
+            type_handle record;
+            if (!result && G.derived(type, derived)) {
+                if (derived.kind == derived_type_kind::bounded_array ||
+                    derived.kind == derived_type_kind::const_qualified ||
+                    derived.kind == derived_type_kind::volatile_qualified)
+                    result = self(self, derived.child);
+            } else if (!result && G.named(type, record)) {
+                for (const auto& field : G.members(record))
+                    if (self(self, field.type)) { result = true; break; }
+                if (!result)
+                    for (const auto& base : G.bases(record))
+                        if (self(self, G.named(G.find_type(base.type)))) { result = true; break; }
+            }
+            relevant[type.value()] = result;
+            return result;
+        };
+
+        std::vector<endpoint_path_step> prefix;
+        std::vector<endpoint_path_step> steps;
+        const auto apply = [&](auto&& self, identity_ref object, type_ref object_type, type_ref type) -> server_status {
+            if (!contains(contains, type)) return server_status::success;
+            if (prefix.size() >= 128) return server_status::project_configuration_invalid;
+            const auto [begin, end] = by_type.equal_range(type.value());
+            const auto endpoint = [&](const source_typed_endpoint& local, object_endpoint& output) {
+                steps.assign(prefix.begin(), prefix.end());
+                steps.insert(steps.end(), local.path.begin(), local.path.end());
+                if (steps.size() == 1 && steps.front().kind == endpoint_path_step_kind::member) {
+                    output = {object, endpoint_ref::from_raw(static_cast<std::uint32_t>(steps.front().value))};
+                    return server_status::success;
+                }
+                endpoint_path_handle path;
+                const auto status = G.intern_resolved_endpoint_path(object_type, steps, local.type, path);
+                if (succeeded(status)) output = {object, endpoint_ref::from_path(path)};
+                return status;
+            };
+            for (auto it = begin; it != end; ++it) {
+                const auto& binding = it->second;
+                object_endpoint target, referent;
+                auto status = endpoint(binding.target, target);
+                if (!succeeded(status)) return status;
+                // Explicit Source links override type-local defaults.
+                if (G.link_at_target(target)) continue;
+                if (binding.static_referent) {
+                    endpoint_path_handle path;
+                    const auto type = binding.referent.type;
+                    status = G.intern_resolved_endpoint_path(type, {}, type, path);
+                    referent = {binding.static_referent, endpoint_ref::from_path(path)};
+                } else status = endpoint(binding.referent, referent);
+                if (!succeeded(status)) return status;
+                link_handle link;
+                status = G.add_link(referent, target, link);
+                if (!succeeded(status))
+                    return fail_binding(*binding.source, "Unable to create Header aggregate reference binding");
+                status = sources.add(binding.source->file, source_data_ref::link(link));
+                if (!succeeded(status)) return status;
+            }
+
+            const auto visit = [&](type_ref child, endpoint_path_step step) {
+                if (!contains(contains, child)) return server_status::success;
+                prefix.push_back(step);
+                const auto status = self(self, object, object_type, child);
+                prefix.pop_back();
+                return status;
+            };
+            derived_type_record derived;
+            type_handle record;
+            if (G.derived(type, derived)) {
+                if (derived.kind == derived_type_kind::bounded_array && contains(contains, derived.child)) {
+                    for (std::uint64_t i = 0; i < derived.payload; ++i) {
+                        const auto status = visit(derived.child, {i, endpoint_path_step_kind::array_index, {}});
+                        if (!succeeded(status)) return status;
+                    }
+                } else if (derived.kind == derived_type_kind::const_qualified ||
+                           derived.kind == derived_type_kind::volatile_qualified) {
+                    return self(self, object, object_type, derived.child);
+                }
+            } else if (G.named(type, record)) {
+                std::uint32_t index = 0;
+                for (const auto& base : G.bases(record)) {
+                    const auto status = visit(G.named(G.find_type(base.type)), {index++, endpoint_path_step_kind::base, {}});
+                    if (!succeeded(status)) return status;
+                }
+                index = 0;
+                for (const auto& field : G.members(record)) {
+                    const auto status = visit(field.type, {index++, endpoint_path_step_kind::member, {}});
+                    if (!succeeded(status)) return status;
+                }
+            }
+            return server_status::success;
+        };
+
+        for (std::size_t i = first_object; i < G.object_count(); ++i) {
+            const auto object = G.object_at(i);
+            const auto* found = G.find(object);
+            if (found == nullptr) continue;
+            const auto type = found->type;
+            const auto status = apply(apply, G.identity(object), type, type);
+            if (!succeeded(status)) return status;
+        }
+        return server_status::success;
+    }
+    catch (...) { return server_status::io_error; }
+}
+
 server_status parse_semantic_project(
     file_context& files,
     lexical_generation& lexical,
@@ -5925,6 +6109,7 @@ server_status parse_semantic_project(
             status = input.start(root);
             if (succeeded(status)) {
                 header_parser_v2 parser{input, identities, G, &header_failure};
+                parser.set_warnings(warnings);
                 parser.set_template_definitions(template_definitions);
                 parser.set_provenance(&sources);
 #if defined(CW_HEADER_MODEL_V2) && !defined(CW_HEADER_MODEL_EFFECTIVE_V2)
@@ -6056,6 +6241,9 @@ server_status parse_semantic_project(
             files, lexical, frontend_root_count, configuration,
             strings, identities, G, sources, failure, warnings, telemetry, &source_preparation, &template_definitions);
         if (!succeeded(result)) return result;
+        const auto bindings = apply_header_relative_bindings(
+            template_definitions.relative_bindings, strings, G, sources, G.object_count(), failure);
+        if (!succeeded(bindings)) return bindings;
 
         // SOURCE-V2-PERF-02-PRESERVE-INPUT-COUNTERS:
         // The shared finalization below reads input_telemetry (OLD Source).

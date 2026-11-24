@@ -1,3 +1,4 @@
+#include "../construction/publish_source_profile.hpp"
 #include "source_map.hpp"
 
 #include <limits>
@@ -670,6 +671,7 @@ void source_map::grow_contribution_index() {
 server_status source_map::add(
     file_id file,
     source_data_ref data) noexcept {
+    CW_SOURCE_PROFILE(provenance);
 
     if (!active_root ||
         finalized_value ||
@@ -779,6 +781,7 @@ server_status source_map::add(
 
 server_status source_map::add_dependency(
     identity_ref identity) noexcept {
+    CW_SOURCE_PROFILE(provenance);
 
     if (!identity) {
         return server_status::
@@ -807,6 +810,7 @@ server_status source_map::add_dependency(
 
 server_status source_map::add_dependency(
     source_dependency_ref dependency) noexcept {
+    CW_SOURCE_PROFILE(provenance);
 
     if (!active_root ||
         finalized_value) {
@@ -854,6 +858,7 @@ server_status source_map::add_dependency(
 
 server_status source_map::add_initialization(
     object_endpoint target) noexcept {
+    CW_SOURCE_PROFILE(provenance);
 
     if (!active_root ||
         finalized_value) {

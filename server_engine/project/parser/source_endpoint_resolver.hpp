@@ -78,9 +78,10 @@ public:
     }
 
     [[nodiscard]] server_status append_index(source_typed_endpoint& output,
-        const derived_type_record& array, std::uint64_t index, failure& error) const noexcept {
+        const derived_type_record& array, std::int64_t logical_index, failure& error) const noexcept {
         error = failure::none;
-        if (index >= array.payload) {
+        std::uint64_t index;
+        if (!array_offset(logical_index, array_origin(array.reserved), array.payload, index)) {
             error = failure::index_out_of_range;
             return server_status::project_configuration_invalid;
         }
@@ -158,10 +159,8 @@ public:
                 const auto& selector = request.selectors[i];
                 if (selector.kind == source_selector_kind::index) {
                     derived_type_record array;
-                    if (!array_type(output.endpoint.type, array)) {
-                        error = failure::array_required;
-                        return server_status::project_configuration_invalid;
-                    }
+                    status = prepare_index(output.endpoint, array, error);
+                    if (!succeeded(status)) return status;
                     status = append_index(output.endpoint, array, selector.index, error);
                 } else {
                     type_handle record, owner;
@@ -185,6 +184,33 @@ public:
         if (!who || object == nullptr) return false;
         type = object->type;
         return true;
+    }
+
+    [[nodiscard]] server_status prepare_index(source_typed_endpoint& output,
+        derived_type_record& array, failure& error) noexcept {
+        error = failure::none;
+        if (array_type(output.type, array)) return server_status::success;
+
+        type_handle record;
+        bool dereference = false;
+        if (record_type(output.type, record, dereference)) {
+            const auto* entry = G.find(record);
+            const auto fields = G.members(record);
+            const auto slot = entry ? entry->index_member_slot() : 0;
+            if (slot != 0 && static_cast<std::size_t>(slot) <= fields.size()) {
+                const auto status = prepare_member(output, record, error);
+                if (!succeeded(status)) return status;
+                type_handle declaring;
+                const auto appended = append_member(output, record, fields[slot - 1].name, declaring, error);
+                if (!succeeded(appended)) return appended;
+                if (array_type(output.type, array)) {
+                    set_array_origin(array.reserved, array_origin(fields[slot - 1].reserved));
+                    return server_status::success;
+                }
+            }
+        }
+        error = failure::array_required;
+        return server_status::project_configuration_invalid;
     }
 
     [[nodiscard]] bool array_type(type_ref type, derived_type_record& array) const noexcept {

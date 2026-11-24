@@ -13,6 +13,13 @@ option(SERVER_ENGINE_PUBLISH_NO_SHA256_AB "Benchmark reference/candidate PUBLISH
 if(SERVER_ENGINE_PUBLISH_NO_SHA256_AB)
     add_compile_definitions(CW_PUBLISH_NO_SHA256_AB=1)
 endif()
+option(SERVER_ENGINE_PUBLISH_SOURCE_PROFILE "Compile sampled Source clocks into PUBLISH benchmark" ON)
+option(SERVER_ENGINE_PUBLISH_SOURCE_INDEX_AUDIT "Compile diagnostic Source index counters/clocks into benchmark" OFF)
+option(SERVER_ENGINE_SOURCE_TOKEN_BINDING_AB "Enable runtime token-binding A/B in benchmark/frontend tests" OFF)
+option(SERVER_ENGINE_SOURCE_TOKEN_BINDING_V2 "Pass the current Source dispatch type to named_type without a second lookup" OFF)
+if(SERVER_ENGINE_SOURCE_TOKEN_BINDING_V2)
+    add_compile_definitions(CW_SOURCE_TOKEN_BINDING_V2=1)
+endif()
 option(SERVER_ENGINE_CANONICALIZER_TRACE "Capture symbol events in the PUBLISH benchmark only" OFF)
 option(SERVER_ENGINE_HEADER_STATE_LAZY_AB "Enable eager/lazy Header state control in benchmark/tests only" OFF)
 
@@ -368,6 +375,15 @@ if(SERVER_ENGINE_BUILD_BENCHMARKS)
         benchmarks/publish_benchmark.cpp
         ${SERVER_ENGINE_V4_BENCHMARK_SOURCES}
     )
+    if(SERVER_ENGINE_PUBLISH_SOURCE_PROFILE)
+        target_compile_definitions(ServerEngineV4PublishBenchmark PRIVATE CW_PUBLISH_SOURCE_PROFILE=1)
+    endif()
+    if(SERVER_ENGINE_PUBLISH_SOURCE_INDEX_AUDIT)
+        target_compile_definitions(ServerEngineV4PublishBenchmark PRIVATE CW_SOURCE_INDEX_AUDIT=1)
+    endif()
+    if(SERVER_ENGINE_SOURCE_TOKEN_BINDING_AB)
+        target_compile_definitions(ServerEngineV4PublishBenchmark PRIVATE CW_SOURCE_TOKEN_BINDING_AB=1)
+    endif()
     if(SERVER_ENGINE_HEADER_STATE_LAZY_AB)
         target_compile_definitions(ServerEngineV4PublishBenchmark PRIVATE CW_HEADER_STATE_LAZY_AB=1)
     endif()
@@ -1404,8 +1420,12 @@ if(BUILD_TESTING)
         COMMAND ServerEngineV4SourceMapTests
     )
 
+    set(SERVER_ENGINE_FRONTEND_TEST_MAIN tests/frontend_regression_tests.cpp)
+    if(SERVER_ENGINE_SOURCE_TOKEN_BINDING_AB)
+        set(SERVER_ENGINE_FRONTEND_TEST_MAIN experiments/publish-source-index-opt02/contract.cpp)
+    endif()
     add_executable(ServerEngineV4FrontendTests
-        tests/frontend_regression_tests.cpp
+        ${SERVER_ENGINE_FRONTEND_TEST_MAIN}
         server_engine/filesystem_path.cpp
         server_engine/project/project_path.cpp
         server_engine/project/string/string_table.cpp
@@ -1435,6 +1455,9 @@ if(BUILD_TESTING)
         server_engine/project/file/file_context.cpp
     )
 
+    if(SERVER_ENGINE_SOURCE_TOKEN_BINDING_AB)
+        target_compile_definitions(ServerEngineV4FrontendTests PRIVATE CW_SOURCE_TOKEN_BINDING_AB=1)
+    endif()
     target_include_directories(ServerEngineV4FrontendTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/server_engine
     )
@@ -1525,6 +1548,7 @@ if(WIN32)
         tests/task_runtime_tests.cpp
         server_engine/project/task/runtime/task_process.cpp
     )
+    add_dependencies(simtask_integration_tests SimTaskFixture)
     target_include_directories(simtask_integration_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/server_engine/project/task/runtime
     )
@@ -1534,6 +1558,23 @@ if(WIN32)
 endif()
 
 # TASK-MANAGER-01 standalone build target (not wired to Server lifecycle yet).
+if(WIN32 AND BUILD_TESTING)
+    add_executable(task_cleanup_fault_fixture tests/task_cleanup_fault_fixture.cpp
+        server_engine/project/task/runtime/task_host.cpp server_engine/fixed_shared_memory.cpp)
+    target_include_directories(task_cleanup_fault_fixture PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_engine/project/task/runtime)
+    add_executable(task_cleanup_regression_tests tests/task_cleanup_regression_tests.cpp
+        server_engine/project/task/runtime/task_manager.cpp
+        server_engine/project/task/runtime/task_process.cpp
+        server_engine/project/task/task_configuration.cpp server_engine/json/json_parser.cpp)
+    target_include_directories(task_cleanup_regression_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/server_engine)
+    target_compile_definitions(task_cleanup_regression_tests PRIVATE CW_TASK_PROCESS_TEST_FAULTS=1)
+    add_dependencies(task_cleanup_regression_tests task_cleanup_fault_fixture)
+    add_test(NAME task_cleanup_regressions COMMAND task_cleanup_regression_tests
+        $<TARGET_FILE:task_cleanup_fault_fixture>)
+    set_tests_properties(task_cleanup_regressions PROPERTIES TIMEOUT 30)
+endif()
+
 if(WIN32)
     add_library(task_manager_runtime STATIC
         server_engine/project/task/runtime/task_manager.cpp

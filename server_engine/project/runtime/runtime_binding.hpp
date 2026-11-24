@@ -56,6 +56,8 @@ public:
         intrinsic_type type,
         std::uint8_t& output) const noexcept;
 
+    [[nodiscard]] bool record_size(type_handle type, runtime_offset& size) const noexcept;
+
     [[nodiscard]] bool reference_layout(
         std::uint8_t& size,
         std::uint64_t& target_base_address) const noexcept;
@@ -74,7 +76,7 @@ private:
     std::uint64_t target_base_address_value = 0;
     std::uint8_t reference_size_value = 0;
 
-    std::vector<runtime_offset> object_offsets;
+    std::vector<runtime_offset> object_offsets, record_sizes;
     std::vector<record_offset> member_offsets;
     std::vector<record_offset> base_offsets;
 

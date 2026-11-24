@@ -1,3 +1,10 @@
+#include "project/parser/source_token_binding_policy.hpp"
+#include "project/construction/source_index_audit.hpp"
+#include "project/construction/publish_source_profile.hpp"
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #if defined(CW_SOURCE_TARGET_CONTEXT_AB) || defined(CW_SOURCE_TARGET_CONTEXT_AUDIT)
 #include "project/parser/source_target_context_policy.hpp"
 #endif
@@ -105,7 +112,7 @@ enum class benchmark_mode {
         output = benchmark_mode::publish;
         return true;
     }
-    if (value == "publish-profile" || value == "publish-stage" || value == "publish-timeline") {
+    if (value == "publish-profile" || value == "publish-stage" || value == "publish-timeline" || value == "publish-source-profile" || value == "publish-index-audit") {
         output = benchmark_mode::publish_profile;
         return true;
     }
@@ -549,6 +556,8 @@ void print_usage() {
         << "Usage:\n"
         << "  ServerEngineV4PublishBenchmark publish <project.json> <expected-types>\n"
         << "  ServerEngineV4PublishBenchmark publish-profile <project.json> <expected-types>\n"
+        << "  ServerEngineV4PublishBenchmark publish-index-audit <project.json> <expected-types>\n"
+        << "  ServerEngineV4PublishBenchmark publish-source-profile <project.json> <expected-types>\n"
         << "  ServerEngineV4PublishBenchmark publish-timeline <project.json> <expected-types>\n"
         << "  ServerEngineV4PublishBenchmark publish-stage <project.json> <expected-types>\n"
         << "  ServerEngineV4PublishBenchmark load    <project.json> <expected-types>\n"
@@ -561,10 +570,79 @@ void print_usage() {
 
 }
 
+#if defined(_WIN32)
+// Process counters include cached I/O, but not all Cache Manager mmap writeback.
+struct process_measurement {
+    FILETIME unused{}, user_start{}, kernel_start{};
+    IO_COUNTERS io_start{}, io_end{};
+    std::uint64_t cpu_user_100ns=0, cpu_kernel_100ns=0, peak_private=0, samples=0;
+    bool times_valid=false, io_valid=false;
+    std::mutex mutex; std::condition_variable wake; bool done=false;
+    std::thread sampler;
+    static std::uint64_t ticks(FILETIME t) { return (std::uint64_t{t.dwHighDateTime}<<32)|t.dwLowDateTime; }
+    void sample() {
+        PROCESS_MEMORY_COUNTERS_EX m{};
+        if(GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&m),sizeof(m))) {
+            peak_private=(std::max)(peak_private,static_cast<std::uint64_t>(m.PrivateUsage)); ++samples;
+        }
+    }
+    void start() {
+        times_valid=GetProcessTimes(GetCurrentProcess(),&unused,&unused,&kernel_start,&user_start)!=0;
+        io_valid=GetProcessIoCounters(GetCurrentProcess(),&io_start)!=0;
+        sample();
+        sampler=std::thread([this] { std::unique_lock lock{mutex}; while(!wake.wait_for(lock,std::chrono::milliseconds{10},[this]{return done;})) sample(); });
+    }
+    void stop() {
+        { std::lock_guard lock{mutex}; done=true; } wake.notify_one();
+        if(sampler.joinable()) sampler.join();
+        sample(); FILETIME user{},kernel{};
+        times_valid=times_valid && GetProcessTimes(GetCurrentProcess(),&unused,&unused,&kernel,&user)!=0;
+        if(times_valid) {cpu_user_100ns=ticks(user)-ticks(user_start); cpu_kernel_100ns=ticks(kernel)-ticks(kernel_start);}
+        io_valid=io_valid && GetProcessIoCounters(GetCurrentProcess(),&io_end)!=0;
+    }
+    ~process_measurement() { if(sampler.joinable()) stop(); }
+    void print(std::ostream& out) const {
+        out<<",cpu_times_valid="<<times_valid<<",cpu_user_ms="<<cpu_user_100ns/1e4<<",cpu_kernel_ms="<<cpu_kernel_100ns/1e4
+           <<",peak_private_bytes_sampled="<<peak_private<<",private_sample_interval_ms=10,private_samples="<<samples
+           <<",process_io_valid="<<io_valid;
+        if(io_valid) out<<",process_read_bytes="<<io_end.ReadTransferCount-io_start.ReadTransferCount
+            <<",process_write_bytes="<<io_end.WriteTransferCount-io_start.WriteTransferCount
+            <<",process_other_bytes="<<io_end.OtherTransferCount-io_start.OtherTransferCount
+            <<",process_read_ops="<<io_end.ReadOperationCount-io_start.ReadOperationCount
+            <<",process_write_ops="<<io_end.WriteOperationCount-io_start.WriteOperationCount;
+    }
+};
+#endif
+
 int main(
     int argc,
     char* argv[]) {
 
+#ifdef CW_SOURCE_TOKEN_BINDING_AB
+    if(const auto* reuse=std::getenv("CW_SOURCE_TOKEN_BINDING_REUSE"))
+        cw::server::detail::source_token_binding_reuse=std::string_view{reuse} != "0";
+#endif
+#ifdef CW_PUBLISH_SOURCE_PROFILE
+    if(argc==2 && std::string_view{argv[1]}=="source-profile-self-test") {
+        using namespace cw::server::source_profile;
+        static std::uint64_t time=0;
+        data={}; data.enabled=true; data.clock=+[]()->std::uint64_t {return time;};
+        { root r{0}; time=10;
+          { scope a{tokens}; time=30;
+            { scope same{tokens}; time=35; }
+            { scope b{symbols_types}; time=65; }
+            time=70;
+          }
+          time=77;
+        }
+        const bool valid=data.source_ns==77 && data.ns[other]==17 && data.ns[tokens]==30
+            && data.ns[symbols_types]==30 && data.calls[tokens]==1 && data.sampled_roots==1 && !data.active;
+        data.enabled=false; { root ignored{0}; scope ignored_scope{links}; time=100; }
+        if(!valid || data.roots!=1 || data.source_ns!=77) return 4;
+        std::cout<<"source-profile-self-test: exclusive clocks, nested categories and disabled probes passed\n";
+        return 0;
+    }
+#endif
 #ifdef CW_GRAPH_MEMBER_INDEX_AB
     const auto* reference=std::getenv("CW_GRAPH_MEMBER_INDEX_REFERENCE");
     cw::server::detail::member_index_growth_reference=reference&&std::string_view{reference}=="1";
@@ -723,6 +801,20 @@ int main(
     std::unique_ptr<cw::server::project>
         project;
 
+#ifdef CW_SOURCE_INDEX_AUDIT
+    cw::server::source_index_audit::data.enabled=std::string_view{argv[1]} == "publish-index-audit";
+#endif
+    const bool source_detail = std::string_view{argv[1]} == "publish-source-profile";
+#ifdef CW_PUBLISH_SOURCE_PROFILE
+    cw::server::source_profile::data.enabled=source_detail;
+    if(source_detail) cw::server::source_profile::calibrate();
+    if(const auto* seed=std::getenv("CW_SOURCE_PROFILE_SEED"))
+        cw::server::source_profile::data.seed=static_cast<std::uint32_t>(std::strtoul(seed,nullptr,10));
+#endif
+#if defined(_WIN32)
+    process_measurement process_metrics;
+    process_metrics.start();
+#endif
     const auto started =
         std::chrono::steady_clock::now();
 
@@ -734,7 +826,7 @@ int main(
         runtime_telemetry;
     cw::server::full_construction_telemetry
         publish_telemetry;
-    publish_telemetry.phase_only = std::string_view{argv[1]} == "publish-timeline";
+    publish_telemetry.phase_only = source_detail || std::string_view{argv[1]} == "publish-index-audit" || std::string_view{argv[1]} == "publish-timeline";
     publish_telemetry.detailed_source = std::string_view{argv[1]} == "publish-profile";
 
     if (mode == benchmark_mode::publish ||
@@ -786,6 +878,9 @@ int main(
 
     const auto finished =
         std::chrono::steady_clock::now();
+#if defined(_WIN32)
+    process_metrics.stop();
+#endif
 
 #ifdef CW_SOURCE_LOCALITY_AUDIT
     // Also retain diagnostic prefixes when an input is unsupported. Consumers
@@ -902,6 +997,15 @@ int main(
         << ",identities="
         << compiled.identity_count();
 
+#if defined(_WIN32)
+    process_metrics.print(std::cout);
+#endif
+#ifdef CW_PUBLISH_SOURCE_PROFILE
+    if(source_detail) cw::server::source_profile::print(std::cout);
+#endif
+#ifdef CW_SOURCE_INDEX_AUDIT
+    if(cw::server::source_index_audit::data.enabled) cw::server::source_index_audit::print(std::cout);
+#endif
     if (mode == benchmark_mode::publish_profile) {
         const auto& t = publish_telemetry;
         const auto accounted = t.cleanup_ns + t.context_setup_ns + t.configuration_ns +
@@ -914,6 +1018,8 @@ int main(
             << ",unaccounted_ms=" << ns_to_ms(t.operation_ns) - ns_to_ms(accounted)
             << ",external_ms=" << elapsed - ns_to_ms(t.operation_ns)
             << ",context_setup_ms=" << ns_to_ms(t.context_setup_ns)
+            << ",warnings_ms=" << ns_to_ms(publish_telemetry.warnings_ns)
+            << ",topology_ms=" << ns_to_ms(publish_telemetry.topology_ns)
             << ",post_semantic_ms=" << ns_to_ms(t.post_semantic_ns)
             << ",post_persistence_ms=" << ns_to_ms(t.post_persistence_ns)
             << ",transient_release_ms=" << ns_to_ms(t.transient_release_ns)

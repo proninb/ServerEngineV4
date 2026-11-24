@@ -18,6 +18,7 @@
 #include "project/task/runtime/task_perf_probe.hpp"
 #include "fixed_shared_memory.hpp"
 #include "project/task/runtime/task_process.hpp"
+#include "project/task/runtime/task_variables.hpp"
 #if defined(CW_UNLOAD_HEAP_OPTIMIZATION)
 #include "unload_heap_optimization.hpp"
 #endif
@@ -957,6 +958,7 @@ server_response server::execute_message(
 server_response server::execute(
     const server_request& request) {
 
+    const auto operation_started = std::chrono::steady_clock::now();
     server_response result;
     result.operation =
         next_operation();
@@ -1246,10 +1248,7 @@ server_response server::execute(
         }
 
         const auto queried =
-            get_runtime_link(
-                context.project->compiled(),
-                request.objects,
-                result.link);
+            context.project->query_links(request.objects, result.link);
 
         switch (queried) {
         case runtime_query_result::success:
@@ -1308,6 +1307,7 @@ server_response server::execute(
         break;
     }
 
+    case server_request_kind::set_value:
     case server_request_kind::get_value: {
         if (!context.project) {
             result.diagnostics.emit(
@@ -1315,7 +1315,7 @@ server_response server::execute(
                     diagnostics::project_not_loaded,
                     result.operation)
                     .detail(
-                        "GET_VALUE requires an active Project")
+                        "Value access requires an active Project")
                     .build());
 
             result.status =
@@ -1345,13 +1345,15 @@ server_response server::execute(
 
         runtime_value value;
 
-        const auto queried =
-            get_runtime_value(
-                context.project->compiled(),
-                context.project->runtime_bindings(),
-                bytes.first(logical_size),
-                request.name,
-                value);
+        runtime_query_result queried;
+        if (request.kind == server_request_kind::set_value) {
+            std::lock_guard lock(scheduler_mutex);
+            queried = set_runtime_value(context.project->compiled(), context.project->runtime_bindings(),
+                bytes.first(logical_size), request.name, request.value, value);
+        } else {
+            queried = get_runtime_value(context.project->compiled(), context.project->runtime_bindings(),
+                bytes.first(logical_size), request.name, value);
+        }
 
         switch (queried) {
         case runtime_query_result::success:
@@ -1418,6 +1420,21 @@ server_response server::execute(
         break;
     }
 
+    if (operation_diagnostics_enabled || (context.configuration.telemetry && context.configuration.telemetry->operation_timings)) {
+        result.has_operation_metrics = true;
+        result.elapsed_us = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - operation_started).count());
+        result.elapsed_ms = result.elapsed_us / 1000;
+        if (result.status == server_status::success && context.project) {
+            result.has_project_metrics = true;
+            const auto& image = context.project->compiled();
+            result.types = image.live_type_count();
+            result.objects = image.live_object_count();
+            result.links = image.live_link_count();
+            result.members = image.member_count();
+            result.runtime_bytes = context.project->runtime_size();
+            result.link_index_ready = context.project->link_index_ready();
+        }
+    }
     result.diagnostics.sort_deterministic();
     return result;
 }
@@ -1485,6 +1502,7 @@ server_status server::load(
     }
     task_manager.set_system_table(&task_system_table);
     set_project_state(project_state::loaded);
+    context.project->configure_link_queries(context.configuration.settings.link_query_index);
 
     return server_status::success;
 }
@@ -1552,6 +1570,7 @@ server_status server::publish(
     }
     task_manager.set_system_table(&task_system_table);
     set_project_state(project_state::loaded);
+    context.project->configure_link_queries(context.configuration.settings.link_query_index);
 
     return server_status::success;
 }
@@ -1619,6 +1638,7 @@ server_status server::build(
     }
     task_manager.set_system_table(&task_system_table);
     set_project_state(project_state::loaded);
+    context.project->configure_link_queries(context.configuration.settings.link_query_index);
 
     return server_status::success;
 }
@@ -1686,6 +1706,7 @@ server_status server::rebuild(
     }
     task_manager.set_system_table(&task_system_table);
     set_project_state(project_state::loaded);
+    context.project->configure_link_queries(context.configuration.settings.link_query_index);
 
     return server_status::success;
 }
@@ -2547,6 +2568,30 @@ server_status server::run_project(
             attachment.size = static_cast<std::uint64_t>(shm.size());
             attachment.address = static_cast<std::uint64_t>(shm.address());
             std::memcpy(attachment.name, name.data(), name.size());
+            std::vector<std::byte> catalog;
+            if (!build_task_variable_catalog(context.project->compiled(), context.project->runtime_bindings(),
+                    shm.bytes(), catalog)) {
+                diagnostics.emit(diagnostic(diagnostics::runtime_state_invalid, operation)
+                    .detail("Could not prepare the Task variable catalog").build());
+                return server_status::project_runtime_failed;
+            }
+            task_variable_catalog.reset();
+            std::wstring catalog_name(name.begin(), name.end());
+            catalog_name.append(task_runtime::variable_catalog_suffix.begin(), task_runtime::variable_catalog_suffix.end());
+            const std::uint64_t catalog_size = catalog.size();
+            const auto handle = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
+                static_cast<DWORD>(catalog_size >> 32), static_cast<DWORD>(catalog_size), catalog_name.c_str());
+            const bool exists = GetLastError() == ERROR_ALREADY_EXISTS;
+            std::shared_ptr<void> owner(handle, [](void* value) { if (value) CloseHandle(value); });
+            auto* view = handle && !exists ? MapViewOfFile(handle, FILE_MAP_WRITE, 0, 0, catalog.size()) : nullptr;
+            if (!view) {
+                diagnostics.emit(diagnostic(diagnostics::runtime_state_invalid, operation)
+                    .detail("Could not publish the Task variable catalog").build());
+                return server_status::project_runtime_failed;
+            }
+            std::memcpy(view, catalog.data(), catalog.size());
+            UnmapViewOfFile(view);
+            task_variable_catalog = std::move(owner);
             std::string error;
             if (!task_manager.start(config, context.project->path().parent_path(),
                     5000, attachment, error)) {
@@ -2646,7 +2691,14 @@ server_status server::kill_task(
         return server_status::runtime_state_invalid;
     }
     std::unique_lock<std::mutex> lock(scheduler_mutex);
-    task_manager.finish_kill(index);
+    if (!task_manager.finish_kill(index)) {
+        task_runtime_failed = true;
+        scheduler_dedicated_active = false;
+        set_project_state(project_state::freeze);
+        diagnostics.emit(diagnostic(diagnostics::runtime_state_invalid, operation)
+            .detail("Task exit not confirmed; cleanup pending, Project SHM retained").build());
+        return server_status::project_runtime_failed;
+    }
     if (task_manager.active_count() != 0) {
         next_task_tick = std::chrono::steady_clock::now();
         scheduler_resync_requested = true;
@@ -2735,6 +2787,7 @@ server_status server::unload(
     const bool stopped = !task_manager.active() || task_manager.stop(task_error);
     if (!stopped) {
         task_runtime_failed = true;
+        scheduler_dedicated_active = false;
         diagnostics.emit(diagnostic(diagnostics::runtime_state_invalid, operation)
             .detail("Task STOP failed; Project SHM retained: " + task_error).build());
         return server_status::project_runtime_failed;
@@ -2745,6 +2798,7 @@ server_status server::unload(
     scheduler_dedicated_active = false;
     scheduler_realtime_active = false;
     scheduler_project_period_us = scheduler_default_period_us;
+    task_variable_catalog.reset();
     task_manager.set_system_table(nullptr);
     task_system_table.close();
     context.project.reset();
@@ -2790,6 +2844,7 @@ void server::shutdown() noexcept {
     std::string task_error;
     if (task_manager.active()) (void)task_manager.stop(task_error);
     task_manager.terminate();
+    task_variable_catalog.reset();
     task_manager.set_system_table(nullptr);
     task_system_table.close();
     context.project.reset();

@@ -1,3 +1,4 @@
+#include "../construction/publish_source_profile.hpp"
 #pragma once
 
 #include "../graph/graph.hpp"
@@ -42,6 +43,7 @@ inline bool enum_constant(const graph& G, const identity_space& identities,
 
 inline bool normalize_enum_constant(const graph& G, type_ref target,
     construction_value& value) noexcept {
+    CW_SOURCE_PROFILE(type_validation);
     if (G.enum_types().empty()) return true;
     derived_type_record qualifiers;
     auto scalar_target = target;

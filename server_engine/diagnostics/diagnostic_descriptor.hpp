@@ -389,6 +389,11 @@ inline constexpr diagnostic_descriptor project_semantic_error{
     "Project source semantic construction failed",
 };
 
+inline constexpr diagnostic_descriptor project_duplicate_alias{
+    diagnostic_id{2035}, diagnostic_domain::parser, diagnostic_severity::warning,
+    "project.duplicate_alias", "Type alias is declared more than once with the same type",
+};
+
 inline constexpr diagnostic_descriptor project_duplicate_initialization{
     diagnostic_id{2034},
     diagnostic_domain::parser,

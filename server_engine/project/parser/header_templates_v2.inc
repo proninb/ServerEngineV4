@@ -154,13 +154,63 @@ server_status header_parser_v2::parse_using(identity_ref scope) noexcept {
         return fail(parser_v2_failure_kind::unsupported, "Expected a using alias declaration");
     const auto name = current()->identifier;
     const auto file = current()->file;
+    const source_range alias_source{current()->source_offset, current()->source_length};
     status = consume();
     if (!succeeded(status)) return status;
+    bit_rule bits;
+    if (at(token_kind::l_bracket)) {
+        status = consume();
+        if (!succeeded(status)) return status;
+        status = expect(token_kind::l_bracket, "Expected '[[' for cw::bits");
+        if (!succeeded(status)) return status;
+        if (!at(token_kind::identifier) || input.spelling(*current()) != "cw")
+            return fail(parser_v2_failure_kind::syntax, "Expected cw::bits attribute");
+        status = consume();
+        if (!succeeded(status)) return status;
+        status = expect(token_kind::scope, "Expected '::' in cw::bits");
+        if (!succeeded(status)) return status;
+        if (!at(token_kind::identifier) || input.spelling(*current()) != "bits")
+            return fail(parser_v2_failure_kind::syntax, "Expected cw::bits attribute");
+        status = consume();
+        if (!succeeded(status)) return status;
+        status = expect(token_kind::l_paren, "Expected '(' after cw::bits");
+        if (!succeeded(status)) return status;
+        resolved_type result;
+        status = parse_type(scope, result);
+        if (!succeeded(status)) return status;
+        if (result.type != G.intrinsic(intrinsic_type::bool_type)) {
+            type_handle handle;
+            const auto* entry = G.named(result.type, handle) ? G.find(handle) : nullptr;
+            if (!entry || entry->kind == graph_type_kind::enumeration ||
+                entry->storage_intrinsic() != intrinsic_type::bool_type)
+                return fail(parser_v2_failure_kind::semantic, "cw::bits result type must be bool or a bool alias");
+            bits.result_alias = G.identity(handle);
+        }
+        status = expect(token_kind::comma, "Expected ',' in cw::bits");
+        if (!succeeded(status)) return status;
+        std::int64_t width = 0;
+        status = parse_integer_expression(width);
+        if (!succeeded(status)) return status;
+        if (width < 1 || width > 64)
+            return fail(parser_v2_failure_kind::semantic, "Invalid cw::bits count");
+        bits.bit_count = static_cast<std::uint8_t>(width);
+        status = expect(token_kind::r_paren, "Expected ')' after cw::bits");
+        if (!succeeded(status)) return status;
+        status = expect(token_kind::r_bracket, "Expected ']]' after cw::bits");
+        if (!succeeded(status)) return status;
+        status = expect(token_kind::r_bracket, "Expected ']]' after cw::bits");
+        if (!succeeded(status)) return status;
+    }
     status = expect(token_kind::assign, "Expected '=' in using alias");
     if (!succeeded(status)) return status;
     resolved_type type;
     status = parse_type(scope, type);
     if (!succeeded(status)) return status;
+    status = parse_array_suffix(type);
+    if (!succeeded(status)) return status;
+    derived_type_record array_shape;
+    const bool array_alias = G.derived(type.type, array_shape) &&
+        array_shape.kind == derived_type_kind::bounded_array;
     intrinsic_type intrinsic;
     if (!G.intrinsic(type.type, intrinsic)) {
         type_handle handle;
@@ -168,8 +218,8 @@ server_status header_parser_v2::parse_using(identity_ref scope) noexcept {
         intrinsic = entry && entry->scalar_named() && entry->kind != graph_type_kind::enumeration
             ? entry->storage_intrinsic() : intrinsic_type::none;
     }
-    if (intrinsic < intrinsic_type::bool_type || intrinsic > intrinsic_type::long_double_type)
-        return fail(parser_v2_failure_kind::unsupported, "Using aliases currently require an intrinsic scalar type");
+    if (!array_alias && (intrinsic < intrinsic_type::bool_type || intrinsic > intrinsic_type::long_double_type))
+        return fail(parser_v2_failure_kind::unsupported, "Using aliases require a scalar or bounded array type");
     if (!at(token_kind::semicolon))
         return fail(parser_v2_failure_kind::syntax, "Expected ';' after using alias");
     identity_ref identity;
@@ -178,9 +228,28 @@ server_status header_parser_v2::parse_using(identity_ref scope) noexcept {
     for (const auto& definition : templates->records)
         if (definition.identity == identity)
             return fail(parser_v2_failure_kind::semantic, "Using alias conflicts with a template name");
+    const auto previous_array = templates->array_aliases.find(identity.value());
+    if (array_alias) {
+        if (bits.bit_count || G.find_type(identity) ||
+            (previous_array != templates->array_aliases.end() && previous_array->second != type.type))
+            return fail(parser_v2_failure_kind::semantic, "Conflicting array using alias");
+        try { templates->array_aliases.emplace(identity.value(), type.type); }
+        catch (...) { return server_status::io_error; }
+        return consume();
+    }
+    if (previous_array != templates->array_aliases.end())
+        return fail(parser_v2_failure_kind::semantic, "Using alias conflicts with an array alias");
+    const bool repeated = static_cast<bool>(G.find_type(identity));
     type_handle handle;
-    status = G.define_intrinsic_alias(identity, intrinsic, handle, true);
+    if (bits.bit_count > bit_storage_width(intrinsic))
+        return fail(parser_v2_failure_kind::semantic, "cw::bits exceeds the alias storage width");
+    status = G.define_intrinsic_alias(identity, intrinsic, handle, true, bits);
     if (!succeeded(status)) return fail(parser_v2_failure_kind::semantic, "Conflicting using alias");
+    if (repeated && warnings) {
+        try { warnings->push_back({parser_warning_kind::duplicate_alias, file, alias_source,
+            "Repeated identical using alias declaration"}); }
+        catch (...) { return server_status::io_error; }
+    }
     status = record_contribution(file, source_data_ref::type(identity, true));
     if (!succeeded(status)) return status;
     return consume();
@@ -228,6 +297,12 @@ server_status header_parser_v2::parse_template(identity_ref scope) noexcept {
         definition.tokens.push_back(*current());
         status = consume();
         if (!succeeded(status)) return status;
+        status = parse_record_attributes(definition.index_member, definition.index_origin, &definition.index_parameter);
+        if (!succeeded(status)) return status;
+        if (definition.index_parameter &&
+            std::none_of(definition.parameters.begin(), definition.parameters.end(),
+                [&](const auto& parameter) { return !parameter.type && parameter.name == definition.index_parameter; }))
+            return fail(parser_v2_failure_kind::semantic, "cw::index requires an integer template parameter");
         if (!at(token_kind::identifier))
             return fail(parser_v2_failure_kind::syntax, "Expected template record name");
         const auto name = current()->identifier;
@@ -237,12 +312,23 @@ server_status header_parser_v2::parse_template(identity_ref scope) noexcept {
         definition.tokens.push_back(*current());
         status = identities.resolve(scope, name, identity_kind::type, definition.identity);
         if (!succeeded(status)) return status;
-        if (G.find_type(definition.identity))
-            return fail(parser_v2_failure_kind::semantic, "Template conflicts with a concrete type");
+        if (G.find_type(definition.identity) || templates->array_aliases.contains(definition.identity.value()))
+            return fail(parser_v2_failure_kind::semantic, "Template conflicts with a concrete type or alias");
         status = consume();
         if (!succeeded(status)) return status;
+        if (at(token_kind::colon)) {
+            // Resolve base template arguments when replaying the specialization.
+            do {
+                if (input.finished() || current() == nullptr || at(token_kind::semicolon) ||
+                    definition.tokens.size() >= 1000000)
+                    return fail(parser_v2_failure_kind::syntax, "Incomplete template base list");
+                definition.tokens.push_back(*current());
+                status = consume();
+                if (!succeeded(status)) return status;
+            } while (!at(token_kind::l_brace));
+        }
         if (!at(token_kind::l_brace))
-            return fail(parser_v2_failure_kind::unsupported, "Template requires a record body; partial specializations and template bases are unsupported");
+            return fail(parser_v2_failure_kind::unsupported, "Template requires a record body");
         std::size_t braces = 0;
         do {
             const auto* token = current();
@@ -266,7 +352,9 @@ server_status header_parser_v2::parse_template(identity_ref scope) noexcept {
             if (previous.identity != definition.identity) continue;
             if (previous.root == definition.root)
                 return fail(parser_v2_failure_kind::semantic, "Duplicate template definition in one Header root");
-            bool same = previous.parameters.size() == definition.parameters.size() &&
+            bool same = previous.index_member == definition.index_member &&
+                previous.index_origin == definition.index_origin && previous.index_parameter == definition.index_parameter &&
+                previous.parameters.size() == definition.parameters.size() &&
                 previous.tokens.size() == definition.tokens.size();
             for (std::size_t p = 0; same && p < previous.parameters.size(); ++p)
                 same = previous.parameters[p].name == definition.parameters[p].name &&
@@ -373,7 +461,14 @@ server_status header_parser_v2::instantiate_template(identity_ref& identity, res
             ~pop_replay() { stack.pop_back(); pending = saved; token = saved_token; }
         } pop{template_replays, has_split_greater, split_greater, has_split_greater, split_greater};
         has_split_greater = false;
-        status = parse_record(definition->scope);
+        auto index_origin = definition->index_origin;
+        for (std::size_t p = 0; definition->index_parameter && p < definition->parameters.size(); ++p) {
+            if (definition->parameters[p].name == definition->index_parameter) {
+                index_origin = integers[p];
+                break;
+            }
+        }
+        status = parse_record(definition->scope, definition->index_member, index_origin);
         if (!succeeded(status)) return status;
         if (template_replays.back().cursor != template_replays.back().tokens.size())
             return fail(parser_v2_failure_kind::syntax, "Unexpected tokens after instantiated record");

@@ -1,3 +1,5 @@
+#include "../construction/source_index_audit.hpp"
+#include "../construction/publish_source_profile.hpp"
 #ifdef CW_STRING_INTERN_SLOT_AB
 #include "intern_slot_policy.hpp"
 #endif
@@ -89,6 +91,7 @@ server_status string_table::bind_baseline(
 
 std::uint32_t string_table::hash_text(
     std::string_view value) noexcept {
+    CW_INDEX_TIMER(string_hash);
 
     std::uint32_t hash = 2166136261u;
 
@@ -207,6 +210,7 @@ string_id string_table::find(
 string_id string_table::find_hashed(
     std::string_view value,
     std::uint32_t hash) const noexcept {
+    CW_INDEX_TIMER(strings_lookup);
 
     if (!index.empty()) {
         const auto mask =
@@ -221,6 +225,7 @@ string_id string_table::find_hashed(
              probe < index.size();
              ++probe) {
 
+            CW_INDEX_COUNT(string_probes);
             const auto& slot =
                 index[position];
 
@@ -271,6 +276,7 @@ void string_table::insert_index(
 
 server_status string_table::ensure_index_capacity(
     std::size_t additional) noexcept {
+    CW_SOURCE_PROFILE(indexes);
 
     if (additional >
         (std::numeric_limits<std::size_t>::max)() -
@@ -288,6 +294,7 @@ server_status string_table::ensure_index_capacity(
         return server_status::success;
     }
 
+    CW_INDEX_TIMER(strings_rehash);
     const auto capacity =
         next_index_capacity(required);
 
@@ -333,6 +340,7 @@ server_status string_table::intern(
 string_id string_table::find_prehashed(
     std::string_view value,
     std::uint32_t lexical_hash) const noexcept {
+    CW_SOURCE_PROFILE(strings);
     return value.empty() ? string_id{} :
         find_hashed(value, lexical_hash == 0 ? 1u : lexical_hash);
 }
@@ -341,6 +349,7 @@ server_status string_table::intern_prehashed(
     std::string_view value,
     std::uint32_t lexical_hash,
     string_id& output) noexcept {
+    CW_SOURCE_PROFILE(strings);
 #ifdef CW_CANONICALIZER_TRACE
     canonicalizer01::exit_capture trace{[&]() noexcept {
         if (output) canonicalizer01::string_event(this, get(output), output.value());

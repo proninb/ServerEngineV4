@@ -24,6 +24,7 @@ enum field_bit : std::uint32_t {
     options_bit = 1u << 7,
     type_bit = 1u << 8,
     objects_bit = 1u << 9,
+    value_bit = 1u << 10,
 };
 
 class request_handler final : public json_event_handler {
@@ -145,6 +146,8 @@ public:
 
         if (key_value == "name") {
             assign_string(name_bit, value, name_value);
+        } else if (key_value == "value") {
+            assign_string(value_bit, value, runtime_value_text);
         } else if (key_value == "type") {
             assign_string(type_bit, value, type_value);
         } else if (key_value == "path") {
@@ -175,6 +178,7 @@ public:
     std::uint64_t request_value = 0;
     std::string command_value;
     std::string name_value;
+    std::string runtime_value_text;
     std::string type_value;
     std::string path_value;
     std::string login_value;
@@ -535,6 +539,15 @@ void append_diagnostics(
                 output);
         }
 
+        if (!record.location.file.empty()) {
+            std::string source_file;
+            if (filesystem_path_to_utf8(record.location.file, source_file) == filesystem_path_result::success) {
+                output += ",\"file\":";
+                append_escaped(source_file, output);
+            }
+        }
+        output += ",\"offset\":"; append_integer(record.location.offset, output);
+        output += ",\"length\":"; append_integer(record.location.length, output);
         if (record.location.has_position()) {
             output += ",\"line\":";
             append_integer(
@@ -623,6 +636,8 @@ void append_response(
             append_escaped(
                 response.result.object.type,
                 output);
+            output += ",\"file\":";
+            append_escaped(response.result.object.file, output);
 
             output.push_back('}');
             break;
@@ -862,6 +877,20 @@ void append_response(
         break;
     }
 
+    if (response.result.has_operation_metrics) {
+        output += ",\"metrics\":{\"elapsed_ms\":";
+        append_integer(response.result.elapsed_ms, output);
+        output += ",\"elapsed_us\":"; append_integer(response.result.elapsed_us, output);
+        if (response.result.has_project_metrics) {
+            output += ",\"types\":"; append_integer(response.result.types, output);
+            output += ",\"objects\":"; append_integer(response.result.objects, output);
+            output += ",\"links\":"; append_integer(response.result.links, output);
+            output += ",\"members\":"; append_integer(response.result.members, output);
+            output += ",\"runtime_bytes\":"; append_integer(response.result.runtime_bytes, output);
+            output += response.result.link_index_ready ? ",\"link_index_ready\":true" : ",\"link_index_ready\":false";
+        }
+        output.push_back('}');
+    }
     append_diagnostics(
         response.result.diagnostics,
         output);
@@ -1073,6 +1102,8 @@ json_decode_result decode_json_request(
             } else if (command == "GET_LINK") {
                 request.kind =
                     server_request_kind::get_link;
+            } else if (command == "SET_VALUE") {
+                request.kind = server_request_kind::set_value;
             } else if (command == "GET_VALUE") {
                 request.kind =
                     server_request_kind::get_value;
@@ -1247,6 +1278,14 @@ json_decode_result decode_json_request(
                         handler.objects_value);
                 break;
 
+            case server_request_kind::set_value:
+                if (!only(handler.seen, name_bit | value_bit) ||
+                    handler.name_value.empty() || handler.runtime_value_text.empty())
+                    return {json_protocol_error::invalid_schema};
+                request.name = std::move(handler.name_value);
+                request.value = std::move(handler.runtime_value_text);
+                break;
+
             case server_request_kind::get_value:
                 if (!only(
                         handler.seen,
@@ -1348,7 +1387,7 @@ bool encode_json_outbound(
         }
 
         return output.size() <=
-            tcp_json_max_frame_bytes;
+            tcp_json_max_response_bytes;
     } catch (...) {
         output.clear();
         return false;

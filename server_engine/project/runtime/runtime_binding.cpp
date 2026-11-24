@@ -70,6 +70,11 @@ bool runtime_binding_index::base_offset(
     return true;
 }
 
+bool runtime_binding_index::record_size(type_handle type, runtime_offset& size) const noexcept {
+    size = type && type.value() <= record_sizes.size() ? record_sizes[type.value() - 1] : 0;
+    return size != 0;
+}
+
 bool runtime_binding_index::reference_layout(
     std::uint8_t& size,
     std::uint64_t& target_base_address) const noexcept {
@@ -224,6 +229,7 @@ bool prepare_runtime_bindings(
         };
 
     try {
+        next.record_sizes.resize(project.type_count());
         next.object_offsets.assign(
             project.object_slot_count(),
             (std::numeric_limits<
@@ -241,6 +247,12 @@ bool prepare_runtime_bindings(
     }
     catch (...) {
         return false;
+    }
+
+    for (std::size_t index = 0; index < project.type_count(); ++index) {
+        const auto type = project.type_at(index);
+        shm_value_layout value;
+        if (type && layout.type(type, value)) next.record_sizes[type.value() - 1] = value.size;
     }
 
     for (std::size_t index = 0;

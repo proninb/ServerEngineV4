@@ -6,8 +6,20 @@
 #include <string>
 #include <new>
 #include <vector>
+#if defined(CW_TASK_PROCESS_TEST_FAULTS)
+#include "testing/task_process_faults.hpp"
+#endif
 namespace cw::server::task_runtime {
 namespace {
+BOOL terminate_child(HANDLE child, UINT code) noexcept {
+#if defined(CW_TASK_PROCESS_TEST_FAULTS)
+    if (testing::deny_termination.load(std::memory_order_relaxed)) {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+#endif
+    return TerminateProcess(child, code);
+}
 std::atomic<std::uint64_t> ipc_handles{0};
 std::atomic<std::uint64_t> ipc_views{0};
 void close_handle(HANDLE& h) noexcept {
@@ -28,10 +40,15 @@ task_ipc_ownership task_ipc_snapshot() noexcept {
             ipc_views.load(std::memory_order_relaxed)};
 }
 process::~process() { terminate(); }
-void process::terminate() noexcept {
+bool process::terminate() noexcept {
     if(child) {
-        if(WaitForSingleObject(child,0)==WAIT_TIMEOUT) TerminateProcess(child,1);
-        WaitForSingleObject(child, 1000);
+        const DWORD state = WaitForSingleObject(child, 0);
+        if (state == WAIT_TIMEOUT) {
+            (void)terminate_child(child, 1);
+            if (WaitForSingleObject(child, 1000) != WAIT_OBJECT_0) return false;
+        } else if (state != WAIT_OBJECT_0) {
+            return false;
+        }
     }
     if(control) {
         UnmapViewOfFile(control);
@@ -43,6 +60,7 @@ void process::terminate() noexcept {
     perf_trace.close();
     if (dispatch_file) { std::fclose(dispatch_file); dispatch_file=nullptr; }
     initialized=false; sequence=0; in_flight=false; in_flight_sequence=0; in_flight_cycle=0; in_flight_start=0;
+    return true;
 }
 bool process::start(const std::wstring& executable,std::uint32_t timeout_ms,std::string& error) {
     return start_impl(executable,timeout_ms,nullptr,error);
@@ -53,7 +71,8 @@ bool process::start(const std::wstring& executable,std::uint32_t timeout_ms,
 }
 bool process::start_impl(const std::wstring& executable,std::uint32_t timeout_ms,
                          const shm_attachment* attachment,std::string& error) {
-    terminate(); timeout=timeout_ms;
+    if (!terminate()) { error="Previous Task is still owned; cleanup pending"; return false; }
+    timeout=timeout_ms;
     const auto name=unique_name();
     perf_trace.open(name,L"parent");
     // PERF-49C: opt-in, buffered dispatch timestamps; no SHM ABI changes.
@@ -218,7 +237,7 @@ stop_result process::stop_checked(std::string& error) {
         error = "Task process wait failed before termination: " + std::to_string(GetLastError());
         return stop_result::failed;
     }
-    if (!TerminateProcess(child, 1)) {
+    if (!terminate_child(child, 1)) {
         const DWORD win32 = GetLastError();
         if (WaitForSingleObject(child, 0) != WAIT_OBJECT_0) {
             error = "TerminateProcess failed: " + std::to_string(win32);
@@ -238,8 +257,9 @@ stop_result process::stop_checked(std::string& error) {
 
 bool process::stop(std::string& error) {
     const auto result = stop_checked(error);
-    terminate();
-    return result != stop_result::failed;
+    if (result == stop_result::failed) return false;
+    if (!terminate()) { error="Task exit could not be confirmed"; return false; }
+    return true;
 }
 
 }

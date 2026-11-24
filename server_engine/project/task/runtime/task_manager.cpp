@@ -21,7 +21,9 @@ bool manager::start(task_configuration value,
                     const std::filesystem::path& project_directory,
                     std::uint32_t timeout_ms, const shm_attachment& attachment,
                     std::string& error) {
-    terminate();
+    if (!terminate()) { error = "Task cleanup pending; start rejected"; return false; }
+    no_barrier_mode = !system_table && std::getenv("TASK_PERF52_NO_BARRIER") &&
+        std::string(std::getenv("TASK_PERF52_NO_BARRIER")) == "1";
     if (!validate_task_configuration(value, error)) return false;
     configuration = std::move(value);
     this->project_directory = project_directory;
@@ -87,7 +89,9 @@ bool manager::start(task_configuration value,
 bool manager::start(task_configuration value,
                     const std::filesystem::path& project_directory,
                     std::uint32_t timeout_ms, std::string& error) {
-    terminate();
+    if (!terminate()) { error = "Task cleanup pending; start rejected"; return false; }
+    no_barrier_mode = !system_table && std::getenv("TASK_PERF52_NO_BARRIER") &&
+        std::string(std::getenv("TASK_PERF52_NO_BARRIER")) == "1";
     saved_attachment.reset();
     if (!validate_task_configuration(value, error)) return false;
     configuration = std::move(value);
@@ -380,9 +384,9 @@ void manager::stop_completion() noexcept {
 }
 
 bool manager::tick(std::uint64_t cycle, bool frozen, std::string& error) {
+    if (cleanup_pending) { error = "Task cleanup pending; dispatch rejected"; return false; }
     // The system table requires a complete barrier for consistent Task snapshots.
-    if (!system_table && std::getenv("TASK_PERF52_NO_BARRIER") &&
-        std::string(std::getenv("TASK_PERF52_NO_BARRIER")) == "1")
+    if (no_barrier_mode)
         return tick_no_barrier(cycle, frozen, error);
     const auto perf_start = perf::clock::now();
     if (!started) { error = "Task Manager not started"; return false; }
@@ -580,6 +584,7 @@ bool manager::reap(std::string& error) {
 }
 
 bool manager::tick_overlap(std::uint64_t cycle, bool frozen, std::string& error) {
+    if (cleanup_pending) { error = "Task cleanup pending; dispatch rejected"; return false; }
     if (!started) { error = "Task Manager not started"; return false; }
     if (!reap(error)) return false;
     if (!executor) {
@@ -705,6 +710,7 @@ void manager::drain() noexcept {
 }
 
 bool manager::quiesce(std::string& error) {
+    if (cleanup_pending) { error = "Task cleanup pending"; return false; }
     if (!started) return true;
     std::unique_lock<std::mutex> lock(completion_mutex);
     // This is a temporary dispatch gate, not a process shutdown.
@@ -734,6 +740,12 @@ bool manager::quiesce(std::string& error) {
 }
 
 bool manager::stop(std::string& error) {
+    error.clear();
+    if (cleanup_pending) {
+        if (terminate()) return true;
+        error = "Task cleanup pending; process exit not confirmed";
+        return false;
+    }
     // Close dispatch before stopping children; no new TaskMain calls.
     {
         std::unique_lock<std::mutex> lock(completion_mutex);
@@ -776,9 +788,16 @@ bool manager::stop(std::string& error) {
             success = false;
         }
     }
-    terminate();
-    if (success) error.clear();
-    return success;
+    if (!success) {
+        cleanup_pending = true;
+        return false;
+    }
+    if (!terminate()) {
+        error = "Task cleanup pending; process exit not confirmed";
+        return false;
+    }
+    error.clear();
+    return true;
 }
 
 
@@ -787,6 +806,8 @@ bool manager::stop(std::string& error) {
 bool manager::request_kill(const std::string& id, std::size_t& index, std::string& error) {
     std::lock_guard<std::mutex> lock(supervisor_mutex);
     error.clear();
+    if (cleanup_pending) { error = "Task cleanup pending; retry UNLOAD"; return false; }
+    if (no_barrier_mode) { error = "Individual Task controls are unsupported in NO_BARRIER mode"; return false; }
     if (!started || !kill_requested) {
         error = "Task runtime is not active";
         return false;
@@ -815,16 +836,22 @@ bool manager::request_kill(const std::string& id, std::size_t& index, std::strin
     return true;
 }
 
-void manager::finish_kill(std::size_t index) noexcept {
+bool manager::finish_kill(std::size_t index) noexcept {
     std::lock_guard<std::mutex> lock(supervisor_mutex);
-    if (!started || index >= workers.size() || !kill_requested) return;
+    if (!started || index >= workers.size() || !kill_requested) return false;
     auto& child = workers[index].child;
-    if (child) { child->terminate(); child.reset(); }
+    if (child) {
+        if (!child->terminate()) { cleanup_pending = true; return false; }
+        child.reset();
+    }
     if (system_table) system_table->task_killed(index);
+    return true;
 }
 
 bool manager::restart_one(const std::string& id, std::size_t& index, std::string& error) {
     error.clear();
+    if (cleanup_pending) { error = "Task cleanup pending; retry UNLOAD"; return false; }
+    if (no_barrier_mode) { error = "Individual Task controls are unsupported in NO_BARRIER mode"; return false; }
     if (!started || !kill_requested) {
         error = "Task runtime is not active; use RUN to initialize it";
         return false;
@@ -846,7 +873,14 @@ bool manager::restart_one(const std::string& id, std::size_t& index, std::string
         replacement->start(executable.lexically_normal().wstring(), task_timeout_ms,
             *saved_attachment, error) :
         replacement->start(executable.lexically_normal().wstring(), task_timeout_ms, error);
-    if (!ok) { error = "Task '" + id + "' TASKINIT failed: " + error; return false; }
+    if (!ok) {
+        if (replacement->process_handle()) {
+            workers[index].child = std::move(replacement);
+            cleanup_pending = true;
+        }
+        error = "Task '" + id + "' TASKINIT failed: " + error;
+        return false;
+    }
     {
         std::lock_guard<std::mutex> lock(supervisor_mutex);
         workers[index].child = std::move(replacement);
@@ -866,11 +900,18 @@ std::size_t manager::active_count() const noexcept {
     return count;
 }
 
-void manager::terminate() noexcept {
+bool manager::terminate() noexcept {
     stop_completion();
     drain();
     std::lock_guard<std::mutex> supervisor_lock(supervisor_mutex);
-    for (auto& worker : workers) if (worker.child) worker.child->terminate();
+    bool exited = true;
+    for (auto& worker : workers)
+        if (worker.child && !worker.child->terminate()) exited = false;
+    if (!exited) {
+        cleanup_pending = true;
+        completion_stopping = true;
+        return false;
+    }
     kill_requested.reset();
     manual_kill.store(false, std::memory_order_relaxed);
     project_directory.clear();
@@ -888,5 +929,8 @@ void manager::terminate() noexcept {
     completion_stop = false;
     completion_stopping = false;
     started = false;
+    cleanup_pending = false;
+    no_barrier_mode = false;
+    return true;
 }
 }

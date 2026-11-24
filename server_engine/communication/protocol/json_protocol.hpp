@@ -20,8 +20,11 @@ namespace cw::server {
 inline constexpr std::size_t tcp_json_max_frame_bytes =
     1024u * 1024u;
 
+inline constexpr std::size_t tcp_json_max_response_bytes =
+    64u * 1024u * 1024u;
+
 inline constexpr std::size_t tcp_json_outbound_budget_bytes =
-    4u * 1024u * 1024u;
+    128u * 1024u * 1024u;
 
 enum class json_request_kind : std::uint8_t {
     login = 0,

@@ -19,6 +19,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <vector>
 
@@ -94,6 +95,37 @@ struct shm_runtime_v2_physical_link final {
 static_assert(
     sizeof(shm_runtime_v2_physical_link) == 32);
 
+// Compact physical endpoints use 30-bit SHM offsets or program IDs. Larger
+// layouts/program spaces retain the original lossless 32-byte record.
+struct shm_runtime_v2_compact_link final { std::uint32_t source = 0, target = 0; };
+static_assert(sizeof(shm_runtime_v2_compact_link) == 8);
+inline constexpr std::uint32_t shm_runtime_v2_compact_limit = 1u << 30;
+inline bool pack_shm_runtime_v2_link(const shm_runtime_v2_physical_link& link,
+    shm_runtime_v2_compact_link& packed) noexcept {
+    packed = {};
+    if (link.reserved || (link.flags & ~3u)) return false;
+    if (!(link.flags & shm_runtime_v2_physical_link_live))
+        return link.flags == 0 && !link.source && !link.target && !link.source_program && !link.target_program;
+    const auto source = link.source_program ? link.source_program : link.source;
+    const auto target = link.target_program ? link.target_program : link.target;
+    if (source >= shm_runtime_v2_compact_limit || target >= shm_runtime_v2_compact_limit ||
+        (link.source_program && link.source) || (link.target_program && link.target)) return false;
+    packed.source = static_cast<std::uint32_t>(source) | (link.source_program ? 1u << 30 : 0) |
+        ((link.flags & shm_runtime_v2_physical_link_source_reference) ? 1u << 31 : 0);
+    packed.target = static_cast<std::uint32_t>(target) | (link.target_program ? 1u << 30 : 0) | (1u << 31);
+    return true;
+}
+inline shm_runtime_v2_physical_link unpack_shm_runtime_v2_link(shm_runtime_v2_compact_link packed) noexcept {
+    shm_runtime_v2_physical_link link{};
+    constexpr auto mask = shm_runtime_v2_compact_limit - 1;
+    if (packed.source & (1u << 30)) link.source_program = packed.source & mask;
+    else link.source = packed.source & mask;
+    if (packed.target & (1u << 30)) link.target_program = packed.target & mask;
+    else link.target = packed.target & mask;
+    link.flags = (packed.target >> 31) | ((packed.source >> 31) << 1);
+    return link;
+}
+
 struct shm_runtime_v2_physical_initialization final {
     // Direct position when target_program is zero.
     shm_offset target = 0;
@@ -105,7 +137,8 @@ struct shm_runtime_v2_physical_initialization final {
     std::uint8_t size = 0;
     // For size>0, reserved[0] is an optional eight-bit byte-write mask.
     // size==0/reserved[0]==255 encodes char_array_store in value, referring
-    // to runtime_initialization_bytes. Remaining reserved bytes stay zero.
+    // to runtime_initialization_bytes. For a bit store, reserved[1] holds
+    // the bit position in the addressed byte plus one.
     std::uint8_t reserved[3]{};
 };
 
@@ -118,6 +151,7 @@ struct shm_runtime_v2_physical_counts final {
     std::uint64_t endpoint_programs = 0;
     std::uint64_t dereferences = 0;
     std::uint64_t initialization_bytes = 0;
+    bool compact_links = false;
 };
 
 class shm_runtime_v2 final {
@@ -266,8 +300,28 @@ private:
 
     // Variant-C zero-copy execution columns. These spans point directly into
     // compiled.bin and exist only during Runtime construction.
-    std::span<const shm_runtime_v2_physical_link>
-        persisted_links;
+    class link_column_view {
+    public:
+        void assign(std::span<const std::byte> input, std::uint32_t stride) noexcept {
+            bytes = input; compact = stride == 8; count = stride ? input.size() / stride : 0;
+        }
+        [[nodiscard]] std::size_t size() const noexcept { return count; }
+        [[nodiscard]] shm_runtime_v2_physical_link operator[](std::size_t index) const noexcept {
+            if (compact) {
+                shm_runtime_v2_compact_link packed;
+                std::memcpy(&packed, bytes.data() + index * 8, 8);
+                return unpack_shm_runtime_v2_link(packed);
+            }
+            shm_runtime_v2_physical_link link;
+            std::memcpy(&link, bytes.data() + index * 32, 32);
+            return link;
+        }
+    private:
+        std::span<const std::byte> bytes;
+        std::size_t count = 0;
+        bool compact = false;
+    } persisted_links;
+    bool compact_link_offsets = false;
     std::span<const shm_runtime_v2_physical_initialization>
         persisted_initializations;
     std::span<const shm_runtime_v2_physical_endpoint_program>

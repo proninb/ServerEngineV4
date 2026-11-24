@@ -500,7 +500,7 @@ void write_u64(
     return kind ==
             endpoint_path_step_kind::member ||
         kind ==
-            endpoint_path_step_kind::array_index || kind == endpoint_path_step_kind::base ||
+            endpoint_path_step_kind::array_index || kind == endpoint_path_step_kind::bit_index || kind == endpoint_path_step_kind::base ||
             kind == endpoint_path_step_kind::dereference;
 }
 
@@ -548,6 +548,14 @@ void write_u64(
 
     return capacity;
 }
+
+[[nodiscard]] std::uint64_t publish_link_index_capacity(std::uint64_t live) noexcept {
+    const auto standard = index_capacity(live);
+    if (standard <= 8) return standard;
+    const auto smaller = standard / 2;
+    return live <= smaller - smaller / 4 ? smaller : standard;
+}
+
 
 [[nodiscard]] bool valid_record_kind(
     graph_record_kind kind) noexcept {
@@ -875,7 +883,7 @@ compiled_project_view::bind(
             invalid_image;
     }
 
-    if ((read_u32(image.data() + 8) != 25 && read_u32(image.data() + 8) != 26 &&
+    if ((read_u32(image.data() + 8) != 25 && read_u32(image.data() + 8) != 26 && read_u32(image.data() + 8) != 30 &&
          read_u32(image.data() + 8) != compiled_project_format_version) ||
         read_u32(
             image.data() + 12) !=
@@ -1368,8 +1376,8 @@ compiled_project_view::bind(
             graph_object_construction_slot_mask ||
         link_count >
             links.count ||
-        link_target_index.count !=
-            expected_link_target_index_count ||
+        (link_target_index.count != expected_link_target_index_count &&
+         (read_u32(image.data() + 8) < 31 || link_target_index.count != publish_link_index_capacity(links.count))) ||
         object_initialization_target_index.count !=
             expected_initialization_target_index_count ||
         endpoint_path_index.count !=
@@ -2238,42 +2246,7 @@ bool compiled_project_view::member(
             type_record.members.begin) +
         member_value.value();
 
-    const auto& values =
-        section(
-            compiled_project_section::
-                members);
-
-    if (global >=
-        values.count) {
-
-        return false;
-    }
-
-    const auto* record =
-        values.data +
-        static_cast<std::size_t>(
-            global) *
-            member_record_size;
-
-    output.name =
-        string_from_raw(
-            read_u32(record));
-
-    output.type =
-        type_ref_from_raw(
-            read_u32(
-                record + 4));
-
-    output.access =
-        static_cast<graph_member_access>(
-            std::to_integer<std::uint8_t>(
-                record[8]));
-
-    return output.name &&
-        output.type &&
-        zero_bytes(
-            record + 9,
-            3);
+    return member_at(static_cast<std::size_t>(global), output);
 }
 
 bool compiled_project_view::member(
@@ -2324,14 +2297,9 @@ bool compiled_project_view::member_at(
             std::to_integer<std::uint8_t>(
                 record[8]));
 
-    return
-        output.name &&
-        output.type &&
-        valid_member_access(
-            output.access) &&
-        zero_bytes(
-            record + 9,
-            3);
+    for (std::size_t byte = 0; byte < 3; ++byte)
+        output.reserved[byte] = std::to_integer<std::uint8_t>(record[9 + byte]);
+    return output.name && output.type && valid_member_access(output.access);
 }
 
 bool compiled_project_view::construction_at(
@@ -4395,6 +4363,17 @@ compiled_project_view::verify_contents() const noexcept {
                 invalid_image;
         }
 
+        if (const auto rule = type_value.bits(); rule.bit_count) {
+            if (type_value.members.begin) {
+                type_entry result;
+                if (!rule.result_alias || !type(find_type(rule.result_alias), result) ||
+                    result.kind == graph_type_kind::enumeration ||
+                    result.storage_intrinsic() != intrinsic_type::bool_type)
+                    return compiled_project_image_result::invalid_image;
+            }
+            continue;
+        }
+
         if (!type_value.defined()) {
             if (type_value.members.begin != 0 ||
                 type_value.members.count != 0 ||
@@ -4566,6 +4545,8 @@ compiled_project_view::verify_contents() const noexcept {
             const auto member_value =
                 member_from_raw(local);
 
+            const bool index_member = type_value.index_member_slot() == local + 1;
+            derived_type_record indexed_array;
             member_record member_record_value;
             construction_value construction_value_value;
 
@@ -4585,6 +4566,10 @@ compiled_project_view::verify_contents() const noexcept {
                     member_record_value.access) ||
                 !member_record_value.name ||
                 !member_record_value.type ||
+                (index_member
+                    ? (!derived(member_record_value.type, indexed_array) ||
+                       indexed_array.kind != derived_type_kind::bounded_array)
+                    : array_origin(member_record_value.reserved) != 0) ||
                 !construction_compatible(
                     *this,
                     member_record_value.type,
@@ -5153,6 +5138,16 @@ compiled_project_view::verify_contents() const noexcept {
                         return compiled_project_image_result::invalid_image;
                     }
                     current_type = named(find_type(base.type));
+                    continue;
+                }
+                if (step.kind == endpoint_path_step_kind::bit_index) {
+                    type_handle owner;
+                    type_entry entry;
+                    if (local + 1 != path.steps.count || !named(current_type, owner) ||
+                        !type(owner, entry) || step.value >= entry.bits().bit_count)
+                        return compiled_project_image_result::invalid_image;
+                    const auto result = entry.bits().result_alias;
+                    current_type = result ? named(find_type(result)) : type_ref::make(type_ref_kind::intrinsic, static_cast<std::uint32_t>(intrinsic_type::bool_type));
                     continue;
                 }
                 if (step.kind ==
@@ -5908,9 +5903,8 @@ compiled_project_layout::prepare_counts(
         index_capacity(
             counts.derived_count);
 
-    const auto link_target_index_count =
-        index_capacity(
-            counts.link_count);
+    const auto link_target_index_count = counts.compact_link_index
+        ? publish_link_index_capacity(counts.link_count) : index_capacity(counts.link_count);
 
     const auto initialization_target_index_count =
         index_capacity(
@@ -6156,7 +6150,7 @@ prepare_compiled_project_layout(
     const assign_table& assigns,
     const file_context& files,
     const source_map& sources,
-    compiled_project_layout& output) noexcept {
+    compiled_project_layout& output, bool compact_link_index) noexcept {
 
     output = {};
 
@@ -6250,6 +6244,7 @@ prepare_compiled_project_layout(
                 files.size()),
             source_path_bytes,
             G.constructor_defaults.entries().size(),
+            compact_link_index,
         };
 
     return compiled_project_layout::prepare_counts(counts, output);
@@ -7009,6 +7004,8 @@ encode_compiled_project_image(const string_table &strings,
                 record + 8,
                 static_cast<std::uint32_t>(
                     value.access));
+            for (std::size_t byte = 0; byte < 3; ++byte)
+                record[9 + byte] = static_cast<std::byte>(value.reserved[byte]);
 
             auto* initial_record =
                 construction_out +
@@ -7057,7 +7054,7 @@ encode_compiled_project_image(const string_table &strings,
                 type_entries[
                     type_index];
 
-            if (!type_value.defined()) {
+            if (!type_value.defined() || type_value.bits().bit_count) {
                 continue;
             }
 
@@ -7949,7 +7946,8 @@ encode_compiled_project_image(const string_table &strings,
         base + 8,
         std::any_of(G.type_entries().begin(), G.type_entries().end(), [](const type_entry& entry) {
             return entry.kind == graph_type_kind::nominal_scalar;
-        }) || std::any_of(G.initialization_entries().begin(), G.initialization_entries().end(),
+        }) || link_target_index_count != index_capacity(link_count) ||
+        std::any_of(G.initialization_entries().begin(), G.initialization_entries().end(),
             [](const object_initialization_record& entry) { return entry.value.kind == construction_kind::byte_patch || entry.value.kind == construction_kind::byte_array; })
             ? compiled_project_format_version : G.enum_types().empty() ? 25u : 26u);
 
@@ -8084,6 +8082,16 @@ encode_compiled_project_image(const string_table &strings,
 
     return compiled_project_image_result::
         success;
+}
+
+bool compiled_project_view::bit_endpoint(endpoint_ref endpoint, std::uint8_t& index) const noexcept {
+    endpoint_path_record path;
+    endpoint_path_step step;
+    if (!endpoint.is_path() || !endpoint_path(endpoint.path(), path) || !path.steps.count ||
+        !endpoint_path_step_at(static_cast<std::size_t>(path.steps.begin) + path.steps.count - 1, step) ||
+        step.kind != endpoint_path_step_kind::bit_index || step.value >= 64) return false;
+    index = static_cast<std::uint8_t>(step.value);
+    return true;
 }
 
 std::size_t compiled_project_view::source_file_count() const noexcept {

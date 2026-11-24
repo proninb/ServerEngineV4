@@ -6,6 +6,11 @@
 
 namespace cw::server {
 struct header_template_definitions_v2;
+struct header_relative_binding_v2;
+
+[[nodiscard]] server_status apply_header_relative_bindings(
+    std::span<const header_relative_binding_v2> bindings, const string_table& strings,
+    graph& G, source_map& sources, std::size_t first_object, parser_failure* failure) noexcept;
 
 // Owns captured Source descriptors and joins on every exit path. Caller keeps
 // source bytes and lexical backing storage alive and immutable until join.

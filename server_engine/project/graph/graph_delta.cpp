@@ -4662,6 +4662,15 @@ bool graph_delta::resolve_endpoint_path(
             break;
         }
 
+        case endpoint_path_step_kind::bit_index: {
+            type_handle owner;
+            type_entry entry;
+            if (!named(current_type, owner) || !type(owner, entry) || step.value >= entry.bits().bit_count)
+                return false;
+            const auto result = entry.bits().result_alias;
+            current_type = result ? named(find_type(result)) : intrinsic(intrinsic_type::bool_type);
+            break;
+        }
         case endpoint_path_step_kind::array_index:
             if (!derived(
                     current_type,

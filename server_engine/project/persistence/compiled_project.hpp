@@ -26,7 +26,7 @@ class graph_delta;
 class graph_dense_projection;
 class source_map_overlay_view;
 
-inline constexpr std::uint32_t compiled_project_format_version = 30;
+inline constexpr std::uint32_t compiled_project_format_version = 31;
 
 inline constexpr std::size_t
 compiled_project_header_size = 256;
@@ -178,6 +178,7 @@ private:
         std::uint64_t source_file_count = 0;
         std::uint64_t source_path_bytes = 0;
         std::uint64_t constructor_default_count = 0;
+        bool compact_link_index = false;
     };
 
     [[nodiscard]] static compiled_project_image_result
@@ -206,7 +207,7 @@ private:
                                     const assign_table &,
                                     const file_context &,
                                     const source_map &,
-                                    compiled_project_layout &) noexcept;
+                                    compiled_project_layout &, bool) noexcept;
 
     friend compiled_project_image_result
     prepare_build_compiled_project_layout(
@@ -598,6 +599,7 @@ public:
     [[nodiscard]] std::size_t source_contribution_count() const noexcept;
     [[nodiscard]] bool source_contribution(std::uint32_t index,
                                            source_contribution_record &output) const noexcept;
+    [[nodiscard]] bool bit_endpoint(endpoint_ref endpoint, std::uint8_t& index) const noexcept;
     [[nodiscard]] bool source_root(file_id root, source_map_range &output) const noexcept;
     [[nodiscard]] bool source_file(file_id file,
                                    std::string_view &path,
@@ -607,6 +609,9 @@ public:
     [[nodiscard]] compiled_project_image_result verify_sources() const noexcept;
 
   private:
+    // PUBLISH owns a fresh dense semantic image; its physical producer can
+    // read immutable slots directly without re-probing the query index twice.
+    friend class shm_runtime_v2_link_builder;
     struct section_view final {
         const std::byte* data = nullptr;
         std::uint64_t count = 0;
@@ -668,7 +673,8 @@ prepare_compiled_project_layout(const string_table &strings,
                                 const assign_table &assigns,
                                 const file_context &files,
                                 const source_map &sources,
-                                compiled_project_layout &output) noexcept;
+                                compiled_project_layout &output,
+                                bool compact_link_index = false) noexcept;
 
 
 // Encodes directly into caller-owned bytes, including writable mmap pages.

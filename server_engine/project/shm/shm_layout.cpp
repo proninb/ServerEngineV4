@@ -1766,8 +1766,17 @@ void attach_shm_layout_columns(
                     compiled_project_section::
                         unconnected_types));
 
-    const auto& value =
-        header.front();
+    if (header.size() != 1) { output.reset(); return; }
+    const auto& value = header.front();
+    if (value.magic != shm_abi_column_magic || value.version != shm_abi_column_version ||
+        value.target > (std::numeric_limits<std::uint8_t>::max)() ||
+        !valid_abi_layout_key({static_cast<abi_target>(value.target), value.pack}) ||
+        !value.runtime_size || !std::has_single_bit(value.runtime_alignment) ||
+        value.unconnected_count > unconnected_types.size() ||
+        value.reserved0 || value.reserved1 || value.reserved2 || value.reserved3) {
+        output.reset();
+        return;
+    }
 
     output.persisted_unconnected_types = {
         unconnected_types.data(),

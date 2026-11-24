@@ -610,6 +610,9 @@ promote_build_artifacts(
             nullptr;
 
         switch (warning.kind) {
+        case parser_warning_kind::duplicate_alias:
+            descriptor = &diagnostics::project_duplicate_alias;
+            break;
         case parser_warning_kind::
                 duplicate_initialization:
             descriptor =

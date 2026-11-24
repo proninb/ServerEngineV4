@@ -24,7 +24,7 @@ static_assert(sizeof(constructor_default) == 24);
 struct constructor_path_reader final {
     std::string_view remaining;
     bool first = true;
-    bool next(std::string_view& name, std::uint64_t& index) noexcept {
+    bool next(std::string_view& name, std::uint64_t& index, bool allow_negative = false) noexcept {
         name = {};
         index = 0;
         if (remaining.empty()) { return false; }
@@ -32,7 +32,12 @@ struct constructor_path_reader final {
             const auto close = remaining.find(']');
             if (close == std::string_view::npos) { return false; }
             const auto digits = remaining.substr(1, close - 1);
-            const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), index);
+            std::int64_t signed_index = 0;
+            const bool negative = allow_negative && digits.starts_with('-');
+            const auto parsed = negative
+                ? std::from_chars(digits.data(), digits.data() + digits.size(), signed_index)
+                : std::from_chars(digits.data(), digits.data() + digits.size(), index);
+            if (negative) index = static_cast<std::uint64_t>(signed_index);
             if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size()) { return false; }
             remaining.remove_prefix(close + 1);
             return true;

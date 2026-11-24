@@ -49,7 +49,8 @@ namespace {
     const diagnostic_descriptor& descriptor,
     std::string_view detail,
     operation_id operation,
-    diagnostic_collection& diagnostics) {
+    diagnostic_collection& diagnostics,
+    diagnostic_file_id* cached_source = nullptr) {
 
     if (!file ||
         !files.contains(file)) {
@@ -74,12 +75,11 @@ namespace {
         const auto source =
             files.content(file);
 
-        const auto diagnostic_file =
-            diagnostics.add_source(
-                path,
-                std::string{
-                    source.data(),
-                    source.size()});
+        auto diagnostic_file = cached_source ? *cached_source : invalid_diagnostic_file_id;
+        if (diagnostic_file == invalid_diagnostic_file_id) {
+            diagnostic_file = diagnostics.add_source(path, std::string{source.data(), source.size()});
+            if (cached_source) *cached_source = diagnostic_file;
+        }
 
         const auto location =
             diagnostics.locate(
@@ -106,7 +106,12 @@ namespace {
     file_context& files,
     const std::vector<parser_warning>& warnings,
     operation_id operation,
-    diagnostic_collection& diagnostics) {
+    diagnostic_collection& diagnostics, bool reuse_sources) {
+    std::vector<diagnostic_file_id> source_ids;
+    if (reuse_sources) {
+        try { source_ids.assign(files.size() + 1, invalid_diagnostic_file_id); }
+        catch (...) { return server_status::io_error; }
+    }
 
     for (const auto& warning :
          warnings) {
@@ -115,6 +120,9 @@ namespace {
             nullptr;
 
         switch (warning.kind) {
+        case parser_warning_kind::duplicate_alias:
+            descriptor = &diagnostics::project_duplicate_alias;
+            break;
         case parser_warning_kind::
                 duplicate_initialization:
             descriptor =
@@ -136,7 +144,9 @@ namespace {
                 *descriptor,
                 warning.detail,
                 operation,
-                diagnostics);
+                diagnostics,
+                reuse_sources && warning.file.value() < source_ids.size()
+                    ? &source_ids[warning.file.value()] : nullptr);
 
         if (!succeeded(emitted)) {
             return emitted;
@@ -356,7 +366,8 @@ persist_compiled(
             context.assigns,
             context.files,
             context.sources,
-            layout);
+            layout,
+            !durable);
 
     if (prepared !=
         compiled_project_image_result::success) {
@@ -1327,8 +1338,10 @@ server_status construct_full_project(
             context.files,
             semantic_warnings,
             operation,
-            diagnostics);
+            diagnostics,
+            mode == full_construction_mode::publish);
 
+    if (telemetry) telemetry->warnings_ns = elapsed_ns(post_semantic_started);
     if (!succeeded(warnings_emitted)) {
         return warnings_emitted;
     }
@@ -1367,10 +1380,12 @@ server_status construct_full_project(
         return parsed;
     }
 
+    const auto topology_started = telemetry ? clock_type::now() : clock_type::time_point{};
     const auto topology_finalized =
         context.files.
             finalize_dependency_topology();
 
+    if (telemetry) telemetry->topology_ns = elapsed_ns(topology_started);
     if (!succeeded(topology_finalized)) {
         return topology_finalized;
     }

@@ -251,10 +251,11 @@ struct execution_counts final {
             continue;
 
         link_record link;
-        if (!project.link(handle, link) ||
-            !count_endpoint(project, link.source, counts) ||
-            !count_endpoint(project, link.target, counts))
-            return false;
+        if (!project.link(handle, link)) return false;
+        std::uint8_t bit = 0;
+        if (project.bit_endpoint(link.source.member, bit)) continue;
+        if (!count_endpoint(project, link.source, counts) ||
+            !count_endpoint(project, link.target, counts)) return false;
     }
 
     for (std::size_t index = 0;
@@ -319,7 +320,7 @@ runtime_project_view::bind(
             image.data(),
             image_magic.data(),
             image_magic.size()) != 0 ||
-        read_u32(image.data() + 8) != runtime_project_format_version ||
+        (read_u32(image.data() + 8) != 3 && read_u32(image.data() + 8) != runtime_project_format_version) ||
         read_u32(image.data() + 12) != runtime_project_header_size ||
         read_u32(image.data() + 16) != runtime_project_directory_count ||
         read_u32(image.data() + 20) != runtime_project_directory_entry_size ||
@@ -352,8 +353,12 @@ runtime_project_view::bind(
         std::uint64_t byte_count = 0;
         std::uint64_t end = 0;
 
-        if (kind != expected_kind ||
-            record_size != expected_record_size(kind) ||
+        // Consumers read these mandatory singleton headers with front().
+        const bool singleton = kind == compiled_project_section::runtime_abi_header ||
+            kind == compiled_project_section::runtime_execution_header;
+        if (kind != expected_kind || (singleton && count != 1) ||
+            (record_size != expected_record_size(kind) &&
+             !(kind == compiled_project_section::link_runtime && record_size == 8 && read_u32(image.data() + 8) >= 4)) ||
             record_size == 0 ||
             offset < previous_end ||
             (offset & 63u) != 0 ||
@@ -392,6 +397,11 @@ runtime_project_view::section(
     };
 }
 
+std::uint32_t runtime_project_view::record_size(compiled_project_section kind) const noexcept {
+    const auto index = section_index(kind);
+    return valid() && index < sections.size() ? sections[index].record_size : 0;
+}
+
 runtime_project_image_result
 prepare_runtime_project_layout(
     const compiled_project_view& project,
@@ -405,6 +415,7 @@ prepare_runtime_project_layout(
         return runtime_project_image_result::invalid_state;
 
     execution_counts execution;
+    bool compact_links = false;
 
     if (physical_plan != nullptr) {
         shm_runtime_v2_physical_counts counts;
@@ -415,6 +426,7 @@ prepare_runtime_project_layout(
         execution.endpoint_programs = counts.endpoint_programs;
         execution.dereferences = counts.dereferences;
         execution.initialization_bytes = counts.initialization_bytes;
+        compact_links = counts.compact_links;
     }
     else if (!prepare_execution_counts(project, execution)) {
         return runtime_project_image_result::invalid_state;
@@ -440,7 +452,7 @@ prepare_runtime_project_layout(
                 intrinsic_count + project.identity_count() +
                     project.derived_type_count()},
             {compiled_project_section::runtime_execution_header, 64, 1},
-            {compiled_project_section::link_runtime, 32, project.link_count()},
+            {compiled_project_section::link_runtime, compact_links ? 8u : 32u, project.link_count()},
             {compiled_project_section::initialization_runtime, 32, project.initialization_count()},
             {compiled_project_section::runtime_endpoint_programs, 24, execution.endpoint_programs},
             {compiled_project_section::runtime_endpoint_dereferences, 8, execution.dereferences},
@@ -558,7 +570,8 @@ runtime_project_mutable_section(
         index * runtime_project_directory_entry_size;
 
     if (read_u32(entry) != static_cast<std::uint32_t>(kind) ||
-        read_u32(entry + 4) != expected_record_size(kind))
+        (read_u32(entry + 4) != expected_record_size(kind) &&
+         !(kind == compiled_project_section::link_runtime && read_u32(entry + 4) == 8 && read_u32(image.data() + 8) >= 4)))
         return {};
 
     const auto record_size = read_u32(entry + 4);

@@ -99,8 +99,11 @@ struct header_v2_publication_stats final {
     std::uint64_t intrinsic_aliases = 0;
 };
 
+struct parser_warning;
+
 class header_parser_v2 final {
 public:
+    void set_warnings(std::vector<parser_warning>* value) noexcept { warnings = value; }
     header_parser_v2(
         semantic_preprocessor_v2& input,
         identity_space& identities,
@@ -150,6 +153,7 @@ public:
     }
 
 private:
+    std::vector<parser_warning>* warnings = nullptr;
     [[nodiscard]] server_status record_dependency(identity_ref identity) noexcept;
     [[nodiscard]] server_status record_contribution(file_id file, source_data_ref data) noexcept;
     struct resolved_type final {
@@ -226,6 +230,7 @@ private:
         file_id file{};
         source_range source{};
         string_id reference_name{};
+        string_id relative_referent{};
         file_id reference_file{};
         source_range reference_source{};
     };
@@ -256,6 +261,7 @@ private:
     };
     struct nested_operation final {
         string_id root{};
+        string_id referent{};
         std::vector<nested_path_step> path;
         construction_value value{};
         file_id file{};
@@ -302,7 +308,10 @@ private:
         identity_ref scope) noexcept;
 
     [[nodiscard]] server_status parse_record(
-        identity_ref scope) noexcept;
+        identity_ref scope, string_id index_member = {}, std::int64_t index_origin = 0) noexcept;
+
+    [[nodiscard]] server_status parse_record_attributes(string_id& index_member,
+        std::int64_t& index_origin, string_id* index_parameter = nullptr) noexcept;
 
     [[nodiscard]] static graph_record_kind record_kind(
         token_kind kind) noexcept;
@@ -357,7 +366,12 @@ private:
     [[nodiscard]] server_status parse_member_initializer(
         type_ref target,
         constructor_operation& output, std::vector<std::uint8_t>* string_bytes = nullptr,
-        bool* explicit_value = nullptr) noexcept;
+        bool* explicit_value = nullptr,
+        std::vector<nested_operation>* aggregate = nullptr) noexcept;
+    [[nodiscard]] server_status parse_relative_aggregate_referent(string_id& output, string_id first = {}) noexcept;
+    [[nodiscard]] server_status parse_aggregate_elements(
+        type_ref target, nested_operation& operation,
+        std::vector<nested_operation>& output) noexcept;
     [[nodiscard]] server_status parse_string_initializer(type_ref target,
         constructor_operation& output, std::vector<std::uint8_t>& bytes) noexcept;
     [[nodiscard]] server_status parse_static_object(identity_ref scope) noexcept;

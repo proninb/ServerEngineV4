@@ -31,6 +31,8 @@ struct full_construction_telemetry final {
     std::uint64_t operation_ns = 0;
     std::uint64_t context_setup_ns = 0;
     std::uint64_t post_semantic_ns = 0;
+    std::uint64_t warnings_ns = 0;
+    std::uint64_t topology_ns = 0;
     std::uint64_t post_persistence_ns = 0;
     std::uint64_t transient_release_ns = 0;
     std::uint64_t acquisition_change_tokens = 1;

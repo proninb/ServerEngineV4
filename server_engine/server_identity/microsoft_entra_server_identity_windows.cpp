@@ -924,12 +924,12 @@ private:
         sizeof(redirect_policy));
 
     static constexpr wchar_t headers[] =
-        L"Content-Type: application/x-www-form-urlencoded\\r\\n";
+        L"Content-Type: application/x-www-form-urlencoded\r\n";
 
     if (!WinHttpSendRequest(
             request.value,
             headers,
-            static_cast<DWORD>(-1),
+            static_cast<DWORD>(sizeof(headers) / sizeof(headers[0]) - 1),
             const_cast<char*>(
                 body.data()),
             static_cast<DWORD>(

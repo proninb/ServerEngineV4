@@ -11,6 +11,23 @@ struct Device {
  IecArray<PLC_INT,6,1> BackupAgain;
  IecArray<short,6,0> Other;
 };)", true},
+        {"plc-base", R"(
+using U_BOOL = bool;
+struct U_FB { int state; };
+template<typename T, int Lower, int Upper>
+struct U_IEC_ARRAY {
+    T values[Upper - Lower + 1]{};
+    T& operator[](int index) { return values[index - Lower]; }
+};
+template<typename T, int Lower, int Upper>
+struct U_IS_PAR_CON : U_FB {
+    U_IEC_ARRAY<T, Lower, Upper>& INP;
+    U_BOOL OUTP = false;
+    int tick();
+};
+struct Device { U_IS_PAR_CON<U_BOOL, 1, 6> instance; };
+)", true},
+        {"template-incomplete-base", "struct Base; template<class T> struct Box : Base { T value; }; struct C { Box<int> box; };",false},
         {"generic", "template<class T, int Count> struct Buffer { T data[Count]; int tag=7; }; struct C { Buffer<unsigned short,4> data; };",true},
         {"nominal-scalars", "using I=short; using J=I; using R=float; struct C { I a=7; J b=8; R r=1.25; C(){a=9;} };",true},
         {"nominal-float-to-int", "using I=short; struct C { I a=1.25; };",false},
@@ -78,4 +95,66 @@ struct Device {
             array.payload==6 && array.child==G.intrinsic(intrinsic_type::signed_short),
             "Template T and N resolve into the ordinary canonical short[6] graph type");
     }
+}
+
+// Source instantiation exercises named_type's cold Header-parser delegation.
+void test_source_template_instantiation(test_state& tests) {
+    const struct { const char* name; const char* header; const char* source; bool accepted; } cases[] = {
+        {"using-char-array", "using U_STRING = char[256]; struct Record { U_STRING text; };",
+         "U_STRING a; a = \"hello\"; Record r; r.text = \"world\";", true},
+        {"ordinary", "struct Plain { int value; };", "Plain a; a.value=7;", true},
+        {"unused-template", "struct Plain { int value; }; template<class T> struct Box { T value; };", "Plain a; a.value=7;", true},
+        {"inherited-specialization", "struct Base { int value; }; template<class T> struct Box : Base { T other; };", "Box<int> a; a.value=7; a.other=8;", true},
+        {"first-specialization", "template<class T> struct Box { T value; };", "Box<int> a; a.value=7;", true},
+        {"nested", "template<class T> struct Box { T value; };", "Box<Box<int>> a; a.value.value=7;", true},
+        {"qualified-nominal", "namespace N { template<class T> struct Box { T value; }; } using I=short;", "N::Box<I> a; a.value=7;", true},
+        {"reuse-and-default", "template<class T> struct Box { T value=5; Box(){value=6;} };", "Box<int> a; Box<int> b; a.value=7; b.value=8;", true},
+        {"array", "template<class T,int N> struct Buffer { T data[N]; };", "Buffer<int,3> a; a.data[2]=7;", true},
+        {"missing-argument", "template<class T,int N> struct Buffer { T data[N]; };", "Buffer<int> a;", false},
+        {"wrong-kind", "template<class T> struct Box { T value; };", "Box<7> a;", false},
+        {"void-member", "template<class T> struct Box { T value; };", "Box<void> a;", false},
+        {"divide-zero", "template<class T,int N> struct Buffer { T data[N]; };", "Buffer<int,4/0> a;", false},
+        {"unclosed", "template<class T> struct Box { T value; };", "Box<int a;", false},
+        {"not-template", "struct Plain { int value; };", "Plain<int> a;", false},
+    };
+    for (const auto& item : cases) {
+        const temporary_source header{std::string{"source_template_header_"}+item.name, item.header};
+        const temporary_source source{std::string{"source_template_source_"}+item.name, item.source};
+        file_context files;
+        lexical_generation lexical;
+        std::array<file_id, 2> roots;
+        if (!tests.expect(succeeded(files.resolve(header.path(), file_kind::header, roots[0])) &&
+                succeeded(files.resolve(source.path(), file_kind::source, roots[1])),
+                "resolve Source template roots")) return;
+        if (!prepare_all_roots(tests, files, lexical, roots)) return;
+        preprocessor_configuration configuration;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        parser_failure failure;
+        const auto status = parse_semantic_project(files, lexical, roots.size(), configuration,
+            strings, identities, G, sources, &failure, nullptr, nullptr, true);
+        if (!tests.expect(succeeded(status) == item.accepted,
+                std::string{"Source template cold path: "}+item.name))
+            std::cerr << failure.detail << '\n';
+        if (succeeded(status))
+            tests.expect(G.object_count() > 0 && G.initialization_count() > 0,
+                "Source specialization builds objects and ordered scalar initializations");
+    }
+}
+
+void test_duplicate_alias_warning(test_state& tests) {
+    const std::string header = "namespace N {\nusing U_BOOL=bool;\nusing U_BOOL=bool;\n};\n";
+    const temporary_source input{"duplicate_alias_header", header};
+    file_context files; lexical_generation lexical; std::array<file_id,1> roots; preprocessor_configuration config;
+    if (!tests.expect(succeeded(files.resolve(input.path(),file_kind::header,roots[0])),"resolve duplicate alias header")) return;
+    if (!prepare_all_roots(tests,files,lexical,roots)) return;
+    string_table strings; identity_space identities{strings}; graph G; source_map sources; parser_failure failure;
+    std::vector<parser_warning> warnings;
+    const auto status=parse_semantic_project(files,lexical,roots.size(),config,strings,identities,G,sources,&failure,&warnings,nullptr,true);
+    const auto second=header.find("U_BOOL",header.find("U_BOOL")+1);
+    tests.expect(succeeded(status) && warnings.size()==1 && warnings[0].kind==parser_warning_kind::duplicate_alias &&
+        warnings[0].source.offset==second && warnings[0].source.length==6,
+        "Repeated identical alias warns at second alias token; namespace trailing semicolon accepted");
 }

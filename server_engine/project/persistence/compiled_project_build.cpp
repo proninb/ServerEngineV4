@@ -1153,7 +1153,7 @@ encode_build_compiled_project_image(
 
         build_write_u32(
             type_record,
-            dense_member_cursor);
+            value.bits().bit_count ? value.members.begin : dense_member_cursor);
 
         build_write_u32(
             type_record + 4,
@@ -1334,6 +1334,8 @@ encode_build_compiled_project_image(
                 record + 8,
                 static_cast<std::uint32_t>(
                     member.access));
+            for (std::size_t byte = 0; byte < 3; ++byte)
+                record[9 + byte] = static_cast<std::byte>(member.reserved[byte]);
 
             auto* initial_record =
                 member_construction +
@@ -1847,7 +1849,10 @@ encode_build_compiled_project_image(
                              member &&
                      step.kind !=
                          endpoint_path_step_kind::
-                             array_index)) {
+                             array_index &&
+                     step.kind != endpoint_path_step_kind::bit_index &&
+                     step.kind != endpoint_path_step_kind::base &&
+                     step.kind != endpoint_path_step_kind::dereference)) {
 
                     return compiled_project_image_result::
                         invalid_state;

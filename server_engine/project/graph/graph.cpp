@@ -1,3 +1,5 @@
+#include "../construction/source_index_audit.hpp"
+#include "../construction/publish_source_profile.hpp"
 #ifdef CW_RESOLVED_G_01
 #include "../../../experiments/resolved-g-01/capture.hpp"
 #endif
@@ -255,6 +257,8 @@ const link_record* graph::find(
 
 type_handle graph::find_type(
     identity_ref identity) const noexcept {
+    CW_INDEX_TIMER(where_type);
+    CW_SOURCE_PROFILE(indexes);
 
     if (!identity ||
         identity.slot() >=
@@ -284,6 +288,8 @@ type_handle graph::find_type(
 
 object_handle graph::find_object(
     identity_ref identity) const noexcept {
+    CW_INDEX_TIMER(where_object);
+    CW_SOURCE_PROFILE(indexes);
 
     if (!identity ||
         identity.slot() >=
@@ -381,14 +387,22 @@ server_status graph::define_enum(identity_ref identity, intrinsic_type underlyin
     return server_status::success;
 }
 
-server_status graph::define_intrinsic_alias(identity_ref identity, intrinsic_type intrinsic_value, type_handle& output, bool nominal) noexcept {
+server_status graph::define_intrinsic_alias(identity_ref identity, intrinsic_type intrinsic_value, type_handle& output, bool nominal, bit_rule bits) noexcept {
     if (intrinsic_value < intrinsic_type::bool_type || intrinsic_value > intrinsic_type::long_double_type) {
         return server_status::project_configuration_invalid;
+    }
+    if ((!nominal && bits.bit_count) || bits.bit_count > bit_storage_width(intrinsic_value))
+        return server_status::project_configuration_invalid;
+    if (bits.result_alias) {
+        const auto* result = find(find_type(bits.result_alias));
+        if (!bits.bit_count || !result || result->kind == graph_type_kind::enumeration ||
+            result->storage_intrinsic() != intrinsic_type::bool_type)
+            return server_status::project_configuration_invalid;
     }
     output = find_type(identity);
     if (output) {
         const auto* entry = find(output);
-        return entry && entry->kind == (nominal ? graph_type_kind::nominal_scalar : graph_type_kind::intrinsic_alias) && entry->storage_intrinsic() == intrinsic_value
+        return entry && entry->bits() == bits && entry->kind == (nominal ? graph_type_kind::nominal_scalar : graph_type_kind::intrinsic_alias) && entry->storage_intrinsic() == intrinsic_value
             ? server_status::success : server_status::project_configuration_invalid;
     }
     auto status = declare_record(identity, graph_record_kind::struct_type, output);
@@ -397,7 +411,9 @@ server_status graph::define_intrinsic_alias(identity_ref identity, intrinsic_typ
     if (!succeeded(status)) { return status; }
     auto& entry = types[output.value() - 1];
     entry.kind = nominal ? graph_type_kind::nominal_scalar : graph_type_kind::intrinsic_alias;
-    entry.flags = graph_type_defined | (static_cast<std::uint16_t>(intrinsic_value) << 8);
+    entry.flags = graph_type_defined | (static_cast<std::uint16_t>(intrinsic_value) << 8) |
+        (static_cast<std::uint16_t>(bits.bit_count) << 1);
+    if (bits.bit_count) entry.members.begin = bits.result_alias.value();
     return server_status::success;
 }
 
@@ -865,7 +881,7 @@ server_status graph::define_resolved_record(
     std::span<const member_record> definition,
     std::span<const construction_value> construction_values,
     std::span<const base_record> bases_value,
-    bool declares_virtual) noexcept {
+    bool declares_virtual, std::uint16_t index_member_slot) noexcept {
 
     auto* entry =
         contains(type)
@@ -886,6 +902,15 @@ server_status graph::define_resolved_record(
           declares_virtual))) {
 
         return server_status::project_configuration_invalid;
+    }
+
+    if (index_member_slot != 0) {
+        derived_type_record array;
+        if (kind == graph_record_kind::union_type || index_member_slot > 0x3fffu ||
+            index_member_slot > definition.size() ||
+            !derived(definition[index_member_slot - 1].type, array) ||
+            array.kind != derived_type_kind::bounded_array)
+            return server_status::project_configuration_invalid;
     }
 
     const auto type_identity =
@@ -979,7 +1004,9 @@ server_status graph::define_resolved_record(
     }
 
     if (entry->defined()) {
-        if (entry->record_kind != kind ||
+        if (entry->record_kind != kind || entry->index_member_slot() != index_member_slot ||
+            (index_member_slot && array_origin(members(type)[index_member_slot - 1].reserved) !=
+                array_origin(definition[index_member_slot - 1].reserved)) ||
             entry->polymorphic() !=
                 polymorphic_value) {
 
@@ -1132,7 +1159,7 @@ server_status graph::define_resolved_record(
     };
 
     entry->record_kind = kind;
-    entry->flags |= graph_type_defined;
+    entry->flags |= static_cast<std::uint16_t>(graph_type_defined | (index_member_slot << 2));
 
     if (polymorphic_value) {
         entry->flags |=
@@ -1164,6 +1191,7 @@ server_status graph::add_object(
     object_handle& output,
     std::uint32_t flags,
     construction_value initial) noexcept {
+    CW_SOURCE_PROFILE(objects);
 
     output = {};
 
@@ -1358,6 +1386,7 @@ server_status graph::add_resolved_object(
     object_handle& output,
     std::uint32_t flags,
     construction_value initial) noexcept {
+    CW_SOURCE_PROFILE(objects);
 #ifdef CW_RESOLVED_G_01
     auto replay_observation=resolved_g01::observe([&] { return resolved_g01::object(identity,type,flags,initial,false); },
         [&](resolved_g01::operation& o) { o.expected=output.value(); });
@@ -1591,6 +1620,7 @@ type_ref graph::find_derived(
     std::uint64_t payload,
     std::uint64_t hash,
     std::uint32_t fingerprint_value) const noexcept {
+    CW_SOURCE_PROFILE(indexes);
 
     if (derived_index.empty()) {
         return {};
@@ -1670,6 +1700,7 @@ void graph::insert_derived_index(
 
 server_status graph::ensure_derived_index_capacity(
     std::size_t additional) noexcept {
+    CW_SOURCE_PROFILE(indexes);
 
     if (additional >
         (std::numeric_limits<std::size_t>::max)() -
@@ -1689,6 +1720,7 @@ server_status graph::ensure_derived_index_capacity(
         return server_status::success;
     }
 
+    CW_INDEX_TIMER(graph_rehash);
     const auto capacity =
         next_index_capacity(
             required);
@@ -2124,6 +2156,7 @@ std::uint64_t graph::hash_member_name(
 
 server_status graph::ensure_member_name_index_capacity(
     std::size_t additional) noexcept {
+    CW_SOURCE_PROFILE(indexes);
 #ifdef CW_GRAPH_MEMBER_INDEX_AUDIT
     ++member_index_audit::ensure_calls;
 #endif
@@ -2260,6 +2293,8 @@ void graph::insert_member_name_index(
 member_index graph::find_indexed_member(
     type_handle type,
     string_id name) const noexcept {
+    CW_INDEX_TIMER(member_find);
+    CW_SOURCE_PROFILE(indexes);
 
     if (!type ||
         !name ||
@@ -2703,6 +2738,14 @@ bool graph::resolve_endpoint_path(
             break;
         }
 
+        case endpoint_path_step_kind::bit_index: {
+            type_handle owner;
+            const auto* entry = named(current_type, owner) ? find(owner) : nullptr;
+            if (!entry || step.value >= entry->bits().bit_count) return false;
+            const auto result = entry->bits().result_alias;
+            current_type = result ? named(find_type(result)) : intrinsic(intrinsic_type::bool_type);
+            break;
+        }
         case endpoint_path_step_kind::array_index:
             if (!derived(
                     current_type,
@@ -2735,6 +2778,8 @@ endpoint_path_handle graph::find_endpoint_path(
     std::span<const endpoint_path_step> steps,
     std::uint64_t hash,
     std::uint32_t fingerprint_value) const noexcept {
+    CW_INDEX_TIMER(endpoint_find);
+    CW_SOURCE_PROFILE(indexes);
 
     if (endpoint_path_index.empty()) {
         return {};
@@ -2833,6 +2878,7 @@ void graph::insert_endpoint_path_index(
 
 server_status graph::ensure_endpoint_path_index_capacity(
     std::size_t additional) noexcept {
+    CW_SOURCE_PROFILE(indexes);
 
     if (additional >
         (std::numeric_limits<std::size_t>::max)() -
@@ -2852,6 +2898,8 @@ server_status graph::ensure_endpoint_path_index_capacity(
         return server_status::success;
     }
 
+    CW_INDEX_TIMER(graph_rehash);
+    CW_INDEX_TIMER(graph_rehash);
     const auto capacity =
         next_index_capacity(
             required);
@@ -2913,6 +2961,7 @@ server_status graph::intern_endpoint_path(
     std::span<const endpoint_path_step> steps,
     endpoint_path_handle& output,
     type_ref* value_type) noexcept {
+    CW_SOURCE_PROFILE(endpoints);
 
     output = {};
 
@@ -2941,6 +2990,7 @@ server_status graph::intern_endpoint_path(
 server_status graph::intern_resolved_endpoint_path(
     type_ref root_type, std::span<const endpoint_path_step> steps,
     type_ref resolved, endpoint_path_handle& output) noexcept {
+    CW_SOURCE_PROFILE(endpoints);
 #ifdef CW_RESOLVED_G_01
     auto replay_observation=resolved_g01::observe([&] { return resolved_g01::path(root_type,steps,resolved); },
         [&](resolved_g01::operation& o) { o.expected=output.value(); });
@@ -3122,6 +3172,7 @@ std::uint64_t graph::link_target_key(
 #ifdef CW_GRAPH_LINK_INDEX_AB
 server_status graph::ensure_link_target_index_capacity(
     std::size_t additional) noexcept {
+    CW_SOURCE_PROFILE(indexes);
 #ifdef CW_GRAPH_LINK_INDEX_AUDIT
     ++link_index_audit::ensure_calls;
 #endif
@@ -3194,6 +3245,7 @@ void graph::insert_link_target_index(
 #else
 server_status graph::ensure_link_target_index_capacity(
     std::size_t additional) noexcept {
+    CW_SOURCE_PROFILE(indexes);
 
     if (additional > (std::numeric_limits<std::size_t>::max)() - link_target_index_count)
         return server_status::io_error;
@@ -3202,6 +3254,7 @@ server_status graph::ensure_link_target_index_capacity(
     if (!link_target_index.empty() && required <= link_target_index.size() / 2)
         return server_status::success;
 
+    CW_INDEX_TIMER(graph_rehash);
     const auto capacity = next_index_capacity(required);
     if (capacity == 0) return server_status::io_error;
 
@@ -3232,6 +3285,7 @@ void graph::insert_link_target_index(
 
 link_handle graph::find_link_target(
     object_endpoint target) const noexcept {
+    CW_SOURCE_PROFILE(links);
 
     const auto key = link_target_key(target);
     if (key == 0 || link_target_index.empty()) return {};
@@ -3249,6 +3303,7 @@ link_handle graph::find_link_target(
 
 server_status graph::ensure_initialization_target_index_capacity(
     std::size_t additional) noexcept {
+    CW_SOURCE_PROFILE(indexes);
 
     if (additional >
         (std::numeric_limits<std::size_t>::max)() -
@@ -3268,6 +3323,7 @@ server_status graph::ensure_initialization_target_index_capacity(
         return server_status::success;
     }
 
+    CW_INDEX_TIMER(graph_rehash);
     const auto capacity =
         next_index_capacity(
             required);
@@ -3330,6 +3386,7 @@ void graph::insert_initialization_target_index(
 
 std::uint32_t graph::find_initialization_position(
     object_endpoint target) const noexcept {
+    CW_SOURCE_PROFILE(indexes);
 
     const auto key =
         link_target_key(
@@ -3594,6 +3651,7 @@ server_status graph::add_initialization(
     object_endpoint target,
     construction_value value,
     bool& replaced) noexcept {
+    CW_SOURCE_PROFILE(initializations);
 
     replaced = false;
 
@@ -3627,6 +3685,7 @@ server_status graph::add_initialization(
 server_status graph::add_resolved_initialization(
     object_endpoint target, type_ref target_type,
     construction_value value, bool& replaced) noexcept {
+    CW_SOURCE_PROFILE(initializations);
 #ifdef CW_RESOLVED_G_01
     auto replay_observation=resolved_g01::observe([&] { return resolved_g01::initialization(target,target_type,value); },
         [&](resolved_g01::operation& o) { o.replaced=replaced; });
@@ -3636,13 +3695,14 @@ server_status graph::add_resolved_initialization(
     if (!scalar_initialization_target(target_type))
         return server_status::project_configuration_invalid;
 
-    return upsert_initialization(target, value, replaced, false);
+    return upsert_initialization(target, target_type, value, replaced, false);
 }
 
 server_status graph::apply_resolved_initialization(
     object_endpoint target, type_ref target_type, construction_value value,
     initialization_decision decision, void* context,
     initialization_apply_result& output) noexcept {
+    CW_SOURCE_PROFILE(initializations);
     output = {};
     if (decision == nullptr || !scalar_initialization_target(target_type))
         return server_status::project_configuration_invalid;
@@ -3692,6 +3752,7 @@ server_status graph::apply_resolved_initialization(
 server_status graph::add_resolved_initializations(
     type_ref target_type, std::span<const object_initialization_record> records,
     bool& any_replaced) noexcept {
+    CW_SOURCE_PROFILE(initializations);
 #ifdef CW_RESOLVED_G_01
     auto replay_observation=resolved_g01::observe([&] { return resolved_g01::batch(target_type,records); },
         [&](resolved_g01::operation& o) { o.replaced=any_replaced; });
@@ -3716,16 +3777,43 @@ server_status graph::add_resolved_initializations(
     } catch (...) { return server_status::io_error; }
     for (const auto& record : records) {
         bool replaced = false;
-        status = upsert_initialization(record.target, record.value, replaced, true);
+        status = upsert_initialization(record.target, target_type, record.value, replaced, true);
         if (!succeeded(status)) return status;
         any_replaced |= replaced;
     }
     return server_status::success;
 }
 
+void graph::move_overlapping_initialization_to_end(
+    std::uint32_t position, type_ref target_type) noexcept {
+    if (position == object_initializations.size()) return;
+    const auto endpoint = object_initializations[position - 1].target.member;
+    const auto steps = endpoint.is_path() ? endpoint_path_steps(endpoint.path())
+        : std::span<const endpoint_path_step>{};
+    const bool bit = !steps.empty() && steps.back().kind == endpoint_path_step_kind::bit_index;
+    type_handle owner;
+    const auto* entry = named(target_type, owner) ? find(owner) : nullptr;
+    if (!bit && (!entry || !entry->bits().bit_count)) return;
+
+    // A whole scalar and its bit paths overlap. Keep the final write to each
+    // distinct endpoint in source order even when that endpoint is repeated.
+    auto begin = object_initializations.begin() + (position - 1);
+    std::rotate(begin, begin + 1, object_initializations.end());
+    const auto mask = initialization_target_index.size() - 1;
+    for (auto it = begin; it != object_initializations.end(); ++it) {
+        const auto key = link_target_key(it->target);
+        auto index = static_cast<std::size_t>(mix64(key)) & mask;
+        while (initialization_target_index[index].key != key)
+            index = (index + 1) & mask;
+        initialization_target_index[index].position =
+            static_cast<std::uint32_t>(it - object_initializations.begin() + 1);
+    }
+}
+
 server_status graph::upsert_initialization(
-    object_endpoint target, construction_value value,
+    object_endpoint target, type_ref target_type, construction_value value,
     bool& replaced, bool capacity_prepared) noexcept {
+    CW_SOURCE_PROFILE(initializations);
     replaced = false;
 
     const auto key =
@@ -3762,6 +3850,7 @@ server_status graph::upsert_initialization(
             value.kind != construction_kind::byte_patch ||
             (current.value.operand & value.operand) != 0;
         current.value = merge_byte_patch(current.value, value);
+        move_overlapping_initialization_to_end(existing, target_type);
 
         return server_status::success;
     }
@@ -3809,6 +3898,7 @@ server_status graph::add_link(
     object_endpoint source,
     object_endpoint target,
     link_handle& output) noexcept {
+    CW_SOURCE_PROFILE(links);
 
     output = {};
 
@@ -3833,6 +3923,7 @@ server_status graph::add_link(
 
 server_status graph::add_resolved_link(
     object_endpoint source, object_endpoint target, link_handle& output) noexcept {
+    CW_SOURCE_PROFILE(links);
     output = {};
     if (const auto existing = find_link_target(target); existing) {
         const auto* value = find(existing);
@@ -3866,6 +3957,7 @@ server_status graph::add_resolved_link(
 server_status graph::rebind_resolved_link(
     object_endpoint source, object_endpoint target,
     link_handle& output, bool& replaced) noexcept {
+    CW_SOURCE_PROFILE(links);
 #ifdef CW_RESOLVED_G_01
     auto replay_observation=resolved_g01::observe([&] { return resolved_g01::link(source,target); },
         [&](resolved_g01::operation& o) { o.expected=output.value(); o.replaced=replaced; });

@@ -10,6 +10,7 @@
 #include "persistence/compiled_project.hpp"
 #include "ic/ic_catalog.hpp"
 #include "runtime/runtime_binding.hpp"
+#include "runtime/runtime_query.hpp"
 #include "runtime/runtime_system.hpp"
 #include "task/task_configuration.hpp"
 #include "../fixed_shared_memory.hpp"
@@ -18,11 +19,17 @@
 #include <cstdint>
 #include <filesystem>
 #include <utility>
+#include <thread>
+#include <atomic>
 
 namespace cw::server {
 
 class project final {
 public:
+    ~project();
+    void configure_link_queries(link_query_index_mode mode) noexcept;
+    runtime_query_result query_links(std::span<const std::string> objects, runtime_link_query& result) noexcept;
+    bool link_index_ready() const noexcept { return link_index_ready_value.load(std::memory_order_acquire); }
     project(
         std::filesystem::path path,
         read_only_file_mapping&& compiled_mapping,
@@ -97,7 +104,12 @@ public:
         return ic_catalog_value;
     }
 
+
 private:
+    runtime_link_index link_query_index_value;
+    std::jthread link_index_worker;
+    std::atomic<bool> link_index_ready_value{false};
+    link_query_index_mode link_index_mode = link_query_index_mode::lazy;
     std::filesystem::path project_path;
     read_only_file_mapping compiled_mapping;
     compiled_project_view compiled_view;

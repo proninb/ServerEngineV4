@@ -23,6 +23,11 @@ enum class server_response_payload_kind : std::uint8_t {
 };
 
 struct server_response {
+    bool has_operation_metrics = false;
+    std::uint64_t elapsed_us = 0;
+    std::uint64_t elapsed_ms = 0, types = 0, objects = 0, links = 0, members = 0, runtime_bytes = 0;
+    bool has_project_metrics = false;
+    bool link_index_ready = false;
     operation_id operation;
     server_status status = server_status::success;
 

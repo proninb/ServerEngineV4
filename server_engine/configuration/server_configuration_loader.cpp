@@ -87,6 +87,8 @@ enum class schema_field : std::uint8_t {
     console,
     file,
     subsystems,
+    operation_timings,
+    link_query_index,
 };
 
 enum class schema_failure : std::uint8_t {
@@ -876,6 +878,17 @@ public:
             break;
 
         case schema_context::settings:
+            if (field == schema_field::link_query_index) {
+                std::string mode;
+                if (!value.get(mode)) fail(schema_failure::wrong_type, "settings.link_query_index must be a string");
+                else if (mode == "lazy") configuration.settings.link_query_index = link_query_index_mode::lazy;
+                else if (mode == "background") configuration.settings.link_query_index = link_query_index_mode::background;
+                else if (mode == "disabled") configuration.settings.link_query_index = link_query_index_mode::disabled;
+                else fail(schema_failure::invalid_value, "settings.link_query_index must be lazy, background or disabled");
+                break;
+            }
+            fail(schema_failure::invalid_structure, "unexpected scalar in settings");
+            break;
         case schema_context::communication:
         case schema_context::endpoints:
         case schema_context::telemetry_subsystems:
@@ -950,6 +963,7 @@ private:
             if (key == "abi") return schema_field::abi;
             if (key == "shm") return schema_field::shm;
             if (key == "files") return schema_field::files;
+            if (key == "link_query_index") return schema_field::link_query_index;
             break;
 
         case schema_context::abi:
@@ -1022,6 +1036,7 @@ private:
         case schema_context::telemetry:
             if (key == "console") return schema_field::console;
             if (key == "subsystems") return schema_field::subsystems;
+            if (key == "operation_timings") return schema_field::operation_timings;
             break;
 
         case schema_context::endpoints:
@@ -1853,6 +1868,11 @@ private:
     void read_telemetry(
         schema_field field,
         json_value_view value) {
+        if (field == schema_field::operation_timings) {
+            if (!value.get(configuration.telemetry->operation_timings))
+                fail(schema_failure::wrong_type, "telemetry.operation_timings must be boolean");
+            return;
+        }
 
         if (field ==
             schema_field::console) {

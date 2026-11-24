@@ -238,6 +238,128 @@ void test_runtime_v2_constructor_alias_target(test_state& tests) {
         "alias target binding replaces its constructor reference default");
 }
 
+void test_bit_endpoint_materialization(test_state& tests) {
+    compiled_fixture fixture;
+    const auto resolve = [&](std::string_view text, identity_kind kind) {
+        string_id name;
+        identity_ref id;
+        (void)fixture.strings.intern(text, name);
+        (void)fixture.identities.resolve(fixture.identities.root(), name, kind, id);
+        return id;
+    };
+    const auto bool_id = resolve("U_BOOL", identity_kind::type);
+    const auto int_id = resolve("U_INT", identity_kind::type);
+    const auto object_id = resolve("DataBuf", identity_kind::object);
+    type_handle bool_alias, int_alias;
+    auto& graph = fixture.G;
+    if (!tests.expect(succeeded(graph.define_intrinsic_alias(bool_id, intrinsic_type::bool_type, bool_alias, true)) &&
+        succeeded(graph.define_intrinsic_alias(int_id, intrinsic_type::signed_short, int_alias, true, {bool_id, 16})),
+        "Define nominal integer and bool aliases")) return;
+    type_ref array;
+    object_handle object;
+    if (!tests.expect(succeeded(graph.derive(graph.named(int_alias), derived_type_kind::bounded_array, 2, array)) &&
+        succeeded(graph.add_object(object_id, array, object)), "Define array of aliased integers")) return;
+    const auto initialize = [&](std::span<const endpoint_path_step> steps, std::uint64_t value) {
+        endpoint_path_handle path;
+        bool replaced = false;
+        return succeeded(graph.intern_endpoint_path(array, steps, path)) &&
+            succeeded(graph.add_initialization({object_id, endpoint_ref::from_path(path)},
+                construction_value::constant(construction_kind::unsigned_integer, value), replaced));
+    };
+    std::array<endpoint_path_step, 2> steps{{
+        {1, endpoint_path_step_kind::array_index, {}}, {0, endpoint_path_step_kind::bit_index, {}}}};
+    if (!tests.expect(initialize(std::span{steps}.first(1), 6) && initialize(steps, 1),
+        "Initialize the whole scalar and its low bit")) return;
+    steps.back().value = 1;
+    if (!tests.expect(initialize(steps, 0), "Clear one bit")) return;
+    steps.back().value = 15;
+    if (!tests.expect(initialize(steps, 1), "Set the signed high bit")) return;
+    if (!tests.expect(initialize(std::span{steps}.first(1), 6) && initialize(steps, 1),
+        "Repeated scalar and bit assignments retain their relative order")) return;
+    steps.back().value = 0;
+    if (!tests.expect(initialize(steps, 1), "Set the low bit again after the whole scalar")) return;
+    steps.back().value = 1;
+    if (!tests.expect(initialize(steps, 0), "Clear the other bit again after the whole scalar")) return;
+    (void)fixture.sources.finalize(fixture.files.size(), fixture.identities, graph);
+    compiled_test_image image;
+    compiled_project_view view;
+    if (!tests.expect(build_test_compiled_image(fixture, image) == compiled_project_image_result::success,
+        "Build persisted bit endpoint paths")) return;
+    if (!tests.expect(view.bind(image.bytes) == compiled_project_image_result::success,
+        "Bind persisted bit endpoint paths")) return;
+    if (!tests.expect(view.verify_contents() == compiled_project_image_result::success,
+        "Audit persisted bit endpoint paths")) return;
+#if defined(_WIN32)
+    const server_abi_configuration abi{abi_target::windows_x64, 8};
+#else
+    const server_abi_configuration abi{abi_target::posix_x64, 8};
+#endif
+    runtime_layout fixed;
+    shm_layout layout;
+    shm_runtime_v2 model;
+    if (!tests.expect(prepare_runtime_layout(view, abi, fixed) == runtime_layout_result::success &&
+        prepare_shm_layout(view, abi, layout) == shm_layout_result::success &&
+        prepare_shm_runtime_v2(view, abi, layout, model) == shm_runtime_v2_result::success,
+        "Prepare both bit endpoint materializers")) return;
+    std::vector<std::byte> bytes(layout.size());
+    std::vector<std::byte> fixed_bytes(fixed.size());
+    if (!tests.expect(materialize_fixed_direct(view, fixed, abi, fixed_bytes) == fixed_direct_materialization_result::success,
+        "Fixed direct bit writes")) return;
+    if (!tests.expect(materialize_shm_runtime_v2_canonical(model, abi, layout, bytes) == shm_runtime_v2_result::success,
+        "Bit fixture canonical SHM")) return;
+    if (!tests.expect(mark_shm_runtime_v2_links(model, abi, layout, bytes) == shm_runtime_v2_result::success,
+        "Bit fixture mark links")) return;
+    if (!tests.expect(materialize_shm_runtime_v2_objects(model, abi, layout, bytes) == shm_runtime_v2_result::success,
+        "Bit fixture SHM objects")) return;
+    if (!tests.expect(materialize_shm_runtime_v2_links(model, abi, layout, bytes) == shm_runtime_v2_result::success,
+        "Bit fixture SHM links")) return;
+    if (!tests.expect(materialize_shm_runtime_v2_initializations(model, abi, layout, bytes) == shm_runtime_v2_result::success,
+        "V2 SHM bit writes")) return;
+    const auto stored_object = view.find_object(object_id);
+    shm_offset where = 0;
+    std::uint64_t fixed_where = 0;
+    const std::array expected{std::byte{0}, std::byte{0}, std::byte{5}, std::byte{128}};
+    tests.expect(layout.object_offset(stored_object, where) && fixed.object_offset(stored_object, fixed_where) &&
+        std::memcmp(bytes.data() + where, expected.data(), expected.size()) == 0 &&
+        std::memcmp(fixed_bytes.data() + fixed_where, expected.data(), expected.size()) == 0,
+        "Bit writes preserve siblings, neighboring bits and scalar SHM layout");
+    runtime_binding_index bindings;
+    runtime_value bit;
+    tests.expect(fixed.release_bindings(bindings) &&
+        get_runtime_value(view, bindings, fixed_bytes, "DataBuf[1].15", bit) == runtime_query_result::success &&
+        bit.type == intrinsic_type::bool_type && bit.bits == 1 &&
+        get_runtime_value(view, bindings, fixed_bytes, "DataBuf[1].1", bit) == runtime_query_result::success &&
+        bit.bits == 0 &&
+        get_runtime_value(view, bindings, fixed_bytes, "DataBuf[1].16", bit) == runtime_query_result::not_found,
+        "Read virtual bit endpoints through the runtime query");
+    shm_type_batch type_area;
+    compiled_project_runtime_type_counts type_counts;
+    runtime_project_layout physical_layout;
+    if (!tests.expect(prepare_shm_type_batch_inline64(view, abi, layout, type_area) == shm_type_batch_result::success,
+        "Prepare physical bit endpoint types")) return;
+    shm_type_batch_compiled_counts(type_area, type_counts);
+    if (!tests.expect(prepare_runtime_project_layout(view, type_counts, physical_layout, &model) ==
+        runtime_project_image_result::success, "Size physical bit endpoint image")) return;
+    std::vector<std::byte> physical_image(physical_layout.size());
+    runtime_project_view physical_view;
+    if (!tests.expect(encode_runtime_project_image(physical_layout, physical_image) == runtime_project_image_result::success &&
+        encode_shm_layout_columns(layout, abi, physical_image) == shm_layout_result::success &&
+        encode_shm_type_batch_physical_columns(type_area, physical_image) == shm_type_batch_result::success &&
+        encode_shm_runtime_v2_physical_columns(model, layout, physical_image) == shm_runtime_v2_result::success &&
+        physical_view.bind(physical_image) == runtime_project_image_result::success,
+        "Persist the physical bit initialization mask")) return;
+    shm_layout loaded_layout;
+    shm_runtime_v2 loaded_model;
+    attach_shm_layout_columns(physical_view, loaded_layout);
+    std::fill(bytes.begin(), bytes.end(), std::byte{});
+    tests.expect(prepare_shm_runtime_v2_persisted(physical_view, abi, loaded_layout, loaded_model) ==
+        shm_runtime_v2_result::success &&
+        materialize_shm_runtime_v2_initializations(loaded_model, abi, loaded_layout, bytes) ==
+            shm_runtime_v2_result::success &&
+        std::memcmp(bytes.data() + where, expected.data(), expected.size()) == 0,
+        "LOAD applies the persisted bit masks to the original scalar");
+}
+
 void test_packed_char_persistence_and_bounds(test_state& tests) {
     compiled_fixture f;
     string_id name; identity_ref id;
@@ -399,6 +521,119 @@ void test_whole_char_array_persistence(test_state& tests) {
     tests.expect(invalid.bind(corrupt) == compiled_project_image_result::success &&
         invalid.verify_contents() == compiled_project_image_result::invalid_image,
         "reject whole-array bitmap bits outside the final char-array bound");
+}
+
+void test_publish_compact_link_layout(test_state& tests) {
+    compiled_fixture f;
+    const auto identity = [&](const std::string& text) {
+        string_id name; (void)f.strings.intern(text, name);
+        identity_ref id; (void)f.identities.resolve(f.identities.root(), name, identity_kind::object, id); return id;
+    };
+    const auto integer = f.G.intrinsic(intrinsic_type::signed_int);
+    type_ref reference; (void)f.G.derive(integer, derived_type_kind::lvalue_reference, 0, reference);
+    const auto source_id = identity("compact_source"); object_handle source;
+    (void)f.G.add_object(source_id, integer, source);
+    endpoint_path_handle value_path, ref_path;
+    (void)f.G.intern_endpoint_path(integer, {}, value_path);
+    (void)f.G.intern_endpoint_path(reference, {}, ref_path);
+    std::vector<identity_ref> targets;
+    for (unsigned i = 0; i < 11; ++i) {
+        const auto id = identity("compact_target_" + std::to_string(i)); targets.push_back(id);
+        object_handle target; link_handle link;
+        (void)f.G.add_object(id, reference, target);
+        if (!tests.expect(succeeded(f.G.add_link({source_id, endpoint_ref::from_path(value_path)},
+            {id, endpoint_ref::from_path(ref_path)}, link)), "prepare compact link endpoints")) return;
+    }
+    (void)f.sources.finalize(f.files.size(), f.identities, f.G);
+    compiled_project_layout standard_size, dense_size;
+    if (!tests.expect(prepare_compiled_project_layout(f.strings, f.identities, f.G, f.assigns, f.files, f.sources, standard_size) == compiled_project_image_result::success &&
+        prepare_compiled_project_layout(f.strings, f.identities, f.G, f.assigns, f.files, f.sources, dense_size, true) == compiled_project_image_result::success &&
+        dense_size.size() < standard_size.size(), "PUBLISH optionally compacts its link target index")) return;
+    std::vector<std::byte> image(dense_size.size());
+    compiled_project_view view;
+    if (!tests.expect(encode_compiled_project_image(f.strings, f.identities, f.G, f.assigns, f.files, f.sources, dense_size, image) == compiled_project_image_result::success &&
+        view.bind(image) == compiled_project_image_result::success && view.format_version() == 31 &&
+        view.verify_contents() == compiled_project_image_result::success,
+        "dense PUBLISH index selects format 31 and passes full content audit")) return;
+    for (const auto id : targets)
+        tests.expect(bool(view.find_link_target({id, endpoint_ref::from_path(ref_path)})),
+            "dense persisted index preserves every link lookup under collisions");
+#if defined(_WIN32)
+    const server_abi_configuration abi{abi_target::windows_x64, 8};
+#else
+    const server_abi_configuration abi{abi_target::posix_x64, 8};
+#endif
+    shm_layout layout; shm_type_batch types; shm_runtime_v2 plan;
+    if (!tests.expect(prepare_shm_layout(view, abi, layout) == shm_layout_result::success &&
+        prepare_shm_type_batch_inline64(view, abi, layout, types) == shm_type_batch_result::success &&
+        prepare_shm_runtime_v2_physical_plan(view, abi, layout, plan) == shm_runtime_v2_result::success,
+        "prepare compact physical link plan")) return;
+    shm_runtime_v2_physical_counts physical_counts;
+    tests.expect(plan.physical_counts(physical_counts) && physical_counts.compact_links,
+        "small SHM selects lossless 30-bit endpoint encoding");
+    compiled_project_runtime_type_counts type_counts; shm_type_batch_compiled_counts(types, type_counts);
+    std::vector<std::byte> bytes(static_cast<std::size_t>(layout.size())), gold;
+    for (const bool compact : {false, true}) {
+        runtime_project_layout size;
+        if (!tests.expect(prepare_runtime_project_layout(view, type_counts, size, compact ? &plan : nullptr) == runtime_project_image_result::success,
+            "size either physical link representation")) return;
+        std::vector<std::byte> runtime_image(size.size()); runtime_project_view runtime;
+        if (!tests.expect(encode_runtime_project_image(size, runtime_image) == runtime_project_image_result::success &&
+            encode_shm_layout_columns(layout, abi, runtime_image) == shm_layout_result::success &&
+            encode_shm_type_batch_physical_columns(types, runtime_image) == shm_type_batch_result::success &&
+            encode_shm_runtime_v2_physical_columns(plan, layout, runtime_image) == shm_runtime_v2_result::success &&
+            runtime.bind(runtime_image) == runtime_project_image_result::success &&
+            runtime.record_size(compiled_project_section::link_runtime) == (compact ? 8u : 32u),
+            "encode and attach compact/wide physical columns")) return;
+        if (!compact) {
+            const std::uint32_t legacy_version = 3;
+            std::memcpy(runtime_image.data() + 8, &legacy_version, 4);
+            tests.expect(runtime.bind(runtime_image) == runtime_project_image_result::success,
+                "LOAD retains compatibility with version-3 wide physical links");
+        }
+        shm_layout attached; attach_shm_layout_columns(runtime, attached); shm_runtime_v2 model;
+        std::fill(bytes.begin(), bytes.end(), std::byte{});
+        if (!tests.expect(prepare_shm_runtime_v2_persisted(runtime, abi, attached, model) == shm_runtime_v2_result::success &&
+            materialize_shm_runtime_v2_canonical(model, abi, attached, bytes) == shm_runtime_v2_result::success &&
+            mark_shm_runtime_v2_links(model, abi, attached, bytes) == shm_runtime_v2_result::success &&
+            materialize_shm_runtime_v2_objects(model, abi, attached, bytes) == shm_runtime_v2_result::success &&
+            materialize_shm_runtime_v2_links(model, abi, attached, bytes) == shm_runtime_v2_result::success,
+            "LOAD materializes either physical link representation")) return;
+        if (!compact) gold = bytes;
+        else tests.expect(bytes == gold, "compact and wide links produce identical native references");
+        if (compact) {
+            const std::uint32_t legacy_version = 3;
+            std::memcpy(runtime_image.data() + 8, &legacy_version, 4);
+            runtime_project_view invalid_version;
+            tests.expect(invalid_version.bind(runtime_image) == runtime_project_image_result::invalid_image,
+                "compact links require the version-4 descriptor contract");
+        }
+    }
+    // Large data layouts must remain representable without a compact truncation.
+    compiled_fixture large;
+    string_id large_name; (void)large.strings.intern("large_data", large_name);
+    identity_ref large_id; (void)large.identities.resolve(large.identities.root(), large_name, identity_kind::object, large_id);
+    type_ref large_array; (void)large.G.derive(large.G.intrinsic(intrinsic_type::char_type),
+        derived_type_kind::bounded_array, std::uint64_t{1} << 30, large_array);
+    object_handle large_object; (void)large.G.add_object(large_id, large_array, large_object);
+    (void)large.sources.finalize(large.files.size(), large.identities, large.G);
+    compiled_test_image large_image; compiled_project_view large_view;
+    shm_layout large_layout; shm_runtime_v2 large_plan;
+    tests.expect(build_test_compiled_image(large, large_image) == compiled_project_image_result::success &&
+        large_view.bind(large_image.bytes) == compiled_project_image_result::success &&
+        prepare_shm_layout(large_view, abi, large_layout) == shm_layout_result::success &&
+        prepare_shm_runtime_v2_physical_plan(large_view, abi, large_layout, large_plan) == shm_runtime_v2_result::success &&
+        large_plan.physical_counts(physical_counts) && !physical_counts.compact_links,
+        "layouts beyond compact offset range automatically select the wide fallback without allocating SHM");
+    shm_runtime_v2_physical_link original{};
+    original.flags = 3; original.source_program = 17; original.target_program = 21;
+    shm_runtime_v2_compact_link packed;
+    const auto encoded = pack_shm_runtime_v2_link(original, packed);
+    const auto decoded = unpack_shm_runtime_v2_link(packed);
+    tests.expect(encoded && decoded.flags == 3 && decoded.source_program == 17 && decoded.target_program == 21,
+        "compact records preserve both endpoint programs and reference-source flags");
+    original.source_program = 0; original.source = std::uint64_t{1} << 30;
+    tests.expect(!pack_shm_runtime_v2_link(original, packed), "never truncate a wide SHM offset into compact bits");
 }
 
 void test_pointer_address_persistence_runtime(test_state& tests) {
@@ -585,7 +820,7 @@ void test_nested_defaults_persistence(test_state& tests) {
     (void)f.G.derive(f.G.intrinsic(intrinsic_type::signed_int), derived_type_kind::bounded_array, 3, row);
     (void)f.G.derive(row, derived_type_kind::bounded_array, 2, matrix);
     (void)f.G.derive(f.G.named(leaf), derived_type_kind::bounded_array, 2, items);
-    const std::array<member_record, 6> owner_members{{
+    std::array<member_record, 6> owner_members{{
         {name("p"), f.G.named(leaf), graph_member_access::public_access},
         {name("other"), f.G.named(leaf), graph_member_access::public_access},
         {name("matrix"), matrix, graph_member_access::public_access},
@@ -593,7 +828,8 @@ void test_nested_defaults_persistence(test_state& tests) {
         {name("text"), text, graph_member_access::public_access},
         {name("ref"), reference, graph_member_access::public_access}}};
     (void)f.G.define_record(leaf, graph_record_kind::struct_type, leaf_members);
-    (void)f.G.define_record(owner, graph_record_kind::struct_type, owner_members);
+    set_array_origin(owner_members[3].reserved, 1);
+    (void)f.G.define_resolved_record(owner, graph_record_kind::struct_type, owner_members, {}, {}, false, 4);
     tests.expect(succeeded(f.G.constructor_defaults.add({owner_id, name("p.value"),
         construction_value::constant(construction_kind::unsigned_integer, 42)})), "add nested default");
     object_handle instance;
@@ -718,6 +954,28 @@ void test_nested_defaults_persistence(test_state& tests) {
         view.bind(image.bytes) == compiled_project_image_result::success &&
         view.verify_contents() == compiled_project_image_result::success &&
         view.constructor_default_count() == 6, "persist and audit nested defaults")) return;
+    runtime_type_query endpoint_types;
+    const std::vector<std::string> endpoints{"::instance.p", "instance[2]", "wrapper.target.other", "instance.matrix[1][2]"};
+    if (tests.expect(get_runtime_type(view, endpoints, endpoint_types) == runtime_query_result::success &&
+        endpoint_types.types.size() == endpoints.size(), "GET_TYPE resolves nested records, references and array indices")) {
+        for (std::size_t i = 0; i < 3; ++i) {
+            const auto& type = endpoint_types.types[i];
+            tests.expect(type.object == (i == 0 ? "instance.p" : endpoints[i]) && type.type.name == "Leaf" &&
+                type.type.members.size() == 1 && type.type.members[0].name == "value" &&
+                type.type.members[0].type == "int", "GET_TYPE returns fields of the selected subobject");
+        }
+        tests.expect(endpoint_types.types[3].type.name == "int" && endpoint_types.types[3].type.members.empty(),
+            "GET_TYPE returns scalar element type");
+    }
+    for (const auto& [path, status] : std::initializer_list<std::pair<const char*, runtime_query_result>>{
+        {"instance[3]", runtime_query_result::not_found},
+        {"instance.p.missing", runtime_query_result::not_found},
+        {"instance.items[]", runtime_query_result::invalid_input},
+        {"instance..p", runtime_query_result::invalid_input}}) {
+        const std::vector<std::string> query{path};
+        tests.expect(get_runtime_type(view, query, endpoint_types) == status && endpoint_types.types.empty(),
+            "GET_TYPE rejects missing or malformed nested endpoints");
+    }
     graph_delta delta;
     tests.expect(succeeded(delta.bind_baseline(view)) &&
         delta.constructor_defaults.entries().size() == 6,
@@ -775,7 +1033,7 @@ void test_nested_defaults_persistence(test_state& tests) {
                                  expected_text, 8) == 0,
             "SHM-MULTI-BASE-REF-02 inherited third-base bytes reach Fixed Direct");
     }
-    for (const auto path : {"instance.p.value", "second.p.value"}) {
+    for (const auto path : {"instance.p.value", "second.p.value", "instance[2].value", "instance.items[1].value"}) {
         runtime_value result;
         tests.expect(get_runtime_value(view, bindings, runtime, path, result) == runtime_query_result::success &&
             result.bits == 42,
@@ -3898,8 +4156,35 @@ void test_runtime_layout_from_physical_plan(test_state& tests) {
             scanned.size() == reused.size(), "physical and Graph runtime layout sizes match")) return;
     std::vector<std::byte> first(scanned.size()), second(reused.size());
     tests.expect(encode_runtime_project_image(scanned, first) == runtime_project_image_result::success &&
-        encode_runtime_project_image(reused, second) == runtime_project_image_result::success &&
-        first == second, "physical and Graph runtime directories match byte for byte");
+        encode_runtime_project_image(reused, second) == runtime_project_image_result::success,
+        "physical and Graph runtime image encoders accept both layouts");
+    runtime_project_view wide_view, compact_view;
+    tests.expect(wide_view.bind(first) == runtime_project_image_result::success &&
+        compact_view.bind(second) == runtime_project_image_result::success &&
+        wide_view.record_size(compiled_project_section::link_runtime) == 32 &&
+        compact_view.record_size(compiled_project_section::link_runtime) == 8,
+        "reused small physical plan selects compact links; independent sizing retains wide records");
+    for (const auto kind : {compiled_project_section::runtime_abi_header,
+            compiled_project_section::runtime_execution_header}) {
+        auto malformed = first;
+        const auto index = static_cast<std::uint32_t>(kind) -
+            static_cast<std::uint32_t>(compiled_project_section::runtime_abi_header);
+        const auto entry = runtime_project_header_size + index * runtime_project_directory_entry_size;
+        const std::uint64_t missing = 0;
+        std::memcpy(malformed.data() + entry + 16, &missing, sizeof missing);
+        runtime_project_view rejected;
+        tests.expect(rejected.bind(malformed) == runtime_project_image_result::invalid_image,
+            "runtime binding rejects missing mandatory header before front() access");
+    }
+    runtime_project_view absent;
+    shm_layout absent_layout;
+    attach_shm_layout_columns(absent, absent_layout);
+    tests.expect(absent_layout.size() == 0,
+        "layout attachment safely rejects a default unbound runtime view");
+    shm_runtime_v2 absent_plan;
+    tests.expect(attach_shm_runtime_v2_physical_columns(absent, absent_plan) ==
+            shm_runtime_v2_result::invalid_input,
+        "execution attachment safely rejects a default unbound runtime view");
     shm_runtime_v2 empty;
     tests.expect(prepare_runtime_project_layout(view, types, reused, &empty) ==
         runtime_project_image_result::invalid_state, "reject mismatched runtime plan slot counts");
@@ -5920,6 +6205,45 @@ void test_runtime_link_query(
 
         return;
     }
+
+    {
+        runtime_link_index cancelled;
+        std::stop_source stop;
+        stop.request_stop();
+        tests.expect(prepare_runtime_link_index(view,cancelled,stop.get_token())==runtime_query_result::invalid_input &&
+            cancelled.owner==nullptr && cancelled.storage_bytes()==0,
+            "GET_LINK cancelled preparation publishes no index and allocates no storage");
+    }
+    runtime_link_index adjacency;
+    for (unsigned pass=0;pass<2;++pass) {
+        runtime_link_query indexed;
+        bool equal = get_runtime_link_indexed(view, objects, indexed, adjacency) == runtime_query_result::success && indexed.objects.size()==result.objects.size();
+        for (std::size_t i=0;equal && i<result.objects.size();++i) {
+            const auto& x=result.objects[i]; const auto& y=indexed.objects[i];
+            equal=x.object==y.object && x.links.size()==y.links.size() && x.assigns.size()==y.assigns.size();
+            for (std::size_t j=0;equal && j<x.links.size();++j) equal=x.links[j].source==y.links[j].source && x.links[j].target==y.links[j].target && x.links[j].file==y.links[j].file;
+            for (std::size_t j=0;equal && j<x.assigns.size();++j) equal=x.assigns[j].source==y.assigns[j].source && x.assigns[j].target==y.assigns[j].target && x.assigns[j].file==y.assigns[j].file;
+        }
+        tests.expect(equal, "GET_LINK CSR cold/warm preserves linear order, endpoints, assigns and Source files");
+    }
+    tests.expect(adjacency.owner==&view && adjacency.storage_bytes()>0, "GET_LINK retains project-specific adjacency storage");
+    {
+        const std::vector<std::string> repeated{"demo::left", "demo::left", "demo::scalar"};
+        runtime_link_query indexed;
+        tests.expect(get_runtime_link_indexed(view, repeated, indexed, adjacency)==runtime_query_result::success &&
+            indexed.objects.size()==3 && indexed.objects[0].links.size()==result.objects[0].links.size() &&
+            indexed.objects[1].links.size()==result.objects[0].links.size() && indexed.objects[2].links.empty(),
+            "GET_LINK CSR preserves repeated objects and zero-degree objects");
+        const std::vector<std::string> missing{"demo::missing"};
+        tests.expect(get_runtime_link_indexed(view, missing, indexed, adjacency)==runtime_query_result::not_found && indexed.objects.empty(),
+            "GET_LINK CSR missing object clears previous query output");
+        compiled_project_view replacement;
+        tests.expect(replacement.bind(image.bytes)==compiled_project_image_result::success &&
+            get_runtime_link_indexed(replacement, objects, indexed, adjacency)==runtime_query_result::success && adjacency.owner==&replacement,
+            "GET_LINK CSR rebuilds for a different immutable compiled view");
+        adjacency = {}; // replacement is about to leave scope.
+    }
+
 
     tests.expect(
         result.objects[0].object ==
@@ -13771,8 +14095,10 @@ int main() {
         test_nested_defaults_persistence(tests);
         test_enum_persistence_runtime(tests);
         test_runtime_v2_constructor_alias_target(tests);
+        test_bit_endpoint_materialization(tests);
         test_packed_char_persistence_and_bounds(tests);
         test_whole_char_array_persistence(tests);
+        test_publish_compact_link_layout(tests);
         test_pointer_address_persistence_runtime(tests);
         test_nominal_scalar_persistence(tests);
         test_class_abi_persistence(

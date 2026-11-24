@@ -1,3 +1,4 @@
+#include "../construction/publish_source_profile.hpp"
 /*
  * ABI-independent construction semantics shared by Parser/Graph/persistence.
  *
@@ -17,6 +18,7 @@ namespace cw::server {
 // Derived-to-base conversion is made explicit in the source endpoint path.
 template<class Types>
 bool qualified_object_compatible(const Types& types, type_ref pointee, type_ref source, bool allow_void = false) noexcept {
+    CW_SOURCE_PROFILE(type_validation);
     derived_type_record d;
     if (types.derived(source, d) && (d.kind == derived_type_kind::lvalue_reference || d.kind == derived_type_kind::rvalue_reference)) source = d.child;
     bool tc = false, tv = false, sc = false, sv = false;
@@ -109,6 +111,7 @@ namespace construction_semantics_detail {
 
 [[nodiscard]] constexpr bool integer_constant(
     construction_value value) noexcept {
+    CW_SOURCE_PROFILE(type_validation);
 
     return value.kind ==
             construction_kind::signed_integer ||
@@ -125,6 +128,7 @@ template <typename TypeView>
     const TypeView& types,
     type_ref target,
     construction_value value) noexcept {
+    CW_SOURCE_PROFILE(type_validation);
 
     if (!target ||
         !valid_construction(value) ||

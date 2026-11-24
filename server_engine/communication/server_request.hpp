@@ -26,6 +26,7 @@ enum class server_request_kind {
     get_type,
     get_link,
     get_value,
+    set_value,
     snap_ic,
     reset_ic,
     delete_ic,
@@ -45,6 +46,7 @@ struct server_request {
 
     // Runtime query target.
     std::string name;
+    std::string value;
 
     // Optional Runtime query type filter.
     std::string type;

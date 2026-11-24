@@ -8,6 +8,34 @@ using namespace cw::server;
 
 int main() {
     {
+        outbound_write message;
+        server_response response;
+        response.status = server_status::success;
+        response.has_operation_metrics = true;
+        response.elapsed_ms = 123;
+        response.has_project_metrics = true;
+        response.types = 2;
+        response.object.file = "objects.source";
+        diagnostic_record diagnostic;
+        diagnostic.location.file = "source/example.cpp";
+        diagnostic.location.line = 7;
+        diagnostic.location.column = 3;
+        response.diagnostics.emit(diagnostic);
+        response.payload = server_response_payload_kind::runtime_object;
+        response.object.name.assign(3u * 1024u * 1024u, 'x');
+        message.message.payload = protocol_response{request_id{999}, response};
+        std::string json;
+        if (!encode_json_outbound(message, json) || json.size() <= tcp_json_max_frame_bytes)
+            return 90;
+        if (json.find("\"file\":\"source/example.cpp\"") == std::string::npos ||
+            json.find("\"elapsed_ms\":123") == std::string::npos ||
+            json.find("\"types\":2") == std::string::npos ||
+            json.find("\"file\":\"objects.source\"") == std::string::npos) return 92;
+        response.object.name.assign(tcp_json_max_response_bytes, 'x');
+        message.message.payload = protocol_response{request_id{999}, response};
+        if (encode_json_outbound(message, json)) return 91;
+    }
+    {
         json_request request;
 
         const auto decoded =

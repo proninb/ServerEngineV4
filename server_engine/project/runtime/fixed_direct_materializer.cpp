@@ -895,6 +895,14 @@ private:
         type_ref type,
         std::uint32_t& output) noexcept;
 
+    [[nodiscard]] intrinsic_type nominal_storage(type_ref type) const noexcept {
+        type_handle handle;
+        type_entry entry;
+        return project.named(type, handle) && project.type(handle, entry) &&
+            entry.kind == graph_type_kind::nominal_scalar
+            ? entry.storage_intrinsic() : intrinsic_type::none;
+    }
+
     [[nodiscard]] fixed_direct_materialization_result
     prepare_canonical_dependencies(
         type_ref type) noexcept {
@@ -905,6 +913,8 @@ private:
                 success;
 
         case type_ref_kind::named: {
+            if (nominal_storage(type) != intrinsic_type::none)
+                return fixed_direct_materialization_result::success;
             type_handle handle;
             type_entry record;
 
@@ -1279,6 +1289,8 @@ private:
                 success;
 
         case type_ref_kind::named: {
+            if (nominal_storage(type) != intrinsic_type::none)
+                return fixed_direct_materialization_result::success;
             type_handle handle;
             type_entry record;
 
@@ -1834,24 +1846,15 @@ private:
                 target);
 
         case type_ref_kind::named: {
-            if (construction.kind !=
-                construction_kind::zero) {
-
-                return fixed_direct_materialization_result::
-                    invalid_input;
-            }
-
             type_handle handle;
-
-            return project.named(
-                       type,
-                       handle)
-                ? normal_record(
-                    handle,
-                    target,
-                    top_object)
-                : fixed_direct_materialization_result::
-                    invalid_input;
+            type_entry entry;
+            if (!project.named(type, handle) || !project.type(handle, entry))
+                return fixed_direct_materialization_result::invalid_input;
+            if (entry.kind == graph_type_kind::nominal_scalar)
+                return normal_intrinsic(entry.storage_intrinsic(), construction, target);
+            if (construction.kind != construction_kind::zero)
+                return fixed_direct_materialization_result::invalid_input;
+            return normal_record(handle, target, top_object);
         }
 
         case type_ref_kind::derived: {
@@ -2411,11 +2414,8 @@ private:
             type_handle handle;
 
             return
-                project.named(
-                    type,
-                    handle) &&
-                zero_record_noop(
-                    handle);
+                nominal_storage(type) != intrinsic_type::none ||
+                (project.named(type, handle) && zero_record_noop(handle));
         }
 
         case type_ref_kind::derived: {
@@ -2922,6 +2922,8 @@ private:
                     success;
 
             case type_ref_kind::named: {
+                if (nominal_storage(type) != intrinsic_type::none)
+                    return fixed_direct_materialization_result::success;
                 if (construction.kind !=
                     construction_kind::zero) {
 
@@ -5461,6 +5463,7 @@ private:
 
             if (object.type.kind() ==
                     type_ref_kind::named &&
+                nominal_storage(object.type) == intrinsic_type::none &&
                 construction.kind ==
                     construction_kind::zero) {
 
@@ -6551,7 +6554,7 @@ private:
         object_endpoint endpoint,
         reference_state& next,
         bool& has_next,
-        std::uint64_t& output, bool pointer_target = false) noexcept {
+        std::uint64_t& output, bool pointer_target = false, unsigned* bit = nullptr) noexcept {
 
         next = {};
         has_next = false;
@@ -6637,6 +6640,17 @@ private:
                     qualified.child;
             }
 
+            if (step.kind == endpoint_path_step_kind::bit_index) {
+                if (!bit || local_step + 1 != path.steps.count ||
+                    !valid_bit_index(project, current_type, step.value))
+                    return fixed_direct_materialization_result::invalid_input;
+                *bit = 1 + static_cast<unsigned>(step.value % 8);
+                const auto offset = static_cast<std::uint64_t>(current_address - runtime.data()) + step.value / 8;
+                auto* byte = address(offset);
+                if (!byte) return fixed_direct_materialization_result::invalid_input;
+                output = target_address(byte);
+                return fixed_direct_materialization_result::success;
+            }
             if (step.kind == endpoint_path_step_kind::dereference) {
                 type_ref referent;
                 std::uint64_t pointer = 0;
@@ -8386,12 +8400,10 @@ private:
             bool reference = false;
             std::uint64_t target_address_value = 0;
 
-            const auto resolved =
-                endpoint_reference_or_value(
-                    initialization.target,
-                    next,
-                    reference,
-                    target_address_value);
+            unsigned bit = 0;
+            const auto resolved = initialization.target.member.is_path()
+                ? endpoint_path_reference_or_value(initialization.target, next, reference, target_address_value, false, &bit)
+                : direct_endpoint_reference_or_value(initialization.target, next, reference, target_address_value);
 
             if (resolved !=
                     fixed_direct_materialization_result::
@@ -8429,6 +8441,16 @@ private:
                     invalid_input;
             }
 
+            if (bit) {
+                if (!construction_compatible(project, target_type, initialization.value))
+                    return fixed_direct_materialization_result::invalid_input;
+                std::byte value{};
+                const auto result = normal_intrinsic(intrinsic_type::bool_type, initialization.value, &value);
+                if (result != fixed_direct_materialization_result::success) return result;
+                const auto mask = static_cast<std::byte>(1u << (bit - 1));
+                *target = value != std::byte{0} ? *target | mask : *target & ~mask;
+                continue;
+            }
             if (initialization.value.kind == construction_kind::byte_array) {
                 if (!construction_compatible(project, target_type, initialization.value) ||
                     !valid_byte_array_value(project, initialization.value) ||
@@ -8493,6 +8515,8 @@ private:
                     invalid_input;
             }
 
+            std::uint8_t bit = 0;
+            if (project.bit_endpoint(link.source.member, bit)) continue;
             reference_state target;
             bool target_is_reference = false;
             std::uint64_t target_value = 0;
@@ -8578,6 +8602,8 @@ private:
                     invalid_input;
             }
 
+            std::uint8_t bit = 0;
+            if (project.bit_endpoint(link.source.member, bit)) continue;
             if (index >=
                 link_target_slots.size()) {
 

@@ -140,6 +140,8 @@ struct logging_configuration {
 
 // Structured operational/performance telemetry configuration.
 struct telemetry_configuration {
+    // Include server execution duration in operation responses.
+    bool operation_timings = false;
     // Enables telemetry output to the process console when true.
     bool console = false;
 
@@ -189,7 +191,10 @@ struct server_files_configuration final {
 };
 
 // Process-wide low-level Server settings shared by all Project lifecycle modes.
+enum class link_query_index_mode { lazy, background, disabled };
+
 struct server_settings_configuration final {
+    link_query_index_mode link_query_index = link_query_index_mode::lazy;
     server_abi_configuration abi;
     server_shm_configuration shm;
     server_files_configuration files;

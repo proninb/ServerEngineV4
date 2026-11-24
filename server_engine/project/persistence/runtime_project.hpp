@@ -21,7 +21,7 @@ namespace cw::server {
 
 class shm_runtime_v2;
 
-inline constexpr std::uint32_t runtime_project_format_version = 3;
+inline constexpr std::uint32_t runtime_project_format_version = 4;
 inline constexpr std::size_t runtime_project_header_size = 64;
 inline constexpr std::size_t runtime_project_directory_count = 33;
 inline constexpr std::size_t runtime_project_directory_entry_size = 24;
@@ -87,6 +87,7 @@ public:
 
     [[nodiscard]] std::span<const std::byte>
     section(compiled_project_section kind) const noexcept;
+    [[nodiscard]] std::uint32_t record_size(compiled_project_section kind) const noexcept;
 
 private:
     struct section_view final {

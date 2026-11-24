@@ -1,3 +1,5 @@
+#include "project/parser/source_token_binding_policy.hpp"
+#include <cstdlib>
 #ifdef CW_PUBLISH_NO_SHA256_AB
 #include "project/file/publish_hash_policy.hpp"
 #endif
@@ -5151,6 +5153,179 @@ void test_nested_constructor_defaults(test_state& tests) {
     }
 }
 
+void test_header_v2_aggregate_member_defaults(test_state& tests) {
+    const struct { const char* source; bool valid; } cases[] = {
+        {"struct Params { float thld; bool inc_dec; }; "
+         "template<class T, int N> struct Array { T values[N]; }; "
+         "struct FB { Params p = { .thld = 1.000000E+10f, .inc_dec = false }; "
+         "Array<int, 4> samples = {{ 1, {}, 3, 4 }}; "
+         "FB() { samples.values[2] = 42; } };", true},
+        {"struct Params { int x; }; struct FB { Params p = { .absent = 1 }; };", false},
+        {"struct Params { int x; int y; }; struct FB { Params p = { .y = 1, .x = 2 }; };", false},
+        {"struct Params { int x; }; struct FB { Params p = { .x = 1, .x = 2 }; };", false},
+        {"struct FB { int a[1] = { 1, 2 }; };", false},
+    };
+    for (const auto& item : cases) {
+        const temporary_source source{"aggregate_member_defaults", item.source};
+        file_context files;
+        lexical_generation lexical;
+        file_id root;
+        if (!prepare_root(tests, source.path(), files, lexical, root)) return;
+        preprocessor_configuration configuration;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        parser_failure failure;
+        const auto status = parse_semantic_project(files, lexical, 1, configuration,
+            strings, identities, G, sources, &failure, nullptr, nullptr, true);
+        if (!tests.expect(succeeded(status) == item.valid, "Header V2 aggregate syntax validation") ||
+            !item.valid) continue;
+
+        const auto entries = G.constructor_defaults.entries();
+        const auto lookup = [&](const char* path) {
+            for (const auto& entry : entries) {
+                if (entry.path == strings.find(path)) return &entry.value;
+            }
+            return static_cast<const construction_value*>(nullptr);
+        };
+        const auto* threshold = lookup("p.thld");
+        const auto* direction = lookup("p.inc_dec");
+        const auto* first = lookup("samples.values[0]");
+        const auto* third = lookup("samples.values[2]");
+        const auto* last = lookup("samples.values[3]");
+        tests.expect(entries.size() == 5 && threshold && direction && direction->bits() == 0 &&
+            first && first->bits() == 1 && third && third->bits() == 42 && last && last->bits() == 4 &&
+            !lookup("samples.values[1]"), "Aggregate values use canonical paths and constructor precedence");
+    }
+}
+
+void test_header_v2_relative_aggregate_references(test_state& tests) {
+    const struct { const char* referent; bool valid; } cases[] = {
+        {"Hist2.values[1]", true},
+        {"Hist2[-1]", true},
+        {"Hist2[-2]", false},
+        {"this->Hist2.values[1]", true},
+        {"Hist2.missing", false},
+        {"Hist2.values[2]", false},
+        {"incompatible", false}
+    };
+    for (const auto& item : cases) {
+        const temporary_source header{"relative_aggregate_header",
+            std::string{"static int initial = 19; struct [[cw::index(-1, values)]] History { int values[2]; }; struct Block { int& INP; int& initial_value; }; "
+            "struct FB { Block Config_2 = { .INP = "} + item.referent +
+            ", .initial_value = initial }; History Hist2; int& output = Hist2.values[0]; int& spare = unconnected; float incompatible; }; struct Rack { FB slots[2]; };"};
+        const temporary_source source{"relative_aggregate_source",
+            "FB first; FB second; Rack rack; int external; second.Config_2.INP = external;"};
+        file_context files;
+        lexical_generation lexical;
+        file_id header_id, source_id;
+        if (!succeeded(files.resolve(header.path(), file_kind::header, header_id)) ||
+            !succeeded(files.resolve(source.path(), file_kind::source, source_id))) {
+            tests.expect(false, "resolve Header aggregate reference fixture");
+            return;
+        }
+        const std::array<file_id, 2> roots{header_id, source_id};
+        if (!prepare_all_roots(tests, files, lexical, roots)) return;
+        preprocessor_configuration configuration;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        parser_failure failure;
+        const auto status = parse_semantic_project(files, lexical, roots.size(), configuration,
+            strings, identities, G, sources, &failure, nullptr, nullptr, true);
+        if (succeeded(status) != item.valid) std::cerr << failure.detail << '\n';
+        if (!tests.expect(succeeded(status) == item.valid, "Header aggregate reference validation") ||
+            !item.valid) continue;
+
+        std::size_t self_links = 0;
+        for (const auto& link : G.link_entries())
+            if (link.source.object == link.target.object) ++self_links;
+        tests.expect(G.link_count() == 12 && self_links == 7,
+            "Header links bind each instance and each array element; explicit Source link overrides default");
+    }
+}
+
+void test_constructor_relative_order_links(test_state& tests) {
+    const temporary_source header{"constructor_order_header",
+        "struct Parent { unsigned int SectionOrder = 2; unsigned int ProgramOrder = 3; };"
+        "struct Block { unsigned int& SectionOrder = unconnected; unsigned int& ProgramOrder = unconnected;"
+        " unsigned int ExecOrder = 0; }; struct Check : Block { int& INP = unconnected; };"
+        "struct FB : Parent { int Hist1 = 0; Check Config_1 = { .INP = Hist1 };"
+        " FB() { Config_1.SectionOrder = SectionOrder; Config_1.ProgramOrder = this->ProgramOrder;"
+        " Config_1.ExecOrder = 1; } };"
+    };
+    const temporary_source source{"constructor_order_source", "FB A; FB B; A.SectionOrder = 9;"};
+    file_context files;
+    lexical_generation lexical;
+    file_id header_id, source_id;
+    if (!succeeded(files.resolve(header.path(), file_kind::header, header_id)) ||
+        !succeeded(files.resolve(source.path(), file_kind::source, source_id))) {
+        tests.expect(false, "resolve constructor order fixture");
+        return;
+    }
+    const std::array<file_id, 2> roots{header_id, source_id};
+    if (!prepare_all_roots(tests, files, lexical, roots)) return;
+    preprocessor_configuration configuration;
+    string_table strings;
+    identity_space identities{strings};
+    graph G;
+    source_map sources;
+    parser_failure failure;
+    const auto status = parse_semantic_project(files, lexical, roots.size(), configuration,
+        strings, identities, G, sources, &failure, nullptr, nullptr, true);
+    if (!succeeded(status)) std::cerr << failure.detail << '\n';
+    if (!tests.expect(succeeded(status), "Header constructor resolves nested inherited order fields"))
+        return;
+    tests.expect(G.link_count() == 6 && std::all_of(G.link_entries().begin(), G.link_entries().end(),
+        [](const auto& link) { return link.source.object == link.target.object; }),
+        "Each FB instance binds its child to its own enclosing order fields");
+    tests.expect(G.constructor_defaults.entries().size() == 1,
+        "ExecOrder is a per-instance scalar constructor default");
+}
+
+void test_header_v2_record_index_attribute(test_state& tests) {
+    const struct { const char* header; const char* source; bool valid; } cases[] = {
+        {"struct Item { bool Enable; }; template<typename T, int Lower, int Upper> "
+         "struct [[cw::index(Lower, values)]] Array { T values[Upper - Lower + 1]; };",
+         "Array<Item, 1, 32> vars; vars[1].Enable = true; vars.values[0].Enable = false;", true},
+        {"struct [[cw::index(-2, Data)]] Buffer { int Data[3]; };", "Buffer vars; vars[-2] = 7; vars.Data[0] = 8;", true},
+        {"struct [[cw::index(1, Data)]] Buffer { int Data[3]; };", "Buffer vars; vars[0] = 7;", false},
+        {"struct [[cw::index(Data)]] Buffer { int Data[3]; };", "Buffer vars; vars[2] = 7;", true},
+        {"struct [[cw::index(Data)]] Buffer { int Data[3]; };", "Buffer vars; vars[3] = 7;", false},
+        {"struct [[cw::index(Data)]] Buffer { int Data; };", "", false},
+        {"struct [[cw::index(Missing)]] Buffer { int Data[3]; };", "", false},
+    };
+    for (const auto& item : cases) {
+        const temporary_source header{"index_attribute_header", item.header};
+        const temporary_source source{"index_attribute_source", item.source};
+        file_context files;
+        lexical_generation lexical;
+        file_id header_id, source_id;
+        if (!succeeded(files.resolve(header.path(), file_kind::header, header_id)) ||
+            !succeeded(files.resolve(source.path(), file_kind::source, source_id))) {
+            tests.expect(false, "resolve indexed record fixture");
+            return;
+        }
+        const std::array<file_id, 2> roots{header_id, source_id};
+        if (!prepare_all_roots(tests, files, lexical, roots)) return;
+        preprocessor_configuration configuration;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        parser_failure failure;
+        const auto status = parse_semantic_project(files, lexical, roots.size(), configuration,
+            strings, identities, G, sources, &failure, nullptr, nullptr, true);
+        if (succeeded(status) != item.valid) std::cerr << failure.detail << '\n';
+        if (tests.expect(succeeded(status) == item.valid, "Header cw::index syntax and bounds") && item.valid) {
+            tests.expect(G.initialization_count() == 1,
+                "Indexed record uses the canonical backing member path");
+        }
+    }
+}
+
 void test_inherited_constructor_defaults(test_state& tests) {
     const struct { const char* text; bool valid; } cases[] = {
         {"enum Kind { NONE, BOOL }; struct A { unsigned char type = 0; }; struct B : A { B(){ type=NONE; type=BOOL; } };", true},
@@ -5980,6 +6155,51 @@ void test_header_static_constructor_binding(
         "Header internal static is not visible as a Source Project object");
 }
 
+
+void test_source_bit_initialization(test_state& tests) {
+    const temporary_source header{"bit_header",
+        "using U_BOOL = bool; using U_INT [[cw::bits(U_BOOL, 16)]] = int16_t; "
+        "using Narrow [[cw::bits(U_BOOL, 1 + 1)]] = int16_t; using Plain = int16_t;"};
+    const std::pair<std::string_view, bool> cases[] = {
+        {"U_INT DataBuf[16]; DataBuf[1].0 = true; DataBuf[1].1 = false; DataBuf[1].15 = true;", true},
+        {"Narrow x; x.2 = true;", false},
+        {"Plain x; x.0 = true;", false},
+        {"U_INT x; x.16 = true;", false},
+    };
+    for (const auto& [code, valid] : cases) {
+        const temporary_source source{"bit_source", std::string{code}};
+        file_context files;
+        lexical_generation lexical;
+        file_id h, s;
+        (void)files.resolve(header.path(), file_kind::header, h);
+        (void)files.resolve(source.path(), file_kind::source, s);
+        const std::array roots{h, s};
+        if (!prepare_all_roots(tests, files, lexical, roots)) return;
+        string_table strings;
+        identity_space identities{strings};
+        graph G;
+        source_map sources;
+        preprocessor_configuration configuration;
+        parser_failure failure;
+        const auto status = parse_semantic_project(files, lexical, roots.size(), configuration,
+            strings, identities, G, sources, &failure, nullptr, nullptr, true);
+        if (!tests.expect(succeeded(status) == valid, "Source V2 resolves bit ranges per using alias")) {
+            std::cerr << failure.detail << '\n';
+            continue;
+        }
+        if (!valid) continue;
+        const auto bool_alias = identities.find(identities.root(), strings.find("U_BOOL"), identity_kind::type);
+        tests.expect(G.initialization_count() == 3, "Source preserves three distinct bit endpoints");
+        for (const auto& entry : G.initialization_entries()) {
+            const auto path = G.endpoint_path_steps(entry.target.member.path());
+            endpoint_path_record path_record;
+            tests.expect(G.endpoint_path(entry.target.member.path(), path_record) &&
+                path.size() == 2 && path.back().kind == endpoint_path_step_kind::bit_index &&
+                path_record.value_type == G.named(bool_alias),
+                "Bit endpoint is typed as the nominated bool alias");
+        }
+    }
+}
 
 void test_source_string_assignment(test_state& tests) {
     for (const bool frontend_v2 : {false, true}) {
@@ -8741,6 +8961,10 @@ static void test_opt08_validate_canonical(test_state& tests) {
 }
 
 int main(int argc, char** argv) {
+#ifdef CW_SOURCE_TOKEN_BINDING_AB
+    if(const auto* reuse=std::getenv("CW_SOURCE_TOKEN_BINDING_REUSE"))
+        cw::server::detail::source_token_binding_reuse=std::string_view{reuse} != "0";
+#endif
     if (argc == 3 && std::string_view{argv[1]} == "--header-support-matrix")
         return cw::server::run_header_support_matrix(std::filesystem::absolute(argv[2]));
 #ifdef CW_PUBLISH_NO_SHA256_AB
@@ -8833,10 +9057,16 @@ int main(int argc, char** argv) {
             tests);
         test_header_literals_static(tests);
     test_header_templates(tests);
+    test_source_template_instantiation(tests);
+    test_duplicate_alias_warning(tests);
     test_scalar_type_names(tests);
 
         test_record_scratch_isolation(tests);
         test_nested_constructor_defaults(tests);
+        test_header_v2_aggregate_member_defaults(tests);
+        test_header_v2_relative_aggregate_references(tests);
+        test_constructor_relative_order_links(tests);
+        test_header_v2_record_index_attribute(tests);
         test_inherited_constructor_defaults(tests);
         test_constructor_array_defaults(tests);
         test_constructor_aggregate_defaults(tests);
@@ -8844,6 +9074,7 @@ int main(int argc, char** argv) {
         test_class_abi_semantics(
             tests);
 
+        test_source_bit_initialization(tests);
         test_source_string_assignment(tests);
         test_packed_source_char_overwrites(tests);
         test_source_string_scratch_lifetime(tests);

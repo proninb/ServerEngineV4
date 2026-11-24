@@ -126,6 +126,29 @@ static_assert(sizeof(type_ref) == 4);
 static_assert(std::is_trivially_copyable_v<type_ref>);
 static_assert(std::is_standard_layout_v<type_ref>);
 
+// The backing member carries a signed 24-bit origin without changing the image layout.
+inline constexpr std::int32_t array_origin_min = -0x800000;
+inline constexpr std::int32_t array_origin_max = 0x7fffff;
+
+inline constexpr std::int32_t array_origin(const std::uint8_t (&bytes)[3]) noexcept {
+    const auto value = std::int32_t{bytes[0]} | (std::int32_t{bytes[1]} << 8) |
+        (std::int32_t{bytes[2]} << 16);
+    return value < 0x800000 ? value : value - 0x1000000;
+}
+
+inline constexpr void set_array_origin(std::uint8_t (&bytes)[3], std::int32_t origin) noexcept {
+    const auto value = static_cast<std::uint32_t>(origin);
+    for (unsigned i = 0; i < 3; ++i)
+        bytes[i] = static_cast<std::uint8_t>(value >> (8 * i));
+}
+
+inline constexpr bool array_offset(std::int64_t index, std::int32_t origin,
+    std::uint64_t count, std::uint64_t& offset) noexcept {
+    if (index < origin) return false;
+    offset = static_cast<std::uint64_t>(index) - static_cast<std::uint64_t>(origin);
+    return offset < count;
+}
+
 struct derived_type_record final {
     std::uint64_t payload = 0;
     type_ref child{};

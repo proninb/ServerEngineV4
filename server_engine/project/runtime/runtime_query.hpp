@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -46,6 +47,7 @@ struct runtime_object_query final {
     bool pattern = false;
     std::string name;
     std::string type;
+    std::string file;
     std::vector<runtime_object_match> objects;
 };
 
@@ -91,6 +93,21 @@ struct runtime_link_query final {
     std::vector<runtime_object_links> objects;
 };
 
+// Owned by one resident immutable Project. Never shared across project replacement.
+struct runtime_link_index final {
+    const compiled_project_view* owner = nullptr;
+    std::vector<std::uint32_t> offsets, incidents, files, assign_offsets, assign_incidents;
+    [[nodiscard]] std::size_t storage_bytes() const noexcept {
+        return (offsets.capacity()+incidents.capacity()+files.capacity()+assign_offsets.capacity()+assign_incidents.capacity())*sizeof(std::uint32_t);
+    }
+};
+// May allocate; caller owns exception policy. Publishes only on complete success.
+[[nodiscard]] runtime_query_result prepare_runtime_link_index(
+    const compiled_project_view& project, runtime_link_index& index, std::stop_token stop = {});
+[[nodiscard]] runtime_query_result get_runtime_link_indexed(
+    const compiled_project_view& project, std::span<const std::string> objects,
+    runtime_link_query& output, runtime_link_index& index) noexcept;
+
 [[nodiscard]] runtime_query_result get_runtime_object(
     const compiled_project_view& project,
     std::string_view name,
@@ -106,6 +123,14 @@ struct runtime_link_query final {
     const compiled_project_view& project,
     std::span<const std::string> objects,
     runtime_link_query& output) noexcept;
+
+[[nodiscard]] bool build_task_variable_catalog(const compiled_project_view& project,
+    const runtime_binding_index& bindings, std::span<const std::byte> runtime,
+    std::vector<std::byte>& output) noexcept;
+
+[[nodiscard]] runtime_query_result set_runtime_value(const compiled_project_view& project,
+    const runtime_binding_index& bindings, std::span<std::byte> runtime,
+    std::string_view name, std::string_view input, runtime_value& output) noexcept;
 
 [[nodiscard]] runtime_query_result get_runtime_value(
     const compiled_project_view& project,

@@ -1,3 +1,4 @@
+#include "parser.hpp"
 #include "enum_constants.hpp"
 #include "header_parser_v2.hpp"
 #include "scalar_type_names.hpp"
@@ -117,6 +118,7 @@ header_parser_v2::header_parser_v2(
 }
 
 server_status header_parser_v2::record_dependency(identity_ref identity) noexcept {
+    if (templates->array_aliases.contains(identity.value())) return server_status::success;
     auto status = input.record_reuse(semantic_preprocessor_v2::reuse_event::dependency,
         current() != nullptr ? current()->file : file_id{}, identity.value());
     return succeeded(status) ? provenance->add_dependency(identity) : status;
@@ -345,6 +347,13 @@ server_status header_parser_v2::resolve_named_type(
         return fail(
             parser_v2_failure_kind::semantic,
             "Header Parser V2 named type is unknown");
+    }
+
+    if (const auto alias = templates->array_aliases.find(identity.value());
+        alias != templates->array_aliases.end()) {
+        output.type = alias->second;
+        output.complete = true;
+        return server_status::success;
     }
 
     const auto handle =
@@ -1451,9 +1460,158 @@ server_status header_parser_v2::parse_static_object(identity_ref scope) noexcept
     return consume();
 }
 
+server_status header_parser_v2::parse_relative_aggregate_referent(string_id& output, string_id first) noexcept {
+    try {
+        std::string path;
+        if (!first && at(token_kind::kw_this)) {
+            auto status = consume();
+            if (!succeeded(status)) return status;
+            status = expect(token_kind::arrow, "Expected '->' after 'this' in aggregate reference");
+            if (!succeeded(status)) return status;
+        }
+        for (;;) {
+            if (first) {
+                path.append(input.semantic_strings().get(first));
+                first = {};
+            } else {
+                const auto* member = current();
+                if (!member || member->kind != token_kind::identifier || !member->identifier)
+                    return fail(parser_v2_failure_kind::syntax, "Expected relative member path in Header reference");
+                if (!path.empty()) path.push_back('.');
+                path.append(input.semantic_strings().get(member->identifier));
+                const auto status = consume();
+                if (!succeeded(status)) return status;
+            }
+            while (at(token_kind::l_bracket)) {
+                auto status = consume();
+                if (!succeeded(status)) return status;
+                const bool negative = at(token_kind::minus);
+                if (negative) {
+                    status = consume();
+                    if (!succeeded(status)) return status;
+                }
+                const auto* index = current();
+                if (!index || index->kind != token_kind::pp_number ||
+                    index->number.kind != prepared_number_kind_v2::unsigned_integer)
+                    return fail(parser_v2_failure_kind::syntax, "Expected constant array index in Header reference");
+                path.push_back('[');
+                if (negative) path.push_back('-');
+                path.append(std::to_string(index->number.bits));
+                path.push_back(']');
+                status = consume();
+                if (!succeeded(status)) return status;
+                status = expect(token_kind::r_bracket, "Expected ']' in Header reference");
+                if (!succeeded(status)) return status;
+            }
+            if (!at(token_kind::dot)) break;
+            const auto status = consume();
+            if (!succeeded(status)) return status;
+        }
+        return input.semantic_strings().intern(path, output);
+    }
+    catch (...) { return server_status::io_error; }
+}
+
+server_status header_parser_v2::parse_aggregate_elements(
+    type_ref target, nested_operation& operation,
+    std::vector<nested_operation>& output) noexcept {
+
+    type_handle record;
+    const auto* entry = G.named(target, record) ? G.find(record) : nullptr;
+    const bool is_record = entry && entry->kind == graph_type_kind::record;
+    derived_type_record array;
+    const bool is_array = G.derived(target, array) && array.kind == derived_type_kind::bounded_array;
+    const bool designated = at(token_kind::dot);
+    if ((!is_record && !is_array) || (designated && !is_record) ||
+        (is_record && !designated && entry->bases.count != 0 &&
+         !(entry->index_member_slot() == 1 && entry->members.count == 1))) {
+        return fail(parser_v2_failure_kind::unsupported,
+            "Unsupported target for aggregate member initializer");
+    }
+
+    std::uint64_t next_index = 0;
+    while (!at(token_kind::r_brace)) {
+        type_ref child;
+        nested_path_step step;
+        if (is_record) {
+            if (designated) {
+                auto status = expect(token_kind::dot, "Expected a field designator");
+                if (!succeeded(status)) return status;
+                const auto* name = current();
+                if (name == nullptr || name->kind != token_kind::identifier || !name->identifier)
+                    return fail(parser_v2_failure_kind::syntax, "Expected a field name after '.'");
+                const auto index = G.find_member(record, name->identifier);
+                const auto* member = G.member(record, index);
+                if (member == nullptr)
+                    return fail(parser_v2_failure_kind::semantic, "Unknown aggregate initializer field");
+                if (index.value() < next_index)
+                    return fail(parser_v2_failure_kind::semantic,
+                        "Aggregate designators must follow field declaration order");
+                next_index = static_cast<std::uint64_t>(index.value()) + 1;
+                step.name = member->name;
+                child = member->type;
+                status = consume();
+                if (!succeeded(status)) return status;
+                status = expect(token_kind::assign, "Expected '=' after field designator");
+                if (!succeeded(status)) return status;
+            }
+            else {
+                const auto fields = G.members(record);
+                if (next_index >= fields.size())
+                    return fail(parser_v2_failure_kind::semantic, "Too many record initializers");
+                const auto* member = &fields[static_cast<std::size_t>(next_index++)];
+                step.name = member->name;
+                child = member->type;
+            }
+        }
+        else {
+            if (next_index >= array.payload)
+                return fail(parser_v2_failure_kind::semantic, "Too many array initializers");
+            step.index = next_index++;
+            child = array.child;
+        }
+
+        if (operation.path.size() >= parser_v2_scope_depth_limit)
+            return fail(parser_v2_failure_kind::unsupported, "Aggregate initializer path exceeds supported depth");
+        try { operation.path.push_back(step); }
+        catch (...) { return server_status::io_error; }
+        auto status = server_status::success;
+        if (at(token_kind::l_brace)) {
+            status = consume();
+            if (!succeeded(status)) return status;
+            // An empty clause keeps the element's default construction.
+            status = at(token_kind::r_brace) ? consume()
+                : parse_aggregate_elements(child, operation, output);
+        }
+        else {
+            derived_type_record reference;
+            if (G.derived(child, reference) &&
+                (reference.kind == derived_type_kind::lvalue_reference ||
+                 reference.kind == derived_type_kind::rvalue_reference)) {
+                status = parse_relative_aggregate_referent(operation.referent);
+            }
+            else {
+                status = parse_scalar_constant(operation.value);
+            }
+            if (succeeded(status)) {
+                try { output.push_back(operation); }
+                catch (...) { return server_status::io_error; }
+            }
+        }
+        operation.referent = {};
+        operation.path.pop_back();
+        if (!succeeded(status)) return status;
+        if (!at(token_kind::comma)) break;
+        status = consume();
+        if (!succeeded(status)) return status;
+    }
+    return expect(token_kind::r_brace, "Expected '}' after aggregate member initializer");
+}
+
 server_status header_parser_v2::parse_member_initializer(
     type_ref target, constructor_operation& output,
-    std::vector<std::uint8_t>* string_bytes, bool* explicit_value) noexcept {
+    std::vector<std::uint8_t>* string_bytes, bool* explicit_value,
+    std::vector<nested_operation>* aggregate) noexcept {
 
     output = {};
     if (explicit_value) *explicit_value = false;
@@ -1471,18 +1629,43 @@ server_status header_parser_v2::parse_member_initializer(
         (derived.kind == derived_type_kind::lvalue_reference ||
          derived.kind == derived_type_kind::rvalue_reference);
 
+    const auto complete_operand = [&]() {
+        if (aggregate && reference_target && output.reference_name &&
+            (at(token_kind::dot) || at(token_kind::l_bracket)))
+            return parse_relative_aggregate_referent(output.relative_referent, output.reference_name);
+        return server_status::success;
+    };
+
     if (at(token_kind::assign)) {
         const auto status = consume();
         if (!succeeded(status)) return status;
     }
+    if (aggregate && reference_target && at(token_kind::identifier) &&
+        input.semantic_strings().get(current()->identifier) == "unconnected")
+        return consume();
+
     if (at(token_kind::l_brace)) {
         auto status = consume();
         if (!succeeded(status)) return status;
         if (!at(token_kind::r_brace)) {
+            if (aggregate != nullptr && !at(token_kind::string_literal)) {
+                type_handle record;
+                derived_type_record array;
+                const auto* entry = G.named(target, record) ? G.find(record) : nullptr;
+                if ((entry && entry->kind == graph_type_kind::record) ||
+                    (G.derived(target, array) && array.kind == derived_type_kind::bounded_array)) {
+                    nested_operation operation;
+                    operation.file = output.file;
+                    operation.source = output.source;
+                    if (explicit_value) *explicit_value = true;
+                    return parse_aggregate_elements(target, operation, *aggregate);
+                }
+            }
             if (explicit_value) *explicit_value = true;
             status = at(token_kind::string_literal) && string_bytes
                 ? parse_string_initializer(target, output, *string_bytes)
                 : parse_construction_operand(output, reference_target);
+            if (succeeded(status)) status = complete_operand();
             if (!succeeded(status)) return status;
         }
         status = expect(token_kind::r_brace,
@@ -1491,9 +1674,10 @@ server_status header_parser_v2::parse_member_initializer(
     }
     else {
         if (explicit_value) *explicit_value = true;
-        const auto status = at(token_kind::string_literal) && string_bytes
+        auto status = at(token_kind::string_literal) && string_bytes
             ? parse_string_initializer(target, output, *string_bytes)
             : parse_construction_operand(output, reference_target);
+        if (succeeded(status)) status = complete_operand();
         if (!succeeded(status)) return status;
     }
 
@@ -1800,6 +1984,7 @@ server_status header_parser_v2::parse_member_declarator(
         at(token_kind::assign) || at(token_kind::l_brace);
     constructor_operation initial;
     std::vector<std::uint8_t> string_bytes;
+    std::vector<nested_operation> aggregate;
 
     {
     #ifdef CW_HEADER_V2_SEMANTIC_PROFILE
@@ -1809,7 +1994,7 @@ server_status header_parser_v2::parse_member_declarator(
             &header_parser_v2_profile::member_initializer_samples,
             &header_parser_v2_profile::member_initializer_sample_ms);
     #endif
-        status = parse_member_initializer(type.type, initial, &string_bytes);
+        status = parse_member_initializer(type.type, initial, &string_bytes, nullptr, &aggregate);
     }
 
     if (!succeeded(status)) {
@@ -1855,12 +2040,23 @@ server_status header_parser_v2::parse_member_declarator(
     }
 
     const auto index = members.size() - 1;
-    if (has_initializer) {
+    if (initial.relative_referent) {
+        try {
+            templates->relative_bindings.push_back({
+                nested.owner, member_name, initial.relative_referent, {}, initial.file, initial.source});
+        }
+        catch (...) { return server_status::io_error; }
+    } else if (has_initializer) {
         status = apply_record_operand(index, initial, members, construction,
             names, references);
         if (!succeeded(status)) return status;
     }
 
+    for (auto& operation : aggregate) {
+        operation.root = member_name;
+        status = append_nested_operation(std::move(operation), members, names, nested);
+        if (!succeeded(status)) return status;
+    }
     const auto pending_it = pending.find(member_name.value());
     derived_type_record string_array;
     if (!string_bytes.empty() && G.derived(type.type, string_array) &&
@@ -2383,10 +2579,13 @@ server_status header_parser_v2::apply_nested_operation(
             }
             const auto member_index = G.find_member(record, step.name);
             const auto* member = G.member(record, member_index);
+            constructor_member_lookup inherited;
             if (member == nullptr) {
-                return fail_at(parser_v2_failure_kind::semantic,
-                    "Nested constructor field does not exist",
-                    operation.file, operation.source);
+                if (!find_constructor_member(G, record, step.name, inherited) || !inherited.accessible)
+                    return fail_at(parser_v2_failure_kind::semantic,
+                        "Nested constructor field does not exist or is inaccessible",
+                        operation.file, operation.source);
+                member = &inherited.member;
             }
             type = member->type;
             try {
@@ -2416,6 +2615,19 @@ server_status header_parser_v2::apply_nested_operation(
             }
             catch (...) { return server_status::io_error; }
         }
+    }
+
+    if (operation.referent) {
+        string_id target;
+        const auto status = strings.intern(spelling, target);
+        if (!succeeded(status)) return status;
+        try {
+            templates->relative_bindings.push_back({
+                nested.owner, target, operation.referent,
+                find_static_object(constant_scope, operation.referent), operation.file, operation.source});
+        }
+        catch (...) { return server_status::io_error; }
+        return server_status::success;
     }
 
     auto normalized = operation.value;
@@ -2873,12 +3085,27 @@ server_status header_parser_v2::parse_constructor(
 
         value.body_assignment = true;
 
-        status = path.empty()
-            ? parse_construction_operand(value, true)
-            : parse_scalar_constant(value.value);
+        if (path.empty() && at(token_kind::ampersand)) {
+            status = consume();
+            if (!succeeded(status)) return status;
+            status = parse_relative_aggregate_referent(value.relative_referent);
+            if (!succeeded(status)) return status;
+            status = expect(token_kind::semicolon, "Expected ';' after constructor address binding");
+            if (!succeeded(status)) return status;
+            try {
+                templates->relative_bindings.push_back({
+                    nested.owner, target_name, value.relative_referent, {}, target_file, target_source, true});
+            } catch (...) { return server_status::io_error; }
+            continue;
+        }
 
-        if (!succeeded(status)) {
-            return status;
+        status = !path.empty() && at(token_kind::kw_this)
+            ? parse_relative_aggregate_referent(value.relative_referent)
+            : parse_construction_operand(value, true);
+        if (!succeeded(status)) return status;
+        if (!path.empty() && value.reference_name) {
+            status = parse_relative_aggregate_referent(value.relative_referent, value.reference_name);
+            if (!succeeded(status)) return status;
         }
 
         status =
@@ -2898,6 +3125,7 @@ server_status header_parser_v2::parse_constructor(
             operation.root = target_name;
             operation.path = std::move(path);
             operation.value = value.value;
+            operation.referent = value.relative_referent;
             operation.file = target_file;
             operation.source = target_source;
             status = append_nested_operation(std::move(operation), members,
@@ -2912,8 +3140,69 @@ server_status header_parser_v2::parse_constructor(
     return consume();
 }
 
+server_status header_parser_v2::parse_record_attributes(string_id& index_member,
+    std::int64_t& index_origin, string_id* index_parameter) noexcept {
+    while (at(token_kind::l_bracket)) {
+        auto status = consume();
+        if (!succeeded(status)) return status;
+        status = expect(token_kind::l_bracket, "Expected '[[' for record attribute");
+        if (!succeeded(status)) return status;
+        const auto spelling = [&]() {
+            const auto* token = current();
+            return token && token->kind == token_kind::identifier
+                ? input.semantic_strings().get(token->identifier) : std::string_view{};
+        };
+        if (spelling() != "cw")
+            return fail(parser_v2_failure_kind::unsupported, "Unsupported record attribute namespace");
+        status = consume();
+        if (!succeeded(status)) return status;
+        status = expect(token_kind::scope, "Expected '::' in record attribute");
+        if (!succeeded(status)) return status;
+        if (spelling() != "index")
+            return fail(parser_v2_failure_kind::unsupported, "Unsupported cw record attribute");
+        if (index_member)
+            return fail(parser_v2_failure_kind::semantic, "Duplicate cw::index attribute");
+        status = consume();
+        if (!succeeded(status)) return status;
+        status = expect(token_kind::l_paren, "Expected '(' after cw::index");
+        if (!succeeded(status)) return status;
+        if (at(token_kind::identifier)) {
+            const auto first = current()->identifier;
+            status = consume();
+            if (!succeeded(status)) return status;
+            if (at(token_kind::r_paren)) {
+                index_member = first;
+            } else if (index_parameter != nullptr) {
+                *index_parameter = first;
+            } else {
+                return fail(parser_v2_failure_kind::semantic,
+                    "cw::index lower bound must be an integer or an integer template parameter");
+            }
+        } else {
+            status = parse_integer_expression(index_origin);
+            if (!succeeded(status)) return status;
+        }
+        if (!index_member) {
+            status = expect(token_kind::comma, "Expected ',' before cw::index backing member");
+            if (!succeeded(status)) return status;
+            if (!at(token_kind::identifier))
+                return fail(parser_v2_failure_kind::syntax, "Expected backing member name in cw::index");
+            index_member = current()->identifier;
+            status = consume();
+            if (!succeeded(status)) return status;
+        }
+        status = expect(token_kind::r_paren, "Expected ')' after cw::index backing member");
+        if (!succeeded(status)) return status;
+        status = expect(token_kind::r_bracket, "Expected ']]' after cw::index");
+        if (!succeeded(status)) return status;
+        status = expect(token_kind::r_bracket, "Expected ']]' after cw::index");
+        if (!succeeded(status)) return status;
+    }
+    return server_status::success;
+}
+
 server_status header_parser_v2::parse_record(
-    identity_ref scope) noexcept {
+    identity_ref scope, string_id index_member, std::int64_t index_origin) noexcept {
 
     const auto* key =
         current();
@@ -2942,6 +3231,9 @@ server_status header_parser_v2::parse_record(
     if (!succeeded(status)) {
         return status;
     }
+
+    status = parse_record_attributes(index_member, index_origin);
+    if (!succeeded(status)) return status;
 
     const auto* name =
         current();
@@ -2976,6 +3268,8 @@ server_status header_parser_v2::parse_record(
             "Header Parser V2 record identity could not be resolved");
     }
 
+    if (templates->array_aliases.contains(identity.value()))
+        return fail(parser_v2_failure_kind::semantic, "Record conflicts with an array alias");
     for (const auto& definition : templates->records)
         if (definition.identity == identity)
             return fail(parser_v2_failure_kind::semantic, "Concrete record conflicts with a template name");
@@ -3052,27 +3346,17 @@ server_status header_parser_v2::parse_record(
                     "Virtual base classes are not implemented in CXX-CLASS-ABI-V1");
             }
 
-            const auto* base_name = current();
-            if (base_name == nullptr ||
-                base_name->kind != token_kind::identifier ||
-                !base_name->identifier) {
-                return fail(
-                    parser_v2_failure_kind::syntax,
-                    "Expected base class type");
-            }
-
-            const auto base_identity = find_type_identity(
-                scope, base_name->identifier);
-            const auto base_type = G.find_type(base_identity);
-            const auto* base_entry = G.find(base_type);
-            if (!base_identity || !base_type ||
-                base_entry == nullptr || !base_entry->defined() ||
-                base_entry->kind != graph_type_kind::record ||
+            resolved_type base;
+            status = parse_type(scope, base);
+            if (!succeeded(status)) return status;
+            type_handle base_type;
+            const auto* base_entry = G.named(base.type, base_type) ? G.find(base_type) : nullptr;
+            if (!base_entry || !base_entry->defined() || base_entry->kind != graph_type_kind::record ||
                 base_entry->record_kind == graph_record_kind::union_type) {
-                return fail(
-                    parser_v2_failure_kind::semantic,
+                return fail(parser_v2_failure_kind::semantic,
                     "Base class must name a complete non-union record type");
             }
+            const auto base_identity = G.identity(base_type);
 
             if (provenance != nullptr) {
                 const auto dependency = record_dependency(base_identity);
@@ -3094,10 +3378,6 @@ server_status header_parser_v2::parse_record(
                 return server_status::io_error;
             }
 
-            status = consume();
-            if (!succeeded(status)) {
-                return status;
-            }
             if (!at(token_kind::comma)) {
                 break;
             }
@@ -3492,6 +3772,20 @@ server_status header_parser_v2::parse_record(
             "Header Parser V2 expected ';' after record definition");
     }
 
+    std::uint16_t index_slot = 0;
+    if (index_member) {
+        const auto index = names.find(members, index_member);
+        derived_type_record array;
+        if (index >= members.size() || index >= 0x3fffu ||
+            !G.derived(members[index].type, array) || array.kind != derived_type_kind::bounded_array)
+            return fail(parser_v2_failure_kind::semantic,
+                "cw::index must name a bounded array member of the record");
+        if (index_origin < array_origin_min || index_origin > array_origin_max)
+            return fail(parser_v2_failure_kind::semantic, "cw::index lower bound exceeds the supported range");
+        set_array_origin(members[index].reserved, static_cast<std::int32_t>(index_origin));
+        index_slot = static_cast<std::uint16_t>(index + 1);
+    }
+
 #ifdef CW_HEADER_V2_SEMANTIC_PROFILE
     {
         header_v2_timed_probe probe(profile != nullptr ? &profile->graph_define_ms : nullptr);
@@ -3503,7 +3797,7 @@ server_status header_parser_v2::parse_record(
                 members,
                 construction,
                 bases,
-                declares_virtual);
+                declares_virtual, index_slot);
 #ifdef CW_HEADER_V2_SEMANTIC_PROFILE
     }
     if (succeeded(status) && profile != nullptr) {
@@ -3683,6 +3977,8 @@ server_status header_parser_v2::parse_typedef(
     }
 
     type_handle handle;
+    if (templates->array_aliases.contains(identity.value()))
+        return fail(parser_v2_failure_kind::semantic, "Typedef conflicts with an array alias");
     status = G.define_intrinsic_alias(identity, intrinsic, handle);
     if (!succeeded(status) || !handle) {
         return fail_at(parser_v2_failure_kind::semantic,
@@ -3869,6 +4165,8 @@ server_status header_parser_v2::parse_enum(identity_ref scope) noexcept {
         for (auto& name : names) name.type = G.intrinsic(underlying);
     }
     type_handle handle;
+    if (templates->array_aliases.contains(identity.value()))
+        return fail(parser_v2_failure_kind::semantic, "Enum conflicts with an array alias");
     status = G.define_enum(identity, underlying, scoped, fixed, body, names, values, handle);
     if (!succeeded(status)) return fail(parser_v2_failure_kind::semantic, "Enum declaration conflicts with an existing type");
     if (provenance) {
@@ -3938,6 +4236,11 @@ server_status header_parser_v2::parse_scope(
         }
         if (at(token_kind::kw_using)) {
             const auto status = parse_using(scope);
+            if (!succeeded(status)) return status;
+            continue;
+        }
+        if (at(token_kind::semicolon)) {
+            const auto status = consume();
             if (!succeeded(status)) return status;
             continue;
         }

@@ -2166,6 +2166,14 @@ bool runtime_layout::release_bindings(
                 value.size);
     }
 
+    try {
+        output.record_sizes.resize(type_slots.size());
+        for (std::size_t index = 0; index < type_slots.size(); ++index)
+            if (type_slots[index].state == slot_state::ready)
+                output.record_sizes[index] = type_slots[index].size;
+    }
+    catch (...) { return false; }
+
     output.object_offsets =
         std::move(object_offsets);
 

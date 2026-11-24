@@ -85,6 +85,7 @@ struct cpu_trace {
 }
 void* shared_memory_data() noexcept { return attached_mapping.data(); }
 std::size_t shared_memory_size() noexcept { return attached_mapping.size(); }
+std::string_view shared_memory_name() noexcept { return attached_mapping.name(); }
 int run_host(callbacks cb) {
     if(!cb.init || !cb.main || !cb.done) return 2;
     // The host library owns main() and passes the mapping name via argv.

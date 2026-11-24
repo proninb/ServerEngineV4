@@ -49,6 +49,7 @@ struct parser_failure final {
 
 enum class parser_warning_kind : std::uint8_t {
     duplicate_initialization = 1,
+    duplicate_alias = 2,
 };
 
 struct parser_warning final {

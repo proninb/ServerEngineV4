@@ -31,7 +31,8 @@ public:
     [[nodiscard]] std::uint32_t timeout_ms() const noexcept { return timeout; }
     bool stop(std::string& error);
     stop_result stop_checked(std::string& error);
-    void terminate() noexcept;
+    // False preserves all handles/mappings for a later cleanup attempt.
+    bool terminate() noexcept;
 private:
     perf07::trace perf_trace;
     bool exchange(message request,command expected,std::string& error);
