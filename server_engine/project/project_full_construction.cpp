@@ -1332,21 +1332,7 @@ server_status construct_full_project(
         telemetry->source_finalize_ns = semantic_telemetry.finalize_ns;
     }
 
-    const auto post_semantic_started = telemetry ? clock_type::now() : clock_type::time_point{};
-    const auto warnings_emitted =
-        emit_parser_warnings(
-            context.files,
-            semantic_warnings,
-            operation,
-            diagnostics,
-            mode == full_construction_mode::publish);
-
-    if (telemetry) telemetry->warnings_ns = elapsed_ns(post_semantic_started);
-    if (!succeeded(warnings_emitted)) {
-        return warnings_emitted;
-    }
-
-    if (!succeeded(parsed)) {
+    const auto return_parse_failure = [&]() -> server_status {
         if (semantic_failure.file) {
             const auto emitted =
                 emit_source_failure(
@@ -1378,6 +1364,30 @@ server_status construct_full_project(
         }
 
         return parsed;
+    };
+
+    // PUBLISH has already failed. Return its parser diagnostic without
+    // materializing accumulated non-fatal warnings and their source maps.
+    if (!succeeded(parsed) && mode == full_construction_mode::publish) {
+        return return_parse_failure();
+    }
+
+    const auto post_semantic_started = telemetry ? clock_type::now() : clock_type::time_point{};
+    const auto warnings_emitted =
+        emit_parser_warnings(
+            context.files,
+            semantic_warnings,
+            operation,
+            diagnostics,
+            mode == full_construction_mode::publish);
+
+    if (telemetry) telemetry->warnings_ns = elapsed_ns(post_semantic_started);
+    if (!succeeded(warnings_emitted)) {
+        return warnings_emitted;
+    }
+
+    if (!succeeded(parsed)) {
+        return return_parse_failure();
     }
 
     const auto topology_started = telemetry ? clock_type::now() : clock_type::time_point{};
